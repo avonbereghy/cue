@@ -70,9 +70,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let now = Date().timeIntervalSince1970
 
-        // Keep sessions active within the last 5 minutes
+        // State-dependent staleness: idle sessions expire fast (ghost cleanup),
+        // active sessions persist much longer (only SessionEnd should remove them).
         sessions = status.sessions.values
-            .filter { now - $0.lastActivity < 300 }
+            .filter { session in
+                let age = now - session.lastActivity
+                switch session.state {
+                case "idle":   return age < 60    // 1 minute — catches ghost sessions
+                default:       return age < 1800  // 30 minutes — covers quiet periods
+                }
+            }
             .sorted { $0.startedAt < $1.startedAt }
 
         // Cap at 8 (our grid maximum)

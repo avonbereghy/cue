@@ -6,7 +6,7 @@ HOOK_SCRIPT="$SCRIPT_DIR/hooks/claude-status-hook"
 STATUS_DIR="$HOME/Library/Application Support/ClaudeStatus"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 APP_NAME="Claude Status Bar.app"
-APP_DIR="$HOME/Applications"
+APP_DIR="/Applications/Utilities"
 APP_PATH="$APP_DIR/$APP_NAME"
 
 echo "=== Claude Status Bar Installer ==="
