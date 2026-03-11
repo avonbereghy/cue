@@ -100,13 +100,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func renderDotGrid() -> NSImage {
         let count = sessions.count
 
-        // No sessions — single dim dot as a heartbeat indicator
+        // No sessions — hollow ring to indicate app is running but nothing active
         if count == 0 {
             let size = dotSize + padding * 2
             let image = NSImage(size: NSSize(width: size, height: size))
             image.lockFocus()
-            NSColor.gray.withAlphaComponent(0.25).setFill()
-            NSBezierPath(ovalIn: NSRect(x: padding, y: padding, width: dotSize, height: dotSize)).fill()
+            NSColor.white.setStroke()
+            let path = NSBezierPath(ovalIn: NSRect(x: padding + 0.75, y: padding + 0.75, width: dotSize - 1.5, height: dotSize - 1.5))
+            path.lineWidth = 1.5
+            path.stroke()
             image.unlockFocus()
             image.isTemplate = false
             return image
@@ -141,7 +143,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             case "waiting":
                 color = NSColor.systemYellow
             case "idle":
-                color = NSColor.gray.withAlphaComponent(0.45)
+                color = NSColor.white.withAlphaComponent(0.35)
             default:
                 color = NSColor.systemGreen
             }
