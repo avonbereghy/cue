@@ -6,7 +6,7 @@ HOOK_SCRIPT="$SCRIPT_DIR/hooks/claude-status-hook"
 STATUS_DIR="$HOME/Library/Application Support/ClaudeStatus"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 APP_NAME="Claude Status Bar.app"
-APP_DIR="/Applications/Utilities"
+APP_DIR="$HOME/Applications"
 APP_PATH="$APP_DIR/$APP_NAME"
 
 echo "=== Claude Status Bar Installer ==="
@@ -83,12 +83,10 @@ cat > "$APP_PATH/Contents/Info.plist" << 'PLIST'
     <string>1.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
-    <key>LSUIElement</key>
-    <true/>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
+    <string>14.0</string>
 </dict>
 </plist>
 PLIST

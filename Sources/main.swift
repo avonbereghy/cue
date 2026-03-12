@@ -1,5 +1,7 @@
 import AppKit
 import Foundation
+import ServiceManagement
+import SwiftUI
 
 // MARK: - Data Models
 
@@ -17,12 +19,45 @@ struct StatusData: Codable {
 
 // MARK: - App Delegate
 
+// MARK: - Settings View
+
+struct ClaudeStatusSettingsView: View {
+    @AppStorage("showInDock") var showInDock = true
+    @AppStorage("startAtLogin") var startAtLogin = false
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Show icon in dock", isOn: $showInDock)
+                    .onChange(of: showInDock) { _, newValue in
+                        NSApp.setActivationPolicy(newValue ? .regular : .accessory)
+                    }
+                Toggle("Start at login", isOn: $startAtLogin)
+                    .onChange(of: startAtLogin) { _, newValue in
+                        do {
+                            if newValue {
+                                try SMAppService.mainApp.register()
+                            } else {
+                                try SMAppService.mainApp.unregister()
+                            }
+                        } catch {
+                            startAtLogin = !newValue
+                        }
+                    }
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 350)
+    }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var pollTimer: Timer?
     private var animTimer: Timer?
     private var blinkOn = true
     private var sessions: [SessionInfo] = []
+    private var settingsWindow: NSWindow?
 
     private let statusFilePath: String = {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -37,6 +72,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let maxPerColumn = 2
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let showInDock = UserDefaults.standard.object(forKey: "showInDock") as? Bool ?? true
+        NSApp.setActivationPolicy(showInDock ? .regular : .accessory)
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         // Dynamic menu via delegate
@@ -196,7 +234,30 @@ extension AppDelegate: NSMenuDelegate {
         }
 
         menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "Settings...", action: #selector(showSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
+    }
+
+    @objc func showSettings() {
+        if let window = settingsWindow {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 350, height: 120),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Settings"
+        window.contentView = NSHostingView(rootView: ClaudeStatusSettingsView())
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow = window
     }
 
     @objc func quit() {
@@ -214,7 +275,6 @@ extension AppDelegate: NSMenuDelegate {
 // MARK: - Entry Point
 
 let app = NSApplication.shared
-app.setActivationPolicy(.accessory)  // No dock icon
 let delegate = AppDelegate()
 app.delegate = delegate
 app.run()
