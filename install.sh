@@ -127,11 +127,31 @@ new_hooks = {
         "matcher": "",
         "hooks": [{"type": "command", "command": f"{hook_script} working", "timeout": 5000}]
     },
+    "UserPromptSubmit": {
+        "matcher": "",
+        "hooks": [{"type": "command", "command": f"{hook_script} working", "timeout": 5000}]
+    },
     "PermissionRequest": {
         "matcher": "",
         "hooks": [{"type": "command", "command": f"{hook_script} waiting", "timeout": 5000}]
     },
+    "PostToolUseFailure": {
+        "matcher": "",
+        "hooks": [{"type": "command", "command": f"{hook_script} error", "timeout": 5000}]
+    },
+    "SubagentStart": {
+        "matcher": "",
+        "hooks": [{"type": "command", "command": f"{hook_script} subagent", "timeout": 5000}]
+    },
+    "SubagentStop": {
+        "matcher": "",
+        "hooks": [{"type": "command", "command": f"{hook_script} working", "timeout": 5000}]
+    },
     "Stop": {
+        "matcher": "",
+        "hooks": [{"type": "command", "command": f"{hook_script} done", "timeout": 5000}]
+    },
+    "TaskCompleted": {
         "matcher": "",
         "hooks": [{"type": "command", "command": f"{hook_script} done", "timeout": 5000}]
     },
@@ -186,7 +206,9 @@ echo "App installed to: $APP_PATH"
 echo "You can drag it to your Dock for easy access."
 echo ""
 echo "  ● Blinking white = Claude is working"
+echo "  ● Blinking cyan = subagent running"
 echo "  ● Yellow = waiting for your permission"
+echo "  ● Red = tool error"
 echo "  ● Green = done"
 echo ""
 echo "To start on login: System Settings → General → Login Items → add 'Claude Status Bar'"

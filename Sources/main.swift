@@ -8,7 +8,7 @@ import SwiftUI
 struct SessionInfo: Codable {
     let id: String
     let workspace: String
-    let state: String       // "working", "waiting", or "done"
+    let state: String       // "working", "waiting", "error", "subagent", "idle", or "done"
     let lastActivity: Double
     let startedAt: Double
 }
@@ -115,6 +115,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 let age = now - session.lastActivity
                 switch session.state {
                 case "idle":   return age < 60    // 1 minute — catches ghost sessions
+                case "error":  return age < 300   // 5 minutes — transient, don't linger
                 default:       return age < 1800  // 30 minutes — covers quiet periods
                 }
             }
@@ -180,6 +181,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     : NSColor.white.withAlphaComponent(0.15)
             case "waiting":
                 color = NSColor.systemYellow
+            case "error":
+                color = NSColor.systemRed
+            case "subagent":
+                color = blinkOn
+                    ? NSColor.systemCyan
+                    : NSColor.systemCyan.withAlphaComponent(0.15)
             case "idle":
                 color = NSColor.white.withAlphaComponent(0.35)
             default:
@@ -216,10 +223,12 @@ extension AppDelegate: NSMenuDelegate {
                 let name = URL(fileURLWithPath: session.workspace).lastPathComponent
                 let icon: String
                 switch session.state {
-                case "working": icon = "⟳"
-                case "waiting": icon = "⏸"
-                case "idle": icon = "○"
-                default: icon = "✓"
+                case "working":  icon = "⟳"
+                case "waiting":  icon = "⏸"
+                case "error":    icon = "✗"
+                case "subagent": icon = "⤴"
+                case "idle":     icon = "○"
+                default:         icon = "✓"
                 }
                 let elapsed = formatDuration(Date().timeIntervalSince1970 - session.startedAt)
 
