@@ -8,9 +8,12 @@ import json
 import sys
 import os
 import time
+import fcntl
+import tempfile
 
 STATUS_DIR = os.path.expanduser("~/Library/Application Support/ClaudeStatus")
 STATUS_FILE = os.path.join(STATUS_DIR, "sessions.json")
+LOCK_FILE = os.path.join(STATUS_DIR, "sessions.lock")
 STALE_THRESHOLD = 600  # 10 minutes
 
 
@@ -31,46 +34,55 @@ def main():
 
     os.makedirs(STATUS_DIR, exist_ok=True)
 
-    # Read existing sessions
-    try:
-        with open(STATUS_FILE, "r") as f:
-            status = json.load(f)
-    except Exception:
-        status = {"sessions": {}}
+    # Hold an exclusive lock for the entire read-modify-write cycle
+    # to prevent concurrent hooks from clobbering each other's updates
+    with open(LOCK_FILE, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
 
-    if "sessions" not in status:
-        status["sessions"] = {}
+        # Read existing sessions
+        try:
+            with open(STATUS_FILE, "r") as f:
+                status = json.load(f)
+        except Exception:
+            status = {"sessions": {}}
 
-    now = time.time()
+        if "sessions" not in status:
+            status["sessions"] = {}
 
-    if action == "remove":
-        # Session closed — remove it entirely
-        status["sessions"].pop(session_id, None)
-    else:
-        # Update or create session
-        existing = status["sessions"].get(session_id, {})
-        status["sessions"][session_id] = {
-            "id": session_id,
-            "workspace": workspace,
-            "state": action,
-            "lastActivity": now,
-            "startedAt": existing.get("startedAt", now),
-        }
+        now = time.time()
 
-    # Prune stale sessions
-    stale = [
-        sid
-        for sid, s in status["sessions"].items()
-        if now - s.get("lastActivity", 0) > STALE_THRESHOLD
-    ]
-    for sid in stale:
-        del status["sessions"][sid]
+        if action == "remove":
+            # Session closed — remove it entirely
+            status["sessions"].pop(session_id, None)
+        else:
+            # Update or create session
+            existing = status["sessions"].get(session_id, {})
+            status["sessions"][session_id] = {
+                "id": session_id,
+                "workspace": workspace,
+                "state": action,
+                "lastActivity": now,
+                "startedAt": existing.get("startedAt", now),
+            }
 
-    # Atomic write
-    tmp = STATUS_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(status, f, indent=2)
-    os.rename(tmp, STATUS_FILE)
+        # Prune stale sessions
+        stale = [
+            sid
+            for sid, s in status["sessions"].items()
+            if now - s.get("lastActivity", 0) > STALE_THRESHOLD
+        ]
+        for sid in stale:
+            del status["sessions"][sid]
+
+        # Atomic write with unique temp file to avoid collisions
+        fd, tmp = tempfile.mkstemp(dir=STATUS_DIR, suffix=".json.tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(status, f, indent=2)
+            os.rename(tmp, STATUS_FILE)
+        except Exception:
+            os.unlink(tmp)
+            raise
 
 
 if __name__ == "__main__":
