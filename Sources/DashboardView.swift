@@ -124,6 +124,7 @@ struct SessionCardView: View {
 
                 Text(session.displayTitle)
                     .font(.headline)
+                    .foregroundStyle(stateColor)
 
                 // Show workspace name as subtitle if custom title differs
                 if session.metrics.customTitle != nil {
