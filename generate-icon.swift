@@ -80,6 +80,6 @@ image.unlockFocus()
 let tiff = image.tiffRepresentation!
 let rep = NSBitmapImageRep(data: tiff)!
 let png = rep.representation(using: .png, properties: [:])!
-let outPath = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "/tmp/cue-icon.png"
+let outPath = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "/tmp/claude-cue-icon.png"
 try! png.write(to: URL(fileURLWithPath: outPath))
 print("Saved \(outPath)")
