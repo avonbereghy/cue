@@ -54,6 +54,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let padding: CGFloat = 2.0
     private let maxPerColumn = 2
 
+    var isDemo = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         let showInDock = UserDefaults.standard.object(forKey: "showInDock") as? Bool ?? true
         NSApp.setActivationPolicy(showInDock ? .regular : .accessory)
@@ -65,10 +67,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.delegate = self
         statusItem.menu = menu
 
-        // Poll session status every second
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.monitor.pollStatus()
-            self?.updateIcon()
+        // Check for --demo flag
+        isDemo = CommandLine.arguments.contains("--demo")
+
+        if isDemo {
+            monitor.loadDemoData()
+            updateIcon()
+        } else {
+            // Poll session status every second
+            pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                self?.monitor.pollStatus()
+                self?.updateIcon()
+            }
+
+            // Refresh JSONL metrics every 5s
+            metricsTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+                self?.monitor.refreshMetrics()
+            }
+
+            monitor.pollStatus()
+            monitor.refreshMetrics()
         }
 
         // Blink animation every 0.5s
@@ -76,14 +94,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.blinkOn.toggle()
             self?.updateIcon()
         }
-
-        // Refresh JSONL metrics every 5s
-        metricsTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            self?.monitor.refreshMetrics()
-        }
-
-        monitor.pollStatus()
-        monitor.refreshMetrics()
 
         // Auto-open dashboard on launch
         DispatchQueue.main.async { [weak self] in

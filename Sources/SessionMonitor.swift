@@ -15,6 +15,65 @@ final class SessionMonitor {
         claudeProjectsPath = "\(home)/.claude/projects"
     }
 
+    /// Load demo seed data for screenshots/previews
+    func loadDemoData() {
+        let now = Date().timeIntervalSince1970
+
+        let demoSessions: [(id: String, workspace: String, state: String, startedAt: Double)] = [
+            ("demo-1", "/Users/dev/Projects/WebApp", "working", now - 2281),
+            ("demo-2", "/Users/dev/Projects/APIServer", "done", now - 645),
+            ("demo-3", "/Users/dev/Projects/MLPipeline", "waiting", now - 1520),
+            ("demo-4", "/Users/dev/Projects/MobileApp", "done", now - 378),
+            ("demo-5", "/Users/dev/Projects/InfraConfig", "subagent", now - 912),
+        ]
+
+        let demoMetrics: [String: SessionMetrics] = [
+            "demo-1": SessionMetrics(
+                messageCount: 87, userMessageCount: 42, inputTokens: 12_400, outputTokens: 35_800,
+                cacheCreationTokens: 8_200, cacheReadTokens: 72_600, model: "claude-opus-4-6",
+                lastInputTokens: 118_500, customTitle: nil, gitBranch: "feat/dashboard",
+                toolCounts: ["Bash": 24, "Edit": 15, "Read": 12, "Write": 8, "Glob": 6, "Agent": 3, "Grep": 2]
+            ),
+            "demo-2": SessionMetrics(
+                messageCount: 31, userMessageCount: 14, inputTokens: 5_800, outputTokens: 12_200,
+                cacheCreationTokens: 3_100, cacheReadTokens: 28_400, model: "claude-opus-4-6",
+                lastInputTokens: 42_300, customTitle: "Auth Refactor", gitBranch: "fix/oauth-flow",
+                toolCounts: ["Read": 9, "Edit": 7, "Bash": 5, "Grep": 3]
+            ),
+            "demo-3": SessionMetrics(
+                messageCount: 53, userMessageCount: 28, inputTokens: 9_100, outputTokens: 22_500,
+                cacheCreationTokens: 5_500, cacheReadTokens: 51_200, model: "claude-sonnet-4-6",
+                lastInputTokens: 78_600, customTitle: nil, gitBranch: "main",
+                toolCounts: ["Bash": 18, "Read": 11, "TodoWrite": 5, "Agent": 4, "Write": 3]
+            ),
+            "demo-4": SessionMetrics(
+                messageCount: 15, userMessageCount: 8, inputTokens: 2_900, outputTokens: 6_400,
+                cacheCreationTokens: 1_800, cacheReadTokens: 14_200, model: "claude-sonnet-4-6",
+                lastInputTokens: 21_700, customTitle: "UI Tests", gitBranch: "test/e2e-suite",
+                toolCounts: ["Bash": 7, "Write": 4, "Read": 3, "Edit": 2]
+            ),
+            "demo-5": SessionMetrics(
+                messageCount: 44, userMessageCount: 20, inputTokens: 7_600, outputTokens: 18_900,
+                cacheCreationTokens: 4_200, cacheReadTokens: 38_700, model: "claude-opus-4-6",
+                lastInputTokens: 65_400, customTitle: nil, gitBranch: nil,
+                toolCounts: ["Bash": 12, "Read": 8, "Agent": 6, "Glob": 4, "ToolSearch": 2, "Edit": 1]
+            ),
+        ]
+
+        enrichedSessions = demoSessions.map { demo in
+            EnrichedSession(
+                info: SessionInfo(
+                    id: demo.id,
+                    workspace: demo.workspace,
+                    state: demo.state,
+                    lastActivity: now,
+                    startedAt: demo.startedAt
+                ),
+                metrics: demoMetrics[demo.id] ?? SessionMetrics()
+            )
+        }
+    }
+
     /// Poll sessions.json for current session states (called every ~1s)
     func pollStatus() {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: statusFilePath)),

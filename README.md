@@ -8,21 +8,30 @@ A native macOS menu bar app that shows real-time status of your Claude Code sess
 ![Zero Dependencies](https://img.shields.io/badge/Dependencies-None-brightgreen)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 
-## Status Indicators
+<table>
+<tr>
+<td><img src="assets/dashboard-demo.png" width="620" alt="Claude Cue Dashboard"></td>
+<td>
 
-Each Claude Code session appears as a colored dot in your menu bar:
+### Status Indicators
+
+Each session appears as a colored dot in your menu bar:
 
 | Color | Meaning |
 |-------|---------|
 | Blinking white | Claude is working |
 | Blinking cyan | Subagent running |
-| Yellow | Waiting for your permission |
+| Yellow | Waiting for permission |
 | Red | Tool error |
 | Green | Done |
 | Dim white | Idle |
 | Hollow ring | No active sessions |
 
 Multiple sessions show as a grid of dots — see all your sessions at once.
+
+</td>
+</tr>
+</table>
 
 ## Features
 
