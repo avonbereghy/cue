@@ -2,14 +2,14 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-HOOK_SCRIPT="$SCRIPT_DIR/hooks/claude-status-hook"
-STATUS_DIR="$HOME/Library/Application Support/ClaudeStatus"
+HOOK_SCRIPT="$SCRIPT_DIR/hooks/cue-hook"
+STATUS_DIR="$HOME/Library/Application Support/Cue"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
-APP_NAME="Claude Status Bar.app"
+APP_NAME="Cue.app"
 APP_DIR="$HOME/Applications"
 APP_PATH="$APP_DIR/$APP_NAME"
 
-echo "=== Claude Status Bar Installer ==="
+echo "=== Cue Installer ==="
 echo ""
 
 # 1. Create status directory with empty sessions file
@@ -28,11 +28,11 @@ echo ""
 echo "Building..."
 cd "$SCRIPT_DIR"
 swift build -c release 2>&1 | tail -3
-BINARY="$(swift build -c release --show-bin-path)/ClaudeStatusBar"
+BINARY="$(swift build -c release --show-bin-path)/Cue"
 echo "✓ Binary built"
 
 # 4. Kill existing instance if running
-pkill -f "Claude Status Bar.app/Contents/MacOS/ClaudeStatusBar" 2>/dev/null || true
+pkill -f "Cue.app/Contents/MacOS/Cue" 2>/dev/null || true
 
 # 5. Create .app bundle
 mkdir -p "$APP_DIR"
@@ -41,15 +41,15 @@ mkdir -p "$APP_PATH/Contents/MacOS"
 mkdir -p "$APP_PATH/Contents/Resources"
 
 # Copy binary into bundle
-cp "$BINARY" "$APP_PATH/Contents/MacOS/ClaudeStatusBar"
+cp "$BINARY" "$APP_PATH/Contents/MacOS/Cue"
 
 # Generate app icon
 echo "Generating icon..."
-ICON_PNG="/tmp/claude-status-icon-1024.png"
+ICON_PNG="/tmp/cue-icon-1024.png"
 swift "$SCRIPT_DIR/generate-icon.swift" "$ICON_PNG"
 
 # Create .iconset with all required sizes
-ICONSET="/tmp/ClaudeStatusBar.iconset"
+ICONSET="/tmp/Cue.iconset"
 rm -rf "$ICONSET"
 mkdir -p "$ICONSET"
 for sz in 16 32 128 256 512; do
@@ -70,13 +70,13 @@ cat > "$APP_PATH/Contents/Info.plist" << 'PLIST'
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>ClaudeStatusBar</string>
+    <string>Cue</string>
     <key>CFBundleIdentifier</key>
-    <string>com.claude-status-bar</string>
+    <string>com.claude-opera.cue</string>
     <key>CFBundleName</key>
-    <string>Claude Status Bar</string>
+    <string>Cue</string>
     <key>CFBundleDisplayName</key>
-    <string>Claude Status Bar</string>
+    <string>Cue</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>CFBundleShortVersionString</key>
@@ -211,7 +211,7 @@ echo "  ● Yellow = waiting for your permission"
 echo "  ● Red = tool error"
 echo "  ● Green = done"
 echo ""
-echo "To start on login: System Settings → General → Login Items → add 'Claude Status Bar'"
+echo "To start on login: System Settings → General → Login Items → add 'Cue'"
 echo ""
 echo "To uninstall:"
 echo "  rm -rf \"$APP_PATH\""
