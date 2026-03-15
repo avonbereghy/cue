@@ -11,7 +11,7 @@ final class SessionMonitor {
 
     init() {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        statusFilePath = "\(home)/Library/Application Support/Cue/sessions.json"
+        statusFilePath = "\(home)/Library/Application Support/Claude Cue/sessions.json"
         claudeProjectsPath = "\(home)/.claude/projects"
     }
 

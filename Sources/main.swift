@@ -178,7 +178,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "Cue Dashboard"
+        window.title = "Claude Cue Dashboard"
         window.contentView = NSHostingView(rootView: DashboardView(monitor: monitor))
         window.center()
         window.isReleasedWhenClosed = false
