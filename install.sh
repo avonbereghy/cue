@@ -2,7 +2,13 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-HOOK_SCRIPT="$SCRIPT_DIR/hooks/cue-hook"
+SYMPHONY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Create/update symlink so all paths resolve through one fixed location
+mkdir -p "$HOME/.claude"
+ln -sfn "$SYMPHONY_ROOT" "$HOME/.claude/symphony-root"
+
+HOOK_SCRIPT="$HOME/.claude/symphony-root/claude-cue/hooks/cue-hook"
 STATUS_DIR="$HOME/Library/Application Support/Claude Cue"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 APP_NAME="Claude Cue.app"
