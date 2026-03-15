@@ -3,25 +3,9 @@ import Foundation
 import ServiceManagement
 import SwiftUI
 
-// MARK: - Data Models
-
-struct SessionInfo: Codable {
-    let id: String
-    let workspace: String
-    let state: String       // "working", "waiting", "error", "subagent", "idle", or "done"
-    let lastActivity: Double
-    let startedAt: Double
-}
-
-struct StatusData: Codable {
-    var sessions: [String: SessionInfo]
-}
-
-// MARK: - App Delegate
-
 // MARK: - Settings View
 
-struct ClaudeStatusSettingsView: View {
+struct CueSettingsView: View {
     @AppStorage("showInDock") var showInDock = true
     @AppStorage("startAtLogin") var startAtLogin = false
 
@@ -51,18 +35,17 @@ struct ClaudeStatusSettingsView: View {
     }
 }
 
+// MARK: - App Delegate
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var pollTimer: Timer?
     private var animTimer: Timer?
+    private var metricsTimer: Timer?
     private var blinkOn = true
-    private var sessions: [SessionInfo] = []
     private var settingsWindow: NSWindow?
-
-    private let statusFilePath: String = {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/Library/Application Support/ClaudeStatus/sessions.json"
-    }()
+    private var dashboardWindow: NSWindow?
+    let monitor = SessionMonitor()
 
     // Dot grid layout constants
     private let dotSize: CGFloat = 7.0
@@ -84,7 +67,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Poll session status every second
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.pollStatus()
+            self?.monitor.pollStatus()
+            self?.updateIcon()
         }
 
         // Blink animation every 0.5s
@@ -93,40 +77,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.updateIcon()
         }
 
-        pollStatus()
-    }
-
-    // MARK: - Status Polling
-
-    func pollStatus() {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: statusFilePath)),
-              let status = try? JSONDecoder().decode(StatusData.self, from: data) else {
-            sessions = []
-            updateIcon()
-            return
+        // Refresh JSONL metrics every 5s
+        metricsTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            self?.monitor.refreshMetrics()
         }
 
-        let now = Date().timeIntervalSince1970
+        monitor.pollStatus()
+        monitor.refreshMetrics()
 
-        // State-dependent staleness: idle sessions expire fast (ghost cleanup),
-        // active sessions persist much longer (only SessionEnd should remove them).
-        sessions = status.sessions.values
-            .filter { session in
-                let age = now - session.lastActivity
-                switch session.state {
-                case "idle":   return age < 60    // 1 minute — catches ghost sessions
-                case "error":  return age < 300   // 5 minutes — transient, don't linger
-                default:       return age < 1800  // 30 minutes — covers quiet periods
-                }
-            }
-            .sorted { $0.startedAt < $1.startedAt }
-
-        // Cap at 8 (our grid maximum)
-        if sessions.count > 8 {
-            sessions = Array(sessions.prefix(8))
+        // Auto-open dashboard on launch
+        DispatchQueue.main.async { [weak self] in
+            self?.showDashboard()
         }
-
-        updateIcon()
     }
 
     // MARK: - Icon Rendering
@@ -137,6 +99,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func renderDotGrid() -> NSImage {
+        let sessions = monitor.enrichedSessions
         let count = sessions.count
 
         // No sessions — hollow ring to indicate app is running but nothing active
@@ -154,7 +117,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Vertical stacking, columns grow right-to-left
-        // First column (rightmost) fills bottom-to-top, then next column to the left
         let activeCols = Int(ceil(Double(count) / Double(maxPerColumn)))
         let activeRows = min(count, maxPerColumn)
 
@@ -164,17 +126,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let image = NSImage(size: NSSize(width: width, height: height))
         image.lockFocus()
 
-        for i in 0..<count {
-            let col = i / maxPerColumn              // which column (0 = first filled)
-            let row = i % maxPerColumn               // position within column
-            // Rightmost column = col 0, grows left
+        for i in 0..<min(count, 8) {
+            let col = i / maxPerColumn
+            let row = i % maxPerColumn
             let x = padding + CGFloat(activeCols - 1 - col) * (dotSize + hSpacing)
-            let y = padding + CGFloat(row) * (dotSize + vSpacing)  // bottom to top
+            let y = padding + CGFloat(row) * (dotSize + vSpacing)
             let rect = NSRect(x: x, y: y, width: dotSize, height: dotSize)
 
-            let session = sessions[i]
+            let state = sessions[i].info.state
             let color: NSColor
-            switch session.state {
+            switch state {
             case "working":
                 color = blinkOn
                     ? NSColor.white
@@ -201,50 +162,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         image.isTemplate = false
         return image
     }
-}
 
-// MARK: - Menu Delegate
+    // MARK: - Windows
 
-extension AppDelegate: NSMenuDelegate {
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.removeAllItems()
-
-        let header = NSMenuItem(title: "Claude Code Sessions", action: nil, keyEquivalent: "")
-        header.isEnabled = false
-        menu.addItem(header)
-        menu.addItem(NSMenuItem.separator())
-
-        if sessions.isEmpty {
-            let item = NSMenuItem(title: "No active sessions", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
-        } else {
-            for session in sessions {
-                let name = URL(fileURLWithPath: session.workspace).lastPathComponent
-                let icon: String
-                switch session.state {
-                case "working":  icon = "⟳"
-                case "waiting":  icon = "⏸"
-                case "error":    icon = "✗"
-                case "subagent": icon = "⤴"
-                case "idle":     icon = "○"
-                default:         icon = "✓"
-                }
-                let elapsed = formatDuration(Date().timeIntervalSince1970 - session.startedAt)
-
-                let item = NSMenuItem(
-                    title: "\(icon)  \(name) — \(elapsed)",
-                    action: nil,
-                    keyEquivalent: ""
-                )
-                item.isEnabled = false
-                menu.addItem(item)
-            }
+    @objc func showDashboard() {
+        if let window = dashboardWindow {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
         }
 
-        menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Settings...", action: #selector(showSettings), keyEquivalent: ","))
-        menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Cue Dashboard"
+        window.contentView = NSHostingView(rootView: DashboardView(monitor: monitor))
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.setFrameAutosaveName("DashboardWindow")
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        dashboardWindow = window
     }
 
     @objc func showSettings() {
@@ -261,7 +202,7 @@ extension AppDelegate: NSMenuDelegate {
             defer: false
         )
         window.title = "Settings"
-        window.contentView = NSHostingView(rootView: ClaudeStatusSettingsView())
+        window.contentView = NSHostingView(rootView: CueSettingsView())
         window.center()
         window.isReleasedWhenClosed = false
         window.makeKeyAndOrderFront(nil)
@@ -272,12 +213,47 @@ extension AppDelegate: NSMenuDelegate {
     @objc func quit() {
         NSApplication.shared.terminate(nil)
     }
+}
 
-    private func formatDuration(_ seconds: TimeInterval) -> String {
-        let totalSeconds = max(0, Int(seconds))
-        let mins = totalSeconds / 60
-        let secs = totalSeconds % 60
-        return mins > 0 ? "\(mins)m \(secs)s" : "\(secs)s"
+// MARK: - Menu Delegate
+
+extension AppDelegate: NSMenuDelegate {
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+
+        let header = NSMenuItem(title: "Claude Code Sessions", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        menu.addItem(NSMenuItem.separator())
+
+        let sessions = monitor.enrichedSessions
+        if sessions.isEmpty {
+            let item = NSMenuItem(title: "No active sessions", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        } else {
+            for session in sessions {
+                let name = session.workspaceName
+                let icon = session.stateIcon
+                let elapsed = Format.duration(session.duration)
+                let tokens = session.metrics.totalTokens > 0
+                    ? " · \(Format.tokens(session.metrics.totalTokens)) tokens"
+                    : ""
+
+                let item = NSMenuItem(
+                    title: "\(icon)  \(name) — \(elapsed)\(tokens)",
+                    action: nil,
+                    keyEquivalent: ""
+                )
+                item.isEnabled = false
+                menu.addItem(item)
+            }
+        }
+
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "Dashboard...", action: #selector(showDashboard), keyEquivalent: "d"))
+        menu.addItem(NSMenuItem(title: "Settings...", action: #selector(showSettings), keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
     }
 }
 
