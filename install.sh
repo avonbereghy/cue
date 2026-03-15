@@ -78,7 +78,7 @@ cat > "$APP_PATH/Contents/Info.plist" << 'PLIST'
     <key>CFBundleExecutable</key>
     <string>ClaudeCue</string>
     <key>CFBundleIdentifier</key>
-    <string>com.agentopera.claude-cue</string>
+    <string>com.claudestage.claude-cue</string>
     <key>CFBundleName</key>
     <string>Claude Cue</string>
     <key>CFBundleDisplayName</key>

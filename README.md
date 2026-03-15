@@ -60,7 +60,7 @@ The Swift app reads `sessions.json` every second and renders the dot grid in the
 ## Install
 
 ```bash
-git clone https://github.com/AgentOpera/claude-cue.git
+git clone https://github.com/ClaudeStage/claude-cue.git
 cd claude-cue
 bash install.sh
 ```
@@ -97,15 +97,15 @@ hooks/
 
 **4 Swift files, zero external dependencies.** Pure SwiftUI + AppKit with `@Observable` state and atomic file writes.
 
-## AgentOpera
+## Claude Stage
 
-Claude Cue is part of [AgentOpera](https://github.com/AgentOpera), a collection of tools for Claude Code:
+Claude Cue is part of [Claude Stage](https://github.com/ClaudeStage), a collection of tools for Claude Code:
 
 | Project | What It Does |
 |---------|-------------|
-| **[Claude Symphony](https://github.com/AgentOpera/claude-symphony)** | Workflow methodology + slash commands for project generation |
-| **[Claude Conductor](https://github.com/AgentOpera/claude-conductor)** | Native macOS app for managing Claude Code configuration |
-| **[Claude Cue](https://github.com/AgentOpera/claude-cue)** | Status line indicator for Claude Code sessions |
+| **[Claude Symphony](https://github.com/ClaudeStage/claude-symphony)** | Workflow methodology + slash commands for project generation |
+| **[Claude Conductor](https://github.com/ClaudeStage/claude-conductor)** | Native macOS app for managing Claude Code configuration |
+| **[Claude Cue](https://github.com/ClaudeStage/claude-cue)** | Status line indicator for Claude Code sessions |
 
 ## License
 
