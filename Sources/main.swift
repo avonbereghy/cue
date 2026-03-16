@@ -5,9 +5,34 @@ import SwiftUI
 
 // MARK: - Settings View
 
+// MARK: - Plan Presets
+
+enum PlanPreset: String, CaseIterable {
+    case custom = "Custom"
+    case pro = "Pro ($20/mo)"
+    case maxStandard = "Max ($100/mo)"
+    case maxPlus = "Max ($200/mo)"
+
+    var limits: (fiveHour: Int, daily: Int, weekly: Int) {
+        switch self {
+        case .custom:       return (0, 0, 0)
+        case .pro:          return (500_000, 2_000_000, 10_000_000)
+        case .maxStandard:  return (2_000_000, 8_000_000, 40_000_000)
+        case .maxPlus:      return (4_000_000, 16_000_000, 80_000_000)
+        }
+    }
+}
+
 struct CueSettingsView: View {
     @AppStorage("showInDock") var showInDock = true
     @AppStorage("startAtLogin") var startAtLogin = false
+    @AppStorage("fiveHourTokenLimit") var fiveHourLimit = 0
+    @AppStorage("dailyTokenLimit") var dailyLimit = 0
+    @AppStorage("weeklyTokenLimit") var weeklyLimit = 0
+    @State private var selectedPlan = PlanPreset.custom
+    @State private var fiveHourText = ""
+    @State private var dailyText = ""
+    @State private var weeklyText = ""
 
     var body: some View {
         Form {
@@ -29,9 +54,74 @@ struct CueSettingsView: View {
                         }
                     }
             }
+
+            Section("Usage Limits") {
+                Picker("Plan preset", selection: $selectedPlan) {
+                    ForEach(PlanPreset.allCases, id: \.self) { plan in
+                        Text(plan.rawValue).tag(plan)
+                    }
+                }
+                .onChange(of: selectedPlan) { _, plan in
+                    guard plan != .custom else { return }
+                    let limits = plan.limits
+                    fiveHourLimit = limits.fiveHour
+                    dailyLimit = limits.daily
+                    weeklyLimit = limits.weekly
+                    fiveHourText = "\(limits.fiveHour)"
+                    dailyText = "\(limits.daily)"
+                    weeklyText = "\(limits.weekly)"
+                }
+
+                TokenLimitField(label: "5-hour limit", value: $fiveHourLimit, text: $fiveHourText)
+                TokenLimitField(label: "Daily limit", value: $dailyLimit, text: $dailyText)
+                TokenLimitField(label: "Weekly limit", value: $weeklyLimit, text: $weeklyText)
+
+                Text("Set limits to show progress bars. Pick a plan preset or enter custom values.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
-        .frame(width: 350)
+        .frame(width: 420)
+        .onAppear {
+            fiveHourText = fiveHourLimit > 0 ? "\(fiveHourLimit)" : ""
+            dailyText = dailyLimit > 0 ? "\(dailyLimit)" : ""
+            weeklyText = weeklyLimit > 0 ? "\(weeklyLimit)" : ""
+            // Detect current plan
+            selectedPlan = .custom
+            for plan in PlanPreset.allCases where plan != .custom {
+                if plan.limits == (fiveHourLimit, dailyLimit, weeklyLimit) {
+                    selectedPlan = plan
+                    break
+                }
+            }
+        }
+    }
+}
+
+struct TokenLimitField: View {
+    let label: String
+    @Binding var value: Int
+    @Binding var text: String
+
+    var body: some View {
+        HStack {
+            Text(label)
+            Spacer()
+            TextField("0", text: $text)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 120)
+                .monospacedDigit()
+                .onChange(of: text) { _, newValue in
+                    value = Int(newValue.filter(\.isNumber)) ?? 0
+                }
+            if value > 0 {
+                Text(Format.tokens(value))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 50, alignment: .leading)
+            }
+        }
     }
 }
 

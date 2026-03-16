@@ -1,8 +1,73 @@
 import SwiftUI
 
+// MARK: - Dashboard Tab
+
+enum DashboardTab: String, CaseIterable {
+    case sessions = "Sessions"
+    case usage = "Usage"
+
+    var icon: String {
+        switch self {
+        case .sessions: return "circle.grid.2x2"
+        case .usage: return "chart.bar"
+        }
+    }
+}
+
 // MARK: - Dashboard Window
 
 struct DashboardView: View {
+    var monitor: SessionMonitor
+    @AppStorage("selectedDashboardTab") private var selectedTab = DashboardTab.sessions.rawValue
+
+    private var tab: DashboardTab {
+        DashboardTab(rawValue: selectedTab) ?? .sessions
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Tab bar
+            HStack(spacing: 0) {
+                ForEach(DashboardTab.allCases, id: \.self) { t in
+                    Button {
+                        selectedTab = t.rawValue
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: t.icon)
+                                .font(.caption)
+                            Text(t.rawValue)
+                                .font(.subheadline)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(tab == t ? Color.accentColor.opacity(0.15) : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial)
+
+            Divider()
+
+            // Tab content
+            switch tab {
+            case .sessions:
+                SessionsTabView(monitor: monitor)
+            case .usage:
+                UsageView(monitor: monitor)
+            }
+        }
+        .frame(minWidth: 680, minHeight: 300)
+    }
+}
+
+// MARK: - Sessions Tab (extracted from original DashboardView body)
+
+struct SessionsTabView: View {
     var monitor: SessionMonitor
 
     private var totalMessages: Int {
@@ -61,7 +126,6 @@ struct DashboardView: View {
                 }
             }
         }
-        .frame(minWidth: 680, minHeight: 300)
     }
 }
 
@@ -124,7 +188,7 @@ struct SessionCardView: View {
 
                 Text(session.displayTitle)
                     .font(.headline)
-                    .foregroundStyle(stateColor)
+                    .foregroundStyle(session.info.state == "working" ? .primary : stateColor)
 
                 // Show workspace name as subtitle if custom title differs
                 if session.metrics.customTitle != nil {
@@ -135,6 +199,7 @@ struct SessionCardView: View {
 
                 Text(session.stateDisplayName)
                     .font(.caption)
+                    .foregroundStyle(.primary)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 2)
                     .background(stateColor.opacity(0.2))

@@ -3,11 +3,18 @@ import Foundation
 @Observable
 final class SessionMonitor {
     var enrichedSessions: [EnrichedSession] = []
+    var usageMetrics: [UsageWindow: WindowMetrics] = [:]
 
     private let statusFilePath: String
     private let claudeProjectsPath: String
     private var metricsCache: [String: SessionMetrics] = [:]
     private var fileModDates: [String: Date] = [:]
+    private var resolvedPaths: [String: String] = [:]
+    private let usageAggregator = UsageAggregator()
+
+    func tokenLimit(for window: UsageWindow) -> Int {
+        UserDefaults.standard.integer(forKey: window.settingsKey)
+    }
 
     init() {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -17,6 +24,15 @@ final class SessionMonitor {
 
     /// Load demo seed data for screenshots/previews
     func loadDemoData() {
+        // Set demo token limits so progress bars appear
+        let defaults = UserDefaults.standard
+        if defaults.integer(forKey: "fiveHourTokenLimit") == 0 {
+            let preset = PlanPreset.maxStandard.limits
+            defaults.set(preset.fiveHour, forKey: "fiveHourTokenLimit")
+            defaults.set(preset.daily, forKey: "dailyTokenLimit")
+            defaults.set(preset.weekly, forKey: "weeklyTokenLimit")
+        }
+
         let now = Date().timeIntervalSince1970
 
         let demoSessions: [(id: String, workspace: String, state: String, startedAt: Double)] = [
@@ -72,6 +88,37 @@ final class SessionMonitor {
                 metrics: demoMetrics[demo.id] ?? SessionMetrics()
             )
         }
+
+        // Demo usage metrics
+        usageMetrics = [
+            .fiveHour: WindowMetrics(
+                inputTokens: 37_800, outputTokens: 95_800,
+                sessionCount: 5, userMessageCount: 112, assistantMessageCount: 230,
+                toolCounts: ["Bash": 66, "Read": 43, "Edit": 25, "Write": 15, "Glob": 10, "Agent": 13, "Grep": 5, "TodoWrite": 5],
+                modelTokens: [
+                    "claude-opus-4-6": (input: 25_800, output: 67_100),
+                    "claude-sonnet-4-6": (input: 12_000, output: 28_700)
+                ]
+            ),
+            .daily: WindowMetrics(
+                inputTokens: 82_400, outputTokens: 198_500,
+                sessionCount: 11, userMessageCount: 245, assistantMessageCount: 490,
+                toolCounts: ["Bash": 142, "Read": 95, "Edit": 58, "Write": 32, "Agent": 28, "Glob": 22, "Grep": 14, "TodoWrite": 10],
+                modelTokens: [
+                    "claude-opus-4-6": (input: 58_200, output: 145_300),
+                    "claude-sonnet-4-6": (input: 24_200, output: 53_200)
+                ]
+            ),
+            .weekly: WindowMetrics(
+                inputTokens: 412_000, outputTokens: 1_024_000,
+                sessionCount: 47, userMessageCount: 1_180, assistantMessageCount: 2_340,
+                toolCounts: ["Bash": 680, "Read": 455, "Edit": 290, "Write": 162, "Agent": 134, "Glob": 108, "Grep": 72, "TodoWrite": 48],
+                modelTokens: [
+                    "claude-opus-4-6": (input: 290_000, output: 720_000),
+                    "claude-sonnet-4-6": (input: 122_000, output: 304_000)
+                ]
+            ),
+        ]
     }
 
     /// Poll sessions.json for current session states (called every ~1s)
@@ -120,15 +167,53 @@ final class SessionMonitor {
         }
         // Rebuild enriched sessions with updated metrics
         pollStatus()
+
+        // Also refresh usage aggregation
+        refreshUsage()
+    }
+
+    /// Aggregate usage data across all JSONL files for time windows (called every ~5s)
+    func refreshUsage() {
+        usageMetrics = usageAggregator.aggregate()
     }
 
     // MARK: - JSONL Parsing
 
-    /// Construct path to session's JSONL log file
-    /// Format: ~/.claude/projects/<encoded-workspace>/<session-id>.jsonl
+    /// Find path to session's JSONL log file.
+    /// Claude Code uses the git root (not necessarily the CWD) as the project directory,
+    /// so we try the exact workspace encoding first, then walk up parent directories,
+    /// and finally search all project directories as a fallback.
     private func jsonlPath(for session: SessionInfo) -> String {
+        if let cached = resolvedPaths[session.id] { return cached }
+
+        let filename = "\(session.id).jsonl"
+
+        // Try exact workspace path and each parent directory
+        var path = session.workspace
+        while !path.isEmpty && path != "/" {
+            let encoded = path.replacingOccurrences(of: "/", with: "-")
+            let candidate = "\(claudeProjectsPath)/\(encoded)/\(filename)"
+            if FileManager.default.fileExists(atPath: candidate) {
+                resolvedPaths[session.id] = candidate
+                return candidate
+            }
+            path = (path as NSString).deletingLastPathComponent
+        }
+
+        // Fallback: search all project directories
+        if let dirs = try? FileManager.default.contentsOfDirectory(atPath: claudeProjectsPath) {
+            for dir in dirs {
+                let candidate = "\(claudeProjectsPath)/\(dir)/\(filename)"
+                if FileManager.default.fileExists(atPath: candidate) {
+                    resolvedPaths[session.id] = candidate
+                    return candidate
+                }
+            }
+        }
+
+        // Not found — return the original encoding so it can be retried later
         let encoded = session.workspace.replacingOccurrences(of: "/", with: "-")
-        return "\(claudeProjectsPath)/\(encoded)/\(session.id).jsonl"
+        return "\(claudeProjectsPath)/\(encoded)/\(filename)"
     }
 
     /// Parse a JSONL file to extract token usage metrics

@@ -115,6 +115,124 @@ struct EnrichedSession: Identifiable, Sendable {
     }
 }
 
+// MARK: - Usage Aggregation (across all sessions by time window)
+
+enum UsageWindow: String, CaseIterable, Sendable {
+    case fiveHour = "Session (5hr)"
+    case daily = "Today"
+    case weekly = "This Week"
+
+    var displayName: String { rawValue }
+
+    var settingsKey: String {
+        switch self {
+        case .fiveHour: return "fiveHourTokenLimit"
+        case .daily:    return "dailyTokenLimit"
+        case .weekly:   return "weeklyTokenLimit"
+        }
+    }
+
+    /// How far back (in seconds) this window looks from now
+    func startDate(from now: Date = Date()) -> Date {
+        switch self {
+        case .fiveHour:
+            return now.addingTimeInterval(-5 * 3600)
+        case .daily:
+            return Calendar.current.startOfDay(for: now)
+        case .weekly:
+            var cal = Calendar.current
+            cal.firstWeekday = 2  // Monday
+            let components = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)
+            return cal.date(from: components) ?? now.addingTimeInterval(-7 * 86400)
+        }
+    }
+
+    /// When the current window resets, as a human-readable countdown
+    func resetsIn(from now: Date = Date()) -> String {
+        let resetDate: Date
+        switch self {
+        case .fiveHour:
+            // Rolling window — "resets" when the oldest usage falls off (5h from first usage in window)
+            // Approximate: show time until 5h from now
+            resetDate = now.addingTimeInterval(5 * 3600)
+        case .daily:
+            // Resets at next midnight
+            resetDate = Calendar.current.startOfDay(for: now).addingTimeInterval(86400)
+        case .weekly:
+            // Resets next Monday
+            var cal = Calendar.current
+            cal.firstWeekday = 2
+            let components = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)
+            let thisMonday = cal.date(from: components) ?? now
+            resetDate = thisMonday.addingTimeInterval(7 * 86400)
+        }
+
+        let remaining = max(0, resetDate.timeIntervalSince(now))
+        let hours = Int(remaining) / 3600
+        let mins = (Int(remaining) % 3600) / 60
+
+        if hours >= 24 {
+            let days = hours / 24
+            return "Resets in \(days)d"
+        } else if hours > 0 {
+            return "Resets in \(hours)h"
+        } else {
+            return "Resets in \(mins)m"
+        }
+    }
+}
+
+struct WindowMetrics: Sendable {
+    var inputTokens: Int = 0
+    var outputTokens: Int = 0
+    var sessionCount: Int = 0
+    var userMessageCount: Int = 0
+    var assistantMessageCount: Int = 0
+    var toolCounts: [String: Int] = [:]
+    var modelTokens: [String: (input: Int, output: Int)] = [:]
+
+    var totalTokens: Int { inputTokens + outputTokens }
+
+    var topTools: [(name: String, count: Int)] {
+        toolCounts.sorted { $0.value > $1.value }.map { ($0.key, $0.value) }
+    }
+
+    var totalToolUses: Int { toolCounts.values.reduce(0, +) }
+
+    var estimatedCostUSD: Double {
+        var cost = 0.0
+        for (model, tokens) in modelTokens {
+            let pricing = ModelPricing.forModel(model)
+            cost += Double(tokens.input) * pricing.inputPerToken
+            cost += Double(tokens.output) * pricing.outputPerToken
+        }
+        return cost
+    }
+}
+
+// MARK: - Model Pricing (per-token USD rates)
+
+struct ModelPricing: Sendable {
+    let inputPerToken: Double
+    let outputPerToken: Double
+
+    /// Published API pricing as of 2025 (per token, not per million)
+    static func forModel(_ model: String) -> ModelPricing {
+        let m = model.lowercased()
+        if m.contains("opus") {
+            return ModelPricing(inputPerToken: 15.0 / 1_000_000, outputPerToken: 75.0 / 1_000_000)
+        }
+        if m.contains("sonnet") {
+            return ModelPricing(inputPerToken: 3.0 / 1_000_000, outputPerToken: 15.0 / 1_000_000)
+        }
+        if m.contains("haiku") {
+            return ModelPricing(inputPerToken: 0.80 / 1_000_000, outputPerToken: 4.0 / 1_000_000)
+        }
+        // Default to Sonnet pricing
+        return ModelPricing(inputPerToken: 3.0 / 1_000_000, outputPerToken: 15.0 / 1_000_000)
+    }
+}
+
 // MARK: - Formatting Helpers
 
 enum Format {
@@ -131,5 +249,16 @@ enum Format {
         let secs = total % 60
         if hrs > 0 { return String(format: "%dh %02dm", hrs, mins) }
         return String(format: "%dm %02ds", mins, secs)
+    }
+
+    static func cost(_ usd: Double) -> String {
+        if usd < 0.01 { return "$0.00" }
+        return String(format: "$%.2f", usd)
+    }
+
+    static func timeRange(from start: Date, to end: Date = Date()) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm"
+        return "\(fmt.string(from: start)) – \(fmt.string(from: end))"
     }
 }
