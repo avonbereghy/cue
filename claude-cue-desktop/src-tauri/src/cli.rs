@@ -278,6 +278,7 @@ mod tests {
             state: "working".to_string(),
             last_activity: 0.0,
             started_at: 0.0,
+            source: None,
         };
         let enriched =
             EnrichedSession::from_info_and_metrics(info, SessionMetrics::default());
@@ -293,6 +294,7 @@ mod tests {
             state: "working".to_string(),
             last_activity: 0.0,
             started_at: 0.0,
+            source: None,
         };
         let enriched =
             EnrichedSession::from_info_and_metrics(info, SessionMetrics::default());
@@ -397,6 +399,7 @@ mod tests {
             state: "working".to_string(),
             last_activity: 1000.0,
             started_at: 900.0,
+            source: None,
         };
         let sessions = vec![EnrichedSession::from_info_and_metrics(
             info,
