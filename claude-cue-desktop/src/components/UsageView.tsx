@@ -36,6 +36,7 @@ export function UsageView({ metrics }: UsageViewProps) {
 
     const newSettings: Settings = {
       onboardingComplete: settings?.onboardingComplete ?? true,
+      permissionsEnabled: settings?.permissionsEnabled ?? false,
       fiveHourTokenLimit: preset.limits.fiveHour,
       dailyTokenLimit: preset.limits.daily,
       weeklyTokenLimit: preset.limits.weekly,

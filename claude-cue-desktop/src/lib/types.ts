@@ -56,6 +56,7 @@ export interface Settings {
   weeklyTokenLimit: number;
   planPreset: string;
   onboardingComplete: boolean;
+  permissionsEnabled: boolean;
 }
 
 export interface EnvironmentInfo {

@@ -77,7 +77,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           title={showPermissions ? "Hide permission requests" : "Show permission requests"}
         >
           <span className={`inline-block w-2 h-2 rounded-full ${showPermissions ? "bg-yellow-400" : "bg-white/20"}`} />
-          Permissions{totalPending > 0 ? ` (${totalPending})` : ""}
+          Permissions (Beta){totalPending > 0 ? ` ${totalPending}` : ""}
         </button>
       </div>
 
