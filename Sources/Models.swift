@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Session Status (from sessions.json via hooks)
 
-struct SessionInfo: Codable, Identifiable, Sendable {
+struct SessionInfo: Codable, Identifiable, Sendable, Equatable {
     let id: String
     let workspace: String
     let state: String       // "working", "waiting", "error", "subagent", "idle", or "done"
@@ -16,7 +16,7 @@ struct StatusData: Codable, Sendable {
 
 // MARK: - Session Metrics (parsed from JSONL conversation logs)
 
-struct SessionMetrics: Sendable {
+struct SessionMetrics: Sendable, Equatable {
     var messageCount: Int = 0
     var userMessageCount: Int = 0
     var inputTokens: Int = 0
@@ -47,9 +47,13 @@ struct SessionMetrics: Sendable {
 
 // MARK: - Enriched Session (combines hook state + JSONL metrics)
 
-struct EnrichedSession: Identifiable, Sendable {
+struct EnrichedSession: Identifiable, Sendable, Equatable {
     let info: SessionInfo
     var metrics: SessionMetrics
+
+    static func == (lhs: EnrichedSession, rhs: EnrichedSession) -> Bool {
+        lhs.info == rhs.info && lhs.metrics == rhs.metrics
+    }
 
     var id: String { info.id }
 
@@ -182,7 +186,7 @@ enum UsageWindow: String, CaseIterable, Sendable {
     }
 }
 
-struct WindowMetrics: Sendable {
+struct WindowMetrics: Sendable, Equatable {
     var inputTokens: Int = 0
     var outputTokens: Int = 0
     var sessionCount: Int = 0
@@ -190,6 +194,15 @@ struct WindowMetrics: Sendable {
     var assistantMessageCount: Int = 0
     var toolCounts: [String: Int] = [:]
     var modelTokens: [String: (input: Int, output: Int)] = [:]
+
+    static func == (lhs: WindowMetrics, rhs: WindowMetrics) -> Bool {
+        lhs.inputTokens == rhs.inputTokens &&
+        lhs.outputTokens == rhs.outputTokens &&
+        lhs.sessionCount == rhs.sessionCount &&
+        lhs.userMessageCount == rhs.userMessageCount &&
+        lhs.assistantMessageCount == rhs.assistantMessageCount &&
+        lhs.toolCounts == rhs.toolCounts
+    }
 
     var totalTokens: Int { inputTokens + outputTokens }
 
