@@ -10,6 +10,7 @@ final class SessionMonitor {
     private var metricsCache: [String: SessionMetrics] = [:]
     private var fileModDates: [String: Date] = [:]
     private var resolvedPaths: [String: String] = [:]
+    private var lastStatusModDate: Date?
     private let usageAggregator = UsageAggregator()
 
     func tokenLimit(for window: UsageWindow) -> Int {
@@ -123,9 +124,18 @@ final class SessionMonitor {
 
     /// Poll sessions.json for current session states (called every ~1s)
     func pollStatus() {
+        // Skip if file hasn't been modified since last poll
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: statusFilePath),
+           let modDate = attrs[.modificationDate] as? Date {
+            if let lastMod = lastStatusModDate, lastMod == modDate {
+                return  // No change — skip the read entirely
+            }
+            lastStatusModDate = modDate
+        }
+
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: statusFilePath)),
               let status = try? JSONDecoder().decode(StatusData.self, from: data) else {
-            enrichedSessions = []
+            if !enrichedSessions.isEmpty { enrichedSessions = [] }
             return
         }
 
@@ -141,8 +151,13 @@ final class SessionMonitor {
             }
             .sorted { $0.startedAt < $1.startedAt }
 
-        enrichedSessions = active.map { session in
+        let newSessions = active.map { session in
             EnrichedSession(info: session, metrics: metricsCache[session.id] ?? SessionMetrics())
+        }
+
+        // Only update (and trigger SwiftUI re-render) if data actually changed
+        if newSessions != enrichedSessions {
+            enrichedSessions = newSessions
         }
     }
 
@@ -152,29 +167,20 @@ final class SessionMonitor {
             let path = jsonlPath(for: session.info)
             guard FileManager.default.fileExists(atPath: path) else { continue }
 
-            // Skip if file hasn't changed since last parse
-            if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-               let modDate = attrs[.modificationDate] as? Date {
-                if let cached = fileModDates[session.id], cached == modDate {
-                    continue
-                }
-                fileModDates[session.id] = modDate
-            }
-
-            if let metrics = parseJSONL(at: path) {
-                metricsCache[session.id] = metrics
-            }
+            var metrics = metricsCache[session.id] ?? SessionMetrics()
+            parseJSONLIncremental(at: path, into: &metrics)
+            metricsCache[session.id] = metrics
         }
-        // Rebuild enriched sessions with updated metrics
-        pollStatus()
-
         // Also refresh usage aggregation
         refreshUsage()
     }
 
     /// Aggregate usage data across all JSONL files for time windows (called every ~5s)
     func refreshUsage() {
-        usageMetrics = usageAggregator.aggregate()
+        let newMetrics = usageAggregator.aggregate()
+        if newMetrics != usageMetrics {
+            usageMetrics = newMetrics
+        }
     }
 
     // MARK: - JSONL Parsing
@@ -216,51 +222,68 @@ final class SessionMonitor {
         return "\(claudeProjectsPath)/\(encoded)/\(filename)"
     }
 
-    /// Parse a JSONL file to extract token usage metrics
-    private func parseJSONL(at path: String) -> SessionMetrics? {
-        guard let content = try? String(contentsOf: URL(fileURLWithPath: path), encoding: .utf8) else {
-            return nil
+    /// Parse new bytes from a JSONL file incrementally.
+    /// Only reads content appended since the last parse (tracked via jsonlOffsets).
+    private var jsonlOffsets: [String: UInt64] = [:]
+
+    private func parseJSONLIncremental(at path: String, into existing: inout SessionMetrics) {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return }
+        defer { handle.closeFile() }
+
+        handle.seekToEndOfFile()
+        let fileSize = handle.offsetInFile
+
+        let lastOffset = jsonlOffsets[path] ?? 0
+        let startOffset = lastOffset > fileSize ? 0 : lastOffset
+
+        guard fileSize > startOffset else {
+            jsonlOffsets[path] = fileSize
+            return
         }
 
-        var m = SessionMetrics()
+        // If re-reading from start (first time or file replaced), reset metrics
+        if startOffset == 0 {
+            existing = SessionMetrics()
+        }
+
+        handle.seek(toFileOffset: startOffset)
+        let newData = handle.readData(ofLength: Int(fileSize - startOffset))
+        jsonlOffsets[path] = fileSize
+
+        guard let content = String(data: newData, encoding: .utf8) else { return }
 
         for line in content.components(separatedBy: .newlines) where !line.isEmpty {
             guard let data = line.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let type = json["type"] as? String else { continue }
 
-            // Extract custom title
             if type == "custom-title", let title = json["customTitle"] as? String {
-                m.customTitle = title
+                existing.customTitle = title
             }
 
-            // Track git branch from any message that has it
             if let branch = json["gitBranch"] as? String, branch != "HEAD" {
-                m.gitBranch = branch
+                existing.gitBranch = branch
             }
 
-            // Count user messages
             if type == "user" {
-                m.userMessageCount += 1
+                existing.userMessageCount += 1
             }
 
-            // Parse assistant messages for tokens and tool usage
             guard type == "assistant",
                   let message = json["message"] as? [String: Any],
                   let usage = message["usage"] as? [String: Any] else { continue }
 
-            m.messageCount += 1
+            existing.messageCount += 1
 
             if let model = message["model"] as? String {
-                m.model = model
+                existing.model = model
             }
 
-            // Count tool uses from message content
             if let content = message["content"] as? [[String: Any]] {
                 for block in content {
                     if block["type"] as? String == "tool_use",
                        let name = block["name"] as? String {
-                        m.toolCounts[name, default: 0] += 1
+                        existing.toolCounts[name, default: 0] += 1
                     }
                 }
             }
@@ -270,14 +293,11 @@ final class SessionMonitor {
             let cacheCreate = usage["cache_creation_input_tokens"] as? Int ?? 0
             let cacheRead = usage["cache_read_input_tokens"] as? Int ?? 0
 
-            m.inputTokens += input
-            m.outputTokens += output
-            m.cacheCreationTokens += cacheCreate
-            m.cacheReadTokens += cacheRead
-            // Context usage = all input tokens (non-cached + cached)
-            m.lastInputTokens = input + cacheCreate + cacheRead
+            existing.inputTokens += input
+            existing.outputTokens += output
+            existing.cacheCreationTokens += cacheCreate
+            existing.cacheReadTokens += cacheRead
+            existing.lastInputTokens = input + cacheCreate + cacheRead
         }
-
-        return m
     }
 }

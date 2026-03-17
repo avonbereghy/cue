@@ -1,8 +1,14 @@
 import Foundation
 
 /// Scans all JSONL conversation logs and aggregates token usage by time window.
-final class UsageAggregator: Sendable {
+/// Uses incremental parsing — only reads new bytes appended since the last scan.
+final class UsageAggregator {
     private let claudeProjectsPath: String
+
+    // Incremental state: track byte offset per file so we only parse new content
+    private var fileOffsets: [String: UInt64] = [:]
+    // Cached parsed entries per file (only entries within the widest window)
+    private var cachedEntries: [String: [UsageEntry]] = [:]
 
     init() {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -20,7 +26,8 @@ final class UsageAggregator: Sendable {
         }
     }
 
-    /// Aggregate usage across all JSONL files for each time window
+    /// Aggregate usage across all JSONL files for each time window.
+    /// Incrementally reads only new bytes from files since the last call.
     func aggregate() -> [UsageWindow: WindowMetrics] {
         let now = Date()
         var results: [UsageWindow: WindowMetrics] = [:]
@@ -32,26 +39,32 @@ final class UsageAggregator: Sendable {
             ($0, $0.startDate(from: now))
         })
 
-        // Oldest window start — skip files that can't possibly have relevant data
         let oldestStart = windowStarts.values.min() ?? now
 
-        // Find and parse all JSONL files
-        let jsonlFiles = findAllJSONLFiles()
+        let jsonlFiles = findRecentJSONLFiles(modifiedSince: oldestStart)
 
         for filePath in jsonlFiles {
-            // Quick check: skip files not modified since the oldest window start
-            if let attrs = try? FileManager.default.attributesOfItem(atPath: filePath),
-               let modDate = attrs[.modificationDate] as? Date {
-                if modDate < oldestStart { continue }
+
+            // Parse only new bytes appended since last scan
+            let newEntries = parseNewBytes(at: filePath, since: oldestStart)
+
+            // Merge new entries into cache
+            if !newEntries.isEmpty {
+                cachedEntries[filePath, default: []].append(contentsOf: newEntries)
             }
 
-            let sessionEntries = parseJSONLForUsage(at: filePath, since: oldestStart)
-            guard !sessionEntries.isEmpty else { continue }
+            // Prune old entries from cache (older than widest window)
+            if var entries = cachedEntries[filePath] {
+                entries.removeAll { $0.timestamp < oldestStart }
+                cachedEntries[filePath] = entries
+            }
 
-            // Track which windows this session contributes to (for session count)
+            guard let entries = cachedEntries[filePath], !entries.isEmpty else { continue }
+
+            // Aggregate into window buckets
             var sessionContributes: Set<UsageWindow> = []
 
-            for entry in sessionEntries {
+            for entry in entries {
                 for window in UsageWindow.allCases {
                     guard let start = windowStarts[window], entry.timestamp >= start else { continue }
 
@@ -90,7 +103,9 @@ final class UsageAggregator: Sendable {
 
     // MARK: - File Discovery
 
-    private func findAllJSONLFiles() -> [String] {
+    /// Find JSONL files modified since the cutoff date.
+    /// Skips entire project directories whose mod date is older than the cutoff.
+    private func findRecentJSONLFiles(modifiedSince cutoff: Date) -> [String] {
         var files: [String] = []
         let fm = FileManager.default
 
@@ -100,16 +115,31 @@ final class UsageAggregator: Sendable {
 
         for dir in projectDirs {
             let dirPath = "\(claudeProjectsPath)/\(dir)"
+
+            // Skip entire project directory if it hasn't been modified recently
+            if let attrs = try? fm.attributesOfItem(atPath: dirPath),
+               let modDate = attrs[.modificationDate] as? Date,
+               modDate < cutoff {
+                continue
+            }
+
             guard let contents = try? fm.contentsOfDirectory(atPath: dirPath) else { continue }
             for file in contents where file.hasSuffix(".jsonl") {
-                files.append("\(dirPath)/\(file)")
+                let filePath = "\(dirPath)/\(file)"
+                // Skip files not modified since cutoff
+                if let attrs = try? fm.attributesOfItem(atPath: filePath),
+                   let modDate = attrs[.modificationDate] as? Date,
+                   modDate < cutoff {
+                    continue
+                }
+                files.append(filePath)
             }
         }
 
         return files
     }
 
-    // MARK: - JSONL Parsing for Usage
+    // MARK: - Incremental JSONL Parsing
 
     struct UsageEntry: Sendable {
         let timestamp: Date
@@ -121,10 +151,39 @@ final class UsageAggregator: Sendable {
         let model: String
     }
 
-    private func parseJSONLForUsage(at path: String, since cutoff: Date) -> [UsageEntry] {
-        guard let content = try? String(contentsOf: URL(fileURLWithPath: path), encoding: .utf8) else {
+    /// Maximum bytes to read on first scan of a file (2MB tail).
+    /// Subsequent reads are incremental (only new appended bytes).
+    private static let maxInitialRead: UInt64 = 2 * 1024 * 1024
+
+    /// Read only bytes appended since the last call for this file.
+    /// On first read, only reads the last 2MB to avoid parsing huge historical files.
+    private func parseNewBytes(at path: String, since cutoff: Date) -> [UsageEntry] {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return [] }
+        defer { handle.closeFile() }
+
+        handle.seekToEndOfFile()
+        let fileSize = handle.offsetInFile
+
+        var lastOffset = fileOffsets[path] ?? 0
+
+        // If file was truncated/replaced, re-read
+        if lastOffset > fileSize { lastOffset = 0 }
+
+        // First time seeing this file — only read the tail
+        if lastOffset == 0 && fileSize > Self.maxInitialRead {
+            lastOffset = fileSize - Self.maxInitialRead
+        }
+
+        guard fileSize > lastOffset else {
+            fileOffsets[path] = fileSize
             return []
         }
+
+        handle.seek(toFileOffset: lastOffset)
+        let newData = handle.readData(ofLength: Int(fileSize - lastOffset))
+        fileOffsets[path] = fileSize
+
+        guard let content = String(data: newData, encoding: .utf8) else { return [] }
 
         var entries: [UsageEntry] = []
 
@@ -133,7 +192,6 @@ final class UsageAggregator: Sendable {
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let type = json["type"] as? String else { continue }
 
-            // Extract timestamp — try multiple formats
             let timestamp: Date
             if let ts = json["timestamp"] as? Double {
                 timestamp = Date(timeIntervalSince1970: ts)
@@ -145,7 +203,6 @@ final class UsageAggregator: Sendable {
                 continue
             }
 
-            // Skip entries older than the oldest window
             guard timestamp >= cutoff else { continue }
 
             if type == "user" {
