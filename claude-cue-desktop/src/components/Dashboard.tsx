@@ -3,19 +3,22 @@ import { useSessionMonitor } from "@/hooks/useSessionMonitor";
 import { useUsageMetrics } from "@/hooks/useUsageMetrics";
 import { SessionsTab } from "./SessionsTab";
 import { UsageView } from "./UsageView";
+import { SettingsView } from "./SettingsView";
 
-type Tab = "Sessions" | "Usage";
+type Tab = "Sessions" | "Usage" | "Settings";
 
-const TABS: Tab[] = ["Sessions", "Usage"];
+const TABS: Tab[] = ["Sessions", "Usage", "Settings"];
 
 const TAB_ICONS: Record<Tab, string> = {
   Sessions: "⊞",
   Usage: "▤",
+  Settings: "⚙",
 };
 
 const TAB_PANEL_IDS: Record<Tab, string> = {
   Sessions: "panel-sessions",
   Usage: "panel-usage",
+  Settings: "panel-settings",
 };
 
 export function Dashboard() {
@@ -44,7 +47,6 @@ export function Dashboard() {
 
       e.preventDefault();
       setTab(TABS[newIndex]);
-      // Focus the newly selected tab button
       const tabBtn = document.getElementById(`tab-${TABS[newIndex]}`);
       tabBtn?.focus();
     },
@@ -82,13 +84,19 @@ export function Dashboard() {
       </div>
 
       {/* Tab content */}
-      {tab === "Sessions" ? (
+      {tab === "Sessions" && (
         <div role="tabpanel" id="panel-sessions" aria-labelledby="tab-Sessions">
           <SessionsTab sessions={sessions} />
         </div>
-      ) : (
+      )}
+      {tab === "Usage" && (
         <div role="tabpanel" id="panel-usage" aria-labelledby="tab-Usage">
           <UsageView metrics={usageMetrics} />
+        </div>
+      )}
+      {tab === "Settings" && (
+        <div role="tabpanel" id="panel-settings" aria-labelledby="tab-Settings" className="flex-1 overflow-y-auto">
+          <SettingsView />
         </div>
       )}
     </div>

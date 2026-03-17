@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { EnrichedSession } from "@/lib/types";
+import type { Settings } from "@/lib/types";
 import { formatTokens } from "@/lib/format";
 import { StatBadge } from "./StatBadge";
 import { SessionCard } from "./SessionCard";
@@ -12,9 +14,7 @@ interface SessionsTabProps {
 }
 
 export function SessionsTab({ sessions }: SessionsTabProps) {
-  const [showPermissions, setShowPermissions] = useState(() => {
-    return localStorage.getItem("showPermissions") === "true";
-  });
+  const [permissionsEnabled, setPermissionsEnabled] = useState(false);
   const [collapsedSessions, setCollapsedSessions] = useState<Set<string>>(
     new Set(),
   );
@@ -37,11 +37,12 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     0,
   );
 
-  const toggleShowPermissions = () => {
-    const next = !showPermissions;
-    setShowPermissions(next);
-    localStorage.setItem("showPermissions", String(next));
-  };
+  // Check if permissions are enabled in settings
+  useEffect(() => {
+    invoke<Settings>("get_settings")
+      .then((s) => setPermissionsEnabled(s.permissionsEnabled))
+      .catch(() => {});
+  }, []);
 
   const toggleSessionCollapse = (sessionId: string) => {
     setCollapsedSessions((prev) => {
@@ -65,20 +66,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         {totalPending > 0 && (
           <StatBadge icon="⏸" label="Pending" value={`${totalPending}`} color="text-yellow-400" />
         )}
-
-        {/* Permissions toggle */}
-        <button
-          onClick={toggleShowPermissions}
-          className={`ml-auto flex items-center gap-1.5 px-3 py-1 rounded-md text-xs transition-colors ${
-            showPermissions
-              ? "bg-yellow-400/15 text-yellow-400"
-              : "bg-white/5 text-white/30 hover:text-white/50"
-          }`}
-          title={showPermissions ? "Hide permission requests" : "Show permission requests"}
-        >
-          <span className={`inline-block w-2 h-2 rounded-full ${showPermissions ? "bg-yellow-400" : "bg-white/20"}`} />
-          Permissions (Beta){totalPending > 0 ? ` ${totalPending}` : ""}
-        </button>
       </div>
 
       {/* Session list or empty state */}
@@ -91,7 +78,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       ) : (
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {[...sessions].sort((a, b) => {
-            // Waiting sessions first, then working, then rest
             const priority = (s: EnrichedSession) =>
               s.info.state === "waiting" ? 0 : s.info.state === "working" ? 1 : 2;
             return priority(a) - priority(b);
@@ -105,10 +91,9 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
               <div key={session.info.id} className="space-y-2">
                 <SessionCard session={session} />
 
-                {/* Permission section (when visible and has activity) */}
-                {showPermissions && hasPermissionActivity && (
+                {/* Permission section (when enabled and has activity) */}
+                {permissionsEnabled && hasPermissionActivity && (
                   <div className="ml-3 border-l-2 border-yellow-400/20 pl-3 space-y-2">
-                    {/* Collapse toggle for this session's permissions */}
                     {pending.length > 0 && (
                       <button
                         onClick={() => toggleSessionCollapse(session.info.id)}
@@ -121,7 +106,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                       </button>
                     )}
 
-                    {/* Pending permission prompts (collapsible per session) */}
                     {!isCollapsed &&
                       pending.map((req) => (
                         <PermissionPrompt
@@ -132,7 +116,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                         />
                       ))}
 
-                    {/* Permission history */}
                     {hasPermissionActivity && (
                       <details
                         className="text-xs"

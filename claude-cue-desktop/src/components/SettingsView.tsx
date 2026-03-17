@@ -54,7 +54,6 @@ export function SettingsView({ inline = false }: SettingsViewProps) {
     if (!preset) return;
 
     if (displayName === "Custom") {
-      // Keep current values, just switch mode
       setSettings({ ...settings, planPreset: "Custom" });
     } else {
       const updated: Settings = {
@@ -69,6 +68,11 @@ export function SettingsView({ inline = false }: SettingsViewProps) {
       setDailyRaw(formatTokens(preset.limits.daily));
       setWeeklyRaw(formatTokens(preset.limits.weekly));
     }
+  };
+
+  const togglePermissions = () => {
+    if (!settings) return;
+    setSettings({ ...settings, permissionsEnabled: !settings.permissionsEnabled });
   };
 
   const handleSave = async () => {
@@ -105,14 +109,14 @@ export function SettingsView({ inline = false }: SettingsViewProps) {
   }
 
   return (
-    <div className={inline ? "" : "p-6"}>
+    <div className={inline ? "" : "p-6 space-y-8"}>
       {!inline && (
-        <h2 className="text-lg font-semibold text-white mb-4">Settings</h2>
+        <h2 className="text-lg font-semibold text-white">Settings</h2>
       )}
 
       {/* Plan Preset Picker */}
-      <div className="mb-6">
-        <label className="block text-sm text-white/60 mb-2">Plan</label>
+      <section className="space-y-3">
+        <label className="block text-sm font-medium text-white/70">Plan</label>
         <div className="flex rounded-lg overflow-hidden border border-white/10">
           {PLAN_PRESETS.map((preset) => (
             <button
@@ -128,10 +132,11 @@ export function SettingsView({ inline = false }: SettingsViewProps) {
             </button>
           ))}
         </div>
-      </div>
+      </section>
 
       {/* Token Limit Fields */}
-      <div className="space-y-4">
+      <section className="space-y-4">
+        <label className="block text-sm font-medium text-white/70">Token Limits</label>
         <TokenField
           id="field-five-hour"
           label="5-Hour Limit"
@@ -156,10 +161,41 @@ export function SettingsView({ inline = false }: SettingsViewProps) {
           displayValue={formatTokens(settings.weeklyTokenLimit)}
           readOnly={!isCustom}
         />
-      </div>
+      </section>
+
+      {/* Permissions */}
+      {!inline && (
+        <section className="space-y-3">
+          <label className="block text-sm font-medium text-white/70">Permissions</label>
+          <div className="flex items-center justify-between rounded-lg bg-white/5 border border-white/10 px-4 py-3">
+            <div>
+              <div className="text-sm text-white">Permission Requests (Beta)</div>
+              <div className="text-xs text-white/40 mt-0.5">
+                Show and respond to Claude Code permission prompts from this dashboard.
+                Requires app restart to start/stop the permission server.
+              </div>
+            </div>
+            <button
+              onClick={togglePermissions}
+              className={`relative ml-4 shrink-0 w-10 h-6 rounded-full transition-colors ${
+                settings.permissionsEnabled ? "bg-green-500" : "bg-white/20"
+              }`}
+              role="switch"
+              aria-checked={settings.permissionsEnabled}
+              aria-label="Toggle permission requests"
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${
+                  settings.permissionsEnabled ? "translate-x-4" : ""
+                }`}
+              />
+            </button>
+          </div>
+        </section>
+      )}
 
       {/* Save Button */}
-      <div className="mt-6">
+      <div>
         <button
           onClick={handleSave}
           disabled={saving}
