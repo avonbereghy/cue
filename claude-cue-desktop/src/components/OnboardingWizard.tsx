@@ -41,7 +41,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       // Determine hook path based on platform
       const hookPath = envInfo?.platform === "windows"
         ? "%USERPROFILE%\\.claude\\symphony-root\\claude-cue\\hooks\\cue-hook"
-        : "$HOME/.claude/symphony-root/claude-cue/hooks/cue-hook";
+        : "~/.claude/symphony-root/claude-cue/hooks/cue-hook";
 
       await invoke("configure_hooks", { hookPath });
       setHookResult("success");
