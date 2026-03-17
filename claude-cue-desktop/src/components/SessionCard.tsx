@@ -1,3 +1,4 @@
+import { useState, useCallback } from "react";
 import type { EnrichedSession } from "@/lib/types";
 import { STATE_DOT_COLORS, STATE_BADGE_BG, STATE_COLORS } from "@/lib/types";
 import { formatTokens, formatDuration } from "@/lib/format";
@@ -9,6 +10,7 @@ interface SessionCardProps {
 
 export function SessionCard({ session }: SessionCardProps) {
   const { info, metrics } = session;
+  const [copied, setCopied] = useState(false);
   const dotColor = STATE_DOT_COLORS[info.state] ?? "bg-green-500";
   const badgeBg = STATE_BADGE_BG[info.state] ?? "bg-green-500/20 text-green-500";
   const titleColor = info.state === "working" ? "text-white" : (STATE_COLORS[info.state] ?? "text-green-500");
@@ -21,6 +23,16 @@ export function SessionCard({ session }: SessionCardProps) {
 
   const cacheTotal = metrics.cacheCreationTokens + metrics.cacheReadTokens;
   const cacheHitRate = cacheTotal > 0 ? Math.round((metrics.cacheReadTokens / cacheTotal) * 100) : 0;
+
+  const truncatedId = info.id ? info.id.slice(0, 8) : "";
+
+  const copySessionId = useCallback(() => {
+    if (!info.id || !navigator.clipboard) return;
+    navigator.clipboard.writeText(info.id).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }).catch(() => {});
+  }, [info.id]);
 
   const ariaLabel = `${session.stateDisplayName}: ${session.displayTitle}, running ${formatDuration(session.durationSecs)}`;
 
@@ -58,6 +70,17 @@ export function SessionCard({ session }: SessionCardProps) {
 
       {/* Row 2: Metrics */}
       <div className="flex items-center gap-4 text-xs text-white/50">
+        {truncatedId && (
+          <button
+            onClick={copySessionId}
+            className="flex items-center gap-1 font-mono text-white/30 hover:text-white/60 transition-colors cursor-pointer"
+            title={`Copy session ID: ${info.id}`}
+            aria-label={`Copy session ID ${info.id}`}
+          >
+            {truncatedId}&hellip;
+            <span className="text-[10px]">{copied ? "\u2713" : "\u{1F4CB}"}</span>
+          </button>
+        )}
         <span title="User / Total messages">
           &#128172; {metrics.userMessageCount}/{metrics.messageCount}
         </span>
