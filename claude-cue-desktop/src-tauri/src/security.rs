@@ -31,11 +31,11 @@ pub fn atomic_write(target: &Path, contents: &[u8]) -> io::Result<()> {
         file.sync_all()?; // fsync
     }
 
+    // Set owner-only permissions BEFORE rename to avoid TOCTOU window
+    set_owner_only_permissions(&tmp_path)?;
+
     // Atomic rename
     fs::rename(&tmp_path, target)?;
-
-    // Set owner-only permissions on the final file
-    set_owner_only_permissions(target)?;
 
     Ok(())
 }
@@ -60,35 +60,36 @@ pub fn set_owner_only_permissions(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Sanitize a workspace path: reject `..` traversal, resolve symlinks, normalize.
+/// Sanitize a workspace path: reject `..` traversal components, resolve symlinks, normalize.
 pub fn sanitize_workspace_path(path: &str) -> io::Result<PathBuf> {
-    // Reject path traversal
-    if path.contains("..") {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "path contains '..' traversal",
-        ));
-    }
-
     let p = PathBuf::from(path);
 
-    // Try to canonicalize (resolves symlinks). If the path doesn't exist yet,
-    // fall back to the cleaned version.
+    // Reject path traversal at the component level (allows names like "my..project")
+    for component in p.components() {
+        if let std::path::Component::ParentDir = component {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "path contains '..' traversal",
+            ));
+        }
+    }
+
+    // Try to canonicalize (resolves symlinks). If the path doesn't exist,
+    // return the original (validated) path.
     match fs::canonicalize(&p) {
         Ok(canonical) => {
-            // Double-check the canonical path doesn't escape expected directories
-            if canonical.to_string_lossy().contains("..") {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "canonicalized path still contains traversal",
-                ));
+            // Verify canonical path has no traversal components
+            for component in canonical.components() {
+                if let std::path::Component::ParentDir = component {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "canonicalized path contains traversal",
+                    ));
+                }
             }
             Ok(canonical)
         }
-        Err(_) => {
-            // Path doesn't exist — return the normalized version
-            Ok(p)
-        }
+        Err(_) => Ok(p),
     }
 }
 
