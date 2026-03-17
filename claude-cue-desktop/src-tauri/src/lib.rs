@@ -566,7 +566,7 @@ fn setup_tray(
 
     let menu = build_tray_menu(handle, &sessions)?;
 
-    TrayIconBuilder::new()
+    TrayIconBuilder::with_id("claude-cue-tray")
         .icon(icon)
         .menu(&menu)
         .tooltip(format_tooltip(&sessions))

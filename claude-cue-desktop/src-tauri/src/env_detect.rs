@@ -178,13 +178,18 @@ const HOOK_EVENTS: &[(&str, &str)] = &[
 ];
 
 /// Shell metacharacters that must not appear in hook paths.
-const SHELL_METACHARACTERS: &[char] = &[';', '|', '&', '$', '`', '(', ')', '>', '<', '\n', '\r', '\'', '"'];
+const SHELL_METACHARACTERS: &[char] = &[';', '|', '&', '`', '(', ')', '>', '<', '\n', '\r', '\'', '"'];
 
 /// Resolve and validate a hook path. Rejects shell metacharacters and
 /// expands `~` or `$HOME`-style references to the actual home directory.
 fn resolve_hook_path(raw: &str) -> Result<PathBuf, String> {
     // Reject shell metacharacters
     if raw.chars().any(|c| SHELL_METACHARACTERS.contains(&c)) {
+        return Err("Hook path contains invalid characters".to_string());
+    }
+
+    // Reject $ unless it's $HOME at the start (which we expand below)
+    if raw.contains('$') && !raw.starts_with("$HOME/") && !raw.starts_with("$HOME\\") && raw != "$HOME" {
         return Err("Hook path contains invalid characters".to_string());
     }
 
@@ -522,6 +527,16 @@ mod tests {
                 "Error message should mention invalid characters"
             );
         }
+    }
+
+    #[test]
+    fn test_resolve_hook_path_allows_dollar_home() {
+        // $HOME at the start should be allowed and expanded
+        let result = resolve_hook_path("$HOME/.claude/hooks/cue-hook");
+        assert!(result.is_ok(), "Should allow $HOME prefix: {:?}", result);
+        let expanded = result.unwrap();
+        assert!(expanded.is_absolute());
+        assert!(!expanded.to_string_lossy().contains("$HOME"));
     }
 
     #[test]
