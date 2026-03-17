@@ -133,6 +133,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var animTimer: Timer?
     private var metricsTimer: Timer?
     private var blinkOn = true
+    private var lastIconKey = ""
     private var settingsWindow: NSWindow?
     private var dashboardWindow: NSWindow?
     let monitor = SessionMonitor()
@@ -164,14 +165,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             monitor.loadDemoData()
             updateIcon()
         } else {
-            // Poll session status every second
-            pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            // Poll session status every 2 seconds (icon update handled by animTimer)
+            pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
                 self?.monitor.pollStatus()
-                self?.updateIcon()
             }
 
-            // Refresh JSONL metrics every 5s
-            metricsTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            // Refresh JSONL metrics every 10s
+            metricsTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
                 self?.monitor.refreshMetrics()
             }
 
@@ -179,10 +179,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             monitor.refreshMetrics()
         }
 
-        // Blink animation every 0.5s
-        animTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            self?.blinkOn.toggle()
-            self?.updateIcon()
+        // Blink animation every 1s — only re-renders when icon state changes
+        animTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let hasBlinking = self.monitor.enrichedSessions.contains {
+                $0.info.state == "working" || $0.info.state == "subagent"
+            }
+            if hasBlinking {
+                self.blinkOn.toggle()
+            }
+            self.updateIcon()
         }
 
         // Auto-open dashboard on launch
@@ -194,6 +200,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Icon Rendering
 
     func updateIcon() {
+        // Build a cache key from session states + blink phase
+        let sessions = monitor.enrichedSessions
+        let key = sessions.map(\.info.state).joined(separator: ",") + "|\(blinkOn)"
+        guard key != lastIconKey else { return }
+        lastIconKey = key
+
         let image = renderDotGrid()
         statusItem.button?.image = image
     }
