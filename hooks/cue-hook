@@ -133,6 +133,37 @@ def _validate_sessions(data):
     return {"sessions": valid}
 
 
+def _forward_permission_request(hook_data, session_id):
+    """Forward a permission request to the Claude Cue dashboard via localhost HTTP.
+
+    The dashboard's permission server (port 3002) will block this connection
+    until the user approves or denies. Returns the decision JSON or None on error.
+    """
+    import urllib.request
+    import urllib.error
+
+    payload = json.dumps({
+        "session_id": session_id,
+        "tool_name": hook_data.get("tool_name", "unknown"),
+        "tool_input": hook_data.get("tool_input", {}),
+        "hook_event_name": hook_data.get("hook_event_name", "PermissionRequest"),
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        "http://127.0.0.1:3002/permission-request",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            body = resp.read().decode("utf-8")
+            return json.loads(body)
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, TimeoutError):
+        return None
+
+
 def main():
     if len(sys.argv) < 2:
         return
@@ -150,6 +181,17 @@ def main():
 
     session_id = hook_data.get("session_id", f"pid-{os.getppid()}")
     workspace = hook_data.get("cwd", os.getcwd())
+
+    # Forward permission requests to the dashboard for user decision.
+    # PermissionRequest hooks have tool_name in the payload and action="waiting".
+    if action == "waiting" and "tool_name" in hook_data:
+        decision = _forward_permission_request(hook_data, session_id)
+        if decision is not None:
+            # Output the decision JSON so Claude Code receives it
+            json.dump(decision, sys.stdout)
+            sys.stdout.flush()
+            # Still update sessions.json below (don't return) so the
+            # dashboard shows the session state change
 
     os.makedirs(STATUS_DIR, exist_ok=True)
 
