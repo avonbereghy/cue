@@ -43,6 +43,7 @@ pub fn apply_plan_preset(preset: &PlanPreset) -> Settings {
         weekly_token_limit: weekly,
         plan_preset: preset.display_name().to_string(),
         onboarding_complete: false,
+        permissions_enabled: false,
     }
 }
 

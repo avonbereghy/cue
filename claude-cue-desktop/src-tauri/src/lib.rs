@@ -267,7 +267,14 @@ pub fn run() {
             spawn_timers(handle.clone(), monitor);
 
             // --- Permission server (localhost-only HTTP for Claude Code hooks) ---
-            spawn_permission_server(handle, pending_for_server, metadata_for_server);
+            // Only start if user has opted in via settings
+            let perm_settings = settings::load_settings();
+            if perm_settings.permissions_enabled {
+                spawn_permission_server(handle, pending_for_server, metadata_for_server);
+                log::info!("Permission server started (permissions_enabled=true)");
+            } else {
+                log::info!("Permission server not started (permissions_enabled=false)");
+            }
 
             Ok(())
         })

@@ -344,6 +344,8 @@ pub struct Settings {
     pub plan_preset: String,
     #[serde(default)]
     pub onboarding_complete: bool,
+    #[serde(default)]
+    pub permissions_enabled: bool,
 }
 
 impl Default for Settings {
@@ -355,6 +357,7 @@ impl Default for Settings {
             weekly_token_limit: 40_000_000,
             plan_preset: "Max ($100/mo)".to_string(),
             onboarding_complete: false,
+            permissions_enabled: false,
         }
     }
 }
