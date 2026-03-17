@@ -177,12 +177,14 @@ fn render_pixmap(
         (s, s)
     } else {
         let active_cols = ((count as f32) / MAX_PER_COLUMN as f32).ceil() as usize;
-        let active_rows = count.min(MAX_PER_COLUMN);
+        // Always use MAX_PER_COLUMN for layout dimensions so dots stay a
+        // fixed size regardless of how many sessions are active.
+        let layout_rows = MAX_PER_COLUMN;
         let w = active_cols as f32 * DOT_SIZE
             + (active_cols.saturating_sub(1)) as f32 * H_SPACING
             + PADDING * 2.0;
-        let h = active_rows as f32 * DOT_SIZE
-            + (active_rows.saturating_sub(1)) as f32 * V_SPACING
+        let h = layout_rows as f32 * DOT_SIZE
+            + (layout_rows.saturating_sub(1)) as f32 * V_SPACING
             + PADDING * 2.0;
         (w, h)
     };
@@ -190,7 +192,10 @@ fn render_pixmap(
     // We draw at `size x size`, scaling and centering the native layout.
     let mut pixmap = tiny_skia::Pixmap::new(size, size).expect("pixmap");
 
-    let scale = (size as f32 / native_w).min(size as f32 / native_h);
+    // Scale based on height only so dot size stays fixed regardless of
+    // how many columns are needed. Extra columns extend horizontally and
+    // get centered (or clipped at the edges for very many sessions).
+    let scale = size as f32 / native_h;
     let offset_x = (size as f32 - native_w * scale) / 2.0;
     let offset_y = (size as f32 - native_h * scale) / 2.0;
 

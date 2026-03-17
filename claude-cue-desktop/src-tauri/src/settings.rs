@@ -111,6 +111,7 @@ mod tests {
             weekly_token_limit: 20_000_000,
             plan_preset: "Custom".to_string(),
             onboarding_complete: false,
+            permissions_enabled: false,
         };
 
         let content = serde_json::to_string_pretty(&settings).unwrap();
