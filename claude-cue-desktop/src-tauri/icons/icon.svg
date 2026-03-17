@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Dark rounded rectangle background -->
+  <rect width="512" height="512" rx="80" ry="80" fill="#1a1a1a"/>
+
+  <!-- Grid of colored dots representing session states -->
+  <!-- Row 1 -->
+  <circle cx="160" cy="160" r="28" fill="#FFFFFF"/>
+  <circle cx="256" cy="160" r="28" fill="#FFD60A"/>
+  <circle cx="352" cy="160" r="28" fill="#64D2FF"/>
+
+  <!-- Row 2 -->
+  <circle cx="160" cy="256" r="28" fill="#30D158"/>
+  <circle cx="256" cy="256" r="28" fill="#FFFFFF"/>
+  <circle cx="352" cy="256" r="28" fill="#FFD60A"/>
+
+  <!-- Row 3 -->
+  <circle cx="160" cy="352" r="28" fill="#64D2FF"/>
+  <circle cx="256" cy="352" r="28" fill="#30D158"/>
+  <circle cx="352" cy="352" r="28" fill="#FFFFFF"/>
+</svg>

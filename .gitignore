@@ -4,3 +4,10 @@
 xcuserdata/
 DerivedData/
 .DS_Store
+.claude/
+
+# Tauri / Node
+claude-cue-desktop/node_modules/
+claude-cue-desktop/dist/
+claude-cue-desktop/src-tauri/gen/
+claude-cue-desktop/src-tauri/target/

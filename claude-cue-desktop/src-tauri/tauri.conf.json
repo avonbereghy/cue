@@ -1,0 +1,58 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicegui/nicegui-tauri/refs/heads/main/tauri-2/schema.json",
+  "productName": "Claude Cue",
+  "version": "0.1.0",
+  "identifier": "com.claudecue.desktop",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Claude Cue",
+        "width": 800,
+        "height": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis", "appimage", "deb"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      },
+      "wix": {
+        "language": "en-US"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0"],
+        "section": "utils",
+        "desktopTemplate": "claude-cue.desktop"
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    },
+    "publisher": "Claude Cue",
+    "shortDescription": "Cross-platform Claude Code session monitor",
+    "category": "DeveloperTool"
+  }
+}

@@ -1,0 +1,360 @@
+//! Line-by-line JSONL parsing for Claude Code conversation logs.
+//!
+//! Handles three timestamp formats: Unix f64, ISO 8601 string, isoTimestamp field.
+//! Extracts: type, timestamp, usage tokens, tool uses, model, custom title, git branch.
+
+use serde_json::Value;
+use std::collections::HashMap;
+use std::path::Path;
+
+/// Maximum file size we'll parse (500 MB).
+const MAX_FILE_SIZE: u64 = 500 * 1024 * 1024;
+
+/// A parsed entry from a JSONL line.
+#[derive(Debug, Clone, Default)]
+pub struct ParsedEntry {
+    pub entry_type: String,
+    pub timestamp: Option<f64>,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_creation_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub model: String,
+    pub is_user_message: bool,
+    pub is_assistant_message: bool,
+    pub tool_counts: HashMap<String, i64>,
+    pub custom_title: Option<String>,
+    pub git_branch: Option<String>,
+}
+
+/// Parse a JSONL file into a list of entries.
+/// Returns an empty Vec if the file is too large, unreadable, or empty.
+pub fn parse_jsonl_file(path: &Path) -> Vec<ParsedEntry> {
+    // Check file size
+    if let Ok(metadata) = std::fs::metadata(path) {
+        if metadata.len() > MAX_FILE_SIZE {
+            log::warn!("Skipping oversized JSONL file: {:?} ({} bytes)", path, metadata.len());
+            return Vec::new();
+        }
+    }
+
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            log::debug!("Failed to read JSONL file {:?}: {}", path, e);
+            return Vec::new();
+        }
+    };
+
+    parse_jsonl_content(&content)
+}
+
+/// Parse JSONL content string into entries.
+pub fn parse_jsonl_content(content: &str) -> Vec<ParsedEntry> {
+    content
+        .lines()
+        .filter(|line| !line.is_empty())
+        .filter_map(parse_line)
+        .collect()
+}
+
+/// Parse a single JSONL line.
+fn parse_line(line: &str) -> Option<ParsedEntry> {
+    let json: Value = serde_json::from_str(line).ok()?;
+    let obj = json.as_object()?;
+
+    let entry_type = obj.get("type")?.as_str()?.to_string();
+    let mut entry = ParsedEntry {
+        entry_type: entry_type.clone(),
+        ..Default::default()
+    };
+
+    // Extract timestamp — try multiple formats
+    entry.timestamp = extract_timestamp(obj);
+
+    // Extract custom title
+    if entry_type == "custom-title" {
+        entry.custom_title = obj.get("customTitle").and_then(|v| v.as_str()).map(String::from);
+    }
+
+    // Track git branch from any message that has it
+    if let Some(branch) = obj.get("gitBranch").and_then(|v| v.as_str()) {
+        if branch != "HEAD" {
+            entry.git_branch = Some(branch.to_string());
+        }
+    }
+
+    // Count user messages
+    if entry_type == "user" {
+        entry.is_user_message = true;
+    }
+
+    // Parse assistant messages for tokens and tool usage
+    if entry_type == "assistant" {
+        entry.is_assistant_message = true;
+
+        if let Some(message) = obj.get("message").and_then(|v| v.as_object()) {
+            // Model
+            if let Some(model) = message.get("model").and_then(|v| v.as_str()) {
+                entry.model = model.to_string();
+            }
+
+            // Usage
+            if let Some(usage) = message.get("usage").and_then(|v| v.as_object()) {
+                entry.input_tokens = usage
+                    .get("input_tokens")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                entry.output_tokens = usage
+                    .get("output_tokens")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                entry.cache_creation_tokens = usage
+                    .get("cache_creation_input_tokens")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                entry.cache_read_tokens = usage
+                    .get("cache_read_input_tokens")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+            }
+
+            // Tool uses from message content
+            if let Some(content) = message.get("content").and_then(|v| v.as_array()) {
+                for block in content {
+                    if let Some(block_obj) = block.as_object() {
+                        if block_obj.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                            if let Some(name) = block_obj.get("name").and_then(|v| v.as_str()) {
+                                *entry.tool_counts.entry(name.to_string()).or_insert(0) += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Some(entry)
+}
+
+/// Extract a Unix timestamp from a JSONL entry, trying multiple formats.
+fn extract_timestamp(obj: &serde_json::Map<String, Value>) -> Option<f64> {
+    // Format 1: Unix float in "timestamp" field
+    if let Some(ts) = obj.get("timestamp") {
+        if let Some(f) = ts.as_f64() {
+            return Some(f);
+        }
+        // Format 2: ISO 8601 string in "timestamp" field
+        if let Some(s) = ts.as_str() {
+            if let Some(t) = parse_iso8601(s) {
+                return Some(t);
+            }
+        }
+    }
+    // Format 3: ISO 8601 string in "isoTimestamp" field
+    if let Some(ts) = obj.get("isoTimestamp").and_then(|v| v.as_str()) {
+        if let Some(t) = parse_iso8601(ts) {
+            return Some(t);
+        }
+    }
+    None
+}
+
+/// Parse an ISO 8601 datetime string to Unix timestamp.
+fn parse_iso8601(s: &str) -> Option<f64> {
+    // Try with fractional seconds first
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.timestamp() as f64 + dt.timestamp_subsec_nanos() as f64 / 1_000_000_000.0);
+    }
+    // Try without fractional seconds
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+        return Some(dt.and_utc().timestamp() as f64);
+    }
+    // Try with Z suffix but no fractional
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%SZ") {
+        return Some(dt.and_utc().timestamp() as f64);
+    }
+    None
+}
+
+/// Parse a JSONL file and extract aggregated SessionMetrics (for session_monitor).
+pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::SessionMetrics> {
+    let entries = parse_jsonl_file(path);
+    if entries.is_empty() {
+        return None;
+    }
+
+    let mut m = crate::models::SessionMetrics::default();
+
+    for entry in &entries {
+        // Custom title — last one wins
+        if let Some(ref title) = entry.custom_title {
+            m.custom_title = Some(title.clone());
+        }
+
+        // Git branch — last non-HEAD wins
+        if let Some(ref branch) = entry.git_branch {
+            m.git_branch = Some(branch.clone());
+        }
+
+        if entry.is_user_message {
+            m.user_message_count += 1;
+        }
+
+        if entry.is_assistant_message {
+            m.message_count += 1;
+
+            if !entry.model.is_empty() {
+                m.model = entry.model.clone();
+            }
+
+            m.input_tokens += entry.input_tokens;
+            m.output_tokens += entry.output_tokens;
+            m.cache_creation_tokens += entry.cache_creation_tokens;
+            m.cache_read_tokens += entry.cache_read_tokens;
+
+            // Context usage = all input tokens for the last message
+            m.last_input_tokens =
+                entry.input_tokens + entry.cache_creation_tokens + entry.cache_read_tokens;
+
+            for (tool, count) in &entry.tool_counts {
+                *m.tool_counts.entry(tool.clone()).or_insert(0) += count;
+            }
+        }
+    }
+
+    Some(m)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ASSISTANT_WITH_USAGE: &str = r#"{"type":"assistant","timestamp":1710000000.0,"message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":1000,"output_tokens":500,"cache_creation_input_tokens":200,"cache_read_input_tokens":800},"content":[{"type":"tool_use","name":"Bash"},{"type":"tool_use","name":"Read"},{"type":"tool_use","name":"Bash"}]}}"#;
+
+    const USER_MESSAGE: &str = r#"{"type":"user","timestamp":1710000001.0}"#;
+
+    const CUSTOM_TITLE: &str = r#"{"type":"custom-title","timestamp":1710000002.0,"customTitle":"Auth Refactor"}"#;
+
+    const ISO_TIMESTAMP: &str = r#"{"type":"assistant","isoTimestamp":"2024-03-10T12:00:00Z","message":{"model":"claude-opus-4-6","usage":{"input_tokens":2000,"output_tokens":1000},"content":[]}}"#;
+
+    const GIT_BRANCH: &str = r#"{"type":"user","timestamp":1710000003.0,"gitBranch":"feat/dashboard"}"#;
+
+    const MALFORMED: &str = r#"{"type":invalid json here"#;
+
+    #[test]
+    fn test_parse_assistant_with_usage() {
+        let entries = parse_jsonl_content(ASSISTANT_WITH_USAGE);
+        assert_eq!(entries.len(), 1);
+        let e = &entries[0];
+        assert_eq!(e.entry_type, "assistant");
+        assert!(e.is_assistant_message);
+        assert!(!e.is_user_message);
+        assert_eq!(e.input_tokens, 1000);
+        assert_eq!(e.output_tokens, 500);
+        assert_eq!(e.cache_creation_tokens, 200);
+        assert_eq!(e.cache_read_tokens, 800);
+        assert_eq!(e.model, "claude-sonnet-4-6");
+        assert_eq!(e.tool_counts.get("Bash"), Some(&2));
+        assert_eq!(e.tool_counts.get("Read"), Some(&1));
+        assert!((e.timestamp.unwrap() - 1710000000.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_parse_user_message() {
+        let entries = parse_jsonl_content(USER_MESSAGE);
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].is_user_message);
+        assert!(!entries[0].is_assistant_message);
+    }
+
+    #[test]
+    fn test_parse_custom_title() {
+        let entries = parse_jsonl_content(CUSTOM_TITLE);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].custom_title.as_deref(),
+            Some("Auth Refactor")
+        );
+    }
+
+    #[test]
+    fn test_parse_iso_timestamp() {
+        let entries = parse_jsonl_content(ISO_TIMESTAMP);
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].timestamp.is_some());
+        assert_eq!(entries[0].model, "claude-opus-4-6");
+        assert_eq!(entries[0].input_tokens, 2000);
+    }
+
+    #[test]
+    fn test_parse_git_branch() {
+        let entries = parse_jsonl_content(GIT_BRANCH);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].git_branch.as_deref(),
+            Some("feat/dashboard")
+        );
+    }
+
+    #[test]
+    fn test_malformed_line_skipped() {
+        let content = format!("{}\n{}\n{}", ASSISTANT_WITH_USAGE, MALFORMED, USER_MESSAGE);
+        let entries = parse_jsonl_content(&content);
+        assert_eq!(entries.len(), 2); // malformed line skipped
+    }
+
+    #[test]
+    fn test_empty_content() {
+        let entries = parse_jsonl_content("");
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_session_metrics_aggregation() {
+        let content = format!(
+            "{}\n{}\n{}\n{}\n{}",
+            USER_MESSAGE, ASSISTANT_WITH_USAGE, CUSTOM_TITLE, GIT_BRANCH, ISO_TIMESTAMP
+        );
+
+        let dir = std::env::temp_dir().join("claude_cue_test_jsonl");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.jsonl");
+        std::fs::write(&path, &content).unwrap();
+
+        let metrics = parse_jsonl_to_session_metrics(&path).unwrap();
+        assert_eq!(metrics.user_message_count, 2); // user + gitBranch user
+        assert_eq!(metrics.message_count, 2); // two assistant messages
+        assert_eq!(metrics.input_tokens, 3000); // 1000 + 2000
+        assert_eq!(metrics.output_tokens, 1500); // 500 + 1000
+        assert_eq!(metrics.custom_title.as_deref(), Some("Auth Refactor"));
+        assert_eq!(metrics.git_branch.as_deref(), Some("feat/dashboard"));
+        assert_eq!(metrics.model, "claude-opus-4-6"); // last model wins
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_three_timestamp_formats() {
+        // Unix float
+        let e1 = parse_jsonl_content(r#"{"type":"user","timestamp":1710000000.5}"#);
+        assert!((e1[0].timestamp.unwrap() - 1710000000.5).abs() < 0.001);
+
+        // ISO string in timestamp field
+        let e2 = parse_jsonl_content(
+            r#"{"type":"user","timestamp":"2024-03-10T12:00:00+00:00"}"#,
+        );
+        assert!(e2[0].timestamp.is_some());
+
+        // isoTimestamp field
+        let e3 = parse_jsonl_content(
+            r#"{"type":"user","isoTimestamp":"2024-03-10T12:00:00Z"}"#,
+        );
+        assert!(e3[0].timestamp.is_some());
+    }
+}
