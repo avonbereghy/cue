@@ -82,6 +82,35 @@ rm -rf ~/Applications/Claude\ Cue.app
 
 Then remove the hook entries from `~/.claude/settings.json` (search for `cue-hook`).
 
+## Permission Approval
+
+Claude Cue includes a built-in HTTP hook server that lets you approve or deny Claude Code permission requests directly from the dashboard, without switching to the terminal or VS Code.
+
+**How it works:**
+
+- When Claude Code hits a permission check (e.g., running a shell command, editing a file), the request appears inline under the matching session row in the dashboard.
+- You can click **Approve** or **Deny** directly from the dashboard. The response is sent back to Claude Code over HTTP.
+- The desktop app must be running for this to work. If it is not running (or the HTTP server fails to start), Claude Code falls back to its normal terminal/VS Code permission flow — nothing breaks.
+- Port **3002** is used by default for the HTTP hook server.
+
+**Hook configuration:**
+
+The `PermissionRequest` event has two hooks — a command hook that updates the tray color to yellow, and an HTTP hook that sends the permission payload to the desktop app:
+
+```json
+"PermissionRequest": [
+  {
+    "matcher": "",
+    "hooks": [
+      {"type": "command", "command": "~/.claude/symphony-root/claude-cue/hooks/cue-hook waiting", "timeout": 5000},
+      {"type": "http", "url": "http://localhost:3002/permission-request", "timeout": 600000}
+    ]
+  }
+]
+```
+
+The 600,000ms (10 minute) timeout on the HTTP hook matches Claude Code's own permission timeout. If you don't respond within that window, Claude Code handles the timeout on its side.
+
 ## Architecture
 
 ```

@@ -214,16 +214,12 @@ impl SessionMonitorState {
     }
 }
 
-/// Encode a workspace path to a directory name, matching the Swift convention.
+/// Encode a workspace path to a directory name, matching Claude Code's convention.
 ///
-/// The scheme: `/` is replaced with `-`, and a leading `/` becomes `_`.
-/// Example: `/Users/dev/App` -> `_Users-dev-App`
+/// All `/` characters are replaced with `-`.
+/// Example: `/Users/dev/App` -> `-Users-dev-App`
 pub fn encode_workspace_path(workspace: &str) -> String {
-    if let Some(rest) = workspace.strip_prefix('/') {
-        format!("_{}", rest.replace('/', "-"))
-    } else {
-        workspace.replace('/', "-")
-    }
+    workspace.replace('/', "-")
 }
 
 // ---------------------------------------------------------------------------
@@ -238,7 +234,7 @@ mod tests {
     fn test_encode_workspace_path_unix() {
         assert_eq!(
             encode_workspace_path("/Users/dev/App"),
-            "_Users-dev-App"
+            "-Users-dev-App"
         );
     }
 
@@ -246,7 +242,7 @@ mod tests {
     fn test_encode_workspace_path_deep() {
         assert_eq!(
             encode_workspace_path("/Users/dev/Projects/MyOrg/WebApp"),
-            "_Users-dev-Projects-MyOrg-WebApp"
+            "-Users-dev-Projects-MyOrg-WebApp"
         );
     }
 
@@ -260,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_encode_workspace_path_root() {
-        assert_eq!(encode_workspace_path("/"), "_");
+        assert_eq!(encode_workspace_path("/"), "-");
     }
 
     #[test]
@@ -285,15 +281,15 @@ mod tests {
         let dir = std::env::temp_dir().join("claude_cue_test_resolve");
         let _ = std::fs::remove_dir_all(&dir);
 
-        // Create a fixture: projects/_Users-dev-App/session-1.jsonl
-        let project_dir = dir.join("_Users-dev-App");
+        // Create a fixture: projects/-Users-dev-App/session-1.jsonl
+        let project_dir = dir.join("-Users-dev-App");
         std::fs::create_dir_all(&project_dir).unwrap();
         std::fs::write(project_dir.join("session-1.jsonl"), "{}").unwrap();
 
         let state = SessionMonitorState::new();
         let path = state.jsonl_path("session-1", "/Users/dev/App", &dir);
         assert!(path.contains("session-1.jsonl"));
-        assert!(path.contains("_Users-dev-App"));
+        assert!(path.contains("-Users-dev-App"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -304,7 +300,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         // JSONL is stored under the git root (parent), not the exact workspace
-        let project_dir = dir.join("_Users-dev-Projects");
+        let project_dir = dir.join("-Users-dev-Projects");
         std::fs::create_dir_all(&project_dir).unwrap();
         std::fs::write(project_dir.join("session-2.jsonl"), "{}").unwrap();
 
