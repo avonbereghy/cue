@@ -1,18 +1,17 @@
 # Claude Cue
 
-A native macOS menu bar app that shows real-time status of your Claude Code sessions — at a glance, know if Claude is working, waiting for permission, hit an error, or finished.
+A real-time session monitor for Claude Code — see at a glance if Claude is working, waiting for permission, hit an error, or finished. Available as a native macOS menu bar app and a cross-platform desktop app for Windows and Linux.
 
 ![Swift](https://img.shields.io/badge/Swift-5.9-F05138?logo=swift&logoColor=white)
-![Platform](https://img.shields.io/badge/Platform-macOS_14+-000000?logo=apple&logoColor=white)
-![SwiftUI](https://img.shields.io/badge/UI-SwiftUI-0071e3?logo=swift&logoColor=white)
-![Zero Dependencies](https://img.shields.io/badge/Dependencies-None-brightgreen)
+![Rust](https://img.shields.io/badge/Rust-Tauri_v2-000000?logo=rust&logoColor=white)
+![Platform](https://img.shields.io/badge/Platform-macOS_|_Windows_|_Linux-blue)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 
 ![Claude Cue Dashboard](assets/dashboard-demo.png)
 
 ## Status Indicators
 
-Each Claude Code session appears as a colored dot in your menu bar:
+Each Claude Code session appears as a colored dot in your menu bar / system tray:
 
 | Color | Meaning |
 |-------|---------|
@@ -28,34 +27,64 @@ Multiple sessions show as a grid of dots — see all your sessions at once.
 
 ## Features
 
-- **Real-time status** — polls every second, so the indicator updates instantly
+- **Real-time status** — polls every 2 seconds, blink animation for active sessions
 - **Multi-session support** — tracks up to 8 concurrent sessions as a dot grid
-- **Token metrics** — parses JSONL conversation logs for input/output/cache token counts
+- **Token metrics** — incremental JSONL parsing for input/output/cache token counts
+- **Usage tracking** — 5-hour, daily, and weekly usage windows with progress bars and cost estimates
+- **Plan presets** — Pro, Max Standard, Max Plus token limits with one-click selection
 - **Session dashboard** — detailed view with workspace, duration, model, git branch, tool usage
+- **CLI fallback** — `--status` flag for tiling WM users without a system tray
+- **Privacy-first** — shows only leaf directory names, full paths on hover only
+- **Security-first** — no network calls, atomic file writes, 0600 permissions, path sanitization
 - **Automatic cleanup** — stale sessions expire and get pruned
 - **File locking** — concurrent hooks don't clobber each other's updates
-- **Menu bar only** — optional dock icon, configurable via Settings
+- **Accessibility** — ARIA labels, keyboard navigation, high contrast, reduced motion support
+
+## Platforms
+
+### macOS (Native Swift)
+
+The original app — pure SwiftUI + AppKit, zero external dependencies. Menu bar icon with dashboard window.
+
+```bash
+git clone https://github.com/ClaudeStage/claude-cue.git
+cd claude-cue
+bash install.sh
+```
+
+### Windows & Linux (Tauri)
+
+Cross-platform desktop app built with Rust (Tauri v2) + React + TypeScript. System tray icon with dashboard, onboarding wizard, and settings UI.
+
+```bash
+cd claude-cue/claude-cue-desktop
+npm install
+npm run tauri dev    # development
+npm run tauri build  # release
+```
+
+See [claude-cue-desktop/INSTALL.md](claude-cue-desktop/INSTALL.md) for platform-specific install instructions.
 
 ## How It Works
 
-Claude Cue uses [Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) to track session state. A Python hook script writes session status to `~/Library/Application Support/Claude Cue/sessions.json` on every lifecycle event:
+Claude Cue uses [Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) to track session state. A Python hook script writes session status to a platform-specific `sessions.json` on every lifecycle event:
 
 ```
-SessionStart    → idle
-PreToolUse      → working
-PostToolUse     → working
-UserPromptSubmit → working
-PermissionRequest → waiting
+SessionStart       → idle
+PreToolUse         → working
+PostToolUse        → working
+UserPromptSubmit   → working
+PermissionRequest  → waiting
 PostToolUseFailure → error
-SubagentStart   → subagent (cyan)
-SubagentStop    → working
-Stop            → done
-TaskCompleted   → done
-Notification    → done
-SessionEnd      → remove
+SubagentStart      → subagent
+SubagentStop       → working
+Stop               → done
+TaskCompleted      → done
+Notification       → done
+SessionEnd         → remove
 ```
 
-The Swift app reads `sessions.json` every second and renders the dot grid in the menu bar. Metrics are parsed from Claude's `.jsonl` conversation logs every 5 seconds.
+The app reads `sessions.json` and renders the dot grid. Metrics are parsed incrementally from Claude's `.jsonl` conversation logs — only new bytes are read on each cycle, keeping CPU near 0%.
 
 ## Install
 
@@ -82,49 +111,50 @@ rm -rf ~/Applications/Claude\ Cue.app
 
 Then remove the hook entries from `~/.claude/settings.json` (search for `cue-hook`).
 
-## Permission Approval
-
-Claude Cue includes a built-in HTTP hook server that lets you approve or deny Claude Code permission requests directly from the dashboard, without switching to the terminal or VS Code.
-
-**How it works:**
-
-- When Claude Code hits a permission check (e.g., running a shell command, editing a file), the request appears inline under the matching session row in the dashboard.
-- You can click **Approve** or **Deny** directly from the dashboard. The response is sent back to Claude Code over HTTP.
-- The desktop app must be running for this to work. If it is not running (or the HTTP server fails to start), Claude Code falls back to its normal terminal/VS Code permission flow — nothing breaks.
-- Port **3002** is used by default for the HTTP hook server.
-
-**Hook configuration:**
-
-The `PermissionRequest` event has two hooks — a command hook that updates the tray color to yellow, and an HTTP hook that sends the permission payload to the desktop app:
-
-```json
-"PermissionRequest": [
-  {
-    "matcher": "",
-    "hooks": [
-      {"type": "command", "command": "~/.claude/symphony-root/claude-cue/hooks/cue-hook waiting", "timeout": 5000},
-      {"type": "http", "url": "http://localhost:3002/permission-request", "timeout": 600000}
-    ]
-  }
-]
-```
-
-The 600,000ms (10 minute) timeout on the HTTP hook matches Claude Code's own permission timeout. If you don't respond within that window, Claude Code handles the timeout on its side.
-
 ## Architecture
 
 ```
-Sources/
-├── main.swift           # App entry point, AppDelegate, menu bar rendering, dot grid
-├── SessionMonitor.swift # Polls sessions.json, parses JSONL for token metrics
-├── DashboardView.swift  # SwiftUI dashboard with session details
-└── Models.swift         # SessionInfo, SessionMetrics, EnrichedSession
+Sources/                          # macOS native app (Swift/SwiftUI)
+├── main.swift                    # AppDelegate, menu bar, dot grid rendering
+├── SessionMonitor.swift          # Polls sessions.json, incremental JSONL parsing
+├── UsageAggregator.swift         # Time-windowed usage aggregation
+├── DashboardView.swift           # Dashboard with session cards
+├── UsageView.swift               # Usage tab with progress bars
+└── Models.swift                  # SessionInfo, SessionMetrics, EnrichedSession
+
+claude-cue-desktop/               # Cross-platform app (Tauri v2)
+├── src-tauri/src/                # Rust backend
+│   ├── lib.rs                    # Tauri commands, timers, tray setup
+│   ├── session_monitor.rs        # Session polling + JSONL path resolution
+│   ├── usage_aggregator.rs       # Usage aggregation across time windows
+│   ├── jsonl_parser.rs           # Line-by-line JSONL parsing
+│   ├── tray.rs                   # Dot grid icon rendering (tiny-skia)
+│   ├── cli.rs                    # CLI --status output
+│   ├── security.rs               # Atomic writes, permissions, path sanitization
+│   ├── settings.rs               # Settings load/save
+│   ├── env_detect.rs             # Platform detection + hook auto-configuration
+│   ├── models.rs                 # Shared data types
+│   └── paths.rs                  # OS-specific path resolution
+├── src/                          # React frontend
+│   ├── components/               # Dashboard, SessionCard, UsageView, Settings, Onboarding
+│   ├── hooks/                    # useSessionMonitor, useUsageMetrics
+│   └── lib/                      # types, format, a11y utilities
+└── src-tauri/tauri.conf.json     # Tauri config (minimal capabilities, no network)
 
 hooks/
-└── cue-hook             # Python hook script (called by Claude Code on every event)
+└── cue-hook                      # Python hook script (cross-platform)
 ```
 
-**4 Swift files, zero external dependencies.** Pure SwiftUI + AppKit with `@Observable` state and atomic file writes.
+## Security
+
+- **No network calls** — all data stays local, no telemetry, no HTTP clients in dependencies
+- **Atomic file writes** — temp file → fsync → rename prevents data corruption
+- **File permissions** — 0600 on Unix for all data files
+- **Path sanitization** — rejects `..` traversal, validates workspace paths
+- **Hook validation** — rejects shell metacharacters in hook paths
+- **Minimal capabilities** — Tauri frontend has no shell, HTTP, or filesystem access
+- **DevTools disabled** — in release builds
+- **Privacy** — workspace paths show leaf directory name only
 
 ## Claude Stage
 
