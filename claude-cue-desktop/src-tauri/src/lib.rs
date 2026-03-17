@@ -24,13 +24,42 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, Theme};
 
 /// Application state managed by Tauri.
 pub struct AppState {
     pub monitor: Arc<SessionMonitorState>,
     pub pending_permissions: Arc<permission_server::PendingRequests>,
     pub permission_metadata: Arc<Mutex<HashMap<String, models::PermissionRequest>>>,
+}
+
+// ---------------------------------------------------------------------------
+// System theme detection
+// ---------------------------------------------------------------------------
+
+/// Detect the macOS system appearance by checking UserDefaults.
+/// Returns Theme::Dark if AppleInterfaceStyle is "Dark", otherwise Theme::Light.
+#[cfg(target_os = "macos")]
+fn detect_system_theme() -> Theme {
+    let output = std::process::Command::new("defaults")
+        .args(["read", "-g", "AppleInterfaceStyle"])
+        .output();
+    match output {
+        Ok(o) if o.status.success() => {
+            let style = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if style == "Dark" {
+                return Theme::Dark;
+            }
+        }
+        _ => {}
+    }
+    Theme::Light
+}
+
+#[cfg(not(target_os = "macos"))]
+fn detect_system_theme() -> Theme {
+    // On Linux/Windows, default to dark; Tauri should follow system
+    Theme::Dark
 }
 
 // ---------------------------------------------------------------------------
@@ -59,6 +88,15 @@ fn get_settings() -> Settings {
 #[tauri::command]
 fn update_settings(new_settings: Settings) -> Result<(), String> {
     settings::save_settings(&new_settings)
+}
+
+#[tauri::command]
+fn get_theme() -> String {
+    match detect_system_theme() {
+        Theme::Light => "light".to_string(),
+        Theme::Dark => "dark".to_string(),
+        _ => "dark".to_string(),
+    }
 }
 
 #[tauri::command]
@@ -247,6 +285,7 @@ pub fn run() {
             get_settings,
             update_settings,
             get_token_limit,
+            get_theme,
             detect_environment,
             configure_hooks,
             approve_permission,
@@ -263,6 +302,12 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle().clone();
             let monitor_tray = monitor.clone();
+
+            // --- Apply system theme to window ---
+            let system_theme = detect_system_theme();
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_theme(Some(system_theme));
+            }
 
             // --- System Tray ---
             setup_tray(&handle, &monitor_tray)?;
@@ -575,7 +620,7 @@ fn setup_tray(
     monitor: &Arc<SessionMonitorState>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let sessions = monitor.enriched_sessions.lock().unwrap().clone();
-    let png_bytes = tray::render_dot_grid(&sessions, true, 64);
+    let png_bytes = tray::render_dot_grid(&sessions, true, 44);
     let icon = tauri::image::Image::from_bytes(&png_bytes)?;
 
     let menu = build_tray_menu(handle, &sessions)?;
@@ -740,7 +785,7 @@ fn update_tray(
     blink_on: bool,
     last_menu_key: &Arc<Mutex<String>>,
 ) {
-    let png_bytes = tray::render_dot_grid(sessions, blink_on, 64);
+    let png_bytes = tray::render_dot_grid(sessions, blink_on, 44);
 
     if let Some(tray) = handle.tray_by_id("claude-cue-tray") {
         if let Ok(icon) = tauri::image::Image::from_bytes(&png_bytes) {

@@ -78,7 +78,7 @@ export function SessionCard({ session }: SessionCardProps) {
             aria-label={`Copy session ID ${info.id}`}
           >
             {truncatedId}&hellip;
-            <span className="text-[10px]">{copied ? "\u2713" : "\u{1F4CB}"}</span>
+            <span className="text-[10px]">{copied ? "\u2713" : ""}</span>
           </button>
         )}
         <span title="User / Total messages">
