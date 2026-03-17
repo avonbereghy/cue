@@ -7,6 +7,8 @@ export interface SessionInfo {
   state: string;
   lastActivity: number;
   startedAt: number;
+  /** Client that launched the session: "vscode", "cursor", "iterm", "terminal", etc. */
+  source?: string;
 }
 
 export interface SessionMetrics {
@@ -35,6 +37,8 @@ export interface EnrichedSession {
   contextLimit: number;
   contextUsagePercent: number;
   modelDisplayName: string;
+  /** Human-readable source label (e.g. "VSCode", "iTerm", "Terminal") */
+  sourceDisplay: string;
 }
 
 /** Serde serializes (i64, i64) tuples as [number, number] arrays */

@@ -318,6 +318,7 @@ mod tests {
             state: state.to_string(),
             last_activity,
             started_at,
+            source: None,
         }
     }
 

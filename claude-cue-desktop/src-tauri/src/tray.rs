@@ -159,7 +159,7 @@ fn render_impl(
     high_contrast: bool,
 ) -> Vec<u8> {
     let pixmap = render_pixmap(sessions, blink_on, size, high_contrast);
-    encode_png(size, size, pixmap.data())
+    encode_png(pixmap.width(), pixmap.height(), pixmap.data())
 }
 
 fn render_pixmap(
@@ -189,14 +189,13 @@ fn render_pixmap(
         (w, h)
     };
 
-    // We draw at `size x size`, scaling and centering the native layout.
-    let mut pixmap = tiny_skia::Pixmap::new(size, size).expect("pixmap");
-
-    // Scale based on height only so dot size stays fixed regardless of
-    // how many columns are needed. Extra columns extend horizontally and
-    // get centered (or clipped at the edges for very many sessions).
+    // Height is fixed at `size` (matches menu bar). Width grows with columns
+    // so dots are never clipped.
     let scale = size as f32 / native_h;
-    let offset_x = (size as f32 - native_w * scale) / 2.0;
+    let pixel_w = ((native_w * scale).ceil() as u32).max(size);
+    let mut pixmap = tiny_skia::Pixmap::new(pixel_w, size).expect("pixmap");
+
+    let offset_x = (pixel_w as f32 - native_w * scale) / 2.0;
     let offset_y = (size as f32 - native_h * scale) / 2.0;
 
     if count == 0 {
@@ -315,6 +314,7 @@ mod tests {
             state: state.to_string(),
             last_activity: 0.0,
             started_at: 0.0,
+            source: None,
         };
         EnrichedSession::from_info_and_metrics(info, SessionMetrics::default())
     }

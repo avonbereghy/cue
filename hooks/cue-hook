@@ -106,6 +106,7 @@ _SESSION_SCHEMA = {
     "state": str,
     "lastActivity": (int, float),
     "startedAt": (int, float),
+    # "source" is optional — not validated (backward compat with old sessions)
 }
 
 
@@ -164,6 +165,36 @@ def _forward_permission_request(hook_data, session_id):
         return None
 
 
+def _detect_source():
+    """Detect which client launched Claude Code from environment variables."""
+    term = os.environ.get("TERM_PROGRAM", "")
+
+    # VSCode and forks (Cursor, Windsurf, etc.)
+    if term == "vscode" or os.environ.get("VSCODE_PID"):
+        return "vscode"
+    if "cursor" in term.lower():
+        return "cursor"
+
+    # Terminal emulators
+    if term:
+        # Map common TERM_PROGRAM values to short names
+        _TERMINALS = {
+            "Apple_Terminal": "terminal",
+            "iTerm.app": "iterm",
+            "WezTerm": "wezterm",
+            "Alacritty": "alacritty",
+            "tmux": "tmux",
+            "screen": "screen",
+            "Hyper": "hyper",
+            "kitty": "kitty",
+            "ghostty": "ghostty",
+        }
+        return _TERMINALS.get(term, term.lower())
+
+    # No TERM_PROGRAM — could be Claude Desktop or other launcher
+    return "unknown"
+
+
 def main():
     if len(sys.argv) < 2:
         return
@@ -181,6 +212,7 @@ def main():
 
     session_id = hook_data.get("session_id", f"pid-{os.getppid()}")
     workspace = hook_data.get("cwd", os.getcwd())
+    source = _detect_source()
 
     # Forward permission requests to the dashboard for user decision.
     # PermissionRequest hooks have tool_name in the payload and action="waiting".
@@ -225,6 +257,7 @@ def main():
                     "state": action,
                     "lastActivity": now,
                     "startedAt": existing.get("startedAt", now),
+                    "source": existing.get("source", source),
                 }
 
             # Prune stale sessions

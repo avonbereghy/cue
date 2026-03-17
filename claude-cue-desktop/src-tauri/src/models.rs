@@ -19,6 +19,9 @@ pub struct SessionInfo {
     pub state: String,
     pub last_activity: f64,
     pub started_at: f64,
+    /// Client that launched the session: "vscode", "cursor", "iterm", "terminal", etc.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +90,8 @@ pub struct EnrichedSession {
     pub context_limit: i64,
     pub context_usage_percent: f64,
     pub model_display_name: String,
+    /// Human-readable source label (e.g. "VSCode", "iTerm", "Terminal")
+    pub source_display: String,
 }
 
 impl EnrichedSession {
@@ -146,6 +151,8 @@ impl EnrichedSession {
 
         let model_display_name = format_model_name(&metrics.model);
 
+        let source_display = format_source_name(info.source.as_deref());
+
         Self {
             info,
             metrics,
@@ -157,6 +164,7 @@ impl EnrichedSession {
             context_limit,
             context_usage_percent,
             model_display_name,
+            source_display,
         }
     }
 }
@@ -179,6 +187,31 @@ fn format_model_name(model: &str) -> String {
         format!("{} {}", name, version)
     } else {
         model.to_string()
+    }
+}
+
+fn format_source_name(source: Option<&str>) -> String {
+    match source {
+        Some("vscode") => "VSCode".to_string(),
+        Some("cursor") => "Cursor".to_string(),
+        Some("iterm") => "iTerm".to_string(),
+        Some("terminal") => "Terminal".to_string(),
+        Some("wezterm") => "WezTerm".to_string(),
+        Some("alacritty") => "Alacritty".to_string(),
+        Some("kitty") => "Kitty".to_string(),
+        Some("ghostty") => "Ghostty".to_string(),
+        Some("tmux") => "tmux".to_string(),
+        Some("screen") => "screen".to_string(),
+        Some("hyper") => "Hyper".to_string(),
+        Some("unknown") | None => "\u{2014}".to_string(), // em dash
+        Some(other) => {
+            // Capitalize first letter for unknown sources
+            let mut chars = other.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+                None => "\u{2014}".to_string(),
+            }
+        }
     }
 }
 
@@ -508,6 +541,7 @@ mod tests {
                 state: state.to_string(),
                 last_activity: 0.0,
                 started_at: 0.0,
+                source: None,
             };
             EnrichedSession::from_info_and_metrics(info, SessionMetrics::default())
         };
@@ -525,6 +559,7 @@ mod tests {
             state: "working".to_string(),
             last_activity: 0.0,
             started_at: 0.0,
+            source: None,
         };
         let metrics_opus = SessionMetrics {
             model: "claude-opus-4-6".to_string(),
