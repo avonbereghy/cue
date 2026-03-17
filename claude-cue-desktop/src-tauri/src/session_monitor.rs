@@ -6,6 +6,7 @@
 use crate::jsonl_parser;
 use crate::models::{EnrichedSession, SessionInfo, SessionMetrics, StatusData, UsageWindow, WindowMetrics};
 use crate::paths;
+use crate::security;
 use crate::usage_aggregator;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -76,7 +77,14 @@ impl SessionMonitorState {
             .unwrap_or_default()
             .as_secs_f64();
 
-        let active = filter_and_sort_active(status.sessions.into_values(), now);
+        // Filter stale sessions and sanitize workspace paths
+        let active = filter_and_sort_active(
+            status.sessions.into_values().filter(|s| {
+                // Reject sessions with path traversal in workspace
+                security::sanitize_workspace_path(&s.workspace).is_ok()
+            }),
+            now,
+        );
 
         let cache = self.metrics_cache.lock().unwrap();
         let enriched: Vec<_> = active
