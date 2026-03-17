@@ -244,6 +244,57 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn test_sanitize_workspace_path_rejects_dotdot_component() {
+        // ".." as a path component should be rejected
+        let result = sanitize_workspace_path("/Users/dev/../../etc/passwd");
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("traversal"),
+            "Error should mention traversal"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_workspace_path_allows_dotdot_in_name() {
+        // ".." embedded in a directory name like "my..project" is NOT a traversal
+        let result = sanitize_workspace_path("/Users/dev/my..project/src");
+        assert!(result.is_ok(), "Directory name containing '..' should be allowed");
+    }
+
+    #[test]
+    fn test_sanitize_workspace_path_normal_absolute() {
+        let result = sanitize_workspace_path("/Users/dev/Projects/my-app");
+        assert!(result.is_ok());
+        let p = result.unwrap();
+        // The returned path should contain the original components
+        assert!(p.to_string_lossy().contains("my-app"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_atomic_write_content_and_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join("claude_cue_test_atomic_perms");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let target = dir.join("secure_file.json");
+        let payload = b"{ \"secret\": true }";
+        atomic_write(&target, payload).unwrap();
+
+        // Verify content was written correctly
+        let contents = fs::read(&target).unwrap();
+        assert_eq!(contents, payload);
+
+        // Verify permissions are owner-only (0600)
+        let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "atomic_write should set 0600 permissions");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[cfg(unix)]
     #[test]
     fn test_verify_file_permissions() {

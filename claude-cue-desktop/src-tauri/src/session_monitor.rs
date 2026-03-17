@@ -315,6 +315,91 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    fn make_session(id: &str, state: &str, last_activity: f64, started_at: f64) -> SessionInfo {
+        SessionInfo {
+            id: id.to_string(),
+            workspace: "/Users/dev/App".to_string(),
+            state: state.to_string(),
+            last_activity,
+            started_at,
+        }
+    }
+
+    #[test]
+    fn test_filter_and_sort_active_filters_idle_over_60s() {
+        let now = 1000.0;
+        let sessions = vec![
+            make_session("s1", "idle", now - 61.0, now - 200.0), // stale (idle > 60s)
+            make_session("s2", "idle", now - 30.0, now - 100.0), // fresh
+        ];
+        let active = filter_and_sort_active(sessions, now);
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].id, "s2");
+    }
+
+    #[test]
+    fn test_filter_and_sort_active_keeps_working_under_1800s() {
+        let now = 1000000.0;
+        let sessions = vec![
+            make_session("s1", "working", now - 1799.0, now - 2000.0), // fresh (under 1800s)
+            make_session("s2", "working", now - 1801.0, now - 3000.0), // stale (over 1800s)
+        ];
+        let active = filter_and_sort_active(sessions, now);
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].id, "s1");
+    }
+
+    #[test]
+    fn test_filter_and_sort_active_filters_error_over_300s() {
+        let now = 5000.0;
+        let sessions = vec![
+            make_session("s1", "error", now - 301.0, now - 500.0), // stale (error > 300s)
+            make_session("s2", "error", now - 100.0, now - 400.0), // fresh
+        ];
+        let active = filter_and_sort_active(sessions, now);
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].id, "s2");
+    }
+
+    #[test]
+    fn test_filter_and_sort_active_sorts_by_started_at() {
+        let now = 1000.0;
+        let sessions = vec![
+            make_session("s3", "working", now - 5.0, now - 30.0),
+            make_session("s1", "working", now - 5.0, now - 100.0),
+            make_session("s2", "working", now - 5.0, now - 50.0),
+        ];
+        let active = filter_and_sort_active(sessions, now);
+        assert_eq!(active.len(), 3);
+        // Should be sorted by started_at ascending
+        assert_eq!(active[0].id, "s1"); // started_at = 900
+        assert_eq!(active[1].id, "s2"); // started_at = 950
+        assert_eq!(active[2].id, "s3"); // started_at = 970
+    }
+
+    #[test]
+    fn test_is_session_stale_idle() {
+        assert!(!is_session_stale("idle", 59.0));
+        assert!(is_session_stale("idle", 60.0));
+        assert!(is_session_stale("idle", 120.0));
+    }
+
+    #[test]
+    fn test_is_session_stale_error() {
+        assert!(!is_session_stale("error", 299.0));
+        assert!(is_session_stale("error", 300.0));
+        assert!(is_session_stale("error", 600.0));
+    }
+
+    #[test]
+    fn test_is_session_stale_working_and_other() {
+        // "working", "waiting", "subagent", "done" all use the 1800s threshold
+        for state in &["working", "waiting", "subagent", "done"] {
+            assert!(!is_session_stale(state, 1799.0), "{} at 1799s should not be stale", state);
+            assert!(is_session_stale(state, 1800.0), "{} at 1800s should be stale", state);
+        }
+    }
+
     #[test]
     fn test_jsonl_path_fallback_scan() {
         let dir = std::env::temp_dir().join("claude_cue_test_fallback");
