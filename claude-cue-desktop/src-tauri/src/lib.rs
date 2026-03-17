@@ -253,6 +253,13 @@ pub fn run() {
             deny_permission,
             get_permission_history,
         ])
+        .on_window_event(|window, event| {
+            // Hide window instead of quitting when user closes it — app stays in tray
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
+        })
         .setup(move |app| {
             let handle = app.handle().clone();
             let monitor_tray = monitor.clone();
