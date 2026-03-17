@@ -111,3 +111,27 @@ export const STATE_BADGE_BG: Record<string, string> = {
   idle: "bg-gray-500/20 text-gray-500",
   done: "bg-green-500/20 text-green-500",
 };
+
+// ---------------------------------------------------------------------------
+// Permission Request types (for HTTP hook integration)
+// ---------------------------------------------------------------------------
+
+export interface PermissionRequest {
+  requestId: string;
+  sessionId: string;
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  summary: string;
+  hookEventName: string;
+  receivedAt: number;
+}
+
+export type PermissionDecisionType = "allow" | "deny";
+
+export interface PermissionLogEntry {
+  timestamp: number;
+  sessionId: string;
+  toolName: string;
+  toolInputSummary: string;
+  decision: string;
+}
