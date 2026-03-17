@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import type { PermissionRequest, PermissionLogEntry } from "@/lib/types";
+import type { PermissionRequest, PermissionLogEntry, EnrichedSession } from "@/lib/types";
 
 export function usePermissions() {
   const [pendingBySession, setPendingBySession] = useState<
@@ -19,6 +19,33 @@ export function usePermissions() {
         ...prev,
         [request.sessionId]: [...(prev[request.sessionId] ?? []), request],
       }));
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // Clear pending requests when sessions leave "waiting" state or disappear
+  // (user answered in Claude Code directly, not through the dashboard)
+  useEffect(() => {
+    const unlisten = listen<EnrichedSession[]>("sessions-updated", (event) => {
+      const sessions = event.payload;
+      const waitingIds = new Set(
+        sessions.filter((s) => s.info.state === "waiting").map((s) => s.info.id),
+      );
+
+      setPendingBySession((prev) => {
+        const updated = { ...prev };
+        let changed = false;
+        for (const sessionId of Object.keys(updated)) {
+          if (!waitingIds.has(sessionId)) {
+            delete updated[sessionId];
+            changed = true;
+          }
+        }
+        return changed ? updated : prev;
+      });
     });
 
     return () => {
