@@ -10,9 +10,9 @@ use crate::models::EnrichedSession;
 // Layout constants (matches Swift exactly)
 // ---------------------------------------------------------------------------
 
-const DOT_SIZE: f32 = 7.0;
-const H_SPACING: f32 = 3.5;
-const V_SPACING: f32 = 3.0;
+const DOT_SIZE: f32 = 24.0;
+const H_SPACING: f32 = 4.0;
+const V_SPACING: f32 = 4.0;
 const PADDING: f32 = 2.0;
 const MAX_PER_COLUMN: usize = 2;
 const MAX_SESSIONS: usize = 8;
