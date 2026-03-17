@@ -684,6 +684,7 @@ fn format_tokens_short(tokens: i64) -> String {
 /// Spawn a 0.5s blink timer that updates the tray icon when blinking sessions exist.
 fn spawn_blink_timer(handle: AppHandle, monitor: Arc<SessionMonitorState>) {
     let blink_on = Arc::new(Mutex::new(true));
+    let last_menu_key: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
@@ -697,7 +698,7 @@ fn spawn_blink_timer(handle: AppHandle, monitor: Arc<SessionMonitorState>) {
 
             if !has_blinking {
                 // No blinking needed — still update icon/menu but skip blink toggle
-                update_tray(&handle, &sessions, true);
+                update_tray(&handle, &sessions, true, &last_menu_key);
                 continue;
             }
 
@@ -708,13 +709,37 @@ fn spawn_blink_timer(handle: AppHandle, monitor: Arc<SessionMonitorState>) {
                 *b
             };
 
-            update_tray(&handle, &sessions, current);
+            update_tray(&handle, &sessions, current, &last_menu_key);
         }
     });
 }
 
+/// Build a cache key representing the menu-relevant session state (IDs + states + names).
+/// The menu only needs rebuilding when this changes, NOT on every blink tick.
+fn menu_cache_key(sessions: &[EnrichedSession]) -> String {
+    let mut key = String::new();
+    for (i, s) in sessions.iter().enumerate().take(8) {
+        if i > 0 {
+            key.push(',');
+        }
+        key.push_str(&s.info.id);
+        key.push(':');
+        key.push_str(&s.info.state);
+        key.push(':');
+        key.push_str(&s.workspace_name);
+    }
+    key
+}
+
 /// Update the tray icon, tooltip, and menu with current session data.
-fn update_tray(handle: &AppHandle, sessions: &[EnrichedSession], blink_on: bool) {
+/// The menu is only rebuilt when session data changes (not on blink ticks)
+/// to avoid dismissing an open menu on macOS.
+fn update_tray(
+    handle: &AppHandle,
+    sessions: &[EnrichedSession],
+    blink_on: bool,
+    last_menu_key: &Arc<Mutex<String>>,
+) {
     let png_bytes = tray::render_dot_grid(sessions, blink_on, 64);
 
     if let Some(tray) = handle.tray_by_id("claude-cue-tray") {
@@ -722,10 +747,21 @@ fn update_tray(handle: &AppHandle, sessions: &[EnrichedSession], blink_on: bool)
             let _ = tray.set_icon(Some(icon));
         }
 
-        let _ = tray.set_tooltip(Some(&format_tooltip(sessions)));
+        // Only rebuild menu when session data actually changes
+        let new_key = menu_cache_key(sessions);
+        let should_rebuild = {
+            let last = last_menu_key.lock().unwrap();
+            *last != new_key
+        };
 
-        if let Ok(menu) = build_tray_menu(handle, sessions) {
-            let _ = tray.set_menu(Some(menu));
+        if should_rebuild {
+            let _ = tray.set_tooltip(Some(&format_tooltip(sessions)));
+
+            if let Ok(menu) = build_tray_menu(handle, sessions) {
+                let _ = tray.set_menu(Some(menu));
+            }
+
+            *last_menu_key.lock().unwrap() = new_key;
         }
     }
 }
