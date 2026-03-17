@@ -100,6 +100,11 @@ export function SessionCard({ session }: SessionCardProps) {
             {session.modelDisplayName}
           </span>
         )}
+        {session.sourceDisplay !== "\u2014" && (
+          <span className="text-[10px] text-white/30">
+            {session.sourceDisplay}
+          </span>
+        )}
       </div>
 
       {/* Row 3: Tool chips + cache hit rate */}
