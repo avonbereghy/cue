@@ -7,6 +7,35 @@ Claude Cue is a cross-platform desktop app that monitors your Claude Code sessio
 - **Python 3** (3.9 or later) — required for the session-monitoring hook script
 - **Claude Code** — the CLI tool whose sessions Claude Cue monitors
 
+## macOS
+
+### Build from source
+
+```bash
+cd claude-cue-desktop
+npm install
+npm run tauri build
+```
+
+Then copy the app to your Applications folder:
+
+```bash
+cp -R src-tauri/target/release/bundle/macos/Claude\ Cue.app ~/Applications/
+open ~/Applications/Claude\ Cue.app
+```
+
+The onboarding wizard configures the Claude Code hooks automatically on first launch.
+
+To start on login: **System Settings > General > Login Items > add "Claude Cue"**
+
+### Uninstall
+
+```bash
+rm -rf ~/Applications/Claude\ Cue.app
+```
+
+Then remove the hook entries from `~/.claude/settings.json` (search for `cue-hook`).
+
 ## Windows
 
 ### MSI installer (recommended)
