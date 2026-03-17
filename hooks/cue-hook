@@ -137,7 +137,10 @@ def main():
     if len(sys.argv) < 2:
         return
 
-    action = sys.argv[1]  # "idle", "working", "waiting", "done", or "remove"
+    action = sys.argv[1]
+    valid_actions = {"idle", "working", "waiting", "done", "remove", "error", "subagent"}
+    if action not in valid_actions:
+        return  # Silently ignore unknown actions
 
     # Read hook payload from stdin
     try:
@@ -152,8 +155,8 @@ def main():
 
     # Hold an exclusive lock for the entire read-modify-write cycle
     # to prevent concurrent hooks from clobbering each other's updates
-    lock_mode = "r+b" if os.path.exists(LOCK_FILE) else "w+b"
-    with open(LOCK_FILE, lock_mode) as lock:
+    with open(LOCK_FILE, "a+b") as lock:
+        lock.seek(0)
         _lock(lock)
         try:
             # Read existing sessions

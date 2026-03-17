@@ -32,7 +32,7 @@ pub fn detect_environment() -> EnvironmentInfo {
     let has_appindicator = detect_appindicator(&desktop_env);
     let wsl_distros = detect_wsl_distros();
 
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let claude_dir = home.join(".claude");
     let claude_settings = claude_dir.join("settings.json");
 
@@ -177,12 +177,59 @@ const HOOK_EVENTS: &[(&str, &str)] = &[
     ("SessionEnd", "remove"),
 ];
 
+/// Shell metacharacters that must not appear in hook paths.
+const SHELL_METACHARACTERS: &[char] = &[';', '|', '&', '$', '`', '(', ')', '>', '<', '\n', '\r', '\'', '"'];
+
+/// Resolve and validate a hook path. Rejects shell metacharacters and
+/// expands `~` or `$HOME`-style references to the actual home directory.
+fn resolve_hook_path(raw: &str) -> Result<PathBuf, String> {
+    // Reject shell metacharacters
+    if raw.chars().any(|c| SHELL_METACHARACTERS.contains(&c)) {
+        return Err("Hook path contains invalid characters".to_string());
+    }
+
+    // Reject path traversal
+    if raw.contains("..") {
+        return Err("Hook path contains path traversal".to_string());
+    }
+
+    // Reject empty path
+    if raw.trim().is_empty() {
+        return Err("Hook path is empty".to_string());
+    }
+
+    // Expand ~ and $HOME to actual home directory
+    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+    let expanded = if let Some(rest) = raw.strip_prefix("~/") {
+        home.join(rest)
+    } else if raw == "~" {
+        home.clone()
+    } else if let Some(rest) = raw.strip_prefix("$HOME/").or_else(|| raw.strip_prefix("$HOME\\")) {
+        home.join(rest)
+    } else if let Some(rest) = raw.strip_prefix("%USERPROFILE%") {
+        home.join(rest.trim_start_matches(['/', '\\']))
+    } else {
+        PathBuf::from(raw)
+    };
+
+    // Require absolute path after expansion
+    if !expanded.is_absolute() {
+        return Err("Hook path must be an absolute path".to_string());
+    }
+
+    Ok(expanded)
+}
+
 /// Configure Claude Code hooks in `~/.claude/settings.json`.
 ///
 /// Reads the existing settings, backs up the original to `settings.json.bak`,
 /// and adds/updates hook entries for Claude Code lifecycle events.
 /// Uses `security::atomic_write()` for safe file writes.
 pub fn configure_hooks(hook_path: &str) -> Result<(), String> {
+    // Security: validate hook_path to prevent command injection
+    let resolved = resolve_hook_path(hook_path)?;
+    let hook_path = resolved.to_string_lossy().to_string();
+
     let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
     let settings_path = home.join(".claude/settings.json");
 
@@ -236,7 +283,7 @@ pub fn configure_hooks(hook_path: &str) -> Result<(), String> {
                         hooks_arr.iter().any(|h| {
                             h.get("command")
                                 .and_then(|c| c.as_str())
-                                .map(|c| c.starts_with(hook_path))
+                                .map(|c| c.starts_with(hook_path.as_str()))
                                 .unwrap_or(false)
                         })
                     })

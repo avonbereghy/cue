@@ -7,6 +7,7 @@
 
 use crate::models::{EnrichedSession, SessionMetrics, StatusData};
 use crate::paths;
+use crate::security;
 use crate::session_monitor::filter_and_sort_active;
 use std::path::Path;
 use std::time::SystemTime;
@@ -59,7 +60,12 @@ fn load_sessions() -> Vec<EnrichedSession> {
         .unwrap_or_default()
         .as_secs_f64();
 
-    filter_and_sort_active(status.sessions.into_values(), now)
+    filter_and_sort_active(
+        status.sessions.into_values().filter(|s| {
+            security::sanitize_workspace_path(&s.workspace).is_ok()
+        }),
+        now,
+    )
         .into_iter()
         .map(|info| EnrichedSession::from_info_and_metrics(info, SessionMetrics::default()))
         .collect()

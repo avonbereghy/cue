@@ -52,7 +52,7 @@ pub fn ensure_dirs() -> std::io::Result<()> {
 // ---------------------------------------------------------------------------
 
 fn home_dir() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"))
+    dirs::home_dir().expect("Cannot determine home directory — refusing to use /tmp fallback")
 }
 
 fn appdata_local() -> PathBuf {
