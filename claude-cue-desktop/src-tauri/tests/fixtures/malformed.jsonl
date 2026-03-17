@@ -1,0 +1,4 @@
+{"type":"user","timestamp":1710000300.0}
+{"type":invalid json
+not even json at all
+{"type":"assistant","timestamp":1710000310.0,"message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50},"content":[]}}

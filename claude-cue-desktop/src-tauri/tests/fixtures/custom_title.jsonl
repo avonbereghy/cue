@@ -1,0 +1,3 @@
+{"type":"user","timestamp":1710000200.0,"gitBranch":"feat/auth"}
+{"type":"custom-title","timestamp":1710000205.0,"customTitle":"OAuth2 Login Flow"}
+{"type":"assistant","timestamp":1710000210.0,"message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":500,"output_tokens":300},"content":[]}}
