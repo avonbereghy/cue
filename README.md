@@ -27,15 +27,18 @@ Multiple sessions show as a grid of dots — see all your sessions at once.
 
 ## Features
 
-- **Real-time status** — polls every 2 seconds, blink animation for active sessions
+- **Real-time status** — polls every second, blink animation for active sessions
 - **Multi-session support** — tracks up to 8 concurrent sessions as a dot grid
+- **Permission approval** — approve/deny Claude Code permissions directly from the dashboard via HTTP hook
 - **Token metrics** — incremental JSONL parsing for input/output/cache token counts
 - **Usage tracking** — 5-hour, daily, and weekly usage windows with progress bars and cost estimates
 - **Plan presets** — Pro, Max Standard, Max Plus token limits with one-click selection
 - **Session dashboard** — detailed view with workspace, duration, model, git branch, tool usage
+- **Smart summaries** — human-readable tool descriptions ("Run: `npm install`", "Edit: `src/main.rs`")
+- **Audit log** — every permission decision logged to JSONL with timestamp and tool details
 - **CLI fallback** — `--status` flag for tiling WM users without a system tray
 - **Privacy-first** — shows only leaf directory names, full paths on hover only
-- **Security-first** — no network calls, atomic file writes, 0600 permissions, path sanitization
+- **Security-first** — no outbound network calls, atomic file writes, 0600 permissions, path sanitization
 - **Automatic cleanup** — stale sessions expire and get pruned
 - **File locking** — concurrent hooks don't clobber each other's updates
 - **Accessibility** — ARIA labels, keyboard navigation, high contrast, reduced motion support
@@ -86,6 +89,18 @@ SessionEnd         → remove
 
 The app reads `sessions.json` and renders the dot grid. Metrics are parsed incrementally from Claude's `.jsonl` conversation logs — only new bytes are read on each cycle, keeping CPU near 0%.
 
+## Permission Approval
+
+The desktop app includes a localhost HTTP server (`127.0.0.1:3002`) that integrates with Claude Code's `PermissionRequest` hook. When Claude Code needs permission to run a tool, the request appears inline under the relevant session in the dashboard:
+
+- **Smart summary** — "Run: `npm install`", "Read: `package.json`", "Edit: `src/main.rs`"
+- **Expandable details** — full `tool_input` JSON for review
+- **Approve / Deny buttons** — decision is sent back to Claude Code immediately
+- **No auto-timeout** — requests stay pending until you explicitly decide
+- **Audit log** — every decision is recorded to `permission-log.jsonl`
+
+If the desktop app isn't running, Claude Code falls back to its normal terminal/VSCode permission flow. The `install.sh` script configures both a command hook (updates tray status to "waiting") and an HTTP hook (sends the permission to the dashboard) for the `PermissionRequest` event.
+
 ## Install
 
 ```bash
@@ -124,20 +139,24 @@ Sources/                          # macOS native app (Swift/SwiftUI)
 
 claude-cue-desktop/               # Cross-platform app (Tauri v2)
 ├── src-tauri/src/                # Rust backend
-│   ├── lib.rs                    # Tauri commands, timers, tray setup
+│   ├── lib.rs                    # Tauri commands, timers, tray + permission server
 │   ├── session_monitor.rs        # Session polling + JSONL path resolution
 │   ├── usage_aggregator.rs       # Usage aggregation across time windows
 │   ├── jsonl_parser.rs           # Line-by-line JSONL parsing
 │   ├── tray.rs                   # Dot grid icon rendering (tiny-skia)
 │   ├── cli.rs                    # CLI --status output
+│   ├── permission_server.rs      # Pending request channels + HTTP response formatting
+│   ├── permission_log.rs         # JSONL audit log for permission decisions
+│   ├── summary_formatter.rs      # Tool input → human-readable summaries
 │   ├── security.rs               # Atomic writes, permissions, path sanitization
 │   ├── settings.rs               # Settings load/save
 │   ├── env_detect.rs             # Platform detection + hook auto-configuration
 │   ├── models.rs                 # Shared data types
 │   └── paths.rs                  # OS-specific path resolution
 ├── src/                          # React frontend
-│   ├── components/               # Dashboard, SessionCard, UsageView, Settings, Onboarding
-│   ├── hooks/                    # useSessionMonitor, useUsageMetrics
+│   ├── components/               # Dashboard, SessionCard, UsageView, Settings, Onboarding,
+│   │                             # PermissionPrompt, PermissionHistory
+│   ├── hooks/                    # useSessionMonitor, useUsageMetrics, usePermissions
 │   └── lib/                      # types, format, a11y utilities
 └── src-tauri/tauri.conf.json     # Tauri config (minimal capabilities, no network)
 
@@ -147,7 +166,7 @@ hooks/
 
 ## Security
 
-- **No network calls** — all data stays local, no telemetry, no HTTP clients in dependencies
+- **No outbound network calls** — all data stays local, no telemetry, no HTTP clients. Localhost-only server (`127.0.0.1`) for hook communication
 - **Atomic file writes** — temp file → fsync → rename prevents data corruption
 - **File permissions** — 0600 on Unix for all data files
 - **Path sanitization** — rejects `..` traversal, validates workspace paths
