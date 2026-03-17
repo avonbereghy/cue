@@ -204,7 +204,7 @@ pub fn configure_hooks(hook_path: &str) -> Result<(), String> {
     }
 
     // Ensure "hooks" key exists as an object
-    if !settings.get("hooks").map_or(false, |h| h.is_object()) {
+    if !settings.get("hooks").is_some_and(|h| h.is_object()) {
         settings["hooks"] = serde_json::json!({});
     }
 

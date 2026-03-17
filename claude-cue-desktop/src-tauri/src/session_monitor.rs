@@ -42,8 +42,8 @@ pub struct SessionMonitorState {
     resolved_paths: Mutex<HashMap<String, String>>,
 }
 
-impl SessionMonitorState {
-    pub fn new() -> Self {
+impl Default for SessionMonitorState {
+    fn default() -> Self {
         Self {
             enriched_sessions: Mutex::new(Vec::new()),
             usage_metrics: Mutex::new(HashMap::new()),
@@ -51,6 +51,12 @@ impl SessionMonitorState {
             file_mod_dates: Mutex::new(HashMap::new()),
             resolved_paths: Mutex::new(HashMap::new()),
         }
+    }
+}
+
+impl SessionMonitorState {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Poll sessions.json for current session states (called every ~1s).
@@ -213,8 +219,7 @@ impl SessionMonitorState {
 /// The scheme: `/` is replaced with `-`, and a leading `/` becomes `_`.
 /// Example: `/Users/dev/App` -> `_Users-dev-App`
 pub fn encode_workspace_path(workspace: &str) -> String {
-    if workspace.starts_with('/') {
-        let rest = &workspace[1..];
+    if let Some(rest) = workspace.strip_prefix('/') {
         format!("_{}", rest.replace('/', "-"))
     } else {
         workspace.replace('/', "-")

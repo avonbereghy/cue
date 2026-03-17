@@ -8,13 +8,129 @@ import json
 import sys
 import os
 import time
-import fcntl
 import tempfile
 
-STATUS_DIR = os.path.expanduser("~/Library/Application Support/Claude Cue")
+# --- Platform-conditional file locking (Task 5) ---
+if sys.platform == "win32":
+    import msvcrt
+
+    def _lock(lock_file):
+        # msvcrt.locking requires content covering the locked byte range
+        lock_file.write(b"L")
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+
+    def _unlock(lock_file):
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+else:
+    import fcntl
+
+    def _lock(lock_file):
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+
+    def _unlock(lock_file):
+        fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+
+# --- WSL detection (Task 7) — filesystem inspection only, NO subprocess ---
+def _is_wsl():
+    """Detect WSL by checking for /proc/version containing 'microsoft'."""
+    try:
+        with open("/proc/version", "r") as f:
+            return "microsoft" in f.read().lower()
+    except (OSError, IOError):
+        return False
+
+
+def _get_wsl_windows_status_dir():
+    """Return the Windows-side status dir path from within WSL.
+
+    Inspects /mnt/c/Users to find the Windows username and builds the
+    LOCALAPPDATA equivalent path. Returns None if detection fails.
+    """
+    win_users = "/mnt/c/Users"
+    try:
+        entries = os.listdir(win_users)
+    except (OSError, IOError):
+        return None
+
+    # Filter out well-known system directories
+    skip = {"Public", "Default", "Default User", "All Users", "desktop.ini"}
+    candidates = [e for e in entries if e not in skip and not e.startswith(".")]
+
+    if len(candidates) != 1:
+        # Ambiguous or empty — can't auto-detect
+        return None
+
+    win_user = candidates[0]
+    return os.path.join(
+        win_users, win_user, "AppData", "Local", "Claude Cue"
+    )
+
+
+# --- Cross-platform status directory (Task 6) ---
+def get_status_dir():
+    """Return OS-appropriate path for Claude Cue data."""
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/Library/Application Support/Claude Cue")
+
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA", "")
+        if local:
+            return os.path.join(local, "Claude Cue")
+        return os.path.expanduser("~/AppData/Local/Claude Cue")
+
+    # Linux (or other Unix)
+    if _is_wsl():
+        wsl_dir = _get_wsl_windows_status_dir()
+        if wsl_dir:
+            return wsl_dir
+
+    xdg = os.environ.get("XDG_DATA_HOME", "")
+    if not xdg:
+        xdg = os.path.expanduser("~/.local/share")
+    return os.path.join(xdg, "claude-cue")
+
+
+# --- Task 8: Use get_status_dir() instead of hardcoded path ---
+STATUS_DIR = get_status_dir()
 STATUS_FILE = os.path.join(STATUS_DIR, "sessions.json")
 LOCK_FILE = os.path.join(STATUS_DIR, "sessions.lock")
 STALE_THRESHOLD = 600  # 10 minutes
+
+# Required keys and their expected types for session validation (Task 4)
+_SESSION_SCHEMA = {
+    "id": str,
+    "workspace": str,
+    "state": str,
+    "lastActivity": (int, float),
+    "startedAt": (int, float),
+}
+
+
+def _validate_sessions(data):
+    """Validate sessions.json structure. Return sanitised dict or empty sessions."""
+    if not isinstance(data, dict):
+        return {"sessions": {}}
+    sessions = data.get("sessions")
+    if not isinstance(sessions, dict):
+        return {"sessions": {}}
+
+    valid = {}
+    for sid, entry in sessions.items():
+        if not isinstance(entry, dict):
+            continue
+        ok = True
+        for key, expected in _SESSION_SCHEMA.items():
+            val = entry.get(key)
+            if not isinstance(val, expected):
+                ok = False
+                break
+        if ok:
+            valid[sid] = entry
+
+    return {"sessions": valid}
 
 
 def main():
@@ -36,53 +152,66 @@ def main():
 
     # Hold an exclusive lock for the entire read-modify-write cycle
     # to prevent concurrent hooks from clobbering each other's updates
-    with open(LOCK_FILE, "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-
-        # Read existing sessions
+    lock_mode = "r+b" if os.path.exists(LOCK_FILE) else "w+b"
+    with open(LOCK_FILE, lock_mode) as lock:
+        _lock(lock)
         try:
-            with open(STATUS_FILE, "r") as f:
-                status = json.load(f)
-        except Exception:
-            status = {"sessions": {}}
+            # Read existing sessions
+            try:
+                with open(STATUS_FILE, "r") as f:
+                    status = json.load(f)
+            except Exception:
+                status = {"sessions": {}}
 
-        if "sessions" not in status:
-            status["sessions"] = {}
+            # Task 4: Schema validation
+            status = _validate_sessions(status)
 
-        now = time.time()
+            now = time.time()
 
-        if action == "remove":
-            # Session closed — remove it entirely
-            status["sessions"].pop(session_id, None)
-        else:
-            # Update or create session
-            existing = status["sessions"].get(session_id, {})
-            status["sessions"][session_id] = {
-                "id": session_id,
-                "workspace": workspace,
-                "state": action,
-                "lastActivity": now,
-                "startedAt": existing.get("startedAt", now),
-            }
+            if action == "remove":
+                # Session closed — remove it entirely
+                status["sessions"].pop(session_id, None)
+            else:
+                # Update or create session
+                existing = status["sessions"].get(session_id, {})
+                status["sessions"][session_id] = {
+                    "id": session_id,
+                    "workspace": workspace,
+                    "state": action,
+                    "lastActivity": now,
+                    "startedAt": existing.get("startedAt", now),
+                }
 
-        # Prune stale sessions
-        stale = [
-            sid
-            for sid, s in status["sessions"].items()
-            if now - s.get("lastActivity", 0) > STALE_THRESHOLD
-        ]
-        for sid in stale:
-            del status["sessions"][sid]
+            # Prune stale sessions
+            stale = [
+                sid
+                for sid, s in status["sessions"].items()
+                if now - s.get("lastActivity", 0) > STALE_THRESHOLD
+            ]
+            for sid in stale:
+                del status["sessions"][sid]
 
-        # Atomic write with unique temp file to avoid collisions
-        fd, tmp = tempfile.mkstemp(dir=STATUS_DIR, suffix=".json.tmp")
-        try:
-            with os.fdopen(fd, "w") as f:
-                json.dump(status, f, indent=2)
-            os.rename(tmp, STATUS_FILE)
-        except Exception:
-            os.unlink(tmp)
-            raise
+            # Atomic write with unique temp file to avoid collisions
+            fd, tmp = tempfile.mkstemp(dir=STATUS_DIR, suffix=".json.tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(status, f, indent=2)
+                    # Task 2: Flush and fsync before replace to prevent data loss
+                    f.flush()
+                    os.fsync(f.fileno())
+                # Task 1: os.replace() is atomic on all platforms
+                os.replace(tmp, STATUS_FILE)
+                # Task 3: Restrict permissions on Unix
+                if sys.platform != "win32":
+                    os.chmod(STATUS_FILE, 0o600)
+            except Exception:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+        finally:
+            _unlock(lock)
 
 
 if __name__ == "__main__":

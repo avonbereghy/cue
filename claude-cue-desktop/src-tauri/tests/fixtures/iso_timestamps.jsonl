@@ -1,0 +1,3 @@
+{"type":"user","isoTimestamp":"2024-03-10T12:00:00Z"}
+{"type":"assistant","isoTimestamp":"2024-03-10T12:00:10.500Z","message":{"model":"claude-opus-4-6","usage":{"input_tokens":3000,"output_tokens":1500},"content":[]}}
+{"type":"assistant","timestamp":"2024-03-10T12:01:00+00:00","message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":1000,"output_tokens":400},"content":[]}}
