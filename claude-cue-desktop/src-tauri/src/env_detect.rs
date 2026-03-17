@@ -503,6 +503,84 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_hook_path_rejects_shell_metacharacters() {
+        // Semicolons, pipes, backticks, etc. must be rejected
+        let cases = vec![
+            "/usr/bin/hook; rm -rf /",
+            "/usr/bin/hook | cat",
+            "/usr/bin/hook & bg",
+            "/usr/bin/hook$(whoami)",
+            "/usr/bin/hook`id`",
+            "/usr/bin/hook > /tmp/out",
+            "/usr/bin/hook < /dev/null",
+        ];
+        for input in cases {
+            let result = resolve_hook_path(input);
+            assert!(result.is_err(), "Should reject metacharacters in: {}", input);
+            assert!(
+                result.unwrap_err().contains("invalid characters"),
+                "Error message should mention invalid characters"
+            );
+        }
+    }
+
+    #[test]
+    fn test_resolve_hook_path_rejects_traversal() {
+        let result = resolve_hook_path("/usr/local/../bin/hook");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("traversal"));
+    }
+
+    #[test]
+    fn test_resolve_hook_path_rejects_empty() {
+        let result = resolve_hook_path("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("empty"));
+
+        let result2 = resolve_hook_path("   ");
+        assert!(result2.is_err());
+        assert!(result2.unwrap_err().contains("empty"));
+    }
+
+    #[test]
+    fn test_resolve_hook_path_tilde_expansion() {
+        let result = resolve_hook_path("~/bin/cue-hook");
+        assert!(result.is_ok());
+        let expanded = result.unwrap();
+        // Should NOT start with ~, should be an absolute path
+        assert!(expanded.is_absolute(), "Tilde should be expanded to absolute path");
+        assert!(
+            !expanded.to_string_lossy().starts_with('~'),
+            "Tilde should be expanded"
+        );
+        assert!(
+            expanded.to_string_lossy().ends_with("bin/cue-hook"),
+            "Rest of path should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_resolve_hook_path_valid_absolute() {
+        let result = resolve_hook_path("/usr/local/bin/cue-hook");
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            PathBuf::from("/usr/local/bin/cue-hook")
+        );
+    }
+
+    #[test]
+    fn test_resolve_hook_path_rejects_relative() {
+        // A relative path with no tilde or $HOME should be rejected
+        let result = resolve_hook_path("bin/cue-hook");
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().contains("absolute"),
+            "Error should mention absolute path requirement"
+        );
+    }
+
+    #[test]
     fn test_configure_hooks_dedup_by_path() {
         // Simulate the deduplication logic
         let hook_path = "/usr/local/bin/cue-hook";
