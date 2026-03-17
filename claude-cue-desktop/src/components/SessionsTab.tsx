@@ -13,7 +13,7 @@ interface SessionsTabProps {
 
 export function SessionsTab({ sessions }: SessionsTabProps) {
   const [showPermissions, setShowPermissions] = useState(() => {
-    return localStorage.getItem("showPermissions") !== "false";
+    return localStorage.getItem("showPermissions") === "true";
   });
   const [collapsedSessions, setCollapsedSessions] = useState<Set<string>>(
     new Set(),
