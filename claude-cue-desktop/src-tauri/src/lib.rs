@@ -14,6 +14,9 @@ pub mod settings;
 pub mod tray;
 pub mod cli;
 pub mod env_detect;
+pub mod permission_server;
+pub mod permission_log;
+pub mod summary_formatter;
 
 use models::{EnrichedSession, Settings, UsageWindow, WindowMetrics};
 use session_monitor::SessionMonitorState;
@@ -26,6 +29,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 /// Application state managed by Tauri.
 pub struct AppState {
     pub monitor: Arc<SessionMonitorState>,
+    pub pending_permissions: Arc<permission_server::PendingRequests>,
+    pub permission_metadata: Arc<Mutex<HashMap<String, models::PermissionRequest>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -67,21 +72,65 @@ fn configure_hooks(hook_path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn approve_permission(session_id: String, request_id: String) -> Result<(), String> {
+fn approve_permission(
+    state: State<'_, AppState>,
+    session_id: String,
+    request_id: String,
+) -> Result<(), String> {
     log::info!("Permission approved: session={}, request={}", session_id, request_id);
-    Ok(()) // Stub — Wave 2 wires to permission_server
+    state.pending_permissions.resolve(&request_id, models::PermissionDecision::Allow)?;
+
+    // Log the decision using stored metadata
+    if let Some(req) = state.permission_metadata.lock().unwrap().remove(&request_id) {
+        let summary = summary_formatter::format_tool_summary(&req.tool_name, &req.tool_input);
+        let entry = models::PermissionLogEntry {
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64(),
+            session_id: req.session_id,
+            tool_name: req.tool_name,
+            tool_input_summary: summary,
+            decision: "Allow".to_string(),
+        };
+        let _ = permission_log::append_permission_log(&entry);
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
-fn deny_permission(session_id: String, request_id: String) -> Result<(), String> {
+fn deny_permission(
+    state: State<'_, AppState>,
+    session_id: String,
+    request_id: String,
+) -> Result<(), String> {
     log::info!("Permission denied: session={}, request={}", session_id, request_id);
-    Ok(()) // Stub — Wave 2 wires to permission_server
+    state.pending_permissions.resolve(&request_id, models::PermissionDecision::Deny)?;
+
+    // Log the decision using stored metadata
+    if let Some(req) = state.permission_metadata.lock().unwrap().remove(&request_id) {
+        let summary = summary_formatter::format_tool_summary(&req.tool_name, &req.tool_input);
+        let entry = models::PermissionLogEntry {
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64(),
+            session_id: req.session_id,
+            tool_name: req.tool_name,
+            tool_input_summary: summary,
+            decision: "Deny".to_string(),
+        };
+        let _ = permission_log::append_permission_log(&entry);
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
 fn get_permission_history(session_id: String) -> Vec<models::PermissionLogEntry> {
     log::debug!("Getting permission history for session={}", session_id);
-    Vec::new() // Stub — Wave 2 reads from permission_log
+    permission_log::read_permission_log(&session_id)
 }
 
 #[tauri::command]
@@ -178,11 +227,19 @@ pub fn run() {
     startup_checks();
 
     let monitor = Arc::new(SessionMonitorState::new());
+    let pending_permissions = Arc::new(permission_server::PendingRequests::new());
+    let permission_metadata: Arc<Mutex<HashMap<String, models::PermissionRequest>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+
+    let pending_for_server = pending_permissions.clone();
+    let metadata_for_server = permission_metadata.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::default().build())
         .manage(AppState {
             monitor: monitor.clone(),
+            pending_permissions,
+            permission_metadata,
         })
         .invoke_handler(tauri::generate_handler![
             get_sessions,
@@ -207,12 +264,238 @@ pub fn run() {
             spawn_blink_timer(handle.clone(), monitor_tray.clone());
 
             // --- Data polling timers ---
-            spawn_timers(handle, monitor);
+            spawn_timers(handle.clone(), monitor);
+
+            // --- Permission server (localhost-only HTTP for Claude Code hooks) ---
+            spawn_permission_server(handle, pending_for_server, metadata_for_server);
 
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+// ---------------------------------------------------------------------------
+// Permission Server (localhost-only HTTP)
+// ---------------------------------------------------------------------------
+
+/// Spawn a localhost TCP server on port 3002 to receive permission requests
+/// from Claude Code hooks. Each request blocks until the user approves/denies.
+fn spawn_permission_server(
+    app_handle: AppHandle,
+    pending: Arc<permission_server::PendingRequests>,
+    metadata: Arc<Mutex<HashMap<String, models::PermissionRequest>>>,
+) {
+    tauri::async_runtime::spawn(async move {
+        let listener = match tokio::net::TcpListener::bind("127.0.0.1:3002").await {
+            Ok(l) => l,
+            Err(e) => {
+                log::warn!("Permission server failed to start: {}", e);
+                let _ = app_handle.emit("permission-server-error", e.to_string());
+                return;
+            }
+        };
+        log::info!("Permission server listening on 127.0.0.1:3002");
+
+        loop {
+            let (stream, _addr) = match listener.accept().await {
+                Ok(s) => s,
+                Err(e) => {
+                    log::debug!("Accept error: {}", e);
+                    continue;
+                }
+            };
+
+            let app = app_handle.clone();
+            let pending = pending.clone();
+            let metadata = metadata.clone();
+
+            tokio::spawn(async move {
+                if let Err(e) = handle_permission_connection(stream, app, pending, metadata).await {
+                    log::debug!("Permission connection error: {}", e);
+                }
+            });
+        }
+    });
+}
+
+/// Handle a single HTTP connection on the permission server.
+async fn handle_permission_connection(
+    mut stream: tokio::net::TcpStream,
+    app: AppHandle,
+    pending: Arc<permission_server::PendingRequests>,
+    metadata: Arc<Mutex<HashMap<String, models::PermissionRequest>>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // Read the HTTP request (headers + body in one read for small payloads)
+    let mut buf = vec![0u8; 16384];
+    let n = stream.read(&mut buf).await?;
+    if n == 0 {
+        return Ok(());
+    }
+    let raw = &buf[..n];
+
+    // Find end of headers
+    let header_end = raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .unwrap_or(n);
+    let header_str = String::from_utf8_lossy(&raw[..header_end]);
+
+    let first_line = header_str.lines().next().unwrap_or("");
+    let parts: Vec<&str> = first_line.split_whitespace().collect();
+    let method = parts.first().copied().unwrap_or("");
+    let path = parts.get(1).copied().unwrap_or("");
+
+    match (method, path) {
+        ("GET", "/health") => {
+            let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK";
+            stream.write_all(response.as_bytes()).await?;
+        }
+        ("POST", "/permission-request") => {
+            // Parse Content-Length to ensure we have the full body
+            let content_length: usize = header_str
+                .lines()
+                .find_map(|line| {
+                    let lower = line.to_lowercase();
+                    if lower.starts_with("content-length:") {
+                        lower.split(':').nth(1)?.trim().parse().ok()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+
+            let body_start = header_end + 4;
+            let mut body_bytes: Vec<u8> = if body_start < n {
+                raw[body_start..n].to_vec()
+            } else {
+                Vec::new()
+            };
+
+            // Read remaining body if needed
+            while body_bytes.len() < content_length {
+                let mut extra = vec![0u8; content_length - body_bytes.len()];
+                let extra_n = stream.read(&mut extra).await?;
+                if extra_n == 0 {
+                    break;
+                }
+                body_bytes.extend_from_slice(&extra[..extra_n]);
+            }
+
+            let body_str = String::from_utf8_lossy(&body_bytes);
+
+            // Parse JSON payload
+            let payload: serde_json::Value = match serde_json::from_str(&body_str) {
+                Ok(v) => v,
+                Err(e) => {
+                    let msg = format!("Bad JSON: {}", e);
+                    let response = format!(
+                        "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        msg.len(), msg
+                    );
+                    stream.write_all(response.as_bytes()).await?;
+                    return Ok(());
+                }
+            };
+
+            // Extract fields from Claude Code hook payload (accept both snake_case and camelCase)
+            let session_id = payload
+                .get("session_id")
+                .or_else(|| payload.get("sessionId"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let tool_name = payload
+                .get("tool_name")
+                .or_else(|| payload.get("toolName"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let tool_input = payload
+                .get("tool_input")
+                .or_else(|| payload.get("toolInput"))
+                .or_else(|| payload.get("input"))
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            let hook_event_name = payload
+                .get("hook_event_name")
+                .or_else(|| payload.get("hookEventName"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("PermissionRequest")
+                .to_string();
+
+            let request_id = uuid::Uuid::new_v4().to_string();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64();
+
+            let summary = summary_formatter::format_tool_summary(&tool_name, &tool_input);
+
+            let permission_req = models::PermissionRequest {
+                request_id: request_id.clone(),
+                session_id: session_id.clone(),
+                tool_name: tool_name.clone(),
+                tool_input: tool_input.clone(),
+                hook_event_name: hook_event_name.clone(),
+                received_at: now,
+            };
+
+            // Store metadata for logging on decision
+            metadata
+                .lock()
+                .unwrap()
+                .insert(request_id.clone(), permission_req);
+
+            // Build frontend event payload (includes computed summary)
+            let frontend_payload = serde_json::json!({
+                "requestId": request_id,
+                "sessionId": session_id,
+                "toolName": tool_name,
+                "toolInput": tool_input,
+                "summary": summary,
+                "hookEventName": hook_event_name,
+                "receivedAt": now,
+            });
+
+            // Emit to React frontend
+            let _ = app.emit("permission-request", &frontend_payload);
+
+            // Wait for user decision (blocks this connection until approve/deny)
+            let rx = pending.insert(&request_id);
+
+            let decision = match rx.await {
+                Ok(d) => d,
+                Err(_) => {
+                    // Channel dropped (timeout or cleanup)
+                    metadata.lock().unwrap().remove(&request_id);
+                    let response = "HTTP/1.1 504 Gateway Timeout\r\nContent-Type: text/plain\r\nContent-Length: 7\r\nConnection: close\r\n\r\nTimeout";
+                    stream.write_all(response.as_bytes()).await?;
+                    return Ok(());
+                }
+            };
+
+            let response_body = match decision {
+                models::PermissionDecision::Allow => permission_server::format_allow_response(),
+                models::PermissionDecision::Deny => permission_server::format_deny_response(),
+            };
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+        _ => {
+            let response = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 9\r\nConnection: close\r\n\r\nNot Found";
+            stream.write_all(response.as_bytes()).await?;
+        }
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

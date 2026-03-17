@@ -137,9 +137,16 @@ new_hooks = {
         "matcher": "",
         "hooks": [{"type": "command", "command": f"{hook_script} working", "timeout": 5000}]
     },
+    # PermissionRequest has two hooks:
+    #   1. Command hook — updates tray color to yellow ("waiting")
+    #   2. HTTP hook — sends the permission payload to the desktop app for UI approval/denial
+    # The 600s timeout matches Claude Code's own permission timeout.
     "PermissionRequest": {
         "matcher": "",
-        "hooks": [{"type": "command", "command": f"{hook_script} waiting", "timeout": 5000}]
+        "hooks": [
+            {"type": "command", "command": f"{hook_script} waiting", "timeout": 5000},
+            {"type": "http", "url": "http://localhost:3002/permission-request", "timeout": 600000}
+        ]
     },
     "PostToolUseFailure": {
         "matcher": "",
