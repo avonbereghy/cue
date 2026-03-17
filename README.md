@@ -1,8 +1,7 @@
 # Claude Cue
 
-A real-time session monitor for Claude Code — see at a glance if Claude is working, waiting for permission, hit an error, or finished. Available as a native macOS menu bar app and a cross-platform desktop app for Windows and Linux.
+A real-time session monitor for Claude Code — see at a glance if Claude is working, waiting for permission, hit an error, or finished. Cross-platform desktop app for macOS, Windows, and Linux.
 
-![Swift](https://img.shields.io/badge/Swift-5.9-F05138?logo=swift&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-Tauri_v2-000000?logo=rust&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-macOS_|_Windows_|_Linux-blue)
 ![License](https://img.shields.io/badge/License-MIT-blue)
@@ -43,30 +42,33 @@ Multiple sessions show as a grid of dots — see all your sessions at once.
 - **File locking** — concurrent hooks don't clobber each other's updates
 - **Accessibility** — ARIA labels, keyboard navigation, high contrast, reduced motion support
 
-## Platforms
+## Install
 
-### macOS (Native Swift)
-
-The original app — pure SwiftUI + AppKit, zero external dependencies. Menu bar icon with dashboard window.
+### macOS
 
 ```bash
-git clone https://github.com/avonbereghy/claude-cue.git
-cd claude-cue
-bash install.sh
-```
-
-### Windows & Linux (Tauri)
-
-Cross-platform desktop app built with Rust (Tauri v2) + React + TypeScript. System tray icon with dashboard, onboarding wizard, and settings UI.
-
-```bash
-cd claude-cue/claude-cue-desktop
+cd claude-cue-desktop
 npm install
-npm run tauri dev    # development
-npm run tauri build  # release
+npm run tauri build
+cp -R src-tauri/target/release/bundle/macos/Claude\ Cue.app ~/Applications/
+open ~/Applications/Claude\ Cue.app
 ```
 
-See [claude-cue-desktop/INSTALL.md](claude-cue-desktop/INSTALL.md) for platform-specific install instructions.
+The onboarding wizard configures the Claude Code hooks automatically on first launch.
+
+To start on login: **System Settings > General > Login Items > add "Claude Cue"**
+
+### Windows & Linux
+
+See [claude-cue-desktop/INSTALL.md](claude-cue-desktop/INSTALL.md) for MSI, NSIS, AppImage, and .deb instructions.
+
+### Development
+
+```bash
+cd claude-cue-desktop
+npm install
+npm run tauri dev
+```
 
 ## How It Works
 
@@ -101,23 +103,6 @@ The desktop app includes a localhost HTTP server (`127.0.0.1:3002`) that integra
 
 If the desktop app isn't running, Claude Code falls back to its normal terminal/VSCode permission flow. The `install.sh` script configures both a command hook (updates tray status to "waiting") and an HTTP hook (sends the permission to the dashboard) for the `PermissionRequest` event.
 
-## Install
-
-```bash
-git clone https://github.com/avonbereghy/claude-cue.git
-cd claude-cue
-bash install.sh
-```
-
-The installer:
-1. Builds the Swift binary
-2. Creates `Claude Cue.app` in `~/Applications/`
-3. Generates the app icon
-4. Configures all 12 Claude Code hooks in `~/.claude/settings.json`
-5. Launches the app
-
-To start on login: **System Settings → General → Login Items → add "Claude Cue"**
-
 ## Uninstall
 
 ```bash
@@ -129,14 +114,6 @@ Then remove the hook entries from `~/.claude/settings.json` (search for `cue-hoo
 ## Architecture
 
 ```
-Sources/                          # macOS native app (Swift/SwiftUI)
-├── main.swift                    # AppDelegate, menu bar, dot grid rendering
-├── SessionMonitor.swift          # Polls sessions.json, incremental JSONL parsing
-├── UsageAggregator.swift         # Time-windowed usage aggregation
-├── DashboardView.swift           # Dashboard with session cards
-├── UsageView.swift               # Usage tab with progress bars
-└── Models.swift                  # SessionInfo, SessionMetrics, EnrichedSession
-
 claude-cue-desktop/               # Cross-platform app (Tauri v2)
 ├── src-tauri/src/                # Rust backend
 │   ├── lib.rs                    # Tauri commands, timers, tray + permission server
