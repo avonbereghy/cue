@@ -29,6 +29,15 @@ body {
   .progress-fill { border: 1px solid CanvasText; }
 }
 
+/* Pulsing dot for active session states */
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.dot-pulse {
+  animation: dot-pulse 2s ease-in-out infinite;
+}
+
 /* Reduced Motion */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

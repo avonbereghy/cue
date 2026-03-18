@@ -12,6 +12,7 @@ export function SessionCard({ session }: SessionCardProps) {
   const { info, metrics } = session;
   const [copied, setCopied] = useState(false);
   const dotColor = STATE_DOT_COLORS[info.state] ?? "bg-green-500";
+  const dotPulse = info.state !== "done" && info.state !== "error" ? "dot-pulse" : "";
   const badgeBg = STATE_BADGE_BG[info.state] ?? "bg-green-500/20 text-green-500";
   const titleColor = info.state === "working" ? "text-white" : (STATE_COLORS[info.state] ?? "text-green-500");
 
@@ -45,7 +46,7 @@ export function SessionCard({ session }: SessionCardProps) {
     >
       {/* Row 1: Status dot + title + state badge + git branch + duration */}
       <div className="flex items-center gap-2">
-        <span className={`inline-block w-2.5 h-2.5 rounded-full ${dotColor} shrink-0`} aria-hidden="true" />
+        <span className={`inline-block w-2.5 h-2.5 rounded-full ${dotColor} ${dotPulse} shrink-0`} aria-hidden="true" />
         <span className={`font-semibold truncate ${titleColor}`}>
           {session.displayTitle}
         </span>
