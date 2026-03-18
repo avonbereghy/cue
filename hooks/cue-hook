@@ -195,6 +195,46 @@ def _detect_source():
     return "unknown"
 
 
+def _read_last_tokens(transcript_path):
+    """Read the last assistant usage entry from the JSONL transcript.
+    Returns a dict with input_tokens, cache_creation, cache_read, output_tokens, model — or {}."""
+    if not transcript_path:
+        return {}
+    try:
+        with open(transcript_path, "rb") as f:
+            # Scan from end for last assistant message with usage
+            f.seek(0, 2)
+            size = f.tell()
+            chunk = min(size, 8192)
+            f.seek(-chunk, 2)
+            tail = f.read().decode("utf-8", errors="ignore")
+        for line in reversed(tail.splitlines()):
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if obj.get("type") != "assistant":
+                continue
+            msg = obj.get("message", {})
+            usage = msg.get("usage")
+            if not usage:
+                continue
+            return {
+                "inputTokens": (
+                    usage.get("input_tokens", 0)
+                    + usage.get("cache_creation_input_tokens", 0)
+                    + usage.get("cache_read_input_tokens", 0)
+                ),
+                "outputTokens": usage.get("output_tokens", 0),
+                "model": msg.get("model", ""),
+            }
+    except Exception:
+        pass
+    return {}
+
+
 def main():
     if len(sys.argv) < 2:
         return
@@ -213,6 +253,10 @@ def main():
     session_id = hook_data.get("session_id", f"pid-{os.getppid()}")
     workspace = hook_data.get("cwd", os.getcwd())
     source = _detect_source()
+
+    # Read latest token usage directly from the JSONL transcript
+    transcript_path = hook_data.get("transcript_path", "")
+    last_tokens = _read_last_tokens(transcript_path)
 
     # Forward permission requests to the dashboard for user decision.
     # PermissionRequest hooks have tool_name in the payload and action="waiting".
@@ -251,7 +295,7 @@ def main():
             else:
                 # Update or create session
                 existing = status["sessions"].get(session_id, {})
-                status["sessions"][session_id] = {
+                entry = {
                     "id": session_id,
                     "workspace": workspace,
                     "state": action,
@@ -259,6 +303,17 @@ def main():
                     "startedAt": existing.get("startedAt", now),
                     "source": existing.get("source", source),
                 }
+                if last_tokens:
+                    entry["inputTokens"] = last_tokens["inputTokens"]
+                    entry["outputTokens"] = last_tokens["outputTokens"]
+                    if last_tokens["model"]:
+                        entry["model"] = last_tokens["model"]
+                elif existing.get("inputTokens"):
+                    # Preserve last known token counts if JSONL wasn't readable
+                    entry["inputTokens"] = existing["inputTokens"]
+                    entry["outputTokens"] = existing.get("outputTokens", 0)
+                    entry["model"] = existing.get("model", "")
+                status["sessions"][session_id] = entry
 
             # Prune stale sessions
             stale = [
