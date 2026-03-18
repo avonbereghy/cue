@@ -730,6 +730,7 @@ fn format_tokens_short(tokens: i64) -> String {
 fn spawn_blink_timer(handle: AppHandle, monitor: Arc<SessionMonitorState>) {
     let blink_on = Arc::new(Mutex::new(true));
     let last_menu_key: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let last_icon_key: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
@@ -742,8 +743,8 @@ fn spawn_blink_timer(handle: AppHandle, monitor: Arc<SessionMonitorState>) {
                 .any(|s| s.info.state == "working" || s.info.state == "subagent");
 
             if !has_blinking {
-                // No blinking needed — still update icon/menu but skip blink toggle
-                update_tray(&handle, &sessions, true, &last_menu_key);
+                // No blinking needed — only update if sessions changed
+                update_tray(&handle, &sessions, true, &last_menu_key, &last_icon_key);
                 continue;
             }
 
@@ -754,7 +755,7 @@ fn spawn_blink_timer(handle: AppHandle, monitor: Arc<SessionMonitorState>) {
                 *b
             };
 
-            update_tray(&handle, &sessions, current, &last_menu_key);
+            update_tray(&handle, &sessions, current, &last_menu_key, &last_icon_key);
         }
     });
 }
@@ -777,6 +778,7 @@ fn menu_cache_key(sessions: &[EnrichedSession]) -> String {
 }
 
 /// Update the tray icon, tooltip, and menu with current session data.
+/// The icon is only re-rendered when sessions or blink phase actually changes.
 /// The menu is only rebuilt when session data changes (not on blink ticks)
 /// to avoid dismissing an open menu on macOS.
 fn update_tray(
@@ -784,19 +786,30 @@ fn update_tray(
     sessions: &[EnrichedSession],
     blink_on: bool,
     last_menu_key: &Arc<Mutex<String>>,
+    last_icon_key: &Arc<Mutex<String>>,
 ) {
-    let png_bytes = tray::render_dot_grid(sessions, blink_on, 44);
+    let menu_key = menu_cache_key(sessions);
+    let icon_key = format!("{}:{}", menu_key, blink_on as u8);
+
+    let icon_changed = {
+        let last = last_icon_key.lock().unwrap();
+        *last != icon_key
+    };
 
     if let Some(tray) = handle.tray_by_id("claude-cue-tray") {
-        if let Ok(icon) = tauri::image::Image::from_bytes(&png_bytes) {
-            let _ = tray.set_icon(Some(icon));
+        // Only render + push a new PNG when the visual state actually changed
+        if icon_changed {
+            let png_bytes = tray::render_dot_grid(sessions, blink_on, 44);
+            if let Ok(icon) = tauri::image::Image::from_bytes(&png_bytes) {
+                let _ = tray.set_icon(Some(icon));
+            }
+            *last_icon_key.lock().unwrap() = icon_key;
         }
 
         // Only rebuild menu when session data actually changes
-        let new_key = menu_cache_key(sessions);
         let should_rebuild = {
             let last = last_menu_key.lock().unwrap();
-            *last != new_key
+            *last != menu_key
         };
 
         if should_rebuild {
@@ -806,7 +819,7 @@ fn update_tray(
                 let _ = tray.set_menu(Some(menu));
             }
 
-            *last_menu_key.lock().unwrap() = new_key;
+            *last_menu_key.lock().unwrap() = menu_key;
         }
     }
 }

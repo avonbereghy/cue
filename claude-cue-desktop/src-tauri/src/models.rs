@@ -22,6 +22,15 @@ pub struct SessionInfo {
     /// Client that launched the session: "vscode", "cursor", "iterm", "terminal", etc.
     #[serde(default)]
     pub source: Option<String>,
+    /// Total input tokens from last API call (written by hook from JSONL).
+    #[serde(default, rename = "inputTokens")]
+    pub hook_input_tokens: i64,
+    /// Output tokens from last API call (written by hook from JSONL).
+    #[serde(default, rename = "outputTokens")]
+    pub hook_output_tokens: i64,
+    /// Model name from last API call (written by hook from JSONL).
+    #[serde(default, rename = "model")]
+    pub hook_model: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,8 +143,22 @@ impl EnrichedSession {
 
         let duration_secs = now - info.started_at;
 
+        // Prefer hook-sourced token counts (written at hook time from JSONL)
+        // over the background-polled metrics, as they're fresher.
+        let effective_input_tokens = if info.hook_input_tokens > 0 {
+            info.hook_input_tokens
+        } else {
+            metrics.last_input_tokens
+        };
+
+        let effective_model = if !info.hook_model.is_empty() {
+            info.hook_model.clone()
+        } else {
+            metrics.model.clone()
+        };
+
         let context_limit = {
-            let m = metrics.model.to_lowercase();
+            let m = effective_model.to_lowercase();
             if (m.contains("opus") || m.contains("sonnet")) && m.contains("4-6") {
                 1_000_000
             } else {
@@ -143,13 +166,13 @@ impl EnrichedSession {
             }
         };
 
-        let context_usage_percent = if metrics.last_input_tokens > 0 {
-            (metrics.last_input_tokens as f64 / context_limit as f64).min(1.0)
+        let context_usage_percent = if effective_input_tokens > 0 {
+            (effective_input_tokens as f64 / context_limit as f64).min(1.0)
         } else {
             0.0
         };
 
-        let model_display_name = format_model_name(&metrics.model);
+        let model_display_name = format_model_name(&effective_model);
 
         let source_display = format_source_name(info.source.as_deref());
 
