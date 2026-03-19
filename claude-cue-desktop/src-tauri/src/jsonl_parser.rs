@@ -25,6 +25,8 @@ pub struct ParsedEntry {
     pub tool_counts: HashMap<String, i64>,
     pub custom_title: Option<String>,
     pub git_branch: Option<String>,
+    pub agent_id: Option<String>,
+    pub slug: Option<String>,
 }
 
 /// Parse a JSONL file into a list of entries.
@@ -83,6 +85,10 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
             entry.git_branch = Some(branch.to_string());
         }
     }
+
+    // Extract agent identifiers (for subagent JSONL files)
+    entry.agent_id = obj.get("agentId").and_then(|v| v.as_str()).map(String::from);
+    entry.slug = obj.get("slug").and_then(|v| v.as_str()).map(String::from);
 
     // Count user messages
     if entry_type == "user" {
@@ -177,6 +183,67 @@ fn parse_iso8601(s: &str) -> Option<f64> {
     None
 }
 
+/// Parse a subagent JSONL file and its companion .meta.json into SubagentMetrics.
+pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::SubagentMetrics> {
+    let entries = parse_jsonl_file(jsonl_path);
+    if entries.is_empty() {
+        return None;
+    }
+
+    let mut m = crate::models::SubagentMetrics::default();
+
+    // Extract agentId and slug from first entry that has them
+    for entry in &entries {
+        if m.agent_id.is_empty() {
+            if let Some(ref id) = entry.agent_id {
+                m.agent_id = id.clone();
+            }
+        }
+        if m.slug.is_empty() {
+            if let Some(ref slug) = entry.slug {
+                m.slug = slug.clone();
+            }
+        }
+        if !m.agent_id.is_empty() && !m.slug.is_empty() {
+            break;
+        }
+    }
+
+    // Aggregate metrics
+    for entry in &entries {
+        if entry.is_assistant_message {
+            m.message_count += 1;
+            if !entry.model.is_empty() {
+                m.model = entry.model.clone();
+            }
+            m.input_tokens += entry.input_tokens;
+            m.output_tokens += entry.output_tokens;
+            m.cache_creation_tokens += entry.cache_creation_tokens;
+            m.cache_read_tokens += entry.cache_read_tokens;
+            for (tool, count) in &entry.tool_counts {
+                *m.tool_counts.entry(tool.clone()).or_insert(0) += count;
+            }
+        }
+    }
+
+    // Read companion .meta.json for description
+    if let Some(stem) = jsonl_path.file_stem().and_then(|s| s.to_str()) {
+        let meta_filename = format!("{}.meta.json", stem);
+        if let Some(parent) = jsonl_path.parent() {
+            let meta_path = parent.join(meta_filename);
+            if let Ok(content) = std::fs::read_to_string(&meta_path) {
+                if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(desc) = meta.get("description").and_then(|v| v.as_str()) {
+                        m.description = desc.to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    Some(m)
+}
+
 /// Parse a JSONL file and extract aggregated SessionMetrics (for session_monitor).
 pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::SessionMetrics> {
     let entries = parse_jsonl_file(path);
@@ -219,6 +286,27 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
 
             for (tool, count) in &entry.tool_counts {
                 *m.tool_counts.entry(tool.clone()).or_insert(0) += count;
+            }
+        }
+    }
+
+    // Discover subagents: {session_stem}/subagents/*.jsonl
+    if let Some(parent_dir) = path.parent() {
+        if let Some(session_stem) = path.file_stem().and_then(|s| s.to_str()) {
+            let subagents_dir = parent_dir.join(session_stem).join("subagents");
+            if subagents_dir.is_dir() {
+                if let Ok(dir_entries) = std::fs::read_dir(&subagents_dir) {
+                    for dir_entry in dir_entries.flatten() {
+                        let file_path = dir_entry.path();
+                        if file_path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                            if let Some(sub_metrics) = parse_subagent_jsonl(&file_path) {
+                                m.subagents.push(sub_metrics);
+                            }
+                        }
+                    }
+                }
+                // Sort by description for stable display order
+                m.subagents.sort_by(|a, b| a.description.cmp(&b.description));
             }
         }
     }

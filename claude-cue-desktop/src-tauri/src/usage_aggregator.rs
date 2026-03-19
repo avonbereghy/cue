@@ -133,6 +133,23 @@ fn find_all_jsonl_files() -> Vec<PathBuf> {
                 let file_path = file_entry.path();
                 if file_path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
                     files.push(file_path);
+                    continue;
+                }
+
+                // Recurse into {session-uuid}/subagents/ directories
+                if file_path.is_dir() {
+                    let subagents_dir = file_path.join("subagents");
+                    if subagents_dir.is_dir() {
+                        if let Ok(sub_contents) = std::fs::read_dir(&subagents_dir) {
+                            for sub_entry in sub_contents.flatten() {
+                                let sub_path = sub_entry.path();
+                                if sub_path.extension().and_then(|e| e.to_str()) == Some("jsonl")
+                                {
+                                    files.push(sub_path);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
