@@ -555,17 +555,24 @@ mod tests {
         assert!((cost - 4.5).abs() < 0.001);
     }
 
+    fn make_test_info(id: &str, workspace: &str, state: &str) -> SessionInfo {
+        SessionInfo {
+            id: id.to_string(),
+            workspace: workspace.to_string(),
+            state: state.to_string(),
+            last_activity: 0.0,
+            started_at: 0.0,
+            source: None,
+            hook_input_tokens: 0,
+            hook_output_tokens: 0,
+            hook_model: String::new(),
+        }
+    }
+
     #[test]
     fn test_enriched_session_state_icons() {
         let make = |state: &str| {
-            let info = SessionInfo {
-                id: "test".to_string(),
-                workspace: "/tmp/test".to_string(),
-                state: state.to_string(),
-                last_activity: 0.0,
-                started_at: 0.0,
-                source: None,
-            };
+            let info = make_test_info("test", "/tmp/test", state);
             EnrichedSession::from_info_and_metrics(info, SessionMetrics::default())
         };
         assert_eq!(make("working").state_icon, "\u{27F3}");
@@ -576,14 +583,7 @@ mod tests {
 
     #[test]
     fn test_context_limit_by_model() {
-        let info = SessionInfo {
-            id: "t".to_string(),
-            workspace: "/test".to_string(),
-            state: "working".to_string(),
-            last_activity: 0.0,
-            started_at: 0.0,
-            source: None,
-        };
+        let info = make_test_info("t", "/test", "working");
         let metrics_opus = SessionMetrics {
             model: "claude-opus-4-6".to_string(),
             last_input_tokens: 500_000,

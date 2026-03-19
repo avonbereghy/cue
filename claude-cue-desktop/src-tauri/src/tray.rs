@@ -315,6 +315,9 @@ mod tests {
             last_activity: 0.0,
             started_at: 0.0,
             source: None,
+            hook_input_tokens: 0,
+            hook_output_tokens: 0,
+            hook_model: String::new(),
         };
         EnrichedSession::from_info_and_metrics(info, SessionMetrics::default())
     }
