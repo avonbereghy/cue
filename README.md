@@ -35,7 +35,7 @@ Multiple sessions show as a grid of dots — see all your sessions at once.
 - **Session dashboard** — detailed view with workspace, duration, model, git branch, tool usage
 - **Smart summaries** — human-readable tool descriptions ("Run: `npm install`", "Edit: `src/main.rs`")
 - **Audit log** — every permission decision logged to JSONL with timestamp and tool details
-- **CLI fallback** — `--status` flag for tiling WM users without a system tray
+- **CLI with full stats** — `--status --pretty` for SSH/tiling WM users, `--compact` for dense output, ANSI colors auto-detected
 - **Privacy-first** — shows only leaf directory names, full paths on hover only
 - **Security-first** — no outbound network calls, atomic file writes, 0600 permissions, path sanitization
 - **Automatic cleanup** — stale sessions expire and get pruned
@@ -103,6 +103,26 @@ The desktop app includes a localhost HTTP server (`127.0.0.1:3002`) that integra
 
 If the desktop app isn't running, Claude Code falls back to its normal terminal/VSCode permission flow. The `install.sh` script configures both a command hook (updates tray status to "waiting") and an HTTP hook (sends the permission to the dashboard) for the `PermissionRequest` event.
 
+## CLI Usage
+
+Monitor sessions from the terminal — useful over SSH or on tiling window managers without a system tray.
+
+```bash
+# Rich multi-line output with all stats (colors auto-detected)
+claude-cue-desktop --status --pretty
+
+# Dense single-line-per-session format
+claude-cue-desktop --status --pretty --compact
+
+# JSON output for scripting (pipe to jq)
+claude-cue-desktop --status
+
+# Show full workspace paths (leaf name only by default)
+claude-cue-desktop --status --pretty --show-paths
+```
+
+The CLI displays the same data as the GUI dashboard: session ID, messages, input/output tokens, tool breakdown, model, source client, cache hit %, context usage bar, git branch, and duration. Sessions are sorted with active states first (working/waiting/subagent), then idle, then done.
+
 ## Uninstall
 
 ```bash
@@ -121,7 +141,7 @@ claude-cue-desktop/               # Cross-platform app (Tauri v2)
 │   ├── usage_aggregator.rs       # Usage aggregation across time windows
 │   ├── jsonl_parser.rs           # Line-by-line JSONL parsing
 │   ├── tray.rs                   # Dot grid icon rendering (tiny-skia)
-│   ├── cli.rs                    # CLI --status output
+│   ├── cli.rs                    # CLI --status/--pretty/--compact with full JSONL enrichment
 │   ├── permission_server.rs      # Pending request channels + HTTP response formatting
 │   ├── permission_log.rs         # JSONL audit log for permission decisions
 │   ├── summary_formatter.rs      # Tool input → human-readable summaries
