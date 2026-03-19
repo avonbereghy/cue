@@ -116,16 +116,58 @@ impl SessionMonitorState {
                 continue;
             }
 
-            // Skip if file hasn't changed since last parse
-            if let Ok(metadata) = std::fs::metadata(&path) {
-                if let Ok(mod_time) = metadata.modified() {
-                    let mut mod_dates = self.file_mod_dates.lock().unwrap();
-                    if let Some(cached) = mod_dates.get(&session.info.id) {
-                        if *cached == mod_time {
-                            continue;
+            // For active sessions (working/subagent/waiting), always reparse to
+            // capture subagent token changes in real-time. For inactive sessions,
+            // check file mod times before reparsing.
+            let is_active = matches!(
+                session.info.state.as_str(),
+                "working" | "subagent" | "waiting"
+            );
+
+            if !is_active {
+                let mut should_skip = false;
+                if let Ok(metadata) = std::fs::metadata(&path) {
+                    if let Ok(mod_time) = metadata.modified() {
+                        let mut mod_dates = self.file_mod_dates.lock().unwrap();
+                        if let Some(cached) = mod_dates.get(&session.info.id) {
+                            if *cached == mod_time {
+                                // Parent unchanged — also check subagents dir
+                                let session_stem = Path::new(&path)
+                                    .file_stem()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("");
+                                let subagents_dir = Path::new(&path)
+                                    .parent()
+                                    .map(|p| p.join(session_stem).join("subagents"));
+
+                                let sub_changed = subagents_dir
+                                    .as_ref()
+                                    .filter(|d| d.is_dir())
+                                    .and_then(|d| std::fs::metadata(d).ok())
+                                    .and_then(|m| m.modified().ok())
+                                    .map(|sub_mod| {
+                                        let sub_key = format!("{}-subagents", session.info.id);
+                                        let changed = mod_dates
+                                            .get(&sub_key)
+                                            .map(|c| *c != sub_mod)
+                                            .unwrap_or(true);
+                                        if changed {
+                                            mod_dates.insert(sub_key, sub_mod);
+                                        }
+                                        changed
+                                    })
+                                    .unwrap_or(false);
+
+                                if !sub_changed {
+                                    should_skip = true;
+                                }
+                            }
                         }
+                        mod_dates.insert(session.info.id.clone(), mod_time);
                     }
-                    mod_dates.insert(session.info.id.clone(), mod_time);
+                }
+                if should_skip {
+                    continue;
                 }
             }
 

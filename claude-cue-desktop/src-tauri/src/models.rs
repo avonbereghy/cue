@@ -44,6 +44,33 @@ pub struct StatusData {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct SubagentMetrics {
+    pub agent_id: String,
+    /// Human-readable description from .meta.json
+    pub description: String,
+    /// Random slug from JSONL entries (e.g., "refactored-sprouting-hellman")
+    pub slug: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_creation_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub model: String,
+    pub tool_counts: HashMap<String, i64>,
+    pub message_count: i64,
+}
+
+impl SubagentMetrics {
+    pub fn total_tokens(&self) -> i64 {
+        self.input_tokens + self.output_tokens
+    }
+
+    pub fn total_tool_uses(&self) -> i64 {
+        self.tool_counts.values().sum()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionMetrics {
     pub message_count: i64,
     pub user_message_count: i64,
@@ -56,15 +83,18 @@ pub struct SessionMetrics {
     pub custom_title: Option<String>,
     pub git_branch: Option<String>,
     pub tool_counts: HashMap<String, i64>,
+    pub subagents: Vec<SubagentMetrics>,
 }
 
 impl SessionMetrics {
     pub fn total_tokens(&self) -> i64 {
         self.input_tokens + self.output_tokens
+            + self.subagents.iter().map(|s| s.total_tokens()).sum::<i64>()
     }
 
     pub fn total_tool_uses(&self) -> i64 {
-        self.tool_counts.values().sum()
+        self.tool_counts.values().sum::<i64>()
+            + self.subagents.iter().map(|s| s.total_tool_uses()).sum::<i64>()
     }
 
     pub fn top_tools(&self) -> Vec<(String, i64)> {
@@ -101,6 +131,8 @@ pub struct EnrichedSession {
     pub model_display_name: String,
     /// Human-readable source label (e.g. "VSCode", "iTerm", "Terminal")
     pub source_display: String,
+    /// Whether this session has active or completed subagents
+    pub has_subagents: bool,
 }
 
 impl EnrichedSession {
@@ -175,6 +207,7 @@ impl EnrichedSession {
         let model_display_name = format_model_name(&effective_model);
 
         let source_display = format_source_name(info.source.as_deref());
+        let has_subagents = !metrics.subagents.is_empty();
 
         Self {
             info,
@@ -188,6 +221,7 @@ impl EnrichedSession {
             context_usage_percent,
             model_display_name,
             source_display,
+            has_subagents,
         }
     }
 }
