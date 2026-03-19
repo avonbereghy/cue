@@ -319,6 +319,9 @@ mod tests {
             last_activity,
             started_at,
             source: None,
+            hook_input_tokens: 0,
+            hook_output_tokens: 0,
+            hook_model: String::new(),
         }
     }
 
