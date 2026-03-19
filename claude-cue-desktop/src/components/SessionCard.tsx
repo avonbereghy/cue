@@ -11,12 +11,21 @@ interface SessionCardProps {
 export function SessionCard({ session }: SessionCardProps) {
   const { info, metrics } = session;
   const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const dotColor = STATE_DOT_COLORS[info.state] ?? "bg-green-500";
   const dotPulse = info.state !== "done" && info.state !== "error" ? "dot-pulse" : "";
   const badgeBg = STATE_BADGE_BG[info.state] ?? "bg-green-500/20 text-green-500";
   const titleColor = info.state === "working" ? "text-white" : (STATE_COLORS[info.state] ?? "text-green-500");
 
-  const totalToolUses = Object.values(metrics.toolCounts).reduce((a, b) => a + b, 0);
+  const subagents = metrics.subagents ?? [];
+  const hasSubagents = session.hasSubagents;
+
+  // Aggregated metrics (parent + all children)
+  const aggregatedInputTokens = metrics.inputTokens + subagents.reduce((s, a) => s + a.inputTokens, 0);
+  const aggregatedOutputTokens = metrics.outputTokens + subagents.reduce((s, a) => s + a.outputTokens, 0);
+  const aggregatedToolUses = Object.values(metrics.toolCounts).reduce((a, b) => a + b, 0)
+    + subagents.reduce((s, a) => s + Object.values(a.toolCounts).reduce((x, y) => x + y, 0), 0);
+
   const topTools = Object.entries(metrics.toolCounts)
     .sort(([, a], [, b]) => b - a)
     .slice(0, 6);
@@ -86,15 +95,26 @@ export function SessionCard({ session }: SessionCardProps) {
           &#128172; {metrics.userMessageCount}/{metrics.messageCount}
         </span>
         <span>
-          &#8595; {formatTokens(metrics.inputTokens)} in
+          &#8595; {formatTokens(aggregatedInputTokens)} in
         </span>
         <span>
-          &#8593; {formatTokens(metrics.outputTokens)} out
+          &#8593; {formatTokens(aggregatedOutputTokens)} out
         </span>
-        {totalToolUses > 0 && (
+        {aggregatedToolUses > 0 && (
           <span>
-            &#128295; {totalToolUses} tools
+            &#128295; {aggregatedToolUses} tools
           </span>
+        )}
+        {hasSubagents && (
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="flex items-center gap-1 text-cyan-400/60 hover:text-cyan-400 transition-colors cursor-pointer"
+            aria-label={expanded ? "Collapse agent team" : "Expand agent team"}
+            aria-expanded={expanded}
+          >
+            <span className="text-[10px]">{expanded ? "\u25BE" : "\u25B8"}</span>
+            <span className="text-[10px]">{subagents.length} agents</span>
+          </button>
         )}
         {session.modelDisplayName !== "\u2014" && (
           <span className="text-[10px] text-white/30">
@@ -148,6 +168,38 @@ export function SessionCard({ session }: SessionCardProps) {
           <span className="text-[10px] text-white/30 mono-nums">
             {formatTokens(metrics.lastInputTokens)} / {formatTokens(session.contextLimit)}
           </span>
+        </div>
+      )}
+
+      {/* Row 5: Expanded agent team */}
+      {expanded && hasSubagents && (
+        <div className="pl-3 space-y-1 border-l-2 border-cyan-400/20">
+          {subagents.map((agent, i) => {
+            const agentTotalTokens = agent.inputTokens + agent.outputTokens;
+            const agentToolUses = Object.values(agent.toolCounts).reduce((a, b) => a + b, 0);
+            const isLast = i === subagents.length - 1;
+            const prefix = isLast ? "\u2514\u2500" : "\u251C\u2500";
+            const label = agent.slug || agent.agentId.slice(0, 8);
+            return (
+              <div key={agent.agentId || i} className="flex items-center gap-2 text-xs text-white/50">
+                <span className="font-mono text-white/30 shrink-0">{prefix}</span>
+                <span className="text-cyan-400/80 shrink-0">
+                  @{label}
+                </span>
+                {agent.description && (
+                  <span className="text-white/30 truncate text-[10px]" title={agent.description}>
+                    {agent.description}
+                  </span>
+                )}
+                <span className="ml-auto flex items-center gap-3 shrink-0 mono-nums">
+                  {agentToolUses > 0 && (
+                    <span className="text-[10px]">{agentToolUses} tools</span>
+                  )}
+                  <span className="text-[10px]">{formatTokens(agentTotalTokens)} tokens</span>
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

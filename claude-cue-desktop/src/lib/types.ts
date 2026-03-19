@@ -11,6 +11,19 @@ export interface SessionInfo {
   source?: string;
 }
 
+export interface SubagentMetrics {
+  agentId: string;
+  description: string;
+  slug: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  model: string;
+  toolCounts: Record<string, number>;
+  messageCount: number;
+}
+
 export interface SessionMetrics {
   messageCount: number;
   userMessageCount: number;
@@ -23,6 +36,7 @@ export interface SessionMetrics {
   customTitle: string | null;
   gitBranch: string | null;
   toolCounts: Record<string, number>;
+  subagents: SubagentMetrics[];
 }
 
 /** Pre-computed by Rust backend (EnrichedSession includes derived fields) */
@@ -39,6 +53,8 @@ export interface EnrichedSession {
   modelDisplayName: string;
   /** Human-readable source label (e.g. "VSCode", "iTerm", "Terminal") */
   sourceDisplay: string;
+  /** Whether this session has active or completed subagents */
+  hasSubagents: boolean;
 }
 
 /** Serde serializes (i64, i64) tuples as [number, number] arrays */

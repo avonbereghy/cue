@@ -21,7 +21,12 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
   const totalMessages = sessions.reduce((sum, s) => sum + s.metrics.messageCount, 0);
   const totalTokens = sessions.reduce(
-    (sum, s) => sum + s.metrics.inputTokens + s.metrics.outputTokens,
+    (sum, s) => {
+      const subTokens = (s.metrics.subagents ?? []).reduce(
+        (sub, a) => sub + a.inputTokens + a.outputTokens, 0,
+      );
+      return sum + s.metrics.inputTokens + s.metrics.outputTokens + subTokens;
+    },
     0,
   );
   const {
