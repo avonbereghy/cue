@@ -27,6 +27,10 @@ pub struct ParsedEntry {
     pub git_branch: Option<String>,
     pub agent_id: Option<String>,
     pub slug: Option<String>,
+    /// True if this assistant message has stop_reason "tool_use"
+    pub has_pending_tool_use: bool,
+    /// True if this entry is a tool_result
+    pub is_tool_result: bool,
 }
 
 /// Parse a JSONL file into a list of entries.
@@ -137,7 +141,17 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
                     }
                 }
             }
+
+            // Detect pending tool use (session is waiting for permission/input)
+            if message.get("stop_reason").and_then(|v| v.as_str()) == Some("tool_use") {
+                entry.has_pending_tool_use = true;
+            }
         }
+    }
+
+    // Detect tool_result entries
+    if entry_type == "tool_result" {
+        entry.is_tool_result = true;
     }
 
     Some(entry)
@@ -288,6 +302,21 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
                 *m.tool_counts.entry(tool.clone()).or_insert(0) += count;
             }
         }
+    }
+
+    // Detect pending tool_use: scan backwards from end to find if the last
+    // assistant message with tool_use has no subsequent tool_result.
+    // This indicates the session is waiting for permission/user input.
+    for entry in entries.iter().rev() {
+        if entry.is_tool_result {
+            // A tool_result was found before any pending assistant — not waiting
+            break;
+        }
+        if entry.has_pending_tool_use {
+            m.pending_tool_use = true;
+            break;
+        }
+        // Skip non-relevant entries (e.g., progress, thinking)
     }
 
     // Discover subagents: {session_stem}/subagents/*.jsonl
