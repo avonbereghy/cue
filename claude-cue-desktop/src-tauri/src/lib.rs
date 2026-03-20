@@ -9,7 +9,6 @@ pub mod paths;
 pub mod security;
 pub mod jsonl_parser;
 pub mod session_monitor;
-pub mod usage_aggregator;
 pub mod settings;
 pub mod tray;
 pub mod cli;
@@ -18,7 +17,7 @@ pub mod permission_server;
 pub mod permission_log;
 pub mod summary_formatter;
 
-use models::{EnrichedSession, Settings, UsageWindow, WindowMetrics};
+use models::{EnrichedSession, Settings};
 use session_monitor::SessionMonitorState;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -69,15 +68,6 @@ fn detect_system_theme() -> Theme {
 #[tauri::command]
 fn get_sessions(state: State<'_, AppState>) -> Vec<EnrichedSession> {
     state.monitor.enriched_sessions.lock().unwrap().clone()
-}
-
-#[tauri::command]
-fn get_usage_metrics(state: State<'_, AppState>) -> HashMap<String, WindowMetrics> {
-    let metrics = state.monitor.usage_metrics.lock().unwrap();
-    metrics
-        .iter()
-        .map(|(window, m)| (window.display_name().to_string(), m.clone()))
-        .collect()
 }
 
 #[tauri::command]
@@ -247,17 +237,6 @@ fn spawn_terminal_with_resume(_session_id: &str, _workspace: &str) -> Result<(),
     Err("Revive is not supported on this platform".to_string())
 }
 
-#[tauri::command]
-fn get_token_limit(window: String) -> i64 {
-    let w = match window.as_str() {
-        "FiveHour" | "fiveHour" | "Session (5hr)" => UsageWindow::FiveHour,
-        "Daily" | "daily" | "Today" => UsageWindow::Daily,
-        "Weekly" | "weekly" | "This Week" => UsageWindow::Weekly,
-        _ => return 0,
-    };
-    settings::token_limit_for_window(&w)
-}
-
 // ---------------------------------------------------------------------------
 // Startup + Timer Setup
 // ---------------------------------------------------------------------------
@@ -292,26 +271,24 @@ fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
         loop {
             interval.tick().await;
-            monitor_poll.poll_status();
-            let sessions = monitor_poll.enriched_sessions.lock().unwrap().clone();
+            let m = monitor_poll.clone();
+            let sessions = tokio::task::spawn_blocking(move || {
+                m.poll_status();
+                m.enriched_sessions.lock().unwrap().clone()
+            }).await.unwrap_or_default();
             let _ = app_poll.emit("sessions-updated", &sessions);
         }
     });
 
-    // Refresh metrics every 5 seconds
+    // Refresh metrics every 5 seconds (session-level JSONL parsing)
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
         loop {
             interval.tick().await;
-            monitor.refresh_metrics();
-            let usage: HashMap<String, WindowMetrics> = {
-                let metrics = monitor.usage_metrics.lock().unwrap();
-                metrics
-                    .iter()
-                    .map(|(w, m)| (w.display_name().to_string(), m.clone()))
-                    .collect()
-            };
-            let _ = app_handle.emit("usage-updated", &usage);
+            let m = monitor.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                m.refresh_metrics();
+            }).await;
         }
     });
 }
@@ -357,10 +334,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_sessions,
-            get_usage_metrics,
             get_settings,
             update_settings,
-            get_token_limit,
             get_theme,
             detect_environment,
             configure_hooks,
