@@ -206,6 +206,14 @@ pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::Subagent
 
     let mut m = crate::models::SubagentMetrics::default();
 
+    // Check if the file was modified recently (within 60s = active)
+    m.is_active = std::fs::metadata(jsonl_path)
+        .and_then(|meta| meta.modified())
+        .map(|mod_time| {
+            mod_time.elapsed().map(|elapsed| elapsed.as_secs() < 60).unwrap_or(false)
+        })
+        .unwrap_or(false);
+
     // Extract agentId and slug from first entry that has them
     for entry in &entries {
         if m.agent_id.is_empty() {
