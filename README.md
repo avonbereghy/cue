@@ -29,16 +29,17 @@ Multiple sessions show as a grid of dots — see all your sessions at once.
 - **Real-time status** — polls every second, blink animation for active sessions
 - **Multi-session support** — tracks up to 8 concurrent sessions as a dot grid
 - **Permission approval** — approve/deny Claude Code permissions directly from the dashboard via HTTP hook
-- **Token metrics** — incremental JSONL parsing for input/output/cache token counts
-- **Usage tracking** — 5-hour, daily, and weekly usage windows with progress bars and cost estimates
-- **Plan presets** — Pro, Max Standard, Max Plus token limits with one-click selection
-- **Session dashboard** — detailed view with workspace, duration, model, git branch, tool usage
+- **Token metrics** — incremental JSONL parsing for input/output/cache token counts per session
+- **Agent team tracking** — expandable subagent view showing active and completed agents with token/tool breakdowns
+- **Session revive** — ended sessions move to a revive section with elapsed timer and 3-click confirmation to resume
+- **Animation controls** — configurable title animations (Rotate Flip, Ripple, Pulse Glow, Bounce), speed presets, and random per-character mode with bell-curve speed variance
+- **Session dashboard** — detailed view with workspace, duration, model, git branch, tool usage, context usage bar
 - **Smart summaries** — human-readable tool descriptions ("Run: `npm install`", "Edit: `src/main.rs`")
 - **Audit log** — every permission decision logged to JSONL with timestamp and tool details
 - **CLI with full stats** — `--status --pretty` for SSH/tiling WM users, `--compact` for dense output, ANSI colors auto-detected
 - **Privacy-first** — shows only leaf directory names, full paths on hover only
 - **Security-first** — no outbound network calls, atomic file writes, 0600 permissions, path sanitization
-- **Automatic cleanup** — stale sessions expire and get pruned
+- **Session persistence** — sessions only close via SessionEnd hook, never by timeout (except error state after 10 min)
 - **File locking** — concurrent hooks don't clobber each other's updates
 - **Accessibility** — ARIA labels, keyboard navigation, high contrast, reduced motion support
 
@@ -91,6 +92,10 @@ SessionEnd         → remove
 
 The app reads `sessions.json` and renders the dot grid. Metrics are parsed incrementally from Claude's `.jsonl` conversation logs — only new bytes are read on each cycle, keeping CPU near 0%.
 
+Sessions are never pruned by timeout (except `error` state after 10 minutes). Only the `SessionEnd` hook removes a session. This means `done` sessions (waiting at the prompt for the next input) remain visible until the terminal is closed.
+
+When a session disappears from the active list, it moves to the "Ended Sessions" section where it can be revived with a 3-click confirmation that opens a new terminal with `claude --resume <session_id>`.
+
 ## Permission Approval
 
 The desktop app includes a localhost HTTP server (`127.0.0.1:3002`) that integrates with Claude Code's `PermissionRequest` hook. When Claude Code needs permission to run a tool, the request appears inline under the relevant session in the dashboard:
@@ -101,7 +106,7 @@ The desktop app includes a localhost HTTP server (`127.0.0.1:3002`) that integra
 - **No auto-timeout** — requests stay pending until you explicitly decide
 - **Audit log** — every decision is recorded to `permission-log.jsonl`
 
-If the desktop app isn't running, Claude Code falls back to its normal terminal/VSCode permission flow. The `install.sh` script configures both a command hook (updates tray status to "waiting") and an HTTP hook (sends the permission to the dashboard) for the `PermissionRequest` event.
+If the desktop app isn't running, Claude Code falls back to its normal terminal/VSCode permission flow.
 
 ## CLI Usage
 
@@ -138,7 +143,6 @@ claude-cue-desktop/               # Cross-platform app (Tauri v2)
 ├── src-tauri/src/                # Rust backend
 │   ├── lib.rs                    # Tauri commands, timers, tray + permission server
 │   ├── session_monitor.rs        # Session polling + JSONL path resolution
-│   ├── usage_aggregator.rs       # Usage aggregation across time windows
 │   ├── jsonl_parser.rs           # Line-by-line JSONL parsing
 │   ├── tray.rs                   # Dot grid icon rendering (tiny-skia)
 │   ├── cli.rs                    # CLI --status/--pretty/--compact with full JSONL enrichment
@@ -151,10 +155,10 @@ claude-cue-desktop/               # Cross-platform app (Tauri v2)
 │   ├── models.rs                 # Shared data types
 │   └── paths.rs                  # OS-specific path resolution
 ├── src/                          # React frontend
-│   ├── components/               # Dashboard, SessionCard, UsageView, Settings, Onboarding,
-│   │                             # PermissionPrompt, PermissionHistory
-│   ├── hooks/                    # useSessionMonitor, useUsageMetrics, usePermissions
-│   └── lib/                      # types, format, a11y utilities
+│   ├── components/               # Dashboard, SessionCard, SessionsTab, Settings,
+│   │                             # Onboarding, PermissionPrompt, PermissionHistory
+│   ├── hooks/                    # useSessionMonitor, usePermissions
+│   └── lib/                      # types, format utilities
 └── src-tauri/tauri.conf.json     # Tauri config (minimal capabilities, no network)
 
 hooks/
