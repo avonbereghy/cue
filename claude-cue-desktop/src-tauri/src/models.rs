@@ -143,19 +143,16 @@ pub struct EnrichedSession {
 }
 
 impl EnrichedSession {
-    pub fn from_info_and_metrics(mut info: SessionInfo, metrics: SessionMetrics) -> Self {
+    pub fn from_info_and_metrics(info: SessionInfo, metrics: SessionMetrics) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs_f64();
 
-        // JSONL-based state inference: if the JSONL shows a pending tool_use
-        // with no tool_result, the session is waiting for permission/input.
-        // This overrides the hook-reported state which may be stale or missing
-        // (macOS throttles background processes, so hooks can fail to fire).
-        if metrics.pending_tool_use && info.state != "done" && info.state != "error" {
-            info.state = "waiting".to_string();
-        }
+        // NOTE: Previously overrode hook state to "waiting" when JSONL showed a
+        // pending tool_use with no tool_result. Removed because hooks reliably
+        // report state and JSONL metrics only refresh every 5s, causing the
+        // stale override to clobber correct hook states.
 
         let workspace_name = std::path::Path::new(&info.workspace)
             .file_name()
@@ -451,6 +448,12 @@ pub struct Settings {
     pub onboarding_complete: bool,
     #[serde(default)]
     pub permissions_enabled: bool,
+    #[serde(default = "default_title_animation")]
+    pub title_animation: String,
+}
+
+fn default_title_animation() -> String {
+    "flip".to_string()
 }
 
 impl Default for Settings {
@@ -463,6 +466,7 @@ impl Default for Settings {
             plan_preset: "Max ($100/mo)".to_string(),
             onboarding_complete: false,
             permissions_enabled: false,
+            title_animation: "flip".to_string(),
         }
     }
 }

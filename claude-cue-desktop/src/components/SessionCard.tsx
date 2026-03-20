@@ -6,9 +6,10 @@ import { ProgressBar } from "./ProgressBar";
 
 interface SessionCardProps {
   session: EnrichedSession;
+  titleAnimation?: string;
 }
 
-export function SessionCard({ session }: SessionCardProps) {
+export function SessionCard({ session, titleAnimation = "flip" }: SessionCardProps) {
   const { info, metrics } = session;
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -36,6 +37,9 @@ export function SessionCard({ session }: SessionCardProps) {
 
   const truncatedId = info.id ? info.id.slice(0, 8) : "";
 
+  // Shorten workspace path: replace home dir with ~
+  const shortPath = info.workspace.replace(/^\/Users\/[^/]+/, "~");
+
   const copySessionId = useCallback(() => {
     if (!info.id || !navigator.clipboard) return;
     navigator.clipboard.writeText(info.id).then(() => {
@@ -56,9 +60,25 @@ export function SessionCard({ session }: SessionCardProps) {
       {/* Row 1: Status dot + title + state badge + git branch + duration */}
       <div className="flex items-center gap-2">
         <span className={`inline-block w-2.5 h-2.5 rounded-full ${dotColor} ${dotPulse} shrink-0`} aria-hidden="true" />
-        <span className={`font-semibold truncate ${titleColor}`}>
-          {session.displayTitle}
-        </span>
+        {(info.state === "working" || info.state === "subagent") && titleAnimation !== "none" ? (
+          <span className={`font-semibold text-white anim-${titleAnimation}`} aria-label={session.displayTitle}>
+            {[...session.displayTitle].map((ch, i) =>
+              ch === " " ? (
+                <span key={i} className="title-space" />
+              ) : (
+                <span
+                  key={i}
+                  className="title-char"
+                  style={{ animationDelay: `${i * 0.05}s` }}
+                >{ch}</span>
+              )
+            )}
+          </span>
+        ) : (
+          <span className={`font-semibold truncate ${titleColor}`}>
+            {session.displayTitle}
+          </span>
+        )}
         {metrics.customTitle && (
           <span className="text-xs text-white/30 truncate">
             {session.workspaceName}
@@ -67,8 +87,11 @@ export function SessionCard({ session }: SessionCardProps) {
         <span className={`text-xs px-2 py-0.5 rounded-full ${badgeBg}`}>
           {session.stateDisplayName}
         </span>
+        <span className="text-[10px] text-white/50 truncate font-mono" title={info.workspace}>
+          {shortPath}
+        </span>
         {metrics.gitBranch && (
-          <span className="text-[10px] text-white/30 truncate">
+          <span className="text-[10px] text-white/30 truncate shrink-0">
             <span className="mr-0.5">&#9702;</span>
             {metrics.gitBranch}
           </span>

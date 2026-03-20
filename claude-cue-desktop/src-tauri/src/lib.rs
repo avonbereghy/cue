@@ -172,6 +172,82 @@ fn get_permission_history(session_id: String) -> Vec<models::PermissionLogEntry>
 }
 
 #[tauri::command]
+fn revive_session(session_id: String, workspace: String) -> Result<(), String> {
+    // Validate session_id is a plausible UUID (alphanumeric + hyphens only)
+    if !session_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err("Invalid session ID".to_string());
+    }
+    // Validate workspace path
+    security::sanitize_workspace_path(&workspace).map_err(|e| e.to_string())?;
+
+    spawn_terminal_with_resume(&session_id, &workspace)
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_terminal_with_resume(session_id: &str, workspace: &str) -> Result<(), String> {
+    // Use osascript to open Terminal.app with the resume command.
+    // Pass session_id and workspace as separate arguments to avoid shell injection.
+    let script = format!(
+        "tell application \"Terminal\"\n\
+         activate\n\
+         do script \"cd \" & quoted form of \"{}\" & \" && claude --resume \" & quoted form of \"{}\"\n\
+         end tell",
+        workspace, session_id
+    );
+    std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .spawn()
+        .map_err(|e| format!("Failed to open Terminal: {}", e))?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_terminal_with_resume(session_id: &str, workspace: &str) -> Result<(), String> {
+    let cmd = format!(
+        "cd '{}' && claude --resume '{}'",
+        workspace.replace('\'', "'\\''"),
+        session_id.replace('\'', "'\\''")
+    );
+    // Try common terminal emulators in order of preference
+    let terminals = [
+        ("x-terminal-emulator", vec!["-e", "bash", "-c"]),
+        ("gnome-terminal", vec!["--", "bash", "-c"]),
+        ("konsole", vec!["-e", "bash", "-c"]),
+        ("xfce4-terminal", vec!["-e", "bash -c"]),
+        ("xterm", vec!["-e", "bash", "-c"]),
+    ];
+    for (term, args) in &terminals {
+        let mut command = std::process::Command::new(term);
+        for arg in args {
+            command.arg(arg);
+        }
+        command.arg(&cmd);
+        if command.spawn().is_ok() {
+            return Ok(());
+        }
+    }
+    Err("No supported terminal emulator found".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_terminal_with_resume(session_id: &str, workspace: &str) -> Result<(), String> {
+    std::process::Command::new("cmd")
+        .args([
+            "/c", "start", "cmd", "/k",
+            &format!("cd /d \"{}\" && claude --resume \"{}\"", workspace, session_id),
+        ])
+        .spawn()
+        .map_err(|e| format!("Failed to open terminal: {}", e))?;
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn spawn_terminal_with_resume(_session_id: &str, _workspace: &str) -> Result<(), String> {
+    Err("Revive is not supported on this platform".to_string())
+}
+
+#[tauri::command]
 fn get_token_limit(window: String) -> i64 {
     let w = match window.as_str() {
         "FiveHour" | "fiveHour" | "Session (5hr)" => UsageWindow::FiveHour,
@@ -291,6 +367,7 @@ pub fn run() {
             approve_permission,
             deny_permission,
             get_permission_history,
+            revive_session,
         ])
         .on_window_event(|window, event| {
             // Hide window instead of quitting when user closes it — app stays in tray
