@@ -84,6 +84,10 @@ pub struct SessionMetrics {
     pub git_branch: Option<String>,
     pub tool_counts: HashMap<String, i64>,
     pub subagents: Vec<SubagentMetrics>,
+    /// True if the last assistant message has a pending tool_use with no tool_result.
+    /// Used to infer "waiting" state from the JSONL when the hook doesn't fire.
+    #[serde(default)]
+    pub pending_tool_use: bool,
 }
 
 impl SessionMetrics {
@@ -136,11 +140,19 @@ pub struct EnrichedSession {
 }
 
 impl EnrichedSession {
-    pub fn from_info_and_metrics(info: SessionInfo, metrics: SessionMetrics) -> Self {
+    pub fn from_info_and_metrics(mut info: SessionInfo, metrics: SessionMetrics) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs_f64();
+
+        // JSONL-based state inference: if the JSONL shows a pending tool_use
+        // with no tool_result, the session is waiting for permission/input.
+        // This overrides the hook-reported state which may be stale or missing
+        // (macOS throttles background processes, so hooks can fail to fire).
+        if metrics.pending_tool_use && info.state != "done" && info.state != "error" {
+            info.state = "waiting".to_string();
+        }
 
         let workspace_name = std::path::Path::new(&info.workspace)
             .file_name()
