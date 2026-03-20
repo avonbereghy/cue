@@ -1,32 +1,28 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSessionMonitor } from "@/hooks/useSessionMonitor";
-import { useUsageMetrics } from "@/hooks/useUsageMetrics";
 import { SessionsTab } from "./SessionsTab";
-import { UsageView } from "./UsageView";
 import { SettingsView } from "./SettingsView";
 
-type Tab = "Sessions" | "Usage" | "Settings";
+type Tab = "Sessions" | "Settings";
 
-const TABS: Tab[] = ["Sessions", "Usage", "Settings"];
+const TABS: Tab[] = ["Sessions", "Settings"];
 
 const TAB_ICONS: Record<Tab, string> = {
-  Sessions: "⊞",
-  Usage: "▤",
-  Settings: "⚙",
+  Sessions: "\u229e",
+  Settings: "\u2699",
 };
 
 const TAB_PANEL_IDS: Record<Tab, string> = {
   Sessions: "panel-sessions",
-  Usage: "panel-usage",
   Settings: "panel-settings",
 };
 
 export function Dashboard() {
   const [tab, setTab] = useState<Tab>(() => {
-    return (localStorage.getItem("selectedDashboardTab") as Tab) ?? "Sessions";
+    const stored = localStorage.getItem("selectedDashboardTab");
+    return stored === "Sessions" || stored === "Settings" ? stored : "Sessions";
   });
   const sessions = useSessionMonitor();
-  const usageMetrics = useUsageMetrics();
 
   useEffect(() => {
     localStorage.setItem("selectedDashboardTab", tab);
@@ -87,11 +83,6 @@ export function Dashboard() {
       {tab === "Sessions" && (
         <div role="tabpanel" id="panel-sessions" aria-labelledby="tab-Sessions">
           <SessionsTab sessions={sessions} />
-        </div>
-      )}
-      {tab === "Usage" && (
-        <div role="tabpanel" id="panel-usage" aria-labelledby="tab-Usage">
-          <UsageView metrics={usageMetrics} />
         </div>
       )}
       {tab === "Settings" && (

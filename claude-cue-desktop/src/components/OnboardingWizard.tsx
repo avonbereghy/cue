@@ -1,13 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { SettingsView } from "./SettingsView";
 import type { EnvironmentInfo } from "@/lib/types";
 
 interface OnboardingWizardProps {
   onComplete: () => void;
 }
 
-const STEPS = ["Welcome", "Plan", "Hooks", "Done"] as const;
+const STEPS = ["Welcome", "Hooks", "Done"] as const;
 
 export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const [step, setStep] = useState(0);
@@ -146,8 +145,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         {step === 0 && (
           <StepWelcome envInfo={envInfo} onUseDashboardOnly={handleComplete} />
         )}
-        {step === 1 && <StepPlan />}
-        {step === 2 && (
+        {step === 1 && (
           <StepHooks
             envInfo={envInfo}
             configuring={hookConfiguring}
@@ -158,7 +156,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
             onToggleManual={() => setShowManual(!showManual)}
           />
         )}
-        {step === 3 && <StepDone />}
+        {step === 2 && <StepDone />}
       </div>
 
       {/* Navigation */}
@@ -322,24 +320,7 @@ function EnvRow({
 }
 
 // ---------------------------------------------------------------------------
-// Step 2: Plan Selection (embedded SettingsView)
-// ---------------------------------------------------------------------------
-
-function StepPlan() {
-  return (
-    <div>
-      <h2 className="text-xl font-semibold text-white mb-2">Choose Your Plan</h2>
-      <p className="text-sm text-white/60 mb-4">
-        Select your Anthropic plan to set appropriate token limits. You can
-        change this later in Settings.
-      </p>
-      <SettingsView inline />
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Step 3: Hook Configuration
+// Step 2: Hook Configuration
 // ---------------------------------------------------------------------------
 
 interface StepHooksProps {
