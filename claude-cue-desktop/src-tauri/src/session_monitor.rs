@@ -4,10 +4,9 @@
 //! logs for token metrics. Maintains enriched sessions and usage metrics.
 
 use crate::jsonl_parser;
-use crate::models::{EnrichedSession, SessionInfo, SessionMetrics, StatusData, UsageWindow, WindowMetrics};
+use crate::models::{EnrichedSession, SessionInfo, SessionMetrics, StatusData};
 use crate::paths;
 use crate::security;
-use crate::usage_aggregator;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -43,7 +42,6 @@ pub fn filter_and_sort_active(sessions: impl IntoIterator<Item = SessionInfo>, n
 /// Shared state for the session monitor.
 pub struct SessionMonitorState {
     pub enriched_sessions: Mutex<Vec<EnrichedSession>>,
-    pub usage_metrics: Mutex<HashMap<UsageWindow, WindowMetrics>>,
     metrics_cache: Mutex<HashMap<String, SessionMetrics>>,
     file_mod_dates: Mutex<HashMap<String, SystemTime>>,
     resolved_paths: Mutex<HashMap<String, String>>,
@@ -53,7 +51,6 @@ impl Default for SessionMonitorState {
     fn default() -> Self {
         Self {
             enriched_sessions: Mutex::new(Vec::new()),
-            usage_metrics: Mutex::new(HashMap::new()),
             metrics_cache: Mutex::new(HashMap::new()),
             file_mod_dates: Mutex::new(HashMap::new()),
             resolved_paths: Mutex::new(HashMap::new()),
@@ -99,14 +96,16 @@ impl SessionMonitorState {
             now,
         );
 
-        let cache = self.metrics_cache.lock().unwrap();
-        let enriched: Vec<_> = active
-            .into_iter()
-            .map(|session| {
-                let metrics = cache.get(&session.id).cloned().unwrap_or_default();
-                EnrichedSession::from_info_and_metrics(session, metrics)
-            })
-            .collect();
+        let enriched: Vec<_> = {
+            let cache = self.metrics_cache.lock().unwrap();
+            active
+                .into_iter()
+                .map(|session| {
+                    let metrics = cache.get(&session.id).cloned().unwrap_or_default();
+                    EnrichedSession::from_info_and_metrics(session, metrics)
+                })
+                .collect()
+        }; // cache lock dropped before acquiring enriched_sessions lock
 
         *self.enriched_sessions.lock().unwrap() = enriched;
     }
@@ -186,14 +185,6 @@ impl SessionMonitorState {
             }
         }
 
-        // Also refresh usage aggregation
-        self.refresh_usage();
-    }
-
-    /// Aggregate usage data across all JSONL files for time windows.
-    pub fn refresh_usage(&self) {
-        let metrics = usage_aggregator::aggregate();
-        *self.usage_metrics.lock().unwrap() = metrics;
     }
 
     /// Find path to a session's JSONL log file.
@@ -312,7 +303,6 @@ mod tests {
     fn test_session_monitor_state_new() {
         let state = SessionMonitorState::new();
         assert!(state.enriched_sessions.lock().unwrap().is_empty());
-        assert!(state.usage_metrics.lock().unwrap().is_empty());
     }
 
     #[test]
