@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Settings, PLAN_PRESETS, TITLE_ANIMATIONS } from "@/lib/types";
+import { Settings, PLAN_PRESETS, TITLE_ANIMATIONS, ANIMATION_SPEEDS } from "@/lib/types";
 import { formatTokens } from "@/lib/format";
 
 interface SettingsViewProps {
@@ -21,6 +21,7 @@ function parseTokenInput(raw: string): number {
 
 export function SettingsView({ inline = false }: SettingsViewProps) {
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [savedSettings, setSavedSettings] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -35,6 +36,7 @@ export function SettingsView({ inline = false }: SettingsViewProps) {
     try {
       const s = await invoke<Settings>("get_settings");
       setSettings(s);
+      setSavedSettings(s);
       setFiveHourRaw(formatTokens(s.fiveHourTokenLimit));
       setDailyRaw(formatTokens(s.dailyTokenLimit));
       setWeeklyRaw(formatTokens(s.weeklyTokenLimit));
@@ -91,6 +93,7 @@ export function SettingsView({ inline = false }: SettingsViewProps) {
     try {
       await invoke("update_settings", { newSettings: toSave });
       setSettings(toSave);
+      setSavedSettings(toSave);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
@@ -99,6 +102,15 @@ export function SettingsView({ inline = false }: SettingsViewProps) {
       setSaving(false);
     }
   };
+
+  const isDirty = settings && savedSettings && (
+    JSON.stringify(settings) !== JSON.stringify(savedSettings) ||
+    (isCustom && (
+      fiveHourRaw !== formatTokens(savedSettings.fiveHourTokenLimit) ||
+      dailyRaw !== formatTokens(savedSettings.dailyTokenLimit) ||
+      weeklyRaw !== formatTokens(savedSettings.weeklyTokenLimit)
+    ))
+  );
 
   if (!settings) {
     return (
@@ -111,7 +123,22 @@ export function SettingsView({ inline = false }: SettingsViewProps) {
   return (
     <div className={inline ? "" : "p-6 space-y-8"}>
       {!inline && (
-        <h2 className="text-lg font-semibold text-white">Settings</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-white">Settings</h2>
+          {isDirty ? (
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 disabled:opacity-50"
+            >
+              {saving ? "Saving..." : "Save Settings"}
+            </button>
+          ) : saved ? (
+            <span className="px-4 py-2 rounded-lg text-sm font-medium bg-green-500/20 text-green-400">
+              Saved
+            </span>
+          ) : null}
+        </div>
       )}
 
       {/* Plan Preset Picker */}
@@ -181,6 +208,51 @@ export function SettingsView({ inline = false }: SettingsViewProps) {
                 {anim.label}
               </button>
             ))}
+          </div>
+
+          {/* Animation Speed */}
+          <div className="pt-2">
+            <label className="block text-xs text-white/50 mb-2">Animation Speed</label>
+            <div className="flex rounded-lg overflow-hidden border border-white/10">
+              {ANIMATION_SPEEDS.map((speed) => (
+                <button
+                  key={speed.id}
+                  onClick={() => settings && setSettings({ ...settings, animationSpeed: speed.id })}
+                  className={`flex-1 px-3 py-2 text-xs font-medium transition-colors border-l border-white/10 first:border-l-0 ${
+                    settings?.animationSpeed === speed.id
+                      ? "bg-blue-500/20 text-blue-400 border-blue-500/30"
+                      : "bg-white/5 text-white/50 hover:text-white/70 hover:bg-white/10"
+                  }`}
+                >
+                  {speed.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Random Animation Toggle */}
+          <div className="flex items-center justify-between rounded-lg bg-white/5 border border-white/10 px-4 py-3 mt-2">
+            <div>
+              <div className="text-sm text-white">Random Animation</div>
+              <div className="text-xs text-white/40 mt-0.5">
+                Animate each character with a random delay instead of a uniform wave
+              </div>
+            </div>
+            <button
+              onClick={() => settings && setSettings({ ...settings, randomAnimation: !settings.randomAnimation })}
+              className={`relative ml-4 shrink-0 w-10 h-6 rounded-full transition-colors ${
+                settings?.randomAnimation ? "bg-blue-500" : "bg-white/20"
+              }`}
+              role="switch"
+              aria-checked={settings?.randomAnimation ?? false}
+              aria-label="Toggle random animation"
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${
+                  settings?.randomAnimation ? "translate-x-4" : ""
+                }`}
+              />
+            </button>
           </div>
         </section>
       )}
@@ -280,20 +352,22 @@ export function SettingsView({ inline = false }: SettingsViewProps) {
         </section>
       )}
 
-      {/* Save Button */}
-      <div>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-            saved
-              ? "bg-green-500/20 text-green-400"
-              : "bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
-          } disabled:opacity-50`}
-        >
-          {saving ? "Saving..." : saved ? "Saved" : "Save Settings"}
-        </button>
-      </div>
+      {/* Save button for inline mode */}
+      {inline && isDirty && (
+        <div>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              saved
+                ? "bg-green-500/20 text-green-400"
+                : "bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
+            } disabled:opacity-50`}
+          >
+            {saving ? "Saving..." : saved ? "Saved" : "Save Settings"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

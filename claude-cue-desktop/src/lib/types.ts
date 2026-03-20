@@ -80,6 +80,8 @@ export interface Settings {
   onboardingComplete: boolean;
   permissionsEnabled: boolean;
   titleAnimation: string;
+  animationSpeed: number;
+  randomAnimation: boolean;
 }
 
 export const TITLE_ANIMATIONS = [
@@ -88,6 +90,14 @@ export const TITLE_ANIMATIONS = [
   { id: "glow", label: "Pulse Glow" },
   { id: "bounce", label: "Bounce" },
   { id: "none", label: "None" },
+] as const;
+
+export const ANIMATION_SPEEDS = [
+  { id: 0.4, label: "Fast" },
+  { id: 0.8, label: "Medium" },
+  { id: 1.2, label: "Normal" },
+  { id: 2.0, label: "Slow" },
+  { id: 3.5, label: "Glacial" },
 ] as const;
 
 export interface EnvironmentInfo {

@@ -7,14 +7,16 @@ import { ProgressBar } from "./ProgressBar";
 interface SessionCardProps {
   session: EnrichedSession;
   titleAnimation?: string;
+  animationSpeed?: number;
+  randomAnimation?: boolean;
 }
 
-export function SessionCard({ session, titleAnimation = "flip" }: SessionCardProps) {
+export function SessionCard({ session, titleAnimation = "flip", animationSpeed = 1.2, randomAnimation = false }: SessionCardProps) {
   const { info, metrics } = session;
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const dotColor = STATE_DOT_COLORS[info.state] ?? "bg-green-500";
-  const dotPulse = info.state !== "done" && info.state !== "error" ? "dot-pulse" : "";
+  const dotPulse = info.state === "working" || info.state === "waiting" || info.state === "subagent" ? "dot-pulse" : "";
   const badgeBg = STATE_BADGE_BG[info.state] ?? "bg-green-500/20 text-green-500";
   const titleColor = info.state === "working" ? "text-white" : (STATE_COLORS[info.state] ?? "text-green-500");
 
@@ -56,23 +58,48 @@ export function SessionCard({ session, titleAnimation = "flip" }: SessionCardPro
       tabIndex={0}
       aria-label={ariaLabel}
       title={info.workspace}
+      style={{ "--anim-speed": `${animationSpeed}s` } as React.CSSProperties}
     >
       {/* Row 1: Status dot + title + state badge + git branch + duration */}
       <div className="flex items-center gap-2">
         <span className={`inline-block w-2.5 h-2.5 rounded-full ${dotColor} ${dotPulse} shrink-0`} aria-hidden="true" />
         {(info.state === "working" || info.state === "subagent") && titleAnimation !== "none" ? (
-          <span className={`font-semibold text-white anim-${titleAnimation}`} aria-label={session.displayTitle}>
-            {[...session.displayTitle].map((ch, i) =>
-              ch === " " ? (
-                <span key={i} className="title-space" />
-              ) : (
+          <span
+            className={`font-semibold text-white anim-${titleAnimation}`}
+            aria-label={session.displayTitle}
+          >
+            {[...session.displayTitle].map((ch, i) => {
+              if (ch === " ") return <span key={i} className="title-space" />;
+
+              // Deterministic per-character hash for stable randomness
+              const hash = (i * 2654435761 + session.displayTitle.charCodeAt(i % session.displayTitle.length) * 40503) >>> 0;
+
+              // Bell curve: average 3 uniform samples (central limit theorem)
+              const u1 = ((hash & 0xFF) / 255);
+              const u2 = (((hash >> 8) & 0xFF) / 255);
+              const u3 = (((hash >> 16) & 0xFF) / 255);
+              const bell = (u1 + u2 + u3) / 3; // ~normal, mean=0.5, narrow spread
+
+              // Map bell curve to speed: mean = animationSpeed, stddev ~30%
+              const charSpeed = randomAnimation
+                ? Math.max(0.15, animationSpeed * (0.4 + bell * 1.2))
+                : animationSpeed;
+
+              const delay = randomAnimation
+                ? `${((hash % 1000) / 1000) * animationSpeed}s`
+                : `${i * 0.05}s`;
+
+              return (
                 <span
                   key={i}
                   className="title-char"
-                  style={{ animationDelay: `${i * 0.05}s` }}
+                  style={{
+                    animationDelay: delay,
+                    animationDuration: randomAnimation ? `${charSpeed.toFixed(2)}s` : undefined,
+                  }}
                 >{ch}</span>
-              )
-            )}
+              );
+            })}
           </span>
         ) : (
           <span className={`font-semibold truncate ${titleColor}`}>
