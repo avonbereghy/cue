@@ -38,6 +38,8 @@ export function UsageView({ metrics }: UsageViewProps) {
       onboardingComplete: settings?.onboardingComplete ?? true,
       permissionsEnabled: settings?.permissionsEnabled ?? false,
       titleAnimation: settings?.titleAnimation ?? "flip",
+      animationSpeed: settings?.animationSpeed ?? 1.2,
+      randomAnimation: settings?.randomAnimation ?? false,
       fiveHourTokenLimit: preset.limits.fiveHour,
       dailyTokenLimit: preset.limits.daily,
       weeklyTokenLimit: preset.limits.weekly,

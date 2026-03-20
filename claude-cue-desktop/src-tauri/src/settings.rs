@@ -45,6 +45,8 @@ pub fn apply_plan_preset(preset: &PlanPreset) -> Settings {
         onboarding_complete: false,
         permissions_enabled: false,
         title_animation: "flip".to_string(),
+        animation_speed: 1.2,
+        random_animation: false,
     }
 }
 
@@ -113,6 +115,9 @@ mod tests {
             plan_preset: "Custom".to_string(),
             onboarding_complete: false,
             permissions_enabled: false,
+            title_animation: "flip".to_string(),
+            animation_speed: 1.2,
+            random_animation: false,
         };
 
         let content = serde_json::to_string_pretty(&settings).unwrap();
