@@ -22,6 +22,8 @@ export interface SubagentMetrics {
   model: string;
   toolCounts: Record<string, number>;
   messageCount: number;
+  /** True if the subagent's JSONL was modified within the last 60s */
+  isActive: boolean;
 }
 
 export interface SessionMetrics {

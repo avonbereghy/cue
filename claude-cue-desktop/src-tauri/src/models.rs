@@ -57,6 +57,9 @@ pub struct SubagentMetrics {
     pub model: String,
     pub tool_counts: HashMap<String, i64>,
     pub message_count: i64,
+    /// True if the subagent's JSONL was modified recently (within 60s)
+    #[serde(default)]
+    pub is_active: bool,
 }
 
 impl SubagentMetrics {

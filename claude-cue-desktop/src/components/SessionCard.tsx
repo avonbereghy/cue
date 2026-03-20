@@ -172,36 +172,53 @@ export function SessionCard({ session }: SessionCardProps) {
       )}
 
       {/* Row 5: Expanded agent team */}
-      {expanded && hasSubagents && (
-        <div className="pl-3 space-y-1 border-l-2 border-cyan-400/20">
-          {subagents.map((agent, i) => {
-            const agentTotalTokens = agent.inputTokens + agent.outputTokens;
-            const agentToolUses = Object.values(agent.toolCounts).reduce((a, b) => a + b, 0);
-            const isLast = i === subagents.length - 1;
-            const prefix = isLast ? "\u2514\u2500" : "\u251C\u2500";
-            const label = agent.slug || agent.agentId.slice(0, 8);
-            return (
-              <div key={agent.agentId || i} className="flex items-center gap-2 text-xs text-white/50">
-                <span className="font-mono text-white/30 shrink-0">{prefix}</span>
-                <span className="text-cyan-400/80 shrink-0">
-                  @{label}
+      {expanded && hasSubagents && (() => {
+        const activeAgents = subagents.filter(a => a.isActive);
+        const completedAgents = subagents.filter(a => !a.isActive);
+
+        const renderAgent = (agent: typeof subagents[0], i: number, list: typeof subagents) => {
+          const agentTotalTokens = agent.inputTokens + agent.outputTokens;
+          const agentToolUses = Object.values(agent.toolCounts).reduce((a, b) => a + b, 0);
+          const isLast = i === list.length - 1;
+          const prefix = isLast ? "\u2514\u2500" : "\u251C\u2500";
+          const label = agent.slug || agent.agentId.slice(0, 8);
+          return (
+            <div key={agent.agentId || i} className="flex items-center gap-2 text-xs text-white/50">
+              <span className="font-mono text-white/30 shrink-0">{prefix}</span>
+              <span className={`shrink-0 ${agent.isActive ? "text-cyan-400/80" : "text-white/30"}`}>
+                @{label}
+              </span>
+              {agent.description && (
+                <span className="text-white/30 truncate text-[10px]" title={agent.description}>
+                  {agent.description}
                 </span>
-                {agent.description && (
-                  <span className="text-white/30 truncate text-[10px]" title={agent.description}>
-                    {agent.description}
-                  </span>
+              )}
+              <span className="ml-auto flex items-center gap-3 shrink-0 mono-nums">
+                {agentToolUses > 0 && (
+                  <span className="text-[10px]">{agentToolUses} tools</span>
                 )}
-                <span className="ml-auto flex items-center gap-3 shrink-0 mono-nums">
-                  {agentToolUses > 0 && (
-                    <span className="text-[10px]">{agentToolUses} tools</span>
-                  )}
-                  <span className="text-[10px]">{formatTokens(agentTotalTokens)} tokens</span>
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
+                <span className="text-[10px]">{formatTokens(agentTotalTokens)} tokens</span>
+              </span>
+            </div>
+          );
+        };
+
+        return (
+          <div className="pl-3 space-y-1 border-l-2 border-cyan-400/20">
+            {activeAgents.map((agent, i) => renderAgent(agent, i, activeAgents))}
+            {completedAgents.length > 0 && (
+              <details className="text-xs">
+                <summary className="cursor-pointer text-white/30 hover:text-white/50 transition-colors py-0.5 select-none">
+                  {completedAgents.length} completed agent{completedAgents.length !== 1 ? "s" : ""}
+                </summary>
+                <div className="mt-1 space-y-1">
+                  {completedAgents.map((agent, i) => renderAgent(agent, i, completedAgents))}
+                </div>
+              </details>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
