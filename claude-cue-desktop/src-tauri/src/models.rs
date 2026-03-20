@@ -2,7 +2,6 @@
 //!
 //! All structs use serde for JSON serialization to/from the React frontend.
 
-use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -285,164 +284,21 @@ fn format_source_name(source: Option<&str>) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Usage Aggregation
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum UsageWindow {
-    FiveHour,
-    Daily,
-    Weekly,
-}
-
-impl UsageWindow {
-    pub const ALL: [UsageWindow; 3] = [
-        UsageWindow::FiveHour,
-        UsageWindow::Daily,
-        UsageWindow::Weekly,
-    ];
-
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            UsageWindow::FiveHour => "Session (5hr)",
-            UsageWindow::Daily => "Today",
-            UsageWindow::Weekly => "This Week",
-        }
-    }
-
-    pub fn settings_key(&self) -> &'static str {
-        match self {
-            UsageWindow::FiveHour => "fiveHourTokenLimit",
-            UsageWindow::Daily => "dailyTokenLimit",
-            UsageWindow::Weekly => "weeklyTokenLimit",
-        }
-    }
-
-    /// Returns the start timestamp (Unix seconds) for this window.
-    pub fn start_timestamp(&self, now_secs: f64) -> f64 {
-        match self {
-            UsageWindow::FiveHour => now_secs - 5.0 * 3600.0,
-            UsageWindow::Daily => {
-                // Start of today (local time); handle DST ambiguity
-                let now = chrono::Local::now();
-                now.date_naive()
-                    .and_hms_opt(0, 0, 0)
-                    .unwrap()
-                    .and_local_timezone(chrono::Local)
-                    .earliest()
-                    .map(|dt| dt.timestamp() as f64)
-                    .unwrap_or(now_secs - 86400.0)
-            }
-            UsageWindow::Weekly => {
-                // Start of this week (Monday); handle DST ambiguity
-                let now = chrono::Local::now();
-                let weekday = now.weekday().num_days_from_monday(); // 0=Mon
-                let start_of_week = now.date_naive()
-                    - chrono::Duration::days(weekday as i64);
-                start_of_week
-                    .and_hms_opt(0, 0, 0)
-                    .unwrap()
-                    .and_local_timezone(chrono::Local)
-                    .earliest()
-                    .map(|dt| dt.timestamp() as f64)
-                    .unwrap_or(now_secs - 7.0 * 86400.0)
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Window Metrics
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct WindowMetrics {
-    pub input_tokens: i64,
-    pub output_tokens: i64,
-    pub session_count: i64,
-    pub user_message_count: i64,
-    pub assistant_message_count: i64,
-    pub tool_counts: HashMap<String, i64>,
-    /// Map of model name -> (input_tokens, output_tokens)
-    pub model_tokens: HashMap<String, (i64, i64)>,
-}
-
-impl WindowMetrics {
-    pub fn total_tokens(&self) -> i64 {
-        self.input_tokens + self.output_tokens
-    }
-
-    pub fn total_tool_uses(&self) -> i64 {
-        self.tool_counts.values().sum()
-    }
-
-    pub fn top_tools(&self) -> Vec<(String, i64)> {
-        let mut tools: Vec<_> = self.tool_counts.iter().map(|(k, v)| (k.clone(), *v)).collect();
-        tools.sort_by(|a, b| b.1.cmp(&a.1));
-        tools
-    }
-
-    pub fn estimated_cost_usd(&self) -> f64 {
-        let mut cost = 0.0;
-        for (model, (input, output)) in &self.model_tokens {
-            let pricing = ModelPricing::for_model(model);
-            cost += *input as f64 * pricing.input_per_token;
-            cost += *output as f64 * pricing.output_per_token;
-        }
-        cost
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Model Pricing
-// ---------------------------------------------------------------------------
-
-pub struct ModelPricing {
-    pub input_per_token: f64,
-    pub output_per_token: f64,
-}
-
-impl ModelPricing {
-    /// Published API pricing as of 2025 (per token, not per million)
-    pub fn for_model(model: &str) -> Self {
-        let m = model.to_lowercase();
-        if m.contains("opus") {
-            return ModelPricing {
-                input_per_token: 15.0 / 1_000_000.0,
-                output_per_token: 75.0 / 1_000_000.0,
-            };
-        }
-        if m.contains("sonnet") {
-            return ModelPricing {
-                input_per_token: 3.0 / 1_000_000.0,
-                output_per_token: 15.0 / 1_000_000.0,
-            };
-        }
-        if m.contains("haiku") {
-            return ModelPricing {
-                input_per_token: 0.80 / 1_000_000.0,
-                output_per_token: 4.0 / 1_000_000.0,
-            };
-        }
-        // Default to Sonnet pricing
-        ModelPricing {
-            input_per_token: 3.0 / 1_000_000.0,
-            output_per_token: 15.0 / 1_000_000.0,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
+    /// Legacy fields — kept for backwards compatibility with existing settings.json.
+    /// No longer exposed in the UI.
+    #[serde(default)]
     pub five_hour_token_limit: i64,
+    #[serde(default)]
     pub daily_token_limit: i64,
+    #[serde(default)]
     pub weekly_token_limit: i64,
+    #[serde(default)]
     pub plan_preset: String,
     #[serde(default)]
     pub onboarding_complete: bool,
@@ -479,45 +335,6 @@ impl Default for Settings {
             title_animation: "flip".to_string(),
             animation_speed: 1.2,
             random_animation: false,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Plan Presets
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum PlanPreset {
-    Custom,
-    Pro,
-    MaxStandard,
-    MaxPlus,
-}
-
-impl PlanPreset {
-    pub const ALL: [PlanPreset; 4] = [
-        PlanPreset::Custom,
-        PlanPreset::Pro,
-        PlanPreset::MaxStandard,
-        PlanPreset::MaxPlus,
-    ];
-
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            PlanPreset::Custom => "Custom",
-            PlanPreset::Pro => "Pro ($20/mo)",
-            PlanPreset::MaxStandard => "Max ($100/mo)",
-            PlanPreset::MaxPlus => "Max ($200/mo)",
-        }
-    }
-
-    pub fn limits(&self) -> (i64, i64, i64) {
-        match self {
-            PlanPreset::Custom => (0, 0, 0),
-            PlanPreset::Pro => (500_000, 2_000_000, 10_000_000),
-            PlanPreset::MaxStandard => (2_000_000, 8_000_000, 40_000_000),
-            PlanPreset::MaxPlus => (4_000_000, 16_000_000, 80_000_000),
         }
     }
 }
@@ -599,27 +416,6 @@ mod tests {
         assert_eq!(top[0].1, 5);
     }
 
-    #[test]
-    fn test_plan_preset_limits() {
-        assert_eq!(PlanPreset::Pro.limits(), (500_000, 2_000_000, 10_000_000));
-        assert_eq!(PlanPreset::MaxStandard.limits(), (2_000_000, 8_000_000, 40_000_000));
-        assert_eq!(PlanPreset::MaxPlus.limits(), (4_000_000, 16_000_000, 80_000_000));
-        assert_eq!(PlanPreset::Custom.limits(), (0, 0, 0));
-    }
-
-    #[test]
-    fn test_window_metrics_cost() {
-        let m = WindowMetrics {
-            model_tokens: HashMap::from([
-                ("claude-sonnet-4-6".to_string(), (1_000_000, 100_000)),
-            ]),
-            ..Default::default()
-        };
-        let cost = m.estimated_cost_usd();
-        // 1M input * $3/M + 100K output * $15/M = $3 + $1.5 = $4.5
-        assert!((cost - 4.5).abs() < 0.001);
-    }
-
     fn make_test_info(id: &str, workspace: &str, state: &str) -> SessionInfo {
         SessionInfo {
             id: id.to_string(),
@@ -665,13 +461,6 @@ mod tests {
         };
         let es2 = EnrichedSession::from_info_and_metrics(info, metrics_old);
         assert_eq!(es2.context_limit, 200_000);
-    }
-
-    #[test]
-    fn test_usage_window_properties() {
-        assert_eq!(UsageWindow::FiveHour.display_name(), "Session (5hr)");
-        assert_eq!(UsageWindow::Daily.settings_key(), "dailyTokenLimit");
-        assert_eq!(UsageWindow::Weekly.settings_key(), "weeklyTokenLimit");
     }
 
     #[test]
