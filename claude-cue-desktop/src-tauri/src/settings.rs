@@ -44,6 +44,7 @@ pub fn apply_plan_preset(preset: &PlanPreset) -> Settings {
         plan_preset: preset.display_name().to_string(),
         onboarding_complete: false,
         permissions_enabled: false,
+        title_animation: "flip".to_string(),
     }
 }
 

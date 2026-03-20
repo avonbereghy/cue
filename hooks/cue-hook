@@ -244,6 +244,10 @@ def main():
     if action not in valid_actions:
         return  # Silently ignore unknown actions
 
+    # Capture start time before any blocking operations (HTTP requests, etc.)
+    # so we can detect if a faster hook already updated this session.
+    hook_start_time = time.time()
+
     # Read hook payload from stdin
     try:
         hook_data = json.load(sys.stdin)
@@ -295,6 +299,16 @@ def main():
             else:
                 # Update or create session
                 existing = status["sessions"].get(session_id, {})
+
+                # Guard against stale "waiting" writes: PermissionRequest hooks
+                # are slow (HTTP request) and can finish after PostToolUse
+                # already moved the state to "working". Only skip writes for
+                # the "waiting" action — all other state transitions are
+                # legitimate and should always apply.
+                if action == "waiting":
+                    existing_activity = existing.get("lastActivity", 0)
+                    if existing_activity > hook_start_time:
+                        return  # A newer hook already wrote — don't clobber it
                 entry = {
                     "id": session_id,
                     "workspace": workspace,
