@@ -15,19 +15,18 @@ use std::time::SystemTime;
 
 /// Staleness thresholds (seconds) by session state.
 /// Shared between poll_status and CLI to avoid divergence.
-/// These are safety nets for orphaned sessions — normal removal happens
-/// via the SessionEnd hook writing "remove" to sessions.json.
+/// Only "done" and "error" sessions auto-expire. Active sessions (idle,
+/// working, waiting, subagent) are never pruned by timeout — they are
+/// only removed when the SessionEnd hook writes "remove" to sessions.json.
 pub fn is_session_stale(state: &str, age_secs: f64) -> bool {
     match state {
-        // "done" sessions linger for 10 min so the user can see them,
-        // then auto-clean (SessionEnd should fire before this).
-        "done" => age_secs >= 600.0,
-        // Errors stay visible longer for debugging.
+        // Errors auto-expire after 10 min (usually from crashed sessions).
         "error" => age_secs >= 600.0,
-        // All other states (idle, working, waiting, subagent): only prune
-        // after 30 min of no activity — handles orphaned sessions if
-        // Claude Code crashes without firing SessionEnd.
-        _ => age_secs >= 1800.0,
+        // All other states (including "done") are never pruned by timeout.
+        // "done" means "finished current turn", not "session ended" — the
+        // session is still alive at the prompt. Only the SessionEnd hook
+        // writing "remove" to sessions.json actually closes a session.
+        _ => false,
     }
 }
 
@@ -376,34 +375,32 @@ mod tests {
     }
 
     #[test]
-    fn test_filter_and_sort_active_filters_idle_over_60s() {
-        let now = 1000.0;
-        let sessions = vec![
-            make_session("s1", "idle", now - 61.0, now - 200.0), // stale (idle > 60s)
-            make_session("s2", "idle", now - 30.0, now - 100.0), // fresh
-        ];
-        let active = filter_and_sort_active(sessions, now);
-        assert_eq!(active.len(), 1);
-        assert_eq!(active[0].id, "s2");
-    }
-
-    #[test]
-    fn test_filter_and_sort_active_keeps_working_under_1800s() {
+    fn test_filter_and_sort_active_keeps_idle_indefinitely() {
         let now = 1000000.0;
         let sessions = vec![
-            make_session("s1", "working", now - 1799.0, now - 2000.0), // fresh (under 1800s)
-            make_session("s2", "working", now - 1801.0, now - 3000.0), // stale (over 1800s)
+            make_session("s1", "idle", now - 7200.0, now - 10000.0), // 2 hours old — still active
+            make_session("s2", "idle", now - 30.0, now - 100.0),
         ];
         let active = filter_and_sort_active(sessions, now);
-        assert_eq!(active.len(), 1);
-        assert_eq!(active[0].id, "s1");
+        assert_eq!(active.len(), 2, "idle sessions should never be pruned by timeout");
     }
 
     #[test]
-    fn test_filter_and_sort_active_filters_error_over_300s() {
+    fn test_filter_and_sort_active_keeps_working_indefinitely() {
+        let now = 1000000.0;
+        let sessions = vec![
+            make_session("s1", "working", now - 3600.0, now - 5000.0), // 1 hour old — still active
+            make_session("s2", "working", now - 7200.0, now - 10000.0), // 2 hours old — still active
+        ];
+        let active = filter_and_sort_active(sessions, now);
+        assert_eq!(active.len(), 2, "working sessions should never be pruned by timeout");
+    }
+
+    #[test]
+    fn test_filter_and_sort_active_filters_error_over_600s() {
         let now = 5000.0;
         let sessions = vec![
-            make_session("s1", "error", now - 301.0, now - 500.0), // stale (error > 300s)
+            make_session("s1", "error", now - 601.0, now - 1000.0), // stale (error > 600s)
             make_session("s2", "error", now - 100.0, now - 400.0), // fresh
         ];
         let active = filter_and_sort_active(sessions, now);
@@ -428,26 +425,19 @@ mod tests {
     }
 
     #[test]
-    fn test_is_session_stale_idle() {
-        assert!(!is_session_stale("idle", 59.0));
-        assert!(is_session_stale("idle", 60.0));
-        assert!(is_session_stale("idle", 120.0));
+    fn test_is_session_stale_non_error_states_never_stale() {
+        // All states except "error" are never pruned by timeout
+        for state in &["idle", "working", "waiting", "subagent", "done"] {
+            assert!(!is_session_stale(state, 60.0), "{} should not be stale at 60s", state);
+            assert!(!is_session_stale(state, 1800.0), "{} should not be stale at 1800s", state);
+            assert!(!is_session_stale(state, 86400.0), "{} should not be stale at 24h", state);
+        }
     }
 
     #[test]
     fn test_is_session_stale_error() {
-        assert!(!is_session_stale("error", 299.0));
-        assert!(is_session_stale("error", 300.0));
+        assert!(!is_session_stale("error", 599.0));
         assert!(is_session_stale("error", 600.0));
-    }
-
-    #[test]
-    fn test_is_session_stale_working_and_other() {
-        // "working", "waiting", "subagent", "done" all use the 1800s threshold
-        for state in &["working", "waiting", "subagent", "done"] {
-            assert!(!is_session_stale(state, 1799.0), "{} at 1799s should not be stale", state);
-            assert!(is_session_stale(state, 1800.0), "{} at 1800s should be stale", state);
-        }
     }
 
     #[test]

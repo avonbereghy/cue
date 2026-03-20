@@ -450,10 +450,20 @@ pub struct Settings {
     pub permissions_enabled: bool,
     #[serde(default = "default_title_animation")]
     pub title_animation: String,
+    /// Animation speed in seconds (e.g. 0.6 = fast, 1.2 = normal, 2.4 = slow)
+    #[serde(default = "default_animation_speed")]
+    pub animation_speed: f64,
+    /// Randomize per-character animation delay instead of uniform wave
+    #[serde(default)]
+    pub random_animation: bool,
 }
 
 fn default_title_animation() -> String {
     "flip".to_string()
+}
+
+fn default_animation_speed() -> f64 {
+    1.2
 }
 
 impl Default for Settings {
@@ -467,6 +477,8 @@ impl Default for Settings {
             onboarding_complete: false,
             permissions_enabled: false,
             title_animation: "flip".to_string(),
+            animation_speed: 1.2,
+            random_animation: false,
         }
     }
 }

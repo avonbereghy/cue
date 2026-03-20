@@ -17,6 +17,17 @@ interface RevivedSession {
   revivedAt: number;
 }
 
+function formatReviveElapsed(revivedAt: number): string {
+  const elapsed = Math.floor((Date.now() - revivedAt) / 1000);
+  if (elapsed < 60) return `${elapsed}s`;
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
+  if (mins < 60) return `${mins}m ${secs}s`;
+  const hrs = Math.floor(mins / 60);
+  const remainMins = mins % 60;
+  return `${hrs}h ${remainMins}m`;
+}
+
 function loadRevivedSessions(): RevivedSession[] {
   try {
     const raw = localStorage.getItem(REVIVED_STORAGE_KEY);
@@ -37,6 +48,8 @@ interface SessionsTabProps {
 export function SessionsTab({ sessions }: SessionsTabProps) {
   const [permissionsEnabled, setPermissionsEnabled] = useState(false);
   const [titleAnimation, setTitleAnimation] = useState("flip");
+  const [animationSpeed, setAnimationSpeed] = useState(1.2);
+  const [randomAnimation, setRandomAnimation] = useState(false);
   const [collapsedSessions, setCollapsedSessions] = useState<Set<string>>(
     new Set(),
   );
@@ -91,6 +104,14 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       return filtered;
     });
   }, [sessions]);
+
+    // Tick every second to update revive timers
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (revivedSessions.length === 0) return;
+    const interval = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, [revivedSessions.length]);
 
   const REVIVE_CLICKS_REQUIRED = 3;
 
@@ -159,6 +180,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       .then((s) => {
         setPermissionsEnabled(s.permissionsEnabled);
         setTitleAnimation(s.titleAnimation ?? "flip");
+        setAnimationSpeed(s.animationSpeed ?? 1.2);
+        setRandomAnimation(s.randomAnimation ?? false);
       })
       .catch(() => {});
   }, []);
@@ -211,7 +234,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
             return (
               <div key={session.info.id} className="space-y-2">
-                <SessionCard session={session} titleAnimation={titleAnimation} />
+                <SessionCard session={session} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} />
 
                 {/* Permission section (when enabled and has activity) */}
                 {permissionsEnabled && hasPermissionActivity && (
@@ -292,6 +315,9 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                     <div key={clicks} className="revived-overlay" />
                     <SessionCard session={revived.session} titleAnimation="none" />
                     <div className="absolute inset-0 flex items-center justify-center gap-3 z-10">
+                      <span className="text-xs text-red-400/70 font-mono tabular-nums">
+                        {formatReviveElapsed(revived.revivedAt)}
+                      </span>
                       <button
                         onClick={() => handleReviveClick(revived.session)}
                         className={`px-4 py-2 rounded-lg text-white text-sm font-semibold transition-colors shadow-lg ${

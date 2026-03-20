@@ -329,11 +329,14 @@ def main():
                     entry["model"] = existing.get("model", "")
                 status["sessions"][session_id] = entry
 
-            # Prune stale sessions
+            # Prune stale sessions — only "error" sessions auto-expire.
+            # "done" means "finished current turn" (session is still alive at
+            # the prompt). Only the SessionEnd hook ("remove") closes a session.
             stale = [
                 sid
                 for sid, s in status["sessions"].items()
-                if now - s.get("lastActivity", 0) > STALE_THRESHOLD
+                if s.get("state") == "error"
+                and now - s.get("lastActivity", 0) > STALE_THRESHOLD
             ]
             for sid in stale:
                 del status["sessions"][sid]
