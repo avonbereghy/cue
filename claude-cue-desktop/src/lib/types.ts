@@ -59,24 +59,7 @@ export interface EnrichedSession {
   hasSubagents: boolean;
 }
 
-/** Serde serializes (i64, i64) tuples as [number, number] arrays */
-export type ModelTokens = Record<string, [number, number]>;
-
-export interface WindowMetrics {
-  inputTokens: number;
-  outputTokens: number;
-  sessionCount: number;
-  userMessageCount: number;
-  assistantMessageCount: number;
-  toolCounts: Record<string, number>;
-  modelTokens: ModelTokens;
-}
-
 export interface Settings {
-  fiveHourTokenLimit: number;
-  dailyTokenLimit: number;
-  weeklyTokenLimit: number;
-  planPreset: string;
   onboardingComplete: boolean;
   permissionsEnabled: boolean;
   titleAnimation: string;
@@ -109,22 +92,6 @@ export interface EnvironmentInfo {
   claudeCodeFound: boolean;
   claudeSettingsExists: boolean;
 }
-
-export interface PlanPreset {
-  name: string;
-  displayName: string;
-  limits: { fiveHour: number; daily: number; weekly: number };
-}
-
-export const PLAN_PRESETS: PlanPreset[] = [
-  { name: "Custom", displayName: "Custom", limits: { fiveHour: 0, daily: 0, weekly: 0 } },
-  { name: "Pro", displayName: "Pro ($20/mo)", limits: { fiveHour: 500_000, daily: 2_000_000, weekly: 10_000_000 } },
-  { name: "MaxStandard", displayName: "Max ($100/mo)", limits: { fiveHour: 2_000_000, daily: 8_000_000, weekly: 40_000_000 } },
-  { name: "MaxPlus", displayName: "Max ($200/mo)", limits: { fiveHour: 4_000_000, daily: 16_000_000, weekly: 80_000_000 } },
-];
-
-export const USAGE_WINDOWS = ["Session (5hr)", "Today", "This Week"] as const;
-export type UsageWindowName = (typeof USAGE_WINDOWS)[number];
 
 /** State colors matching macOS app */
 export const STATE_COLORS: Record<string, string> = {
