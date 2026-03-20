@@ -1,8 +1,8 @@
-//! Settings management with plan presets.
+//! Settings management.
 //!
 //! Wraps file-based settings with permission enforcement via security.rs.
 
-use crate::models::{PlanPreset, Settings};
+use crate::models::Settings;
 use crate::paths;
 use crate::security;
 
@@ -34,32 +34,6 @@ pub fn save_settings(settings: &Settings) -> Result<(), String> {
     Ok(())
 }
 
-/// Apply a plan preset to settings.
-pub fn apply_plan_preset(preset: &PlanPreset) -> Settings {
-    let (five_hour, daily, weekly) = preset.limits();
-    Settings {
-        five_hour_token_limit: five_hour,
-        daily_token_limit: daily,
-        weekly_token_limit: weekly,
-        plan_preset: preset.display_name().to_string(),
-        onboarding_complete: false,
-        permissions_enabled: false,
-        title_animation: "flip".to_string(),
-        animation_speed: 1.2,
-        random_animation: false,
-    }
-}
-
-/// Get the token limit for a specific usage window.
-pub fn token_limit_for_window(window: &crate::models::UsageWindow) -> i64 {
-    let settings = load_settings();
-    match window {
-        crate::models::UsageWindow::FiveHour => settings.five_hour_token_limit,
-        crate::models::UsageWindow::Daily => settings.daily_token_limit,
-        crate::models::UsageWindow::Weekly => settings.weekly_token_limit,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -71,34 +45,10 @@ mod tests {
     #[test]
     fn test_default_settings() {
         let s = Settings::default();
-        assert_eq!(s.five_hour_token_limit, 2_000_000);
-        assert_eq!(s.daily_token_limit, 8_000_000);
-        assert_eq!(s.weekly_token_limit, 40_000_000);
-    }
-
-    #[test]
-    fn test_apply_plan_preset_pro() {
-        let s = apply_plan_preset(&PlanPreset::Pro);
-        assert_eq!(s.five_hour_token_limit, 500_000);
-        assert_eq!(s.daily_token_limit, 2_000_000);
-        assert_eq!(s.weekly_token_limit, 10_000_000);
-        assert_eq!(s.plan_preset, "Pro ($20/mo)");
-    }
-
-    #[test]
-    fn test_apply_plan_preset_max_standard() {
-        let s = apply_plan_preset(&PlanPreset::MaxStandard);
-        assert_eq!(s.five_hour_token_limit, 2_000_000);
-        assert_eq!(s.daily_token_limit, 8_000_000);
-        assert_eq!(s.weekly_token_limit, 40_000_000);
-    }
-
-    #[test]
-    fn test_apply_plan_preset_max_plus() {
-        let s = apply_plan_preset(&PlanPreset::MaxPlus);
-        assert_eq!(s.five_hour_token_limit, 4_000_000);
-        assert_eq!(s.daily_token_limit, 16_000_000);
-        assert_eq!(s.weekly_token_limit, 80_000_000);
+        assert_eq!(s.title_animation, "flip");
+        assert!((s.animation_speed - 1.2).abs() < f64::EPSILON);
+        assert!(!s.random_animation);
+        assert!(!s.permissions_enabled);
     }
 
     #[test]
@@ -109,15 +59,12 @@ mod tests {
 
         let path = dir.join("settings.json");
         let settings = Settings {
-            five_hour_token_limit: 1_000_000,
-            daily_token_limit: 4_000_000,
-            weekly_token_limit: 20_000_000,
-            plan_preset: "Custom".to_string(),
             onboarding_complete: false,
-            permissions_enabled: false,
-            title_animation: "flip".to_string(),
-            animation_speed: 1.2,
-            random_animation: false,
+            permissions_enabled: true,
+            title_animation: "glow".to_string(),
+            animation_speed: 0.8,
+            random_animation: true,
+            ..Default::default()
         };
 
         let content = serde_json::to_string_pretty(&settings).unwrap();
@@ -127,9 +74,27 @@ mod tests {
             &std::fs::read_to_string(&path).unwrap()
         ).unwrap();
 
-        assert_eq!(loaded.five_hour_token_limit, 1_000_000);
-        assert_eq!(loaded.plan_preset, "Custom");
+        assert_eq!(loaded.title_animation, "glow");
+        assert!((loaded.animation_speed - 0.8).abs() < f64::EPSILON);
+        assert!(loaded.random_animation);
+        assert!(loaded.permissions_enabled);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_settings_deserialize_without_legacy_fields() {
+        // Frontend sends Settings without legacy token/plan fields
+        let json = r#"{
+            "onboardingComplete": true,
+            "permissionsEnabled": false,
+            "titleAnimation": "flip",
+            "animationSpeed": 1.2,
+            "randomAnimation": false
+        }"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert!(s.onboarding_complete);
+        assert_eq!(s.five_hour_token_limit, 0); // serde default
+        assert_eq!(s.plan_preset, ""); // serde default
     }
 }

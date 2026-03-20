@@ -58,51 +58,42 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const prevSessionIdsRef = useRef<Set<string>>(new Set());
   const prevSessionsRef = useRef<EnrichedSession[]>([]);
 
-  // Track sessions that disappear from the active list -> add to revived
+  // Track disappeared sessions (-> add to revived) and reappeared ones (-> remove from revived)
   useEffect(() => {
     const currentIds = new Set(sessions.map((s) => s.info.id));
     const prevIds = prevSessionIdsRef.current;
 
-    if (prevIds.size > 0) {
-      const disappeared: EnrichedSession[] = [];
-      for (const id of prevIds) {
-        if (!currentIds.has(id)) {
-          const alreadyRevived = revivedSessions.some((r) => r.session.info.id === id);
-          if (!alreadyRevived) {
+    setRevivedSessions((prev) => {
+      let next = prev;
+
+      // Add newly disappeared sessions
+      if (prevIds.size > 0) {
+        const disappeared: RevivedSession[] = [];
+        for (const id of prevIds) {
+          if (!currentIds.has(id) && !prev.some((r) => r.session.info.id === id)) {
             const snapshot = prevSessionsRef.current.find((s) => s.info.id === id);
             if (snapshot) {
-              disappeared.push(snapshot);
+              disappeared.push({ session: snapshot, revivedAt: Date.now() });
             }
           }
         }
+        if (disappeared.length > 0) {
+          next = [...next, ...disappeared];
+        }
       }
 
-      if (disappeared.length > 0) {
-        setRevivedSessions((prev) => {
-          const next = [
-            ...prev,
-            ...disappeared.map((s) => ({ session: s, revivedAt: Date.now() })),
-          ];
-          saveRevivedSessions(next);
-          return next;
-        });
+      // Remove revived sessions that reappeared (revive succeeded)
+      const filtered = next.filter((r) => !currentIds.has(r.session.info.id));
+
+      if (filtered.length !== prev.length || filtered !== next) {
+        saveRevivedSessions(filtered);
+        return filtered;
       }
-    }
+      return prev;
+    });
 
     prevSessionIdsRef.current = currentIds;
     prevSessionsRef.current = sessions;
-  }, [sessions]);
-
-  // Remove revived sessions that reappeared in the active list (revive succeeded)
-  useEffect(() => {
-    const activeIds = new Set(sessions.map((s) => s.info.id));
-    setRevivedSessions((prev) => {
-      const filtered = prev.filter((r) => !activeIds.has(r.session.info.id));
-      if (filtered.length !== prev.length) {
-        saveRevivedSessions(filtered);
-      }
-      return filtered;
-    });
   }, [sessions]);
 
     // Tick every second to update revive timers
