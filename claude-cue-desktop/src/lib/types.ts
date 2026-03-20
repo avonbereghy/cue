@@ -79,7 +79,16 @@ export interface Settings {
   planPreset: string;
   onboardingComplete: boolean;
   permissionsEnabled: boolean;
+  titleAnimation: string;
 }
+
+export const TITLE_ANIMATIONS = [
+  { id: "flip", label: "Rotate Flip" },
+  { id: "ripple", label: "Ripple" },
+  { id: "glow", label: "Pulse Glow" },
+  { id: "bounce", label: "Bounce" },
+  { id: "none", label: "None" },
+] as const;
 
 export interface EnvironmentInfo {
   platform: string;

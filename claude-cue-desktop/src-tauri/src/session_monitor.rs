@@ -15,10 +15,18 @@ use std::time::SystemTime;
 
 /// Staleness thresholds (seconds) by session state.
 /// Shared between poll_status and CLI to avoid divergence.
+/// These are safety nets for orphaned sessions — normal removal happens
+/// via the SessionEnd hook writing "remove" to sessions.json.
 pub fn is_session_stale(state: &str, age_secs: f64) -> bool {
     match state {
-        "idle" => age_secs >= 60.0,
-        "error" => age_secs >= 300.0,
+        // "done" sessions linger for 10 min so the user can see them,
+        // then auto-clean (SessionEnd should fire before this).
+        "done" => age_secs >= 600.0,
+        // Errors stay visible longer for debugging.
+        "error" => age_secs >= 600.0,
+        // All other states (idle, working, waiting, subagent): only prune
+        // after 30 min of no activity — handles orphaned sessions if
+        // Claude Code crashes without firing SessionEnd.
         _ => age_secs >= 1800.0,
     }
 }

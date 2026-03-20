@@ -38,6 +38,90 @@ body {
   animation: dot-pulse 2s ease-in-out infinite;
 }
 
+/* Working title animations — per-character */
+
+/* Rotate Flip (split-flap board) */
+@keyframes anim-flip {
+  0%, 100% { transform: rotateX(0deg); }
+  50% { transform: rotateX(90deg); }
+}
+.anim-flip .title-char {
+  animation: anim-flip 1.2s ease-in-out infinite;
+  backface-visibility: hidden;
+}
+
+/* Ripple (fade + lift) */
+@keyframes anim-ripple {
+  0%, 100% { color: #fff; transform: translateY(0); }
+  50% { color: #2a2a2a; transform: translateY(-1.5px); }
+}
+.anim-ripple .title-char {
+  animation: anim-ripple 1.2s ease-in-out infinite;
+}
+
+/* Pulse Glow (cyan highlight) */
+@keyframes anim-glow {
+  0%, 100% { color: #fff; text-shadow: none; }
+  50% { color: #4fd1ff; text-shadow: 0 0 6px rgba(79, 209, 255, 0.5); }
+}
+.anim-glow .title-char {
+  animation: anim-glow 1.2s ease-in-out infinite;
+}
+
+/* Bounce (vertical hop) */
+@keyframes anim-bounce {
+  0%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-3px); }
+  60% { transform: translateY(1px); }
+}
+.anim-bounce .title-char {
+  animation: anim-bounce 1.2s ease-in-out infinite;
+}
+
+/* Shared character styles */
+.title-char {
+  display: inline-block;
+}
+.title-space {
+  display: inline-block;
+  width: 0.25em;
+}
+
+/* Revived (ended) session card — red hue overlay */
+.revived-card-wrapper {
+  position: relative;
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+.revived-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  border-radius: 0.5rem;
+  pointer-events: none;
+  z-index: 5;
+  transition: background 0.3s ease, border-color 0.3s ease;
+}
+
+/* Revive click stages — escalating red pulse */
+@keyframes revive-pulse-1 {
+  0%, 100% { background: rgba(239, 68, 68, 0.18); }
+  50% { background: rgba(239, 68, 68, 0.30); }
+}
+@keyframes revive-pulse-2 {
+  0%, 100% { background: rgba(239, 68, 68, 0.28); }
+  50% { background: rgba(239, 68, 68, 0.50); }
+}
+.revived-pulse-1 .revived-overlay {
+  animation: revive-pulse-1 0.6s ease-in-out 1 forwards;
+  border-color: rgba(239, 68, 68, 0.40);
+}
+.revived-pulse-2 .revived-overlay {
+  animation: revive-pulse-2 0.6s ease-in-out 1 forwards;
+  border-color: rgba(239, 68, 68, 0.60);
+}
+
 /* Reduced Motion */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

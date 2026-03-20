@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Settings, PLAN_PRESETS } from "@/lib/types";
+import { Settings, PLAN_PRESETS, TITLE_ANIMATIONS } from "@/lib/types";
 import { formatTokens } from "@/lib/format";
 
 interface SettingsViewProps {
@@ -162,6 +162,28 @@ export function SettingsView({ inline = false }: SettingsViewProps) {
           readOnly={!isCustom}
         />
       </section>
+
+      {/* Title Animation */}
+      {!inline && (
+        <section className="space-y-3">
+          <label className="block text-sm font-medium text-white/70">Working Title Animation</label>
+          <div className="flex rounded-lg overflow-hidden border border-white/10">
+            {TITLE_ANIMATIONS.map((anim) => (
+              <button
+                key={anim.id}
+                onClick={() => settings && setSettings({ ...settings, titleAnimation: anim.id })}
+                className={`flex-1 px-3 py-2 text-xs font-medium transition-colors border-l border-white/10 first:border-l-0 ${
+                  settings?.titleAnimation === anim.id
+                    ? "bg-blue-500/20 text-blue-400 border-blue-500/30"
+                    : "bg-white/5 text-white/50 hover:text-white/70 hover:bg-white/10"
+                }`}
+              >
+                {anim.label}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Permissions */}
       {!inline && (

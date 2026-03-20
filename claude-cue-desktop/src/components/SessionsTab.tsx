@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { EnrichedSession } from "@/lib/types";
 import type { Settings } from "@/lib/types";
@@ -9,15 +9,126 @@ import { PermissionPrompt } from "./PermissionPrompt";
 import { PermissionHistory } from "./PermissionHistory";
 import { usePermissions } from "@/hooks/usePermissions";
 
+const REVIVED_STORAGE_KEY = "claude-cue-revived-sessions";
+
+/** Snapshot stored for revived (ended) sessions */
+interface RevivedSession {
+  session: EnrichedSession;
+  revivedAt: number;
+}
+
+function loadRevivedSessions(): RevivedSession[] {
+  try {
+    const raw = localStorage.getItem(REVIVED_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRevivedSessions(revived: RevivedSession[]) {
+  localStorage.setItem(REVIVED_STORAGE_KEY, JSON.stringify(revived));
+}
+
 interface SessionsTabProps {
   sessions: EnrichedSession[];
 }
 
 export function SessionsTab({ sessions }: SessionsTabProps) {
   const [permissionsEnabled, setPermissionsEnabled] = useState(false);
+  const [titleAnimation, setTitleAnimation] = useState("flip");
   const [collapsedSessions, setCollapsedSessions] = useState<Set<string>>(
     new Set(),
   );
+  const [revivedSessions, setRevivedSessions] = useState<RevivedSession[]>(loadRevivedSessions);
+  const [reviveClicks, setReviveClicks] = useState<Record<string, number>>({});
+  const prevSessionIdsRef = useRef<Set<string>>(new Set());
+  const prevSessionsRef = useRef<EnrichedSession[]>([]);
+
+  // Track sessions that disappear from the active list -> add to revived
+  useEffect(() => {
+    const currentIds = new Set(sessions.map((s) => s.info.id));
+    const prevIds = prevSessionIdsRef.current;
+
+    if (prevIds.size > 0) {
+      const disappeared: EnrichedSession[] = [];
+      for (const id of prevIds) {
+        if (!currentIds.has(id)) {
+          const alreadyRevived = revivedSessions.some((r) => r.session.info.id === id);
+          if (!alreadyRevived) {
+            const snapshot = prevSessionsRef.current.find((s) => s.info.id === id);
+            if (snapshot) {
+              disappeared.push(snapshot);
+            }
+          }
+        }
+      }
+
+      if (disappeared.length > 0) {
+        setRevivedSessions((prev) => {
+          const next = [
+            ...prev,
+            ...disappeared.map((s) => ({ session: s, revivedAt: Date.now() })),
+          ];
+          saveRevivedSessions(next);
+          return next;
+        });
+      }
+    }
+
+    prevSessionIdsRef.current = currentIds;
+    prevSessionsRef.current = sessions;
+  }, [sessions]);
+
+  // Remove revived sessions that reappeared in the active list (revive succeeded)
+  useEffect(() => {
+    const activeIds = new Set(sessions.map((s) => s.info.id));
+    setRevivedSessions((prev) => {
+      const filtered = prev.filter((r) => !activeIds.has(r.session.info.id));
+      if (filtered.length !== prev.length) {
+        saveRevivedSessions(filtered);
+      }
+      return filtered;
+    });
+  }, [sessions]);
+
+  const REVIVE_CLICKS_REQUIRED = 3;
+
+  const handleReviveClick = useCallback((session: EnrichedSession) => {
+    const id = session.info.id;
+    const current = reviveClicks[id] ?? 0;
+    const next = current + 1;
+
+    if (next >= REVIVE_CLICKS_REQUIRED) {
+      // Final click — fire the revive
+      setReviveClicks((prev) => {
+        const copy = { ...prev };
+        delete copy[id];
+        return copy;
+      });
+      invoke("revive_session", {
+        sessionId: session.info.id,
+        workspace: session.info.workspace,
+      }).catch((err) => {
+        console.error("Failed to revive session:", err);
+      });
+    } else {
+      setReviveClicks((prev) => ({ ...prev, [id]: next }));
+    }
+  }, [reviveClicks]);
+
+  const handleDismissRevived = useCallback((sessionId: string) => {
+    setRevivedSessions((prev) => {
+      const next = prev.filter((r) => r.session.info.id !== sessionId);
+      saveRevivedSessions(next);
+      return next;
+    });
+  }, []);
+
+  const handleClearAllRevived = useCallback(() => {
+    setRevivedSessions([]);
+    saveRevivedSessions([]);
+  }, []);
 
   const totalMessages = sessions.reduce((sum, s) => sum + s.metrics.messageCount, 0);
   const totalTokens = sessions.reduce(
@@ -45,7 +156,10 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // Check if permissions are enabled in settings
   useEffect(() => {
     invoke<Settings>("get_settings")
-      .then((s) => setPermissionsEnabled(s.permissionsEnabled))
+      .then((s) => {
+        setPermissionsEnabled(s.permissionsEnabled);
+        setTitleAnimation(s.titleAnimation ?? "flip");
+      })
       .catch(() => {});
   }, []);
 
@@ -61,6 +175,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     });
   };
 
+  const hasContent = sessions.length > 0 || revivedSessions.length > 0;
+
   return (
     <div className="flex flex-col flex-1 min-h-0">
       {/* Stats header */}
@@ -74,7 +190,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       </div>
 
       {/* Session list or empty state */}
-      {sessions.length === 0 ? (
+      {!hasContent ? (
         <div className="flex-1 flex flex-col items-center justify-center text-white/40 gap-2">
           <span className="text-4xl">○</span>
           <span className="text-lg font-medium">No Active Sessions</span>
@@ -82,6 +198,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {/* Active sessions */}
           {[...sessions].sort((a, b) => {
             const priority = (s: EnrichedSession) =>
               s.info.state === "waiting" ? 0 : s.info.state === "working" ? 1 : 2;
@@ -94,7 +211,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
             return (
               <div key={session.info.id} className="space-y-2">
-                <SessionCard session={session} />
+                <SessionCard session={session} titleAnimation={titleAnimation} />
 
                 {/* Permission section (when enabled and has activity) */}
                 {permissionsEnabled && hasPermissionActivity && (
@@ -143,6 +260,63 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
               </div>
             );
           })}
+
+          {/* Revived (ended) sessions */}
+          {revivedSessions.length > 0 && (
+            <>
+              <div className="flex items-center gap-3 pt-4 pb-1">
+                <div className="flex-1 border-t border-red-500/20" />
+                <span className="text-xs text-red-400/60 uppercase tracking-wider font-medium">
+                  Ended Sessions
+                </span>
+                <div className="flex-1 border-t border-red-500/20" />
+                <button
+                  onClick={handleClearAllRevived}
+                  className="text-xs text-red-400/50 hover:text-red-400 transition-colors px-2 py-0.5 rounded hover:bg-red-500/10"
+                >
+                  Clear All
+                </button>
+              </div>
+              {revivedSessions.map((revived) => {
+                const clicks = reviveClicks[revived.session.info.id] ?? 0;
+                const pulseClass = clicks > 0 ? `revived-pulse-${Math.min(clicks, 2)}` : "";
+                const remaining = REVIVE_CLICKS_REQUIRED - clicks;
+                const buttonLabel = clicks === 0
+                  ? "Revive"
+                  : remaining === 1
+                    ? "Confirm!"
+                    : `Revive (${clicks}/${REVIVE_CLICKS_REQUIRED})`;
+
+                return (
+                  <div key={revived.session.info.id} className={`revived-card-wrapper relative ${pulseClass}`}>
+                    <div key={clicks} className="revived-overlay" />
+                    <SessionCard session={revived.session} titleAnimation="none" />
+                    <div className="absolute inset-0 flex items-center justify-center gap-3 z-10">
+                      <button
+                        onClick={() => handleReviveClick(revived.session)}
+                        className={`px-4 py-2 rounded-lg text-white text-sm font-semibold transition-colors shadow-lg ${
+                          clicks >= 2
+                            ? "bg-red-600 hover:bg-red-500 shadow-red-600/40"
+                            : clicks >= 1
+                              ? "bg-red-500 hover:bg-red-400 shadow-red-500/30"
+                              : "bg-red-500 hover:bg-red-400 shadow-red-500/25"
+                        }`}
+                      >
+                        {buttonLabel}
+                      </button>
+                      <button
+                        onClick={() => handleDismissRevived(revived.session.info.id)}
+                        className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white/60 hover:text-white/80 text-sm transition-colors"
+                        title="Dismiss"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          )}
         </div>
       )}
     </div>
