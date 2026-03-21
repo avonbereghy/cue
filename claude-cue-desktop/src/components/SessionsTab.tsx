@@ -55,8 +55,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [signalFrequency, setSignalFrequency] = useState(1.0);
   const [signalMode, setSignalMode] = useState("simulated");
   const [signalAlpha, setSignalAlpha] = useState(1.0);
-  const [signalAmplitude, setSignalAmplitude] = useState(1.0);
-  const [signalEcho, setSignalEcho] = useState(1.0);
+  const [signalAmplitude, setSignalAmplitude] = useState(0.5);
+  const [signalEcho, setSignalEcho] = useState(0.5);
   const [activePresetId, setActivePresetId] = useState("");
   const [presetBootAttempted, setPresetBootAttempted] = useState(false);
   const [testMode, setTestMode] = useState(false);
@@ -194,8 +194,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         const mode = s.signalMode === "audio" ? "preset" : (s.signalMode ?? "simulated");
         setSignalMode(mode);
         setSignalAlpha(s.signalAlpha ?? 1.0);
-        setSignalAmplitude(s.signalAmplitude ?? 1.0);
-        setSignalEcho(s.signalEcho ?? 1.0);
+        setSignalAmplitude(s.signalAmplitude ?? 0.5);
+        setSignalEcho(s.signalEcho ?? 0.5);
         setActivePresetId(s.activePresetId ?? "");
         setTestMode(s.testMode ?? false);
       })
@@ -636,65 +636,57 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                       </select>
                     </div>
                     {/* Opacity */}
-                    <div className="flex items-center justify-between gap-4 py-1">
-                      <span className="text-xs text-white/70">Opacity</span>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] text-white/30 font-mono w-10 text-right">{Math.round(signalAlpha * 100)}%</span>
-                        <input type="range" min={0.05} max={1.0} step={0.05} value={signalAlpha}
-                          onChange={(e) => {
-                            const v = parseFloat(e.target.value);
-                            setSignalAlpha(v);
-                            updateSetting({ signalAlpha: v });
-                          }}
-                          className="w-20 h-1 rounded appearance-none cursor-pointer bg-white/10 accent-blue-500"
-                        />
-                      </div>
+                    <div className="flex items-center gap-2 py-1">
+                      <span className="text-xs text-white/70 w-16 shrink-0">Opacity</span>
+                      <span className="text-[10px] text-white/30 font-mono w-8 text-right shrink-0">{Math.round(signalAlpha * 100)}%</span>
+                      <input type="range" min={0.05} max={1.0} step={0.01} value={signalAlpha}
+                        onChange={(e) => {
+                          const v = parseFloat(e.target.value);
+                          setSignalAlpha(v);
+                          updateSetting({ signalAlpha: v });
+                        }}
+                        className="flex-1 h-1 rounded appearance-none cursor-pointer bg-white/10 accent-blue-500"
+                      />
                     </div>
                     {/* Amplitude */}
-                    <div className="flex items-center justify-between gap-4 py-1">
-                      <span className="text-xs text-white/70">Amplitude</span>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] text-white/30 font-mono w-10 text-right">{signalAmplitude.toFixed(1)}x</span>
-                        <input type="range" min={0.1} max={3.0} step={0.1} value={signalAmplitude}
-                          onChange={(e) => {
-                            const v = parseFloat(e.target.value);
-                            setSignalAmplitude(v);
-                            updateSetting({ signalAmplitude: v });
-                          }}
-                          className="w-20 h-1 rounded appearance-none cursor-pointer bg-white/10 accent-blue-500"
-                        />
-                      </div>
+                    <div className="flex items-center gap-2 py-1">
+                      <span className="text-xs text-white/70 w-16 shrink-0">Amplitude</span>
+                      <span className="text-[10px] text-white/30 font-mono w-8 text-right shrink-0">{signalAmplitude.toFixed(2)}x</span>
+                      <input type="range" min={0.01} max={1.0} step={0.01} value={signalAmplitude}
+                        onChange={(e) => {
+                          const v = parseFloat(e.target.value);
+                          setSignalAmplitude(v);
+                          updateSetting({ signalAmplitude: v });
+                        }}
+                        className="flex-1 h-1 rounded appearance-none cursor-pointer bg-white/10 accent-blue-500"
+                      />
                     </div>
                     {/* Echo */}
-                    <div className="flex items-center justify-between gap-4 py-1">
-                      <span className="text-xs text-white/70">Echo</span>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] text-white/30 font-mono w-10 text-right">{Math.round(signalEcho * 100)}%</span>
-                        <input type="range" min={0} max={1.0} step={0.05} value={signalEcho}
-                          onChange={(e) => {
-                            const v = parseFloat(e.target.value);
-                            setSignalEcho(v);
-                            updateSetting({ signalEcho: v });
-                          }}
-                          className="w-20 h-1 rounded appearance-none cursor-pointer bg-white/10 accent-blue-500"
-                        />
-                      </div>
+                    <div className="flex items-center gap-2 py-1">
+                      <span className="text-xs text-white/70 w-16 shrink-0">Echo</span>
+                      <span className="text-[10px] text-white/30 font-mono w-8 text-right shrink-0">{Math.round(signalEcho * 50)}%</span>
+                      <input type="range" min={0} max={2.0} step={0.01} value={signalEcho}
+                        onChange={(e) => {
+                          const v = parseFloat(e.target.value);
+                          setSignalEcho(v);
+                          updateSetting({ signalEcho: v });
+                        }}
+                        className="flex-1 h-1 rounded appearance-none cursor-pointer bg-white/10 accent-blue-500"
+                      />
                     </div>
                     {/* Frequency (simulated mode only) */}
                     {signalMode !== "preset" && (
-                      <div className="flex items-center justify-between gap-4 py-1">
-                        <span className="text-xs text-white/70">Frequency</span>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[10px] text-white/30 font-mono w-10 text-right">{signalFrequency.toFixed(1)}x</span>
-                          <input type="range" min={0.2} max={3.0} step={0.1} value={signalFrequency}
-                            onChange={(e) => {
-                              const v = parseFloat(e.target.value);
-                              setSignalFrequency(v);
-                              updateSetting({ signalFrequency: v });
-                            }}
-                            className="w-20 h-1 rounded appearance-none cursor-pointer bg-white/10 accent-blue-500"
-                          />
-                        </div>
+                      <div className="flex items-center gap-2 py-1">
+                        <span className="text-xs text-white/70 w-16 shrink-0">Frequency</span>
+                        <span className="text-[10px] text-white/30 font-mono w-8 text-right shrink-0">{signalFrequency.toFixed(2)}x</span>
+                        <input type="range" min={0.2} max={3.0} step={0.01} value={signalFrequency}
+                          onChange={(e) => {
+                            const v = parseFloat(e.target.value);
+                            setSignalFrequency(v);
+                            updateSetting({ signalFrequency: v });
+                          }}
+                          className="flex-1 h-1 rounded appearance-none cursor-pointer bg-white/10 accent-blue-500"
+                        />
                       </div>
                     )}
                   </>

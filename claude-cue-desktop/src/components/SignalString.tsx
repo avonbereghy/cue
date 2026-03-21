@@ -32,12 +32,22 @@ interface SignalStringProps {
   signalEcho?: number;
 }
 
-export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 1.0, signalAmplitude = 1.0, signalEcho = 1.0 }: SignalStringProps) {
+export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 1.0, signalAmplitude = 0.5, signalEcho = 0.5 }: SignalStringProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
 
   const isActive = state === "working" || state === "subagent" || state === "error";
   const isAudio = signalMode === "preset" || signalMode === "audio";
+  // Track energy level for smooth decay when session stops
+  const energyRef = useRef(0);
+  // Track when session became inactive for decay timing
+  const deactivatedAtRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (isActive) {
+      deactivatedAtRef.current = null;
+    }
+  }, [isActive]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -106,11 +116,20 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         const numBins = freqData.length;
         const t = now / 1000;
 
-        // Inactive sessions get flat line even in audio mode
+        // Decay envelope: when session stops, smoothly fade out over ~2 seconds
+        let decayEnvelope = 1.0;
         if (!isActive) {
-          drawFlatLine(w, midY);
-          animRef.current = requestAnimationFrame(draw);
-          return;
+          if (deactivatedAtRef.current === null) {
+            deactivatedAtRef.current = now;
+          }
+          const elapsed = (now - deactivatedAtRef.current) / 1000;
+          decayEnvelope = Math.exp(-elapsed * 2.0); // ~2s decay
+          if (decayEnvelope < 0.005) {
+            drawFlatLine(w, midY);
+            energyRef.current = 0;
+            animRef.current = requestAnimationFrame(draw);
+            return;
+          }
         }
 
         // Three strings with DIFFERENT spatial modes so they visually separate:
@@ -124,7 +143,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           { binStart: Math.floor(numBins * 0.6), binEnd: numBins, startMode: 4, numModes: 6, speed: 2.8, travel: 0.4, phaseOff: 4.5, gain: 1.5 * amp, lw: 0.75, opacity: 0.2 },
         ];
 
-        const numTrails = Math.max(1, Math.round(16 * signalEcho));
+        const numTrails = Math.max(1, Math.round(32 * signalEcho));
         const trailSpacing = 0.018;
 
         for (let bi = 0; bi < bands.length; bi++) {
@@ -166,7 +185,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
                 sum += amp * spatial * temporal;
               }
 
-              const y = Math.tanh(sum * band.gain) * halfH;
+              const y = Math.tanh(sum * band.gain) * halfH * decayEnvelope;
               if (x === 0) ctx.moveTo(x, midY + y);
               else ctx.lineTo(x, midY + y);
             }
@@ -201,7 +220,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       const f = frequency;
       const speed = f * 600;
       const omega = f * 20;
-      const decay = 1.2 + f * 0.4;
+      const physDecay = 1.2 + f * 0.4;
 
       ctx.beginPath();
 
@@ -217,7 +236,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
 
           if (localAge <= 0) continue;
 
-          sum += p.amplitude * Math.sin(omega * localAge) * Math.exp(-decay * localAge);
+          sum += p.amplitude * Math.sin(omega * localAge) * Math.exp(-physDecay * localAge);
         }
 
         const y = Math.tanh(sum * 0.2) * halfH;

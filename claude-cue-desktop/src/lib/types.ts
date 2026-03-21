@@ -124,7 +124,7 @@ export interface EnvironmentInfo {
 
 /** State colors matching macOS app */
 export const STATE_COLORS: Record<string, string> = {
-  working: "text-white",
+  working: "text-blue-400",
   waiting: "text-yellow-400",
   error: "text-red-500",
   subagent: "text-cyan-400",
@@ -133,7 +133,7 @@ export const STATE_COLORS: Record<string, string> = {
 };
 
 export const STATE_DOT_COLORS: Record<string, string> = {
-  working: "bg-white",
+  working: "bg-blue-500",
   waiting: "bg-yellow-400",
   error: "bg-red-500",
   subagent: "bg-cyan-400",
@@ -142,7 +142,7 @@ export const STATE_DOT_COLORS: Record<string, string> = {
 };
 
 export const STATE_BADGE_BG: Record<string, string> = {
-  working: "bg-white/20 text-white",
+  working: "bg-blue-500/20 text-blue-400",
   waiting: "bg-yellow-400/20 text-yellow-400",
   error: "bg-red-500/20 text-red-500",
   subagent: "bg-cyan-400/20 text-cyan-400",

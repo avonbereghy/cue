@@ -54,6 +54,7 @@ pub fn append_permission_log(entry: &PermissionLogEntry) -> Result<(), String> {
 }
 
 /// Append a permission decision to a specific log file path (for testing).
+#[cfg(test)]
 fn append_permission_log_to(path: &Path, entry: &PermissionLogEntry) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
