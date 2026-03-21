@@ -18,10 +18,7 @@ const TAB_PANEL_IDS: Record<Tab, string> = {
 };
 
 export function Dashboard() {
-  const [tab, setTab] = useState<Tab>(() => {
-    const stored = localStorage.getItem("selectedDashboardTab");
-    return stored === "Sessions" || stored === "Settings" ? stored : "Sessions";
-  });
+  const [tab, setTab] = useState<Tab>("Sessions");
   const sessions = useSessionMonitor();
 
   useEffect(() => {

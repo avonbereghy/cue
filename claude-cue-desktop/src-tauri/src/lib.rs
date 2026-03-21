@@ -173,6 +173,88 @@ fn revive_session(session_id: String, workspace: String) -> Result<(), String> {
     spawn_terminal_with_resume(&session_id, &workspace)
 }
 
+#[tauri::command]
+fn save_preset(preset: models::SignalPreset) -> Result<(), String> {
+    let dir = paths::presets_dir();
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create presets dir: {}", e))?;
+    let path = dir.join(format!("{}.json", preset.id));
+    let data = serde_json::to_vec(&preset)
+        .map_err(|e| format!("Failed to serialize preset: {}", e))?;
+    security::atomic_write(&path, &data)
+        .map_err(|e| format!("Failed to save preset: {}", e))
+}
+
+#[tauri::command]
+fn list_presets() -> Result<Vec<models::PresetSummary>, String> {
+    let dir = paths::presets_dir();
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut summaries = Vec::new();
+    let entries = std::fs::read_dir(&dir)
+        .map_err(|e| format!("Failed to read presets dir: {}", e))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().map(|e| e == "json").unwrap_or(false) {
+            if let Ok(data) = std::fs::read(&path) {
+                if let Ok(preset) = serde_json::from_slice::<models::SignalPreset>(&data) {
+                    summaries.push(models::PresetSummary {
+                        id: preset.id,
+                        name: preset.name,
+                        created_at: preset.created_at,
+                        duration_secs: preset.duration_secs,
+                    });
+                }
+            }
+        }
+    }
+    summaries.sort_by(|a, b| b.created_at.partial_cmp(&a.created_at).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(summaries)
+}
+
+#[tauri::command]
+fn load_preset(id: String) -> Result<models::SignalPreset, String> {
+    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err("Invalid preset ID".to_string());
+    }
+    let path = paths::presets_dir().join(format!("{}.json", id));
+    let data = std::fs::read(&path)
+        .map_err(|e| format!("Failed to read preset: {}", e))?;
+    serde_json::from_slice(&data)
+        .map_err(|e| format!("Failed to parse preset: {}", e))
+}
+
+#[tauri::command]
+fn delete_preset(id: String) -> Result<(), String> {
+    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err("Invalid preset ID".to_string());
+    }
+    let path = paths::presets_dir().join(format!("{}.json", id));
+    if path.exists() {
+        std::fs::remove_file(&path)
+            .map_err(|e| format!("Failed to delete preset: {}", e))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn rename_preset(id: String, name: String) -> Result<(), String> {
+    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err("Invalid preset ID".to_string());
+    }
+    let path = paths::presets_dir().join(format!("{}.json", id));
+    let data = std::fs::read(&path)
+        .map_err(|e| format!("Failed to read preset: {}", e))?;
+    let mut preset: models::SignalPreset = serde_json::from_slice(&data)
+        .map_err(|e| format!("Failed to parse preset: {}", e))?;
+    preset.name = name;
+    let updated = serde_json::to_vec(&preset)
+        .map_err(|e| format!("Failed to serialize preset: {}", e))?;
+    security::atomic_write(&path, &updated)
+        .map_err(|e| format!("Failed to save preset: {}", e))
+}
+
 #[cfg(target_os = "macos")]
 fn spawn_terminal_with_resume(session_id: &str, workspace: &str) -> Result<(), String> {
     // Use osascript to open Terminal.app with the resume command.
@@ -343,6 +425,11 @@ pub fn run() {
             deny_permission,
             get_permission_history,
             revive_session,
+            save_preset,
+            list_presets,
+            load_preset,
+            delete_preset,
+            rename_preset,
         ])
         .on_window_event(|window, event| {
             // Hide window instead of quitting when user closes it — app stays in tray

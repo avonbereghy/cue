@@ -14,14 +14,36 @@ function applyTheme(theme: string) {
   }
 }
 
-// Detect system theme and apply before React renders
-invoke<string>("get_theme").then(applyTheme).catch(() => applyTheme("dark"));
+function getSystemTheme(): string {
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
 
-// Listen for OS theme changes
+/** Resolve the effective theme from the saved preference. */
+function resolveTheme(pref: string): string {
+  if (pref === "light" || pref === "dark") return pref;
+  return getSystemTheme(); // "auto" or unknown → follow system
+}
+
+// Read saved theme preference and apply before React renders
+invoke<{ theme?: string }>("get_settings")
+  .then((s) => applyTheme(resolveTheme(s.theme ?? "auto")))
+  .catch(() => applyTheme(getSystemTheme()));
+
+// Listen for OS theme changes — only matters when preference is "auto"
 const mq = window.matchMedia("(prefers-color-scheme: dark)");
 mq.addEventListener("change", () => {
-  invoke<string>("get_theme").then(applyTheme).catch(() => {});
+  invoke<{ theme?: string }>("get_settings")
+    .then((s) => {
+      const pref = s.theme ?? "auto";
+      if (pref === "auto") applyTheme(getSystemTheme());
+    })
+    .catch(() => {});
 });
+
+// Expose for SettingsView to call when theme changes
+(window as unknown as Record<string, unknown>).__applyTheme = (pref: string) => {
+  applyTheme(resolveTheme(pref));
+};
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
