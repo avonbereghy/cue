@@ -61,12 +61,13 @@ const DIM: &str = "\x1b[2m";
 const GREEN: &str = "\x1b[32m";
 const YELLOW: &str = "\x1b[33m";
 const RED: &str = "\x1b[31m";
+const BLUE: &str = "\x1b[34m";
 const CYAN: &str = "\x1b[36m";
 const WHITE: &str = "\x1b[37m";
 
 fn state_color(state: &str) -> &'static str {
     match state {
-        "working" => WHITE,
+        "working" => BLUE,
         "waiting" => YELLOW,
         "error" => RED,
         "subagent" => CYAN,
