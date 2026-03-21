@@ -62,9 +62,38 @@ export interface EnrichedSession {
 export interface Settings {
   onboardingComplete: boolean;
   permissionsEnabled: boolean;
+  theme: string;
   titleAnimation: string;
   animationSpeed: number;
   randomAnimation: boolean;
+  signalString: boolean;
+  signalFrequency: number;
+  signalMode: string;
+  signalAlpha: number;
+  signalAmplitude: number;
+  signalEcho: number;
+  activePresetId: string;
+  testMode: boolean;
+}
+
+export interface SignalPreset {
+  id: string;
+  name: string;
+  createdAt: number;
+  durationSecs: number;
+  sampleRate: number;
+  bands: {
+    bass: number[];
+    mids: number[];
+    treble: number[];
+  };
+}
+
+export interface PresetSummary {
+  id: string;
+  name: string;
+  createdAt: number;
+  durationSecs: number;
 }
 
 export const TITLE_ANIMATIONS = [

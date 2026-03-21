@@ -304,6 +304,9 @@ pub struct Settings {
     pub onboarding_complete: bool,
     #[serde(default)]
     pub permissions_enabled: bool,
+    /// Theme preference: "light", "dark", or "auto" (follows system)
+    #[serde(default = "default_theme")]
+    pub theme: String,
     #[serde(default = "default_title_animation")]
     pub title_animation: String,
     /// Animation speed in seconds (e.g. 0.6 = fast, 1.2 = normal, 2.4 = slow)
@@ -312,6 +315,34 @@ pub struct Settings {
     /// Randomize per-character animation delay instead of uniform wave
     #[serde(default)]
     pub random_animation: bool,
+    /// Show animated signal string separator in session cards
+    #[serde(default = "default_true")]
+    pub signal_string: bool,
+    /// Signal string frequency multiplier (0.3 = slow, 1.0 = normal, 3.0 = fast)
+    #[serde(default = "default_signal_frequency")]
+    pub signal_frequency: f64,
+    /// Signal string mode: "simulated" (piano strikes) or "audio" (uploaded audio file)
+    #[serde(default = "default_signal_mode")]
+    pub signal_mode: String,
+    /// Signal string alpha/opacity multiplier (0.0 = invisible, 1.0 = full)
+    #[serde(default = "default_signal_alpha")]
+    pub signal_alpha: f64,
+    /// Signal string amplitude/gain multiplier (0.1 = subtle, 1.0 = normal, 3.0 = intense)
+    #[serde(default = "default_one")]
+    pub signal_amplitude: f64,
+    /// Signal string echo/trail intensity (0.0 = no trails, 1.0 = full trails)
+    #[serde(default = "default_one")]
+    pub signal_echo: f64,
+    /// UUID of the active signal preset
+    #[serde(default)]
+    pub active_preset_id: String,
+    /// Test mode: adds a synthetic session for previewing animations
+    #[serde(default)]
+    pub test_mode: bool,
+}
+
+fn default_theme() -> String {
+    "auto".to_string()
 }
 
 fn default_title_animation() -> String {
@@ -320,6 +351,26 @@ fn default_title_animation() -> String {
 
 fn default_animation_speed() -> f64 {
     1.2
+}
+
+fn default_signal_frequency() -> f64 {
+    1.0
+}
+
+fn default_signal_mode() -> String {
+    "preset".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_signal_alpha() -> f64 {
+    1.0
+}
+
+fn default_one() -> f64 {
+    1.0
 }
 
 impl Default for Settings {
@@ -332,11 +383,52 @@ impl Default for Settings {
             plan_preset: "Max ($100/mo)".to_string(),
             onboarding_complete: false,
             permissions_enabled: false,
+            theme: "auto".to_string(),
             title_animation: "flip".to_string(),
             animation_speed: 1.2,
             random_animation: false,
+            signal_string: true,
+            signal_frequency: 1.0,
+            signal_mode: "preset".to_string(),
+            signal_alpha: 1.0,
+            signal_amplitude: 1.0,
+            signal_echo: 1.0,
+            active_preset_id: String::new(),
+            test_mode: false,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Signal Presets (extracted frequency envelopes)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresetBands {
+    pub bass: Vec<f64>,
+    pub mids: Vec<f64>,
+    pub treble: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignalPreset {
+    pub id: String,
+    pub name: String,
+    pub created_at: f64,
+    pub duration_secs: f64,
+    pub sample_rate: u32,
+    pub bands: PresetBands,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresetSummary {
+    pub id: String,
+    pub name: String,
+    pub created_at: f64,
+    pub duration_secs: f64,
 }
 
 // ---------------------------------------------------------------------------
