@@ -36,6 +36,18 @@ pub fn claude_projects_path() -> PathBuf {
     home_dir().join(".claude").join("projects")
 }
 
+/// Directory for saved signal presets (extracted frequency envelopes).
+pub fn presets_dir() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        home_dir()
+            .join("Library/Application Support/com.claude-cue.app/presets")
+    } else if cfg!(target_os = "windows") {
+        appdata_local().join("Claude Cue").join("presets")
+    } else {
+        xdg_config_home().join("claude-cue").join("presets")
+    }
+}
+
 /// Ensure all required directories exist.
 pub fn ensure_dirs() -> std::io::Result<()> {
     if let Some(parent) = sessions_json_path().parent() {
