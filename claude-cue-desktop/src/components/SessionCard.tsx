@@ -20,7 +20,7 @@ interface SessionCardProps {
   revived?: boolean;
 }
 
-export function SessionCard({ session, titleAnimation = "flip", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 1.0, signalAmplitude = 1.0, signalEcho = 1.0, revived = false }: SessionCardProps) {
+export function SessionCard({ session, titleAnimation = "flip", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 1.0, signalAmplitude = 0.5, signalEcho = 0.5, revived = false }: SessionCardProps) {
   const { info, metrics } = session;
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -141,7 +141,7 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
   const dotColor = STATE_DOT_COLORS[info.state] ?? "bg-green-500";
   const dotPulse = info.state === "working" || info.state === "waiting" || info.state === "subagent" ? "dot-pulse" : "";
   const badgeBg = STATE_BADGE_BG[info.state] ?? "bg-green-500/20 text-green-500";
-  const titleColor = info.state === "working" ? "text-white" : (STATE_COLORS[info.state] ?? "text-green-500");
+  const titleColor = STATE_COLORS[info.state] ?? "text-green-500";
 
   const subagents = metrics.subagents ?? [];
   const hasSubagents = session.hasSubagents;
@@ -180,7 +180,7 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
     <div
       ref={cardRef}
       className={`relative overflow-hidden rounded-lg bg-white/5 border border-black/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 ${
-        signalString && (signalMode === "preset" || signalMode === "audio") ? "p-4 space-y-4" : "p-3 space-y-2.5"
+        signalString && (signalMode === "preset" || signalMode === "audio") ? "px-4 py-5 space-y-5" : "p-3 space-y-2.5"
       }`}
       tabIndex={0}
       aria-label={ariaLabel}
@@ -196,7 +196,7 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
         {(info.state === "working" || info.state === "subagent") && titleAnimation !== "none" ? (
           <span
             ref={titleContainerRef}
-            className={`font-semibold text-white anim-${titleAnimation} whitespace-nowrap overflow-hidden`}
+            className={`font-semibold ${titleColor} anim-${titleAnimation} whitespace-nowrap overflow-hidden`}
             aria-label={session.displayTitle}
           >
             {[...session.displayTitle].map((ch, i) => {

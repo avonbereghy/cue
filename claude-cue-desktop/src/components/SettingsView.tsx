@@ -38,11 +38,11 @@ function Select({ value, options, onChange }: { value: string | number; options:
 function SettingRow({ label, description, children }: { label: string; description?: string; children: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-4 py-2">
-      <div className="min-w-0">
+      <div className="min-w-0 shrink-0">
         <div className="text-xs text-white/70">{label}</div>
         {description && <div className="text-[10px] text-white/35 mt-0.5">{description}</div>}
       </div>
-      <div className="shrink-0 flex items-center gap-2">{children}</div>
+      <div className="flex-1 flex items-center justify-end gap-2">{children}</div>
     </div>
   );
 }
@@ -70,7 +70,7 @@ function Slider({ value, min, max, step, defaultValue, format, isPct, onChange }
   };
 
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex-1 flex items-center gap-1.5">
       {editing ? (
         <input
           ref={inputRef}
@@ -93,7 +93,7 @@ function Slider({ value, min, max, step, defaultValue, format, isPct, onChange }
         type="range" min={min} max={max} step={step}
         value={value}
         onChange={(e) => onChange(parseFloat(e.target.value))}
-        className="w-20 h-1 rounded appearance-none cursor-pointer bg-white/10 accent-blue-500"
+        className="flex-1 h-1 rounded appearance-none cursor-pointer bg-white/10 accent-blue-500"
       />
       {value !== defaultValue && (
         <button
@@ -101,7 +101,7 @@ function Slider({ value, min, max, step, defaultValue, format, isPct, onChange }
           className="text-[9px] text-white/20 hover:text-white/50 transition-colors"
           title="Reset to default"
         >
-          &circlearrowleft;
+          ↺
         </button>
       )}
     </div>
@@ -109,7 +109,7 @@ function Slider({ value, min, max, step, defaultValue, format, isPct, onChange }
 }
 
 function formatPct(v: number): string { return `${Math.round(v * 100)}%`; }
-function formatMul(v: number): string { return `${v.toFixed(1)}x`; }
+function formatMul(v: number): string { return `${v.toFixed(2)}x`; }
 
 function formatDuration(secs: number): string {
   const m = Math.floor(secs / 60);
@@ -282,8 +282,8 @@ export function SettingsView() {
       signalFrequency: 1.0,
       signalMode: "preset",
       signalAlpha: 1.0,
-      signalAmplitude: 1.0,
-      signalEcho: 1.0,
+      signalAmplitude: 0.5,
+      signalEcho: 0.5,
       activePresetId: settings.activePresetId, // preserve preset selection
       testMode: false,
     };
@@ -400,20 +400,20 @@ export function SettingsView() {
             </SettingRow>
 
             <SettingRow label="Opacity" description="String transparency">
-              <Slider value={settings.signalAlpha ?? 1.0} min={0.05} max={1.0} step={0.05} defaultValue={1.0} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalAlpha: v })} />
+              <Slider value={settings.signalAlpha ?? 1.0} min={0.05} max={1.0} step={0.01} defaultValue={1.0} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalAlpha: v })} />
             </SettingRow>
 
             <SettingRow label="Amplitude" description="String displacement intensity">
-              <Slider value={settings.signalAmplitude ?? 1.0} min={0.1} max={3.0} step={0.1} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, signalAmplitude: v })} />
+              <Slider value={settings.signalAmplitude ?? 0.5} min={0.01} max={1.0} step={0.01} defaultValue={0.5} format={formatMul} onChange={(v) => setSettings({ ...settings, signalAmplitude: v })} />
             </SettingRow>
 
             <SettingRow label="Echo" description="Trailing reverb lines behind the main string">
-              <Slider value={settings.signalEcho ?? 1.0} min={0} max={1.0} step={0.05} defaultValue={1.0} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalEcho: v })} />
+              <Slider value={settings.signalEcho ?? 0.5} min={0} max={2.0} step={0.01} defaultValue={0.5} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalEcho: v })} />
             </SettingRow>
 
             {!isPresetMode && (
               <SettingRow label="Frequency">
-                <Slider value={settings.signalFrequency ?? 1.0} min={0.2} max={3.0} step={0.1} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, signalFrequency: v })} />
+                <Slider value={settings.signalFrequency ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, signalFrequency: v })} />
               </SettingRow>
             )}
 

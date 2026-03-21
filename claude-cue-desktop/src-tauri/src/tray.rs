@@ -32,7 +32,7 @@ fn color_for_state(state: &str, blink_on: bool) -> Rgba {
     match state {
         "working" => {
             let a = if blink_on { 255 } else { 38 }; // 0.15 * 255 ≈ 38
-            Rgba { r: 255, g: 255, b: 255, a }
+            Rgba { r: 59, g: 130, b: 246, a } // blue-500
         }
         "waiting" => Rgba { r: 255, g: 204, b: 0, a: 255 }, // yellow (255,204,0)
         "error" => Rgba { r: 255, g: 69, b: 58, a: 255 },   // red (255,69,58)
