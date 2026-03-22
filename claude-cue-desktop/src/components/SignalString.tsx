@@ -1,5 +1,5 @@
 import { useRef, useEffect } from "react";
-import { getFrequencyData, isPlaying } from "@/lib/presetEngine";
+import { getFrequencyData, isPlaying, getOnsets } from "@/lib/presetEngine";
 
 /**
  * Signal String — animated separator with two modes:
@@ -40,7 +40,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
 
-  const isActive = state === "working" || state === "subagent" || state === "error";
+  const isActive = state === "working" || state === "subagent";
   const isAudio = signalMode === "preset" || signalMode === "audio";
   // Track energy level for smooth decay when session stops
   const energyRef = useRef(0);
@@ -49,6 +49,8 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // Driven oscillator state: position + velocity per mode per band (max 3 bands × 6 modes)
   const modeStateRef = useRef<{ pos: Float64Array; vel: Float64Array } | null>(null);
   const lastFrameRef = useRef<number>(0);
+  // Onset impulse accumulators per band (decays each frame)
+  const onsetRef = useRef<Float64Array>(new Float64Array(3));
 
   useEffect(() => {
     if (isActive) {
@@ -105,9 +107,64 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
 
       ctx.clearRect(0, 0, w, h);
 
-      // Flat line for revived or reduced motion — no animation
-      if (revived || prefersReducedMotion) {
+      // Reduced motion — flat line, no animation
+      if (prefersReducedMotion) {
         drawFlatLine(w, midY);
+        return;
+      }
+
+      // ── Revived mode: red lightning bolts ──
+      if (revived) {
+        const t = now / 1000;
+        const a = signalAlpha;
+
+        // Draw a forked lightning bolt path
+        const drawBolt = (startX: number, seedBase: number, opacity: number, width: number) => {
+          ctx.beginPath();
+          let x = startX;
+          let y = midY;
+          ctx.moveTo(x, y);
+
+          const steps = 12 + Math.floor(Math.random() * 6);
+          const dx = (w * 0.3) / steps;
+
+          for (let i = 0; i < steps; i++) {
+            const seed = (seedBase + i * 2654435761) >>> 0;
+            const jitterY = ((seed & 0xFFFF) / 0xFFFF - 0.5) * halfH * 1.4;
+            const jitterX = ((seed >> 16) & 0xFF) / 255 * dx * 0.6;
+            x += dx + jitterX;
+            y = midY + jitterY;
+            ctx.lineTo(x, y);
+          }
+
+          ctx.strokeStyle = `rgba(255, 69, 58, ${opacity * a})`;
+          ctx.lineWidth = width;
+          ctx.stroke();
+
+          // Glow layer
+          ctx.strokeStyle = `rgba(255, 120, 100, ${opacity * a * 0.3})`;
+          ctx.lineWidth = width * 3;
+          ctx.stroke();
+        };
+
+        // Shift lightning positions over time — new bolts every ~200ms
+        const frame = Math.floor(t * 5);
+        const seed1 = (frame * 2654435761) >>> 0;
+        const seed2 = ((frame + 1000) * 2654435761) >>> 0;
+        const seed3 = ((frame + 2000) * 2654435761) >>> 0;
+
+        // 2-3 bolts at different positions
+        const x1 = ((seed1 & 0xFFFF) / 0xFFFF) * w * 0.6;
+        const x2 = ((seed2 & 0xFFFF) / 0xFFFF) * w * 0.4 + w * 0.3;
+        drawBolt(x1, seed1, 0.7, 1.5);
+        drawBolt(x2, seed2, 0.5, 1.0);
+        // Third bolt appears intermittently
+        if ((seed3 & 0x3) === 0) {
+          const x3 = ((seed3 & 0xFFFF) / 0xFFFF) * w * 0.5 + w * 0.2;
+          drawBolt(x3, seed3, 0.35, 0.75);
+        }
+
+        animRef.current = requestAnimationFrame(draw);
         return;
       }
 
@@ -144,10 +201,11 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         // Mids: harmonics 2-5 (medium)     + standing
         // Treble: harmonics 4-9 (tight)    + rightward travel
         const amp = signalAmplitude;
+        const INHARMONICITY = 0.0005; // slight detuning for organic phase drift
         const allBands = [
-          { enabled: signalBass, binStart: 0, binEnd: Math.floor(numBins * 0.25), startMode: 1, numModes: 3, speed: 0.7, travel: -0.3, phaseOff: 0, gain: 2.2 * amp, lw: 1.5, opacity: 0.3 },
-          { enabled: signalMids, binStart: Math.floor(numBins * 0.25), binEnd: Math.floor(numBins * 0.6), startMode: 2, numModes: 4, speed: 1.4, travel: 0, phaseOff: 2.1, gain: 1.8 * amp, lw: 1.0, opacity: 0.25 },
-          { enabled: signalTreble, binStart: Math.floor(numBins * 0.6), binEnd: numBins, startMode: 4, numModes: 6, speed: 2.8, travel: 0.4, phaseOff: 4.5, gain: 1.5 * amp, lw: 0.75, opacity: 0.2 },
+          { enabled: signalBass, bandIdx: 0, binStart: 0, binEnd: Math.floor(numBins * 0.25), startMode: 1, numModes: 3, speed: 0.7, travel: -0.3, phaseOff: 0, gain: 2.2 * amp, lw: 1.5, opacity: 0.3, baseDamping: 8 },
+          { enabled: signalMids, bandIdx: 1, binStart: Math.floor(numBins * 0.25), binEnd: Math.floor(numBins * 0.6), startMode: 2, numModes: 4, speed: 1.4, travel: 0, phaseOff: 2.1, gain: 1.8 * amp, lw: 1.0, opacity: 0.25, baseDamping: 10 },
+          { enabled: signalTreble, bandIdx: 2, binStart: Math.floor(numBins * 0.6), binEnd: numBins, startMode: 4, numModes: 6, speed: 2.8, travel: 0.4, phaseOff: 4.5, gain: 1.5 * amp, lw: 0.75, opacity: 0.2, baseDamping: 12 },
         ];
         const bands = allBands.filter(b => b.enabled);
 
@@ -160,12 +218,23 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         const dt = lastFrameRef.current > 0 ? Math.min((now - lastFrameRef.current) / 1000, 0.05) : 1 / 60;
         lastFrameRef.current = now;
 
-        // Oscillator constants — stiffness controls response speed, damping prevents ringing
+        // Oscillator constants
         const STIFFNESS = 120;
-        const DAMPING = 10;
+
+        // Onset detection — inject impulses on beat hits
+        const onsets = getOnsets();
+        const onsetArr = onsetRef.current;
+        const onsetValues = [onsets.bass, onsets.mids, onsets.treble];
+        for (let i = 0; i < 3; i++) {
+          if (onsetValues[i] > 0) onsetArr[i] = Math.min(onsetArr[i] + onsetValues[i] * 8, 3.0);
+          else onsetArr[i] *= 0.85; // decay impulse
+        }
 
         const numTrails = Math.max(1, Math.round(32 * signalEcho));
         const trailSpacing = 0.018;
+
+        // Collect all band mode amplitudes for sympathetic resonance
+        const allModeAmps: number[][] = [];
 
         for (let bi = 0; bi < bands.length; bi++) {
           const band = bands[bi];
@@ -179,46 +248,115 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             let energy = 0;
             for (let i = mStart; i < mEnd; i++) energy += freqData[i];
             const raw = energy / ((mEnd - mStart) * 255);
-            const target = Math.sqrt(raw);
+            let target = Math.sqrt(raw);
+
+            // Add onset impulse — a burst that excites the mode
+            target += onsetArr[band.bandIdx] * 0.15;
+
+            // Frequency-dependent damping: higher modes decay faster
+            const modeDamping = band.baseDamping * (1 + m * 0.6);
 
             // Driven oscillator: position tracks target with inertia
             const idx = bi * 6 + m;
-            const force = (target - ms.pos[idx]) * STIFFNESS - ms.vel[idx] * DAMPING;
+            const force = (target - ms.pos[idx]) * STIFFNESS - ms.vel[idx] * modeDamping;
             ms.vel[idx] += force * dt;
             ms.pos[idx] += ms.vel[idx] * dt;
-            // Clamp to prevent overshoot beyond reasonable bounds
             ms.pos[idx] = Math.max(0, Math.min(1.5, ms.pos[idx]));
             modeAmps.push(ms.pos[idx]);
           }
+          allModeAmps.push(modeAmps);
+        }
+
+        // Sympathetic resonance: energy leaks between bands at harmonic ratios
+        if (allModeAmps.length > 1) {
+          for (let a = 0; a < allModeAmps.length; a++) {
+            for (let b = a + 1; b < allModeAmps.length; b++) {
+              const modesA = allModeAmps[a];
+              const modesB = allModeAmps[b];
+              // Couple strongest mode of each band into the other
+              const maxA = Math.max(...modesA);
+              const maxB = Math.max(...modesB);
+              if (maxA > 0.3) {
+                // Band A excites band B's first mode slightly
+                modesB[0] = Math.min(1.5, modesB[0] + maxA * 0.03);
+              }
+              if (maxB > 0.3) {
+                modesA[0] = Math.min(1.5, modesA[0] + maxB * 0.03);
+              }
+            }
+          }
+        }
+
+        // Pseudo-noise breathing: subtle displacement during quiet passages
+        // Sum of irrational-ratio sines approximates Perlin noise cheaply
+        const breathe = (xNorm: number, t: number, level: number) => {
+          const quietness = Math.max(0, 1 - level * 4); // fades out as signal rises
+          if (quietness < 0.01) return 0;
+          return quietness * 0.08 * (
+            Math.sin(xNorm * 4.17 + t * 0.71) * 0.5 +
+            Math.sin(xNorm * 6.83 - t * 1.13) * 0.3 +
+            Math.sin(xNorm * 11.3 + t * 0.37) * 0.15 +
+            Math.sin(xNorm * 17.1 - t * 1.71) * 0.05
+          );
+        };
+
+        for (let bi = 0; bi < bands.length; bi++) {
+          const band = bands[bi];
+          const modeAmps = allModeAmps[bi];
+          const avgAmp = modeAmps.reduce((s, v) => s + v, 0) / modeAmps.length;
 
           for (let trail = 0; trail < numTrails; trail++) {
             const tOff = t - trail * trailSpacing;
             const alpha = 1.0 - (trail / numTrails);
-            // Trail 0 is the main line (always full opacity), trails 1+ are echoes
             const echoFade = trail === 0 ? 1.0 : signalEcho;
             const op = alpha * alpha * band.opacity * signalAlpha * echoFade;
 
-            ctx.beginPath();
+            // Build path once, draw twice (glow + core) for trail 0
+            const points: number[] = [];
             for (let x = 0; x <= w; x += 2) {
               let sum = 0;
               const xNorm = x / w;
 
               for (let m = 0; m < band.numModes; m++) {
                 const n = band.startMode + m;
-                const amp = modeAmps[m];
-                // Standing wave + traveling component
-                const standing = Math.sin(n * Math.PI * xNorm);
-                const traveling = Math.sin(n * Math.PI * xNorm - band.travel * tOff * n);
+                const mAmp = modeAmps[m];
+                // Inharmonicity: slight frequency detuning for organic phase drift
+                const nEff = n * Math.sqrt(1 + INHARMONICITY * n * n);
+                const standing = Math.sin(nEff * Math.PI * xNorm);
+                const traveling = Math.sin(nEff * Math.PI * xNorm - band.travel * tOff * n);
                 const spatial = standing * 0.6 + traveling * 0.4;
                 const temporal = Math.cos(tOff * (band.speed + m * 0.35) + band.phaseOff + m * 1.9);
-                sum += amp * spatial * temporal;
+                sum += mAmp * spatial * temporal;
               }
 
+              // Add breathing noise
+              sum += breathe(xNorm, tOff, avgAmp);
+
               const y = Math.tanh(sum * band.gain) * halfH * decayEnvelope;
-              if (x === 0) ctx.moveTo(x, midY + y);
-              else ctx.lineTo(x, midY + y);
+              points.push(midY + y);
             }
 
+            // Draw glow layer (wider, semi-transparent) — trail 0 only
+            if (trail === 0) {
+              ctx.beginPath();
+              for (let i = 0; i < points.length; i++) {
+                const x = i * 2;
+                if (i === 0) ctx.moveTo(x, points[i]);
+                else ctx.lineTo(x, points[i]);
+              }
+              const glowOp = op * 0.25;
+              ctx.strokeStyle = isDark ? `rgba(255,255,255,${glowOp})` : `rgba(0,0,0,${glowOp * 0.7})`;
+              ctx.lineWidth = band.lw * 4;
+              ctx.stroke();
+            }
+
+            // Draw core line
+            ctx.beginPath();
+            for (let i = 0; i < points.length; i++) {
+              const x = i * 2;
+              if (i === 0) ctx.moveTo(x, points[i]);
+              else ctx.lineTo(x, points[i]);
+            }
             const c = isDark ? `rgba(255,255,255,${op})` : `rgba(0,0,0,${op * 0.8})`;
             ctx.strokeStyle = c;
             ctx.lineWidth = trail === 0 ? band.lw : band.lw * 0.6;
