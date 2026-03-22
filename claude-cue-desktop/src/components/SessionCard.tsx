@@ -1,8 +1,17 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+
+/** Deterministic per-character hash for stable animation randomness */
+function charHash(i: number, title: string): number {
+  return (i * 2654435761 + title.charCodeAt(i % title.length) * 40503) >>> 0;
+}
+
+/** Bell-curve value (0..1) from hash, approximated via central limit theorem */
+function bellFromHash(hash: number): number {
+  return ((hash & 0xFF) / 255 + ((hash >> 8) & 0xFF) / 255 + ((hash >> 16) & 0xFF) / 255) / 3;
+}
 import type { EnrichedSession } from "@/lib/types";
 import { STATE_DOT_COLORS, STATE_BADGE_BG, STATE_COLORS } from "@/lib/types";
 import { formatTokens, formatDuration } from "@/lib/format";
-import { ProgressBar } from "./ProgressBar";
 import { SignalString } from "./SignalString";
 import type { StrikePulse } from "./SignalString";
 
@@ -20,12 +29,15 @@ interface SessionCardProps {
   signalBass?: boolean;
   signalMids?: boolean;
   signalTreble?: boolean;
+  signalColorDark?: string;
+  signalColorLight?: string;
+  signalOffset?: number;
   revived?: boolean;
   keyPressSpeed?: number;
   keyReleaseSpeed?: number;
 }
 
-export function SessionCard({ session, titleAnimation = "flip", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4 }: SessionCardProps) {
+export function SessionCard({ session, titleAnimation = "flip", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4 }: SessionCardProps) {
   const { info, metrics } = session;
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -66,11 +78,8 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
     [...title].forEach((ch, i) => {
       if (ch === " ") return;
 
-      const hash = (i * 2654435761 + title.charCodeAt(i % title.length) * 40503) >>> 0;
-      const u1 = (hash & 0xFF) / 255;
-      const u2 = ((hash >> 8) & 0xFF) / 255;
-      const u3 = ((hash >> 16) & 0xFF) / 255;
-      const bell = (u1 + u2 + u3) / 3;
+      const hash = charHash(i, title);
+      const bell = bellFromHash(hash);
 
       const charDuration = randomAnimation
         ? Math.max(0.15, animationSpeed * (0.4 + bell * 1.2))
@@ -205,174 +214,171 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
       } as React.CSSProperties}
     >
       {/* Signal String background (audio mode) — only for active sessions, not revived */}
-      {signalString && !revived && isWorking && (signalMode === "preset" || signalMode === "audio") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} />}
+      {signalString && !revived && isWorking && (signalMode === "preset" || signalMode === "audio") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} sessionId={info.id} />}
 
-      {/* Row 1: Status dot + title + state badge + git branch + duration */}
-      <div className="relative z-10 flex items-center gap-2">
-        <span className={`inline-block w-2.5 h-2.5 rounded-full ${dotColor} ${dotPulse} shrink-0`} aria-hidden="true" />
-        {(info.state === "working" || info.state === "subagent") && titleAnimation !== "none" ? (
-          <span
-            ref={titleContainerRef}
-            className={`font-semibold ${titleColor} anim-${titleAnimation} whitespace-nowrap overflow-hidden`}
-            aria-label={session.displayTitle}
-          >
-            {[...session.displayTitle].map((ch, i) => {
-              if (ch === " ") return <span key={i} className="title-space" />;
+      <div className="relative z-10 flex gap-3">
+        {/* Left: all content rows */}
+        <div className="flex-1 min-w-0 space-y-2.5">
+          {/* Row 1: Status dot + title + state badge + git branch + duration */}
+          <div className="flex items-center gap-2">
+            <span className={`inline-block w-2.5 h-2.5 rounded-full ${dotColor} ${dotPulse} shrink-0`} aria-hidden="true" />
+            {(info.state === "working" || info.state === "subagent") && titleAnimation !== "none" ? (
+              <span
+                ref={titleContainerRef}
+                className={`font-semibold ${titleColor} anim-${titleAnimation} whitespace-nowrap overflow-hidden`}
+                aria-label={session.displayTitle}
+              >
+                {[...session.displayTitle].map((ch, i) => {
+                  if (ch === " ") return <span key={i} className="title-space" />;
 
-              // Deterministic per-character hash for stable randomness
-              const hash = (i * 2654435761 + session.displayTitle.charCodeAt(i % session.displayTitle.length) * 40503) >>> 0;
+                  const hash = charHash(i, session.displayTitle);
+                  const bell = bellFromHash(hash);
+                  const charSpeed = randomAnimation
+                    ? Math.max(0.15, animationSpeed * (0.4 + bell * 1.2))
+                    : animationSpeed;
+                  const delay = randomAnimation
+                    ? `${((hash % 1000) / 1000) * animationSpeed}s`
+                    : `${i * 0.05}s`;
 
-              // Bell curve: average 3 uniform samples (central limit theorem)
-              const u1 = ((hash & 0xFF) / 255);
-              const u2 = (((hash >> 8) & 0xFF) / 255);
-              const u3 = (((hash >> 16) & 0xFF) / 255);
-              const bell = (u1 + u2 + u3) / 3; // ~normal, mean=0.5, narrow spread
-
-              // Map bell curve to speed: mean = animationSpeed, stddev ~30%
-              const charSpeed = randomAnimation
-                ? Math.max(0.15, animationSpeed * (0.4 + bell * 1.2))
-                : animationSpeed;
-
-              const delay = randomAnimation
-                ? `${((hash % 1000) / 1000) * animationSpeed}s`
-                : `${i * 0.05}s`;
-
-              return (
-                <span
-                  key={i}
-                  className="title-char"
-                  style={{
-                    animationDelay: delay,
-                    animationDuration: randomAnimation ? `${charSpeed.toFixed(2)}s` : undefined,
-                  }}
-                >{ch}</span>
-              );
-            })}
-          </span>
-        ) : (
-          <span className={`font-semibold truncate ${titleColor}`}>
-            {session.displayTitle}
-          </span>
-        )}
-        {metrics.customTitle && (
-          <span className="text-xs text-white/30 truncate">
-            {session.workspaceName}
-          </span>
-        )}
-        <span className={`text-xs px-2 py-0.5 rounded-full ${badgeBg}`}>
-          {session.stateDisplayName}
-        </span>
-        {!isNarrow && (
-          <span className="text-[10px] text-white/50 truncate font-mono" title={info.workspace}>
-            {shortPath}
-          </span>
-        )}
-        {!isNarrow && metrics.gitBranch && (
-          <span className="text-[10px] text-white/30 truncate shrink-0">
-            <span className="mr-0.5">&#9702;</span>
-            {metrics.gitBranch}
-          </span>
-        )}
-        <span className="ml-auto text-sm font-mono text-white/50 mono-nums shrink-0">
-          {formatDuration(session.durationSecs)}
-        </span>
-      </div>
-
-      {/* Signal String separator (simulated mode, revived sessions) */}
-      {signalString && (revived || isWorking) && (signalMode !== "preset" && signalMode !== "audio") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} />}
-
-      {/* Row 2: Metrics */}
-      <div className="relative z-10 flex items-center gap-x-4 gap-y-1 text-xs text-white/50">
-        {!isNarrow && truncatedId && (
-          <button
-            onClick={copySessionId}
-            className="flex items-center gap-1 font-mono text-white/30 hover:text-white/60 transition-colors cursor-pointer whitespace-nowrap"
-            title={`Copy session ID: ${info.id}`}
-            aria-label={`Copy session ID ${info.id}`}
-          >
-            {truncatedId}&hellip;
-            <span className="text-[10px]">{copied ? "\u2713" : ""}</span>
-          </button>
-        )}
-        <span className="whitespace-nowrap" title="User / Total messages">
-          &#128172; {metrics.userMessageCount}/{metrics.messageCount}
-        </span>
-        <span className="whitespace-nowrap">
-          &#8595; {formatTokens(aggregatedInputTokens)} in
-        </span>
-        <span className="whitespace-nowrap">
-          &#8593; {formatTokens(aggregatedOutputTokens)} out
-        </span>
-        {aggregatedToolUses > 0 && (
-          <span className="whitespace-nowrap">
-            &#128295; {aggregatedToolUses} tools
-          </span>
-        )}
-        {hasSubagents && (
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="flex items-center gap-1 text-cyan-600 hover:text-cyan-500 transition-colors cursor-pointer text-[10px] font-mono px-1.5 py-0.5 rounded-full border border-cyan-600/40 hover:border-cyan-500/50 whitespace-nowrap"
-            aria-label={expanded ? "Collapse agent team" : "Expand agent team"}
-            aria-expanded={expanded}
-          >
-            <span>{expanded ? "\u25BE" : "\u25B8"}</span>
-            <span>{subagents.length} agents</span>
-          </button>
-        )}
-        {!isNarrow && session.modelDisplayName !== "\u2014" && (
-          <span className="text-[10px] text-white/30 whitespace-nowrap">
-            {session.modelDisplayName}
-          </span>
-        )}
-        {!isNarrow && session.sourceDisplay !== "\u2014" && (
-          <span className="text-[10px] text-white/30 whitespace-nowrap">
-            {session.sourceDisplay}
-          </span>
-        )}
-      </div>
-
-      {/* Row 3: Tool chips + cache hit rate */}
-      {topTools.length > 0 && (
-        <div className="relative z-10 flex items-center gap-1.5 flex-wrap">
-          {topTools.map(([name, count]) => (
-            <span
-              key={name}
-              className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-white/10"
-            >
-              {name} {count}
+                  return (
+                    <span
+                      key={i}
+                      className="title-char"
+                      style={{
+                        animationDelay: delay,
+                        animationDuration: randomAnimation ? `${charSpeed.toFixed(2)}s` : undefined,
+                      }}
+                    >{ch}</span>
+                  );
+                })}
+              </span>
+            ) : (
+              <span className={`font-semibold truncate ${titleColor}`}>
+                {session.displayTitle}
+              </span>
+            )}
+            {metrics.customTitle && (
+              <span className="text-xs text-white/30 truncate">
+                {session.workspaceName}
+              </span>
+            )}
+            <span className={`text-xs px-2 py-0.5 rounded-full ${badgeBg}`}>
+              {session.stateDisplayName}
             </span>
-          ))}
-          {remainingTools > 0 && (
-            <span className="text-[10px] text-white/30">+{remainingTools}</span>
-          )}
-          <span className="ml-auto" />
-          {cacheTotal > 0 && (
-            <span className="text-[10px] text-white/30">
-              Cache {cacheHitRate}%
+            {!isNarrow && (
+              <span className="text-[10px] text-white/50 truncate font-mono" title={info.workspace}>
+                {shortPath}
+              </span>
+            )}
+            {!isNarrow && metrics.gitBranch && (
+              <span className="text-[10px] text-white/30 truncate shrink-0">
+                <span className="mr-0.5">&#9702;</span>
+                {metrics.gitBranch}
+              </span>
+            )}
+            <span className="ml-auto text-sm font-mono text-white/50 mono-nums shrink-0">
+              {formatDuration(session.durationSecs)}
             </span>
-          )}
-        </div>
-      )}
-
-      {/* Row 4: Context usage bar */}
-      {metrics.lastInputTokens > 0 && (
-        <div className="relative z-10 flex items-center gap-2">
-          <span className="text-[10px] text-white/50">Context</span>
-          <div className="flex-1">
-            <ProgressBar
-              value={metrics.lastInputTokens}
-              max={session.contextLimit}
-              height="h-1.5"
-            />
           </div>
-          <span className="text-[10px] text-white/50 mono-nums">
-            {Math.round(session.contextUsagePercent * 100)}%
-          </span>
-          <span className="text-[10px] text-white/30 mono-nums">
-            {formatTokens(metrics.lastInputTokens)} / {formatTokens(session.contextLimit)}
-          </span>
+
+          {/* Signal String separator (simulated mode, revived sessions) */}
+          {signalString && (revived || isWorking) && (signalMode !== "preset" && signalMode !== "audio") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} sessionId={info.id} />}
+
+          {/* Row 2: Metrics */}
+          <div className="flex items-center gap-x-4 gap-y-1 text-xs text-white/50">
+            {!isNarrow && truncatedId && (
+              <button
+                onClick={copySessionId}
+                className="flex items-center gap-1 font-mono text-white/30 hover:text-white/60 transition-colors cursor-pointer whitespace-nowrap"
+                title={`Copy session ID: ${info.id}`}
+                aria-label={`Copy session ID ${info.id}`}
+              >
+                {truncatedId}&hellip;
+                <span className="text-[10px]">{copied ? "\u2713" : ""}</span>
+              </button>
+            )}
+            <span className="whitespace-nowrap" title="User / Total messages">
+              &#128172; {metrics.userMessageCount}/{metrics.messageCount}
+            </span>
+            <span className="whitespace-nowrap">
+              &#8595; {formatTokens(aggregatedInputTokens)} in
+            </span>
+            <span className="whitespace-nowrap">
+              &#8593; {formatTokens(aggregatedOutputTokens)} out
+            </span>
+            {aggregatedToolUses > 0 && (
+              <span className="whitespace-nowrap">
+                &#128295; {aggregatedToolUses} tools
+              </span>
+            )}
+            {hasSubagents && (
+              <button
+                onClick={() => setExpanded(!expanded)}
+                className="flex items-center gap-1 text-cyan-600 hover:text-cyan-500 transition-colors cursor-pointer text-[10px] font-mono px-1.5 py-0.5 rounded-full border border-cyan-600/40 hover:border-cyan-500/50 whitespace-nowrap"
+                aria-label={expanded ? "Collapse agent team" : "Expand agent team"}
+                aria-expanded={expanded}
+              >
+                <span>{expanded ? "\u25BE" : "\u25B8"}</span>
+                <span>{subagents.length} agents</span>
+              </button>
+            )}
+            {!isNarrow && session.modelDisplayName !== "\u2014" && (
+              <span className="text-[10px] text-white/30 whitespace-nowrap">
+                {session.modelDisplayName}
+              </span>
+            )}
+            {!isNarrow && session.sourceDisplay !== "\u2014" && (
+              <span className="text-[10px] text-white/30 whitespace-nowrap">
+                {session.sourceDisplay}
+              </span>
+            )}
+          </div>
+
+          {/* Row 3: Tool chips + cache hit rate */}
+          {topTools.length > 0 && (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {topTools.map(([name, count]) => (
+                <span
+                  key={name}
+                  className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-white/10"
+                >
+                  {name} {count}
+                </span>
+              ))}
+              {remainingTools > 0 && (
+                <span className="text-[10px] text-white/30">+{remainingTools}</span>
+              )}
+              <span className="ml-auto" />
+              {cacheTotal > 0 && (
+                <span className="text-[10px] text-white/30">
+                  Cache {cacheHitRate}%
+                </span>
+              )}
+            </div>
+          )}
         </div>
-      )}
+
+        {/* Right: Vertical context bar */}
+        {metrics.lastInputTokens > 0 && (
+          <div className="flex flex-col items-end gap-0.5 shrink-0 pt-7" title={`Context: ${formatTokens(metrics.lastInputTokens)} / ${formatTokens(session.contextLimit)}`}>
+            <div className="relative w-2 flex-1 min-h-[40px] rounded-full bg-white/8 overflow-hidden">
+              <div
+                className="absolute bottom-0 left-0 right-0 rounded-full transition-all duration-500"
+                style={{
+                  height: `${Math.min(session.contextUsagePercent * 100, 100)}%`,
+                  background: session.contextUsagePercent > 0.8
+                    ? session.contextUsagePercent > 0.95 ? "#ef4444" : "#f59e0b"
+                    : "#22c55e",
+                  opacity: 0.8,
+                }}
+              />
+            </div>
+            <span className="text-[9px] text-white/30 mono-nums leading-none">
+              {Math.round(session.contextUsagePercent * 100)}%
+            </span>
+          </div>
+        )}
+      </div>
 
       {/* Row 5: Expanded agent team */}
       {expanded && hasSubagents && (() => {
