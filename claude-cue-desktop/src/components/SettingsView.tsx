@@ -110,6 +110,7 @@ function Slider({ value, min, max, step, defaultValue, format, isPct, onChange }
 
 function formatPct(v: number): string { return `${Math.round(v * 100)}%`; }
 function formatMul(v: number): string { return `${v.toFixed(2)}x`; }
+function formatSec(v: number): string { return `${Math.round(v * 1000)}ms`; }
 
 function formatDuration(secs: number): string {
   const m = Math.floor(secs / 60);
@@ -460,6 +461,8 @@ export function SettingsView() {
       signalMids: true,
       signalTreble: true,
       activePresetId: settings.activePresetId, // preserve preset selection
+      keyPressSpeed: 0.35,
+      keyReleaseSpeed: 0.4,
       autoReorder: false,
       testMode: false,
     };
@@ -556,6 +559,12 @@ export function SettingsView() {
         </SettingRow>
         <SettingRow label="Random Delays" description="Per-character random timing instead of uniform wave">
           <Toggle checked={settings.randomAnimation} onChange={() => setSettings({ ...settings, randomAnimation: !settings.randomAnimation })} label="Random animation" />
+        </SettingRow>
+        <SettingRow label="Key Press" description="Speed of the press-down animation">
+          <Slider value={settings.keyPressSpeed ?? 0.35} min={0.1} max={1.0} step={0.01} defaultValue={0.35} format={formatSec} onChange={(v) => setSettings({ ...settings, keyPressSpeed: v })} />
+        </SettingRow>
+        <SettingRow label="Key Release" description="Speed of the pop-up animation">
+          <Slider value={settings.keyReleaseSpeed ?? 0.4} min={0.1} max={1.0} step={0.01} defaultValue={0.4} format={formatSec} onChange={(v) => setSettings({ ...settings, keyReleaseSpeed: v })} />
         </SettingRow>
       </section>
 

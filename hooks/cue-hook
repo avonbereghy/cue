@@ -240,7 +240,7 @@ def main():
         return
 
     action = sys.argv[1]
-    valid_actions = {"idle", "working", "waiting", "done", "remove", "error", "subagent"}
+    valid_actions = {"idle", "working", "waiting", "done", "remove", "error", "subagent", "subagent_stop"}
     if action not in valid_actions:
         return  # Silently ignore unknown actions
 
@@ -309,6 +309,30 @@ def main():
                     existing_activity = existing.get("lastActivity", 0)
                     if existing_activity > hook_start_time:
                         return  # A newer hook already wrote — don't clobber it
+
+                # Don't let "done" or "idle" overwrite "waiting" — the
+                # permission prompt is still unanswered. Only "working",
+                # "error", "subagent", or "remove" should clear it.
+                if existing.get("state") == "waiting" and action in ("done", "idle"):
+                    return
+
+                # Subagent tracking: maintain a count of active subagents.
+                # "subagent" increments, "subagent_stop" decrements.
+                # While count > 0, state stays "subagent" even if
+                # PreToolUse/PostToolUse fire "working" from the parent.
+                active_subs = existing.get("activeSubagents", 0)
+                if action == "subagent":
+                    active_subs += 1
+                elif action == "subagent_stop":
+                    active_subs = max(0, active_subs - 1)
+                    action = "subagent" if active_subs > 0 else "working"
+                elif action == "working" and active_subs > 0:
+                    # Parent is doing work but subagents are still running
+                    action = "subagent"
+                elif action in ("done", "idle", "error"):
+                    # Session turn ended — reset subagent counter
+                    active_subs = 0
+
                 entry = {
                     "id": session_id,
                     "workspace": workspace,
@@ -316,6 +340,7 @@ def main():
                     "lastActivity": now,
                     "startedAt": existing.get("startedAt", now),
                     "source": existing.get("source", source),
+                    "activeSubagents": active_subs,
                 }
                 if last_tokens:
                     entry["inputTokens"] = last_tokens["inputTokens"]
