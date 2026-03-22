@@ -23,6 +23,15 @@ let smoothBass = 0, smoothMids = 0, smoothTreble = 0;
 const ATTACK_BASS = 0.35, ATTACK_MIDS = 0.45, ATTACK_TREBLE = 0.55;
 const RELEASE_BASS = 0.94, RELEASE_MIDS = 0.92, RELEASE_TREBLE = 0.89;
 
+// Spectral flux onset detection state
+// Tracks rate-of-change per band; positive flux = onset (new energy arriving)
+let prevBass = 0, prevMids = 0, prevTreble = 0;
+let fluxBass = 0, fluxMids = 0, fluxTreble = 0;
+// Smoothed flux for adaptive thresholding
+let fluxAvgBass = 0, fluxAvgMids = 0, fluxAvgTreble = 0;
+const FLUX_SMOOTH = 0.92; // EMA for running average
+const FLUX_THRESHOLD_MULT = 2.5; // onset = flux > avg * this
+
 /** Load a preset and auto-start playback. */
 export function loadPreset(p: SignalPreset): void {
   stop();
@@ -69,6 +78,9 @@ export function stop(): void {
   pauseOffset = 0;
   frequencyData = new Uint8Array(NUM_BINS);
   smoothBass = smoothMids = smoothTreble = 0;
+  prevBass = prevMids = prevTreble = 0;
+  fluxBass = fluxMids = fluxTreble = 0;
+  fluxAvgBass = fluxAvgMids = fluxAvgTreble = 0;
 }
 
 /** Current playback position in seconds (accounts for looping). */
@@ -158,6 +170,17 @@ export function getFrequencyData(): Uint8Array {
   const mids = smoothMids;
   const treble = smoothTreble;
 
+  // Spectral flux: half-wave rectified difference (only increases = onsets)
+  fluxBass = Math.max(0, bass - prevBass);
+  fluxMids = Math.max(0, mids - prevMids);
+  fluxTreble = Math.max(0, treble - prevTreble);
+  prevBass = bass; prevMids = mids; prevTreble = treble;
+
+  // Adaptive threshold: running average of flux
+  fluxAvgBass = FLUX_SMOOTH * fluxAvgBass + (1 - FLUX_SMOOTH) * fluxBass;
+  fluxAvgMids = FLUX_SMOOTH * fluxAvgMids + (1 - FLUX_SMOOTH) * fluxMids;
+  fluxAvgTreble = FLUX_SMOOTH * fluxAvgTreble + (1 - FLUX_SMOOTH) * fluxTreble;
+
   // Map bands to bins: bass = 0-25%, mids = 25-60%, treble = 60-100%
   const bassBins = Math.floor(NUM_BINS * 0.25);
   const midsBins = Math.floor(NUM_BINS * 0.6);
@@ -175,4 +198,23 @@ export function getFrequencyData(): Uint8Array {
   }
 
   return frequencyData;
+}
+
+/**
+ * Get per-band onset strength (0 = no onset, positive = onset intensity).
+ * Returns flux above the adaptive threshold — only fires on genuine transients.
+ */
+export function getOnsets(): { bass: number; mids: number; treble: number } {
+  return {
+    bass: fluxBass > fluxAvgBass * FLUX_THRESHOLD_MULT ? fluxBass : 0,
+    mids: fluxMids > fluxAvgMids * FLUX_THRESHOLD_MULT ? fluxMids : 0,
+    treble: fluxTreble > fluxAvgTreble * FLUX_THRESHOLD_MULT ? fluxTreble : 0,
+  };
+}
+
+/**
+ * Get raw spectral flux per band (useful for visualization/debugging).
+ */
+export function getFlux(): { bass: number; mids: number; treble: number } {
+  return { bass: fluxBass, mids: fluxMids, treble: fluxTreble };
 }
