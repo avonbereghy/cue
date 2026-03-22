@@ -131,51 +131,51 @@ body {
    --------------------------------------------------------------------------- */
 .session-card {
   transition:
-    box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1),
-    transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
-    background-color 0.25s ease,
-    border-color 0.25s ease;
+    box-shadow 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+    background-color 0.4s ease,
+    border-color 0.4s ease;
 }
 
+/* Default (dark mode) floating */
 .session-card--floating {
-  background-color: rgba(255,255,255,0.05);
-  border-color: rgba(0,0,0,0.2);
+  background-color: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.08);
   box-shadow:
-    0 1px 2px rgba(0,0,0,0.3),
-    0 4px 12px rgba(0,0,0,0.4),
-    0 8px 24px rgba(0,0,0,0.25);
-  transform: translateY(0) scale(1);
+    0 1px 2px rgba(0,0,0,0.4),
+    0 4px 10px rgba(0,0,0,0.35),
+    0 8px 20px rgba(0,0,0,0.2);
+  transform: translateY(0);
 }
 
-/* Dark mode: pressed into the surface */
+/* Default (dark mode) pressed */
 .session-card--pressed {
-  background-color: rgba(255,255,255,0.01);
+  background-color: rgba(255,255,255,0.02);
   border-color: rgba(255,255,255,0.04);
   box-shadow:
-    inset 0 4px 16px rgba(0,0,0,0.7),
-    inset 0 1px 4px rgba(0,0,0,0.6),
-    0 0 0 1px rgba(0,0,0,0.2);
-  transform: translateY(4px) scale(0.985);
+    inset 0 2px 8px rgba(0,0,0,0.5),
+    inset 0 1px 3px rgba(0,0,0,0.4);
+  transform: translateY(3px);
 }
 
-/* Mechanical press — fast, no bounce */
+/* Mechanical press — no bounce */
 @keyframes card-press-down {
-  0%   { transform: translateY(0) scale(1); }
-  100% { transform: translateY(4px) scale(0.985); }
+  0%   { transform: translateY(0); }
+  100% { transform: translateY(3px); }
 }
 
-/* Mechanical release — fast, no bounce */
+/* Mechanical release — no bounce */
 @keyframes card-pop-up {
-  0%   { transform: translateY(4px) scale(0.985); }
-  100% { transform: translateY(0) scale(1); }
+  0%   { transform: translateY(3px); }
+  100% { transform: translateY(0); }
 }
 
 .session-card--pressed {
-  animation: card-press-down 0.2s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  animation: card-press-down 0.35s cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
 
 .session-card--floating {
-  animation: card-pop-up 0.25s cubic-bezier(0.0, 0, 0.2, 1) forwards;
+  animation: card-pop-up 0.4s cubic-bezier(0.0, 0, 0.2, 1) forwards;
 }
 
 /* During slide-to-top: hold floating appearance, suppress press animation */
@@ -183,26 +183,7 @@ body {
   animation: none !important;
 }
 
-/* Light mode overrides — hard, crisp shadows */
-@media (prefers-color-scheme: light) {
-  .session-card--floating {
-    background-color: rgba(255,255,255,0.97);
-    border-color: rgba(0,0,0,0.08);
-    box-shadow:
-      0 1px 2px rgba(0,0,0,0.12),
-      0 4px 8px rgba(0,0,0,0.14),
-      0 10px 24px rgba(0,0,0,0.16),
-      0 20px 40px rgba(0,0,0,0.10);
-  }
-  .session-card--pressed {
-    background-color: rgba(0,0,0,0.04);
-    border-color: rgba(0,0,0,0.12);
-    box-shadow:
-      inset 0 4px 16px rgba(0,0,0,0.18),
-      inset 0 2px 6px rgba(0,0,0,0.14),
-      inset 0 0 0 1px rgba(0,0,0,0.06);
-  }
-}
+/* Light mode — driven by data-theme attribute only, not media query */
 html[data-theme="light"] .session-card--floating {
   background-color: rgba(255,255,255,0.97);
   border-color: rgba(0,0,0,0.08);
@@ -213,12 +194,11 @@ html[data-theme="light"] .session-card--floating {
     0 20px 40px rgba(0,0,0,0.10);
 }
 html[data-theme="light"] .session-card--pressed {
-  background-color: rgba(0,0,0,0.04);
-  border-color: rgba(0,0,0,0.12);
+  background-color: rgba(0,0,0,0.03);
+  border-color: rgba(0,0,0,0.10);
   box-shadow:
-    inset 0 4px 16px rgba(0,0,0,0.18),
-    inset 0 2px 6px rgba(0,0,0,0.14),
-    inset 0 0 0 1px rgba(0,0,0,0.06);
+    inset 0 2px 8px rgba(0,0,0,0.14),
+    inset 0 1px 3px rgba(0,0,0,0.08);
 }
 
 /* Reduced Motion */
@@ -247,18 +227,9 @@ html[data-theme="light"] .session-card--pressed {
    Light mode: Override --color-white so ALL Tailwind white-based utilities
    (text-white, text-white/50, bg-white/5, border-white/10, etc.) invert
    automatically via color-mix(in oklab, var(--color-white) N%, transparent).
-   Dual approach: media query + data-theme attribute for robustness.
+   Uses data-theme attribute ONLY — never media query, so the app's theme
+   setting always wins over the system preference.
    --------------------------------------------------------------------------- */
-
-@media (prefers-color-scheme: light) {
-  :root {
-    --color-white: #000000;
-  }
-  body {
-    background-color: #f5f5f5;
-    color: #1a1a1a;
-  }
-}
 
 html[data-theme="light"] {
   --color-white: #000000;

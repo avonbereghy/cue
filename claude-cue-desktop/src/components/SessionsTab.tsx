@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { EnrichedSession, Settings, SignalPreset } from "@/lib/types";
 import { TITLE_ANIMATIONS, ANIMATION_SPEEDS } from "@/lib/types";
@@ -64,8 +64,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [presetBootAttempted, setPresetBootAttempted] = useState(false);
   const [testMode, setTestMode] = useState(false);
   const [testState, setTestState] = useState<"working" | "idle">("working");
-  const [sortLocked, setSortLocked] = useState(false);
-  const [lockedOrder, setLockedOrder] = useState<string[]>([]);
+  const [autoReorder, setAutoReorder] = useState(false);
   const cardPositions = useRef<Map<string, DOMRect>>(new Map());
   const prevStates = useRef<Map<string, string>>(new Map());
   const listRef = useRef<HTMLDivElement>(null);
@@ -202,6 +201,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setSignalTreble(s.signalTreble ?? true);
     setGateEngine(s.signalGate ?? 0.05);
     setActivePresetId(s.activePresetId ?? "");
+    setAutoReorder(s.autoReorder ?? false);
     setTestMode(s.testMode ?? false);
   }, []);
 
@@ -272,65 +272,112 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     hasSubagents: false,
   } : null;
 
-  // Sort sessions: by priority (waiting > working > rest) unless locked
+  // Sort sessions: default is most recently active first (stable arrival order).
+  // When autoReorder is on, working/waiting sessions float to the top.
   const sortedSessions = (() => {
-    // Include test session in the sorted list so it obeys sort order
     const all = testMode && testSession ? [...sessions, testSession] : [...sessions];
-    if (sortLocked && lockedOrder.length > 0) {
-      // Preserve locked order; new sessions go to end
-      const orderMap = new Map(lockedOrder.map((id, i) => [id, i]));
+    if (autoReorder) {
       return all.sort((a, b) => {
-        const ai = orderMap.get(a.info.id) ?? Infinity;
-        const bi = orderMap.get(b.info.id) ?? Infinity;
-        return ai - bi;
+        const priority = (s: EnrichedSession) =>
+          s.info.state === "waiting" ? 0
+          : s.info.state === "working" || s.info.state === "subagent" ? 1
+          : 2;
+        const pa = priority(a);
+        const pb = priority(b);
+        if (pa !== pb) return pa - pb;
+        return b.info.lastActivity - a.info.lastActivity;
       });
     }
-    return all.sort((a, b) => {
-      const priority = (s: EnrichedSession) =>
-        s.info.state === "waiting" ? 0
-        : s.info.state === "working" || s.info.state === "subagent" ? 1
-        : 2;
-      const pa = priority(a);
-      const pb = priority(b);
-      if (pa !== pb) return pa - pb;
-      // Within same priority, most recently active first
-      return b.info.lastActivity - a.info.lastActivity;
-    });
+    // Default: oldest first, new sessions go to bottom
+    return all.sort((a, b) => a.info.startedAt - b.info.startedAt);
   })();
 
-  // Capture positions before render for FLIP animation
-  useEffect(() => {
+  // FLIP animation — only active when autoReorder is on
+  const sortKey = sortedSessions.map(s => s.info.id).join(",");
+  const stateKey = sortedSessions.map(s => s.info.state).join(",");
+
+  useLayoutEffect(() => {
     const list = listRef.current;
     if (!list) return;
-    // Snapshot current positions
-    const cards = list.querySelectorAll<HTMLElement>("[data-session-id]");
-    const prevPositions = new Map<string, DOMRect>();
-    cards.forEach((el) => {
-      const id = el.dataset.sessionId!;
-      prevPositions.set(id, el.getBoundingClientRect());
-    });
-    cardPositions.current = prevPositions;
-  });
 
-  // FLIP animate after DOM updates — choreograph slide + piano key
-  useEffect(() => {
-    const list = listRef.current;
-    if (!list) return;
-    const prev = cardPositions.current;
-    if (prev.size === 0) return;
+    if (autoReorder) {
+      const prev = cardPositions.current;
 
-    // Detect which sessions just transitioned to working/subagent
-    const justBecameWorking = new Set<string>();
-    for (const session of sortedSessions) {
-      const id = session.info.id;
-      const oldState = prevStates.current.get(id);
-      const newState = session.info.state;
-      if (
-        (newState === "working" || newState === "subagent") &&
-        oldState !== undefined &&
-        oldState !== "working" && oldState !== "subagent"
-      ) {
-        justBecameWorking.add(id);
+      // Detect which sessions just transitioned to working/subagent
+      const justBecameWorking = new Set<string>();
+      for (const session of sortedSessions) {
+        const id = session.info.id;
+        const oldState = prevStates.current.get(id);
+        const newState = session.info.state;
+        if (
+          (newState === "working" || newState === "subagent") &&
+          oldState !== undefined &&
+          oldState !== "working" && oldState !== "subagent"
+        ) {
+          justBecameWorking.add(id);
+        }
+      }
+
+      // FLIP: DOM is updated but not yet painted
+      if (prev.size > 0) {
+        const cards = list.querySelectorAll<HTMLElement>("[data-session-id]");
+        cards.forEach((el) => {
+          const id = el.dataset.sessionId!;
+          const oldRect = prev.get(id);
+          if (!oldRect) return;
+          const newRect = el.getBoundingClientRect();
+          const dy = oldRect.top - newRect.top;
+          if (Math.abs(dy) < 1) return;
+
+          const isSliding = justBecameWorking.has(id) && dy < -10;
+          const cardEl = el.querySelector<HTMLElement>(".session-card");
+
+          if (isSliding && cardEl) {
+            // Slide up as floating card, then snap key down on arrival
+            cardEl.classList.remove("session-card--pressed");
+            cardEl.classList.add("session-card--floating", "session-card--sliding");
+
+            el.style.zIndex = "50";
+            el.style.position = "relative";
+            el.style.transform = `translateY(${dy}px)`;
+            el.style.transition = "none";
+
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                el.style.transition = "transform 500ms cubic-bezier(0.25, 0.1, 0.25, 1)";
+                el.style.transform = "translateY(0)";
+
+                const onSlideEnd = () => {
+                  el.style.transition = "";
+                  el.style.transform = "";
+                  el.style.zIndex = "";
+                  el.style.position = "";
+                  el.removeEventListener("transitionend", onSlideEnd);
+                  cardEl.classList.remove("session-card--sliding", "session-card--floating");
+                  cardEl.classList.add("session-card--pressed");
+                };
+                el.addEventListener("transitionend", onSlideEnd);
+              });
+            });
+          } else {
+            // Normal FLIP for displaced cards
+            el.style.transform = `translateY(${dy}px)`;
+            el.style.transition = "none";
+
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                el.style.transition = "transform 500ms cubic-bezier(0.25, 0.1, 0.25, 1)";
+                el.style.transform = "translateY(0)";
+                const cleanup = () => {
+                  el.style.transition = "";
+                  el.style.transform = "";
+                  el.removeEventListener("transitionend", cleanup);
+                };
+                el.addEventListener("transitionend", cleanup);
+              });
+            });
+          }
+        });
       }
     }
 
@@ -341,73 +388,15 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     }
     prevStates.current = newStates;
 
+    // Snapshot positions for next render
     const cards = list.querySelectorAll<HTMLElement>("[data-session-id]");
+    const positions = new Map<string, DOMRect>();
     cards.forEach((el) => {
       const id = el.dataset.sessionId!;
-      const oldRect = prev.get(id);
-      if (!oldRect) return;
-      const newRect = el.getBoundingClientRect();
-      const dy = oldRect.top - newRect.top;
-      if (Math.abs(dy) < 1) return;
-
-      const isSliding = justBecameWorking.has(id) && dy < -10;
-
-      // Find the inner session card element
-      const cardEl = el.querySelector<HTMLElement>(".session-card");
-
-      if (isSliding && cardEl) {
-        // Phase 1: Lift card above siblings and slide up smoothly
-        cardEl.classList.remove("session-card--pressed");
-        cardEl.classList.add("session-card--floating", "session-card--sliding");
-
-        el.style.zIndex = "50";
-        el.style.position = "relative";
-        el.style.transform = `translateY(${dy}px)`;
-        el.style.transition = "none";
-
-        requestAnimationFrame(() => {
-          el.style.transition = "transform 650ms cubic-bezier(0.4, 0, 0.0, 1)";
-          el.style.transform = "";
-
-          // Phase 2: After slide completes, snap the key down
-          const onSlideEnd = () => {
-            el.style.transition = "";
-            el.style.zIndex = "";
-            el.style.position = "";
-            el.removeEventListener("transitionend", onSlideEnd);
-            cardEl.classList.remove("session-card--sliding", "session-card--floating");
-            cardEl.classList.add("session-card--pressed");
-          };
-          el.addEventListener("transitionend", onSlideEnd);
-        });
-      } else {
-        // Normal FLIP for non-transitioning cards
-        el.style.transform = `translateY(${dy}px)`;
-        el.style.transition = "none";
-
-        requestAnimationFrame(() => {
-          el.style.transition = "transform 400ms cubic-bezier(0.25, 0.8, 0.25, 1)";
-          el.style.transform = "";
-          const cleanup = () => {
-            el.style.transition = "";
-            el.removeEventListener("transitionend", cleanup);
-          };
-          el.addEventListener("transitionend", cleanup);
-        });
-      }
+      positions.set(id, el.getBoundingClientRect());
     });
-  }, [sortedSessions.map(s => s.info.id).join(","), sortedSessions.map(s => s.info.state).join(",")]);
-
-  // Lock/unlock handler
-  const toggleSortLock = useCallback(() => {
-    if (sortLocked) {
-      setSortLocked(false);
-      setLockedOrder([]);
-    } else {
-      setSortLocked(true);
-      setLockedOrder(sortedSessions.map(s => s.info.id));
-    }
-  }, [sortLocked, sortedSessions]);
+    cardPositions.current = positions;
+  }, [sortKey, stateKey, autoReorder]);
 
   // Helper to update a setting and persist immediately
   const updateSetting = useCallback(async (patch: Partial<Settings>) => {
@@ -434,26 +423,20 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         )}
         <div className="ml-auto">
           <button
-            onClick={toggleSortLock}
+            onClick={() => {
+              const next = !autoReorder;
+              setAutoReorder(next);
+              updateSetting({ autoReorder: next });
+            }}
             className={`flex items-center justify-center w-6 h-6 rounded transition-colors ${
-              sortLocked
-                ? "bg-yellow-500/15 text-yellow-400 hover:bg-yellow-500/25"
+              autoReorder
+                ? "bg-blue-500/15 text-blue-400 hover:bg-blue-500/25"
                 : "bg-white/5 text-white/30 hover:text-white/50 hover:bg-white/10"
             }`}
-            title={sortLocked ? "Unlock sort order" : "Lock current sort order"}
+            title={autoReorder ? "Auto Reorder: ON (working sessions move to top)" : "Auto Reorder: OFF (arrival order)"}
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              {sortLocked ? (
-                <>
-                  <rect x="3" y="11" width="18" height="11" rx="2" />
-                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                </>
-              ) : (
-                <>
-                  <rect x="3" y="11" width="18" height="11" rx="2" />
-                  <path d="M7 11V7a5 5 0 0 1 9.9-1" />
-                </>
-              )}
+              <path d="M3 6h18M3 12h12M3 18h6" />
             </svg>
           </button>
         </div>
