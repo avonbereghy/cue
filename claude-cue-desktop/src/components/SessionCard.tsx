@@ -17,10 +17,13 @@ interface SessionCardProps {
   signalAlpha?: number;
   signalAmplitude?: number;
   signalEcho?: number;
+  signalBass?: boolean;
+  signalMids?: boolean;
+  signalTreble?: boolean;
   revived?: boolean;
 }
 
-export function SessionCard({ session, titleAnimation = "flip", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 1.0, signalAmplitude = 0.5, signalEcho = 0.5, revived = false }: SessionCardProps) {
+export function SessionCard({ session, titleAnimation = "flip", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, revived = false }: SessionCardProps) {
   const { info, metrics } = session;
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -138,6 +141,8 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
     };
   }, [isAnimating, signalString, session.displayTitle, titleAnimation, animationSpeed, randomAnimation]);
 
+  const isWorking = info.state === "working" || info.state === "subagent";
+
   const dotColor = STATE_DOT_COLORS[info.state] ?? "bg-green-500";
   const dotPulse = info.state === "working" || info.state === "waiting" || info.state === "subagent" ? "dot-pulse" : "";
   const badgeBg = STATE_BADGE_BG[info.state] ?? "bg-green-500/20 text-green-500";
@@ -179,16 +184,20 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
   return (
     <div
       ref={cardRef}
-      className={`relative overflow-hidden rounded-lg bg-white/5 border border-black/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 ${
+      className={`relative overflow-hidden rounded-lg border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 session-card ${
+        isWorking ? "session-card--pressed" : "session-card--floating"
+      } ${
         signalString && (signalMode === "preset" || signalMode === "audio") ? "px-4 py-5 space-y-5" : "p-3 space-y-2.5"
       }`}
       tabIndex={0}
       aria-label={ariaLabel}
       title={info.workspace}
-      style={{ "--anim-speed": `${animationSpeed}s`, boxShadow: "0 2px 8px rgba(0,0,0,0.7)" } as React.CSSProperties}
+      style={{
+        "--anim-speed": `${animationSpeed}s`,
+      } as React.CSSProperties}
     >
-      {/* Signal String background (audio mode) */}
-      {signalString && (signalMode === "preset" || signalMode === "audio") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} />}
+      {/* Signal String background (audio mode) — only for active sessions, not revived */}
+      {signalString && !revived && (signalMode === "preset" || signalMode === "audio") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} />}
 
       {/* Row 1: Status dot + title + state badge + git branch + duration */}
       <div className="flex items-center gap-2">
@@ -261,8 +270,8 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
         </span>
       </div>
 
-      {/* Signal String separator (simulated mode) */}
-      {signalString && signalMode !== "preset" && signalMode !== "audio" && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} />}
+      {/* Signal String separator (simulated mode, or revived sessions in any mode) */}
+      {signalString && (revived || (signalMode !== "preset" && signalMode !== "audio")) && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} />}
 
       {/* Row 2: Metrics */}
       <div className="flex items-center gap-x-4 gap-y-1 text-xs text-white/50">

@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Settings, TITLE_ANIMATIONS, ANIMATION_SPEEDS } from "@/lib/types";
 import type { PresetSummary, SignalPreset } from "@/lib/types";
 import { extractPreset } from "@/lib/audioExtractor";
-import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded } from "@/lib/presetEngine";
+import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, getCurrentTime as getPresetTime, seek as presetSeek, setGate as setGateEngine } from "@/lib/presetEngine";
 
 function Toggle({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) {
   return (
@@ -119,6 +119,177 @@ function formatDuration(secs: number): string {
 
 function formatDate(ts: number): string {
   return new Date(ts * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/** Draws band envelope waveforms on a canvas with playhead. Used by BandWaveform, SessionsTab, and BandEnvelopesPage. */
+export function drawBandEnvelopes(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  preset: SignalPreset | null,
+  bands: { bass: boolean; mids: boolean; treble: boolean },
+  dark?: boolean,
+  gate: number = 0,
+) {
+  const isDark = dark ?? window.matchMedia("(prefers-color-scheme: dark)").matches;
+  ctx.clearRect(0, 0, w, h);
+  if (!preset || preset.bands.bass.length === 0) return;
+
+  const total = preset.bands.bass.length;
+  const gateScale = gate < 1 ? 1 / (1 - gate) : 0;
+  const applyGate = (v: number) => v <= gate ? 0 : (v - gate) * gateScale;
+  const bandDefs = isDark ? [
+    { key: "bass" as const, color: "rgba(239, 68, 68, 0.7)", fill: "rgba(239, 68, 68, 0.2)", label: "Bass", enabled: bands.bass },
+    { key: "mids" as const, color: "rgba(234, 179, 8, 0.6)", fill: "rgba(234, 179, 8, 0.15)", label: "Mids", enabled: bands.mids },
+    { key: "treble" as const, color: "rgba(59, 130, 246, 0.6)", fill: "rgba(59, 130, 246, 0.15)", label: "Treble", enabled: bands.treble },
+  ] : [
+    { key: "bass" as const, color: "rgba(220, 38, 38, 0.8)", fill: "rgba(220, 38, 38, 0.25)", label: "Bass", enabled: bands.bass },
+    { key: "mids" as const, color: "rgba(180, 130, 0, 0.8)", fill: "rgba(180, 130, 0, 0.2)", label: "Mids", enabled: bands.mids },
+    { key: "treble" as const, color: "rgba(37, 99, 235, 0.8)", fill: "rgba(37, 99, 235, 0.2)", label: "Treble", enabled: bands.treble },
+  ];
+  const enabledCount = bandDefs.filter(b => b.enabled).length || 1;
+  const bandH = h / enabledCount;
+
+  let lane = 0;
+  for (const { key, color, fill, label, enabled } of bandDefs) {
+    if (!enabled) continue;
+    const data = preset.bands[key];
+    const yBase = (lane + 1) * bandH;
+
+    // Filled area
+    ctx.beginPath();
+    ctx.moveTo(0, yBase);
+    for (let x = 0; x < w; x++) {
+      const idx = Math.floor((x / w) * total);
+      ctx.lineTo(x, yBase - applyGate(data[idx] ?? 0) * bandH * 0.9);
+    }
+    ctx.lineTo(w, yBase);
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.fill();
+
+    // Stroke
+    ctx.beginPath();
+    for (let x = 0; x < w; x++) {
+      const idx = Math.floor((x / w) * total);
+      const y = yBase - applyGate(data[idx] ?? 0) * bandH * 0.9;
+      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Lane separator
+    if (lane > 0) {
+      ctx.beginPath();
+      ctx.moveTo(0, lane * bandH);
+      ctx.lineTo(w, lane * bandH);
+      ctx.strokeStyle = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.08)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    // Label
+    ctx.fillStyle = isDark ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.35)";
+    ctx.font = "9px system-ui";
+    ctx.textAlign = "left";
+    ctx.fillText(label, 3, lane * bandH + 10);
+
+    lane++;
+  }
+
+  // Playhead
+  if (preset.durationSecs > 0) {
+    const t = getPresetTime();
+    const px = (t / preset.durationSecs) * w;
+    ctx.beginPath();
+    ctx.moveTo(px, 0);
+    ctx.lineTo(px, h);
+    ctx.strokeStyle = isDark ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.4)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+}
+
+/** Shared seek-on-canvas handler */
+function seekFromCanvas(e: React.MouseEvent<HTMLCanvasElement> | MouseEvent, canvas: HTMLCanvasElement, duration: number) {
+  const rect = canvas.getBoundingClientRect();
+  const x = ("clientX" in e ? e.clientX : 0) - rect.left;
+  const ratio = Math.max(0, Math.min(1, x / rect.width));
+  presetSeek(ratio * duration);
+}
+
+/** Visualizes the 3 extracted band envelopes with interactive scrubbing */
+function BandWaveform({ presetId, signalBass, signalMids, signalTreble, signalGate = 0.05 }: { presetId: string; signalBass: boolean; signalMids: boolean; signalTreble: boolean; signalGate?: number }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const presetRef = useRef<SignalPreset | null>(null);
+  const animRef = useRef<number>(0);
+  const dragging = useRef(false);
+
+  useEffect(() => {
+    if (!presetId) return;
+    invoke<SignalPreset>("load_preset", { id: presetId })
+      .then((p) => { presetRef.current = p; })
+      .catch(() => {});
+  }, [presetId]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const resize = () => {
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    resize();
+    const obs = new ResizeObserver(resize);
+    obs.observe(canvas);
+
+    const draw = () => {
+      const rect = canvas.getBoundingClientRect();
+      drawBandEnvelopes(ctx, rect.width, rect.height, presetRef.current, { bass: signalBass, mids: signalMids, treble: signalTreble }, undefined, signalGate);
+      animRef.current = requestAnimationFrame(draw);
+    };
+    animRef.current = requestAnimationFrame(draw);
+
+    // Drag-to-scrub
+    const onMove = (e: MouseEvent) => {
+      if (!dragging.current || !presetRef.current) return;
+      seekFromCanvas(e, canvas, presetRef.current.durationSecs);
+    };
+    const onUp = () => { dragging.current = false; };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+
+    return () => {
+      cancelAnimationFrame(animRef.current);
+      obs.disconnect();
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [presetId, signalBass, signalMids, signalTreble, signalGate]);
+
+  if (!presetId) return null;
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    dragging.current = true;
+    const canvas = canvasRef.current;
+    if (canvas && presetRef.current) seekFromCanvas(e, canvas, presetRef.current.durationSecs);
+  };
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="w-full rounded border border-white/10 bg-white/5 cursor-crosshair"
+      style={{ height: "80px" }}
+      onMouseDown={handleMouseDown}
+    />
+  );
 }
 
 export function SettingsView() {
@@ -281,9 +452,13 @@ export function SettingsView() {
       signalString: true,
       signalFrequency: 1.0,
       signalMode: "preset",
-      signalAlpha: 1.0,
-      signalAmplitude: 0.5,
-      signalEcho: 0.5,
+      signalAlpha: 0.25,
+      signalAmplitude: 0.25,
+      signalEcho: 1.0,
+      signalGate: 0.05,
+      signalBass: true,
+      signalMids: true,
+      signalTreble: true,
       activePresetId: settings.activePresetId, // preserve preset selection
       testMode: false,
     };
@@ -318,7 +493,7 @@ export function SettingsView() {
   const isPresetMode = signalMode === "preset";
 
   return (
-    <div className="p-4 space-y-4 max-w-2xl">
+    <div className="p-4 space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-white">Settings</h2>
@@ -400,15 +575,35 @@ export function SettingsView() {
             </SettingRow>
 
             <SettingRow label="Opacity" description="String transparency">
-              <Slider value={settings.signalAlpha ?? 1.0} min={0.05} max={1.0} step={0.01} defaultValue={1.0} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalAlpha: v })} />
+              <Slider value={settings.signalAlpha ?? 0.25} min={0.05} max={1.0} step={0.01} defaultValue={0.25} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalAlpha: v })} />
             </SettingRow>
 
             <SettingRow label="Amplitude" description="String displacement intensity">
-              <Slider value={settings.signalAmplitude ?? 0.5} min={0.01} max={1.0} step={0.01} defaultValue={0.5} format={formatMul} onChange={(v) => setSettings({ ...settings, signalAmplitude: v })} />
+              <Slider value={settings.signalAmplitude ?? 0.25} min={0.01} max={1.0} step={0.01} defaultValue={0.25} format={formatMul} onChange={(v) => setSettings({ ...settings, signalAmplitude: v })} />
             </SettingRow>
 
             <SettingRow label="Echo" description="Trailing reverb lines behind the main string">
-              <Slider value={settings.signalEcho ?? 0.5} min={0} max={2.0} step={0.01} defaultValue={0.5} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalEcho: v })} />
+              <Slider value={settings.signalEcho ?? 1.0} min={0} max={2.0} step={0.01} defaultValue={1.0} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalEcho: v })} />
+            </SettingRow>
+
+            <SettingRow label="Gate" description="Noise floor threshold — clips quiet ambient noise">
+              <Slider value={settings.signalGate ?? 0.05} min={0} max={0.5} step={0.01} defaultValue={0.05} format={formatPct} isPct onChange={(v) => { setSettings({ ...settings, signalGate: v }); setGateEngine(v); }} />
+            </SettingRow>
+
+            <SettingRow label="Bands" description="Toggle bass, mids, and treble strings">
+              <div className="flex items-center gap-3">
+                {([["Bass", "signalBass"], ["Mids", "signalMids"], ["Treble", "signalTreble"]] as const).map(([label, key]) => (
+                  <label key={key} className="flex items-center gap-1 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={settings[key] ?? true}
+                      onChange={() => setSettings({ ...settings, [key]: !settings[key] })}
+                      className="w-3 h-3 rounded accent-blue-500 cursor-pointer"
+                    />
+                    <span className="text-xs text-white/60">{label}</span>
+                  </label>
+                ))}
+              </div>
             </SettingRow>
 
             {!isPresetMode && (
@@ -528,6 +723,23 @@ export function SettingsView() {
                 {presets.length === 0 && !extracting && (
                   <div className="text-[10px] text-white/25 py-1">
                     No presets yet — upload a song to create one
+                  </div>
+                )}
+
+                {/* Band envelope visualization */}
+                {settings.activePresetId && (
+                  <div className="pt-2 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <div className="text-[10px] text-white/40 uppercase tracking-wider">Band Envelopes</div>
+                      <button
+                        onClick={() => invoke("open_signal_settings")}
+                        className="text-[10px] text-white/30 hover:text-white/60 transition-colors"
+                        title="Open in separate window"
+                      >
+                        ↗ Expand
+                      </button>
+                    </div>
+                    <BandWaveform presetId={settings.activePresetId} signalBass={settings.signalBass ?? true} signalMids={settings.signalMids ?? true} signalTreble={settings.signalTreble ?? true} signalGate={settings.signalGate ?? 0.05} />
                   </div>
                 )}
               </div>

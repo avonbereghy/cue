@@ -34,8 +34,9 @@ export async function extractPreset(file: File, name: string): Promise<SignalPre
   // Mix to mono
   const mono = mixToMono(audioBuffer);
 
-  // Simple IIR filter state for band separation
+  // 4-pole cascaded IIR low-pass filters for steep band separation (24dB/oct)
   // Bass: < ~300 Hz, Mids: 300-4000 Hz, Treble: > 4000 Hz
+  const POLES = 4;
   const bassAlpha = 1 - Math.exp(-2 * Math.PI * 300 / sr);
   const trebleAlpha = 1 - Math.exp(-2 * Math.PI * 4000 / sr);
 
@@ -43,8 +44,9 @@ export async function extractPreset(file: File, name: string): Promise<SignalPre
   const mids: number[] = [];
   const treble: number[] = [];
 
-  let bassLp = 0;  // low-pass state for bass extraction
-  let fullLp = 0;  // low-pass state at treble cutoff
+  // Each filter stage gets its own state
+  const bassLp = new Float64Array(POLES);   // 4-pole cascade at 300 Hz
+  const fullLp = new Float64Array(POLES);   // 4-pole cascade at 4000 Hz
 
   for (let i = 0; i < totalEnvelopeSamples; i++) {
     const start = i * chunkSize;
@@ -57,14 +59,22 @@ export async function extractPreset(file: File, name: string): Promise<SignalPre
     for (let s = start; s < end; s++) {
       const sample = mono[s];
 
-      // Single-pole low-pass at 300 Hz → bass
-      bassLp += bassAlpha * (sample - bassLp);
-      const bassSignal = bassLp;
+      // Cascade 4 poles at 300 Hz → bass
+      let bIn = sample;
+      for (let p = 0; p < POLES; p++) {
+        bassLp[p] += bassAlpha * (bIn - bassLp[p]);
+        bIn = bassLp[p];
+      }
+      const bassSignal = bIn;
 
-      // Single-pole low-pass at 4000 Hz → bass+mids
-      fullLp += trebleAlpha * (sample - fullLp);
-      const midsSignal = fullLp - bassLp;      // mids = (bass+mids) - bass
-      const trebleSignal = sample - fullLp;      // treble = original - (bass+mids)
+      // Cascade 4 poles at 4000 Hz → bass+mids
+      let fIn = sample;
+      for (let p = 0; p < POLES; p++) {
+        fullLp[p] += trebleAlpha * (fIn - fullLp[p]);
+        fIn = fullLp[p];
+      }
+      const midsSignal = fIn - bassSignal;       // mids = (bass+mids) - bass
+      const trebleSignal = sample - fIn;          // treble = original - (bass+mids)
 
       bassRms += bassSignal * bassSignal;
       midsRms += midsSignal * midsSignal;

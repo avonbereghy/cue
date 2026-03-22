@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { EnrichedSession, Settings, SignalPreset } from "@/lib/types";
 import { TITLE_ANIMATIONS, ANIMATION_SPEEDS } from "@/lib/types";
-import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded } from "@/lib/presetEngine";
+import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, setGate as setGateEngine } from "@/lib/presetEngine";
 import { formatTokens } from "@/lib/format";
 import { StatBadge } from "./StatBadge";
 import { SessionCard } from "./SessionCard";
@@ -54,9 +54,12 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [signalString, setSignalString] = useState(false);
   const [signalFrequency, setSignalFrequency] = useState(1.0);
   const [signalMode, setSignalMode] = useState("simulated");
-  const [signalAlpha, setSignalAlpha] = useState(1.0);
-  const [signalAmplitude, setSignalAmplitude] = useState(0.5);
-  const [signalEcho, setSignalEcho] = useState(0.5);
+  const [signalAlpha, setSignalAlpha] = useState(0.25);
+  const [signalAmplitude, setSignalAmplitude] = useState(0.25);
+  const [signalEcho, setSignalEcho] = useState(1.0);
+  const [signalBass, setSignalBass] = useState(true);
+  const [signalMids, setSignalMids] = useState(true);
+  const [signalTreble, setSignalTreble] = useState(true);
   const [activePresetId, setActivePresetId] = useState("");
   const [presetBootAttempted, setPresetBootAttempted] = useState(false);
   const [testMode, setTestMode] = useState(false);
@@ -64,6 +67,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [sortLocked, setSortLocked] = useState(false);
   const [lockedOrder, setLockedOrder] = useState<string[]>([]);
   const cardPositions = useRef<Map<string, DOMRect>>(new Map());
+  const prevStates = useRef<Map<string, string>>(new Map());
   const listRef = useRef<HTMLDivElement>(null);
   const [collapsedSessions, setCollapsedSessions] = useState<Set<string>>(
     new Set(),
@@ -180,27 +184,35 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     0,
   );
 
-  // Check if permissions are enabled in settings
-  useEffect(() => {
-    invoke<Settings>("get_settings")
-      .then((s) => {
-        setPermissionsEnabled(s.permissionsEnabled);
-        setTitleAnimation(s.titleAnimation ?? "flip");
-        setAnimationSpeed(s.animationSpeed ?? 1.2);
-        setRandomAnimation(s.randomAnimation ?? false);
-        setSignalString(s.signalString ?? false);
-        setSignalFrequency(s.signalFrequency ?? 1.0);
-        // Backward compat: treat "audio" as "preset"
-        const mode = s.signalMode === "audio" ? "preset" : (s.signalMode ?? "simulated");
-        setSignalMode(mode);
-        setSignalAlpha(s.signalAlpha ?? 1.0);
-        setSignalAmplitude(s.signalAmplitude ?? 0.5);
-        setSignalEcho(s.signalEcho ?? 0.5);
-        setActivePresetId(s.activePresetId ?? "");
-        setTestMode(s.testMode ?? false);
-      })
-      .catch(() => {});
+  // Load settings and poll for changes (so Signal Settings window edits sync)
+  const applySettings = useCallback((s: Settings) => {
+    setPermissionsEnabled(s.permissionsEnabled);
+    setTitleAnimation(s.titleAnimation ?? "flip");
+    setAnimationSpeed(s.animationSpeed ?? 1.2);
+    setRandomAnimation(s.randomAnimation ?? false);
+    setSignalString(s.signalString ?? false);
+    setSignalFrequency(s.signalFrequency ?? 1.0);
+    const mode = s.signalMode === "audio" ? "preset" : (s.signalMode ?? "simulated");
+    setSignalMode(mode);
+    setSignalAlpha(s.signalAlpha ?? 0.25);
+    setSignalAmplitude(s.signalAmplitude ?? 0.25);
+    setSignalEcho(s.signalEcho ?? 1.0);
+    setSignalBass(s.signalBass ?? true);
+    setSignalMids(s.signalMids ?? true);
+    setSignalTreble(s.signalTreble ?? true);
+    setGateEngine(s.signalGate ?? 0.05);
+    setActivePresetId(s.activePresetId ?? "");
+    setTestMode(s.testMode ?? false);
   }, []);
+
+  useEffect(() => {
+    invoke<Settings>("get_settings").then(applySettings).catch(() => {});
+    // Poll every 2s so changes from Signal Settings window sync live
+    const id = setInterval(() => {
+      invoke<Settings>("get_settings").then(applySettings).catch(() => {});
+    }, 2000);
+    return () => clearInterval(id);
+  }, [applySettings]);
 
   // Auto-load active preset on launch when preset mode is configured
   useEffect(() => {
@@ -223,82 +235,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       return next;
     });
   };
-
-  // Sort sessions: by priority (waiting > working > rest) unless locked
-  const sortedSessions = (() => {
-    if (sortLocked && lockedOrder.length > 0) {
-      // Preserve locked order; new sessions go to end
-      const orderMap = new Map(lockedOrder.map((id, i) => [id, i]));
-      return [...sessions].sort((a, b) => {
-        const ai = orderMap.get(a.info.id) ?? Infinity;
-        const bi = orderMap.get(b.info.id) ?? Infinity;
-        return ai - bi;
-      });
-    }
-    return [...sessions].sort((a, b) => {
-      const priority = (s: EnrichedSession) =>
-        s.info.state === "waiting" ? 0 : s.info.state === "working" ? 1 : 2;
-      return priority(a) - priority(b);
-    });
-  })();
-
-  // Capture positions before render for FLIP animation
-  useEffect(() => {
-    const list = listRef.current;
-    if (!list) return;
-    // Snapshot current positions
-    const cards = list.querySelectorAll<HTMLElement>("[data-session-id]");
-    const prevPositions = new Map<string, DOMRect>();
-    cards.forEach((el) => {
-      const id = el.dataset.sessionId!;
-      prevPositions.set(id, el.getBoundingClientRect());
-    });
-    cardPositions.current = prevPositions;
-  });
-
-  // FLIP animate after DOM updates
-  useEffect(() => {
-    const list = listRef.current;
-    if (!list) return;
-    const prev = cardPositions.current;
-    if (prev.size === 0) return;
-
-    const cards = list.querySelectorAll<HTMLElement>("[data-session-id]");
-    cards.forEach((el) => {
-      const id = el.dataset.sessionId!;
-      const oldRect = prev.get(id);
-      if (!oldRect) return;
-      const newRect = el.getBoundingClientRect();
-      const dy = oldRect.top - newRect.top;
-      if (Math.abs(dy) < 1) return;
-
-      // Invert: jump to old position
-      el.style.transform = `translateY(${dy}px)`;
-      el.style.transition = "none";
-
-      // Play: animate to new position
-      requestAnimationFrame(() => {
-        el.style.transition = "transform 400ms cubic-bezier(0.25, 0.8, 0.25, 1)";
-        el.style.transform = "";
-        const cleanup = () => {
-          el.style.transition = "";
-          el.removeEventListener("transitionend", cleanup);
-        };
-        el.addEventListener("transitionend", cleanup);
-      });
-    });
-  }, [sortedSessions.map(s => s.info.id).join(",")]);
-
-  // Lock/unlock handler
-  const toggleSortLock = useCallback(() => {
-    if (sortLocked) {
-      setSortLocked(false);
-      setLockedOrder([]);
-    } else {
-      setSortLocked(true);
-      setLockedOrder(sortedSessions.map(s => s.info.id));
-    }
-  }, [sortLocked, sortedSessions]);
 
   // Build synthetic test session when test mode is enabled
   const testSession: EnrichedSession | null = testMode ? {
@@ -335,6 +271,143 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     sourceDisplay: "Terminal",
     hasSubagents: false,
   } : null;
+
+  // Sort sessions: by priority (waiting > working > rest) unless locked
+  const sortedSessions = (() => {
+    // Include test session in the sorted list so it obeys sort order
+    const all = testMode && testSession ? [...sessions, testSession] : [...sessions];
+    if (sortLocked && lockedOrder.length > 0) {
+      // Preserve locked order; new sessions go to end
+      const orderMap = new Map(lockedOrder.map((id, i) => [id, i]));
+      return all.sort((a, b) => {
+        const ai = orderMap.get(a.info.id) ?? Infinity;
+        const bi = orderMap.get(b.info.id) ?? Infinity;
+        return ai - bi;
+      });
+    }
+    return all.sort((a, b) => {
+      const priority = (s: EnrichedSession) =>
+        s.info.state === "waiting" ? 0
+        : s.info.state === "working" || s.info.state === "subagent" ? 1
+        : 2;
+      const pa = priority(a);
+      const pb = priority(b);
+      if (pa !== pb) return pa - pb;
+      // Within same priority, most recently active first
+      return b.info.lastActivity - a.info.lastActivity;
+    });
+  })();
+
+  // Capture positions before render for FLIP animation
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    // Snapshot current positions
+    const cards = list.querySelectorAll<HTMLElement>("[data-session-id]");
+    const prevPositions = new Map<string, DOMRect>();
+    cards.forEach((el) => {
+      const id = el.dataset.sessionId!;
+      prevPositions.set(id, el.getBoundingClientRect());
+    });
+    cardPositions.current = prevPositions;
+  });
+
+  // FLIP animate after DOM updates — choreograph slide + piano key
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const prev = cardPositions.current;
+    if (prev.size === 0) return;
+
+    // Detect which sessions just transitioned to working/subagent
+    const justBecameWorking = new Set<string>();
+    for (const session of sortedSessions) {
+      const id = session.info.id;
+      const oldState = prevStates.current.get(id);
+      const newState = session.info.state;
+      if (
+        (newState === "working" || newState === "subagent") &&
+        oldState !== undefined &&
+        oldState !== "working" && oldState !== "subagent"
+      ) {
+        justBecameWorking.add(id);
+      }
+    }
+
+    // Update state tracking
+    const newStates = new Map<string, string>();
+    for (const session of sortedSessions) {
+      newStates.set(session.info.id, session.info.state);
+    }
+    prevStates.current = newStates;
+
+    const cards = list.querySelectorAll<HTMLElement>("[data-session-id]");
+    cards.forEach((el) => {
+      const id = el.dataset.sessionId!;
+      const oldRect = prev.get(id);
+      if (!oldRect) return;
+      const newRect = el.getBoundingClientRect();
+      const dy = oldRect.top - newRect.top;
+      if (Math.abs(dy) < 1) return;
+
+      const isSliding = justBecameWorking.has(id) && dy < -10;
+
+      // Find the inner session card element
+      const cardEl = el.querySelector<HTMLElement>(".session-card");
+
+      if (isSliding && cardEl) {
+        // Phase 1: Lift card above siblings and slide up smoothly
+        cardEl.classList.remove("session-card--pressed");
+        cardEl.classList.add("session-card--floating", "session-card--sliding");
+
+        el.style.zIndex = "50";
+        el.style.position = "relative";
+        el.style.transform = `translateY(${dy}px)`;
+        el.style.transition = "none";
+
+        requestAnimationFrame(() => {
+          el.style.transition = "transform 650ms cubic-bezier(0.4, 0, 0.0, 1)";
+          el.style.transform = "";
+
+          // Phase 2: After slide completes, snap the key down
+          const onSlideEnd = () => {
+            el.style.transition = "";
+            el.style.zIndex = "";
+            el.style.position = "";
+            el.removeEventListener("transitionend", onSlideEnd);
+            cardEl.classList.remove("session-card--sliding", "session-card--floating");
+            cardEl.classList.add("session-card--pressed");
+          };
+          el.addEventListener("transitionend", onSlideEnd);
+        });
+      } else {
+        // Normal FLIP for non-transitioning cards
+        el.style.transform = `translateY(${dy}px)`;
+        el.style.transition = "none";
+
+        requestAnimationFrame(() => {
+          el.style.transition = "transform 400ms cubic-bezier(0.25, 0.8, 0.25, 1)";
+          el.style.transform = "";
+          const cleanup = () => {
+            el.style.transition = "";
+            el.removeEventListener("transitionend", cleanup);
+          };
+          el.addEventListener("transitionend", cleanup);
+        });
+      }
+    });
+  }, [sortedSessions.map(s => s.info.id).join(","), sortedSessions.map(s => s.info.state).join(",")]);
+
+  // Lock/unlock handler
+  const toggleSortLock = useCallback(() => {
+    if (sortLocked) {
+      setSortLocked(false);
+      setLockedOrder([]);
+    } else {
+      setSortLocked(true);
+      setLockedOrder(sortedSessions.map(s => s.info.id));
+    }
+  }, [sortLocked, sortedSessions]);
 
   // Helper to update a setting and persist immediately
   const updateSetting = useCallback(async (patch: Partial<Settings>) => {
@@ -404,7 +477,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
             return (
               <div key={session.info.id} data-session-id={session.info.id} className="space-y-2">
-                <SessionCard session={session} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} />
+                <SessionCard session={session} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} />
 
                 {/* Permission section (when enabled and has activity) */}
                 {permissionsEnabled && hasPermissionActivity && (
@@ -454,13 +527,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             );
           })}
 
-          {/* Test session */}
-          {testMode && testSession && (
-            <div data-session-id="__test__" className="space-y-2">
-              <SessionCard session={testSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} />
-            </div>
-          )}
-
           {/* Revived (ended) sessions */}
           {revivedSessions.length > 0 && (
             <>
@@ -490,7 +556,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                 return (
                   <div key={revived.session.info.id} className={`revived-card-wrapper relative ${pulseClass}`}>
                     <div key={clicks} className="revived-overlay" />
-                    <SessionCard session={revived.session} titleAnimation="none" signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} revived />
+                    <SessionCard session={revived.session} titleAnimation="none" signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} revived />
                     <div className="absolute inset-0 flex items-center justify-center gap-3 z-10">
                       <span className="text-xs text-red-400/70 font-mono tabular-nums">
                         {formatReviveElapsed(revived.revivedAt)}
@@ -618,79 +684,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                     <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${signalString ? "translate-x-4" : ""}`} />
                   </button>
                 </div>
-                {signalString && (
-                  <>
-                    {/* Mode */}
-                    <div className="flex items-center justify-between gap-4 py-1">
-                      <span className="text-xs text-white/70">Mode</span>
-                      <select
-                        value={signalMode}
-                        onChange={(e) => {
-                          setSignalMode(e.target.value);
-                          updateSetting({ signalMode: e.target.value });
-                        }}
-                        className="bg-white/10 border border-white/10 rounded px-2 py-1 text-xs text-white/70 outline-none cursor-pointer hover:bg-white/15 transition-colors"
-                      >
-                        <option value="simulated" className="bg-neutral-800 text-white">Simulated</option>
-                        <option value="preset" className="bg-neutral-800 text-white">Preset</option>
-                      </select>
-                    </div>
-                    {/* Opacity */}
-                    <div className="flex items-center gap-2 py-1">
-                      <span className="text-xs text-white/70 w-16 shrink-0">Opacity</span>
-                      <span className="text-[10px] text-white/30 font-mono w-8 text-right shrink-0">{Math.round(signalAlpha * 100)}%</span>
-                      <input type="range" min={0.05} max={1.0} step={0.01} value={signalAlpha}
-                        onChange={(e) => {
-                          const v = parseFloat(e.target.value);
-                          setSignalAlpha(v);
-                          updateSetting({ signalAlpha: v });
-                        }}
-                        className="flex-1 h-1 rounded appearance-none cursor-pointer bg-white/10 accent-blue-500"
-                      />
-                    </div>
-                    {/* Amplitude */}
-                    <div className="flex items-center gap-2 py-1">
-                      <span className="text-xs text-white/70 w-16 shrink-0">Amplitude</span>
-                      <span className="text-[10px] text-white/30 font-mono w-8 text-right shrink-0">{signalAmplitude.toFixed(2)}x</span>
-                      <input type="range" min={0.01} max={1.0} step={0.01} value={signalAmplitude}
-                        onChange={(e) => {
-                          const v = parseFloat(e.target.value);
-                          setSignalAmplitude(v);
-                          updateSetting({ signalAmplitude: v });
-                        }}
-                        className="flex-1 h-1 rounded appearance-none cursor-pointer bg-white/10 accent-blue-500"
-                      />
-                    </div>
-                    {/* Echo */}
-                    <div className="flex items-center gap-2 py-1">
-                      <span className="text-xs text-white/70 w-16 shrink-0">Echo</span>
-                      <span className="text-[10px] text-white/30 font-mono w-8 text-right shrink-0">{Math.round(signalEcho * 50)}%</span>
-                      <input type="range" min={0} max={2.0} step={0.01} value={signalEcho}
-                        onChange={(e) => {
-                          const v = parseFloat(e.target.value);
-                          setSignalEcho(v);
-                          updateSetting({ signalEcho: v });
-                        }}
-                        className="flex-1 h-1 rounded appearance-none cursor-pointer bg-white/10 accent-blue-500"
-                      />
-                    </div>
-                    {/* Frequency (simulated mode only) */}
-                    {signalMode !== "preset" && (
-                      <div className="flex items-center gap-2 py-1">
-                        <span className="text-xs text-white/70 w-16 shrink-0">Frequency</span>
-                        <span className="text-[10px] text-white/30 font-mono w-8 text-right shrink-0">{signalFrequency.toFixed(2)}x</span>
-                        <input type="range" min={0.2} max={3.0} step={0.01} value={signalFrequency}
-                          onChange={(e) => {
-                            const v = parseFloat(e.target.value);
-                            setSignalFrequency(v);
-                            updateSetting({ signalFrequency: v });
-                          }}
-                          className="flex-1 h-1 rounded appearance-none cursor-pointer bg-white/10 accent-blue-500"
-                        />
-                      </div>
-                    )}
-                  </>
-                )}
               </div>
             </>
           )}

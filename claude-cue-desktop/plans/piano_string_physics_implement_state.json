@@ -1,0 +1,15 @@
+{
+  "feature": "piano_string_physics",
+  "description": "Letter bounces in animated titles drive traveling wave pulses on the Signal String, like piano hammers striking a string",
+  "mode": "managed",
+  "created": "2026-03-20T17:50:00Z",
+  "updated": "2026-03-20T17:50:00Z",
+  "base_commit": "0ab2306a6c25826dc22c8518770e3b7f099d332e",
+  "phases": {
+    "feature_forge": { "status": "pending", "artifact": null },
+    "agent_plan": { "status": "pending", "artifact": null },
+    "execute_waves": { "status": "pending", "artifact": null },
+    "review_gauntlet": { "status": "pending", "artifact": null }
+  },
+  "current_phase": "feature_forge"
+}
