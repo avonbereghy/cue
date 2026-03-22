@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager, State, Theme};
+use tauri::{AppHandle, Emitter, Manager, State, Theme, WebviewUrl};
 
 /// Application state managed by Tauri.
 pub struct AppState {
@@ -64,6 +64,22 @@ fn detect_system_theme() -> Theme {
 // ---------------------------------------------------------------------------
 // Tauri Commands
 // ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn open_signal_settings(app: AppHandle) -> Result<(), String> {
+    // If window already exists, just focus it
+    if let Some(win) = app.get_webview_window("signal-settings") {
+        let _ = win.set_focus();
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(&app, "signal-settings", WebviewUrl::App("index.html#/signal-settings".into()))
+        .title("Signal Settings")
+        .inner_size(700.0, 600.0)
+        .resizable(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
 
 #[tauri::command]
 fn get_sessions(state: State<'_, AppState>) -> Vec<EnrichedSession> {
@@ -430,6 +446,7 @@ pub fn run() {
             load_preset,
             delete_preset,
             rename_preset,
+            open_signal_settings,
         ])
         .on_window_event(|window, event| {
             // Hide window instead of quitting when user closes it — app stays in tray

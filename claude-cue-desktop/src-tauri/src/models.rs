@@ -333,6 +333,16 @@ pub struct Settings {
     /// Signal string echo/trail intensity (0.0 = no trails, 1.0 = full trails)
     #[serde(default = "default_one")]
     pub signal_echo: f64,
+    /// Noise gate threshold (0.0 = no gate, values below are zeroed)
+    #[serde(default = "default_gate")]
+    pub signal_gate: f64,
+    /// Which frequency bands are enabled (bass, mids, treble)
+    #[serde(default = "default_true")]
+    pub signal_bass: bool,
+    #[serde(default = "default_true")]
+    pub signal_mids: bool,
+    #[serde(default = "default_true")]
+    pub signal_treble: bool,
     /// UUID of the active signal preset
     #[serde(default)]
     pub active_preset_id: String,
@@ -373,6 +383,10 @@ fn default_one() -> f64 {
     1.0
 }
 
+fn default_gate() -> f64 {
+    0.05
+}
+
 impl Default for Settings {
     fn default() -> Self {
         // Default to Max Standard ($100/mo)
@@ -390,9 +404,13 @@ impl Default for Settings {
             signal_string: true,
             signal_frequency: 1.0,
             signal_mode: "preset".to_string(),
-            signal_alpha: 1.0,
-            signal_amplitude: 1.0,
+            signal_alpha: 0.25,
+            signal_amplitude: 0.25,
             signal_echo: 1.0,
+            signal_gate: 0.05,
+            signal_bass: true,
+            signal_mids: true,
+            signal_treble: true,
             active_preset_id: String::new(),
             test_mode: false,
         }

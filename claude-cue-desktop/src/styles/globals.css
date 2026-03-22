@@ -124,6 +124,103 @@ body {
   border-color: rgba(239, 68, 68, 0.60);
 }
 
+/* ---------------------------------------------------------------------------
+   Session Card: Piano Key Press / Float Effect
+   Floating = raised off the surface (idle/done)
+   Pressed  = sunk into the surface like a depressed piano key (working)
+   --------------------------------------------------------------------------- */
+.session-card {
+  transition:
+    box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+    background-color 0.25s ease,
+    border-color 0.25s ease;
+}
+
+.session-card--floating {
+  background-color: rgba(255,255,255,0.05);
+  border-color: rgba(0,0,0,0.2);
+  box-shadow:
+    0 1px 2px rgba(0,0,0,0.3),
+    0 4px 12px rgba(0,0,0,0.4),
+    0 8px 24px rgba(0,0,0,0.25);
+  transform: translateY(0) scale(1);
+}
+
+/* Dark mode: pressed into the surface */
+.session-card--pressed {
+  background-color: rgba(255,255,255,0.01);
+  border-color: rgba(255,255,255,0.04);
+  box-shadow:
+    inset 0 4px 16px rgba(0,0,0,0.7),
+    inset 0 1px 4px rgba(0,0,0,0.6),
+    0 0 0 1px rgba(0,0,0,0.2);
+  transform: translateY(4px) scale(0.985);
+}
+
+/* Mechanical press — fast, no bounce */
+@keyframes card-press-down {
+  0%   { transform: translateY(0) scale(1); }
+  100% { transform: translateY(4px) scale(0.985); }
+}
+
+/* Mechanical release — fast, no bounce */
+@keyframes card-pop-up {
+  0%   { transform: translateY(4px) scale(0.985); }
+  100% { transform: translateY(0) scale(1); }
+}
+
+.session-card--pressed {
+  animation: card-press-down 0.2s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+.session-card--floating {
+  animation: card-pop-up 0.25s cubic-bezier(0.0, 0, 0.2, 1) forwards;
+}
+
+/* During slide-to-top: hold floating appearance, suppress press animation */
+.session-card--sliding {
+  animation: none !important;
+}
+
+/* Light mode overrides — hard, crisp shadows */
+@media (prefers-color-scheme: light) {
+  .session-card--floating {
+    background-color: rgba(255,255,255,0.97);
+    border-color: rgba(0,0,0,0.08);
+    box-shadow:
+      0 1px 2px rgba(0,0,0,0.12),
+      0 4px 8px rgba(0,0,0,0.14),
+      0 10px 24px rgba(0,0,0,0.16),
+      0 20px 40px rgba(0,0,0,0.10);
+  }
+  .session-card--pressed {
+    background-color: rgba(0,0,0,0.04);
+    border-color: rgba(0,0,0,0.12);
+    box-shadow:
+      inset 0 4px 16px rgba(0,0,0,0.18),
+      inset 0 2px 6px rgba(0,0,0,0.14),
+      inset 0 0 0 1px rgba(0,0,0,0.06);
+  }
+}
+html[data-theme="light"] .session-card--floating {
+  background-color: rgba(255,255,255,0.97);
+  border-color: rgba(0,0,0,0.08);
+  box-shadow:
+    0 1px 2px rgba(0,0,0,0.12),
+    0 4px 8px rgba(0,0,0,0.14),
+    0 10px 24px rgba(0,0,0,0.16),
+    0 20px 40px rgba(0,0,0,0.10);
+}
+html[data-theme="light"] .session-card--pressed {
+  background-color: rgba(0,0,0,0.04);
+  border-color: rgba(0,0,0,0.12);
+  box-shadow:
+    inset 0 4px 16px rgba(0,0,0,0.18),
+    inset 0 2px 6px rgba(0,0,0,0.14),
+    inset 0 0 0 1px rgba(0,0,0,0.06);
+}
+
 /* Reduced Motion */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

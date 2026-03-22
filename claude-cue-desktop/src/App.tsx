@@ -3,26 +3,32 @@ import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dashboard } from "./components/Dashboard";
 import { OnboardingWizard } from "./components/OnboardingWizard";
+import { SignalSettingsPage } from "./components/SignalSettingsPage";
 import type { Settings } from "./lib/types";
 
 function App() {
   const [loading, setLoading] = useState(true);
   const [onboardingComplete, setOnboardingComplete] = useState(false);
 
+  const isSignalSettings = window.location.hash === "#/signal-settings";
+
   useEffect(() => {
+    if (isSignalSettings) {
+      setLoading(false);
+      return;
+    }
     invoke<Settings>("get_settings")
       .then((settings) => {
         setOnboardingComplete(settings.onboardingComplete);
       })
       .catch((err) => {
         console.error("Failed to load settings:", err);
-        // Default to showing onboarding on error
         setOnboardingComplete(false);
       })
       .finally(() => {
         setLoading(false);
       });
-  }, []);
+  }, [isSignalSettings]);
 
   if (loading) {
     return (
@@ -30,6 +36,10 @@ function App() {
         Loading...
       </div>
     );
+  }
+
+  if (isSignalSettings) {
+    return <SignalSettingsPage />;
   }
 
   if (!onboardingComplete) {
