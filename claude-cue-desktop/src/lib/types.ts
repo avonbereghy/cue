@@ -77,6 +77,7 @@ export interface Settings {
   signalMids: boolean;
   signalTreble: boolean;
   activePresetId: string;
+  autoReorder: boolean;
   testMode: boolean;
 }
 
@@ -128,7 +129,7 @@ export interface EnvironmentInfo {
 
 /** State colors matching macOS app */
 export const STATE_COLORS: Record<string, string> = {
-  working: "text-blue-400",
+  working: "text-white/80",
   waiting: "text-yellow-400",
   error: "text-red-500",
   subagent: "text-cyan-400",
@@ -137,7 +138,7 @@ export const STATE_COLORS: Record<string, string> = {
 };
 
 export const STATE_DOT_COLORS: Record<string, string> = {
-  working: "bg-blue-500",
+  working: "bg-white/80",
   waiting: "bg-yellow-400",
   error: "bg-red-500",
   subagent: "bg-cyan-400",
@@ -146,7 +147,7 @@ export const STATE_DOT_COLORS: Record<string, string> = {
 };
 
 export const STATE_BADGE_BG: Record<string, string> = {
-  working: "bg-blue-500/20 text-blue-400",
+  working: "bg-white/10 text-white/80",
   waiting: "bg-yellow-400/20 text-yellow-400",
   error: "bg-red-500/20 text-red-500",
   subagent: "bg-cyan-400/20 text-cyan-400",

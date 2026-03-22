@@ -346,6 +346,9 @@ pub struct Settings {
     /// UUID of the active signal preset
     #[serde(default)]
     pub active_preset_id: String,
+    /// Auto-reorder sessions by state priority (working first)
+    #[serde(default)]
+    pub auto_reorder: bool,
     /// Test mode: adds a synthetic session for previewing animations
     #[serde(default)]
     pub test_mode: bool,
@@ -412,6 +415,7 @@ impl Default for Settings {
             signal_mids: true,
             signal_treble: true,
             active_preset_id: String::new(),
+            auto_reorder: false,
             test_mode: false,
         }
     }

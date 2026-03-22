@@ -131,7 +131,7 @@ export function drawBandEnvelopes(
   dark?: boolean,
   gate: number = 0,
 ) {
-  const isDark = dark ?? window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const isDark = dark ?? document.documentElement.getAttribute("data-theme") !== "light";
   ctx.clearRect(0, 0, w, h);
   if (!preset || preset.bands.bass.length === 0) return;
 
@@ -460,6 +460,7 @@ export function SettingsView() {
       signalMids: true,
       signalTreble: true,
       activePresetId: settings.activePresetId, // preserve preset selection
+      autoReorder: false,
       testMode: false,
     };
     setSettings(defaults);

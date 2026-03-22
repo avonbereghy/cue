@@ -197,10 +197,10 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
       } as React.CSSProperties}
     >
       {/* Signal String background (audio mode) — only for active sessions, not revived */}
-      {signalString && !revived && (signalMode === "preset" || signalMode === "audio") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} />}
+      {signalString && !revived && isWorking && (signalMode === "preset" || signalMode === "audio") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} />}
 
       {/* Row 1: Status dot + title + state badge + git branch + duration */}
-      <div className="flex items-center gap-2">
+      <div className="relative z-10 flex items-center gap-2">
         <span className={`inline-block w-2.5 h-2.5 rounded-full ${dotColor} ${dotPulse} shrink-0`} aria-hidden="true" />
         {(info.state === "working" || info.state === "subagent") && titleAnimation !== "none" ? (
           <span
@@ -271,10 +271,10 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
       </div>
 
       {/* Signal String separator (simulated mode, or revived sessions in any mode) */}
-      {signalString && (revived || (signalMode !== "preset" && signalMode !== "audio")) && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} />}
+      {signalString && (revived || isWorking) && (signalMode !== "preset" && signalMode !== "audio") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} />}
 
       {/* Row 2: Metrics */}
-      <div className="flex items-center gap-x-4 gap-y-1 text-xs text-white/50">
+      <div className="relative z-10 flex items-center gap-x-4 gap-y-1 text-xs text-white/50">
         {!isNarrow && truncatedId && (
           <button
             onClick={copySessionId}
@@ -325,7 +325,7 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
 
       {/* Row 3: Tool chips + cache hit rate */}
       {topTools.length > 0 && (
-        <div className="flex items-center gap-1.5 flex-wrap">
+        <div className="relative z-10 flex items-center gap-1.5 flex-wrap">
           {topTools.map(([name, count]) => (
             <span
               key={name}
@@ -348,7 +348,7 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
 
       {/* Row 4: Context usage bar */}
       {metrics.lastInputTokens > 0 && (
-        <div className="flex items-center gap-2">
+        <div className="relative z-10 flex items-center gap-2">
           <span className="text-[10px] text-white/50">Context</span>
           <div className="flex-1">
             <ProgressBar
