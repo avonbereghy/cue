@@ -30,9 +30,13 @@ interface SignalStringProps {
   signalAmplitude?: number;
   /** Echo/trail intensity (0.0 = no trails, 1.0 = full trails) */
   signalEcho?: number;
+  /** Which frequency bands are enabled */
+  signalBass?: boolean;
+  signalMids?: boolean;
+  signalTreble?: boolean;
 }
 
-export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 1.0, signalAmplitude = 0.5, signalEcho = 0.5 }: SignalStringProps) {
+export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true }: SignalStringProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
 
@@ -42,6 +46,9 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   const energyRef = useRef(0);
   // Track when session became inactive for decay timing
   const deactivatedAtRef = useRef<number | null>(null);
+  // Driven oscillator state: position + velocity per mode per band (max 3 bands × 6 modes)
+  const modeStateRef = useRef<{ pos: Float64Array; vel: Float64Array } | null>(null);
+  const lastFrameRef = useRef<number>(0);
 
   useEffect(() => {
     if (isActive) {
@@ -137,11 +144,25 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         // Mids: harmonics 2-5 (medium)     + standing
         // Treble: harmonics 4-9 (tight)    + rightward travel
         const amp = signalAmplitude;
-        const bands = [
-          { binStart: 0, binEnd: Math.floor(numBins * 0.25), startMode: 1, numModes: 3, speed: 0.7, travel: -0.3, phaseOff: 0, gain: 2.2 * amp, lw: 1.5, opacity: 0.3 },
-          { binStart: Math.floor(numBins * 0.25), binEnd: Math.floor(numBins * 0.6), startMode: 2, numModes: 4, speed: 1.4, travel: 0, phaseOff: 2.1, gain: 1.8 * amp, lw: 1.0, opacity: 0.25 },
-          { binStart: Math.floor(numBins * 0.6), binEnd: numBins, startMode: 4, numModes: 6, speed: 2.8, travel: 0.4, phaseOff: 4.5, gain: 1.5 * amp, lw: 0.75, opacity: 0.2 },
+        const allBands = [
+          { enabled: signalBass, binStart: 0, binEnd: Math.floor(numBins * 0.25), startMode: 1, numModes: 3, speed: 0.7, travel: -0.3, phaseOff: 0, gain: 2.2 * amp, lw: 1.5, opacity: 0.3 },
+          { enabled: signalMids, binStart: Math.floor(numBins * 0.25), binEnd: Math.floor(numBins * 0.6), startMode: 2, numModes: 4, speed: 1.4, travel: 0, phaseOff: 2.1, gain: 1.8 * amp, lw: 1.0, opacity: 0.25 },
+          { enabled: signalTreble, binStart: Math.floor(numBins * 0.6), binEnd: numBins, startMode: 4, numModes: 6, speed: 2.8, travel: 0.4, phaseOff: 4.5, gain: 1.5 * amp, lw: 0.75, opacity: 0.2 },
         ];
+        const bands = allBands.filter(b => b.enabled);
+
+        // Initialize oscillator state if needed (max 3 bands × 6 modes = 18 slots)
+        const totalModes = 18;
+        if (!modeStateRef.current) {
+          modeStateRef.current = { pos: new Float64Array(totalModes), vel: new Float64Array(totalModes) };
+        }
+        const ms = modeStateRef.current;
+        const dt = lastFrameRef.current > 0 ? Math.min((now - lastFrameRef.current) / 1000, 0.05) : 1 / 60;
+        lastFrameRef.current = now;
+
+        // Oscillator constants — stiffness controls response speed, damping prevents ringing
+        const STIFFNESS = 120;
+        const DAMPING = 10;
 
         const numTrails = Math.max(1, Math.round(32 * signalEcho));
         const trailSpacing = 0.018;
@@ -150,16 +171,24 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           const band = bands[bi];
           const bandBins = band.binEnd - band.binStart;
 
-          // Get average energy for this band's FFT range per mode
+          // Get target energy for this band's FFT range per mode
           const modeAmps: number[] = [];
           for (let m = 0; m < band.numModes; m++) {
             const mStart = band.binStart + Math.floor((m / band.numModes) * bandBins);
             const mEnd = band.binStart + Math.floor(((m + 1) / band.numModes) * bandBins);
             let energy = 0;
             for (let i = mStart; i < mEnd; i++) energy += freqData[i];
-            // sqrt curve boosts low amplitudes so quiet parts are still visible
             const raw = energy / ((mEnd - mStart) * 255);
-            modeAmps.push(Math.sqrt(raw));
+            const target = Math.sqrt(raw);
+
+            // Driven oscillator: position tracks target with inertia
+            const idx = bi * 6 + m;
+            const force = (target - ms.pos[idx]) * STIFFNESS - ms.vel[idx] * DAMPING;
+            ms.vel[idx] += force * dt;
+            ms.pos[idx] += ms.vel[idx] * dt;
+            // Clamp to prevent overshoot beyond reasonable bounds
+            ms.pos[idx] = Math.max(0, Math.min(1.5, ms.pos[idx]));
+            modeAmps.push(ms.pos[idx]);
           }
 
           for (let trail = 0; trail < numTrails; trail++) {
@@ -261,7 +290,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       cancelAnimationFrame(animRef.current);
       observer.disconnect();
     };
-  }, [state, isActive, frequency, revived, pulses, isAudio, signalAlpha, signalAmplitude, signalEcho]);
+  }, [state, isActive, frequency, revived, pulses, isAudio, signalAlpha, signalAmplitude, signalEcho, signalBass, signalMids, signalTreble]);
 
   if (isAudio) {
     // Audio mode: full-card background canvas

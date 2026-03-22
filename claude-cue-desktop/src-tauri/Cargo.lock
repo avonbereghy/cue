@@ -397,6 +397,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-store",
+ "tauri-utils",
  "tiny-skia",
  "tokio",
  "uuid",

@@ -72,6 +72,10 @@ export interface Settings {
   signalAlpha: number;
   signalAmplitude: number;
   signalEcho: number;
+  signalGate: number;
+  signalBass: boolean;
+  signalMids: boolean;
+  signalTreble: boolean;
   activePresetId: string;
   testMode: boolean;
 }

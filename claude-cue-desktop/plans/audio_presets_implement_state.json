@@ -1,0 +1,15 @@
+{
+  "feature": "audio_presets",
+  "description": "Extract bass/mid/treble envelopes from uploaded audio files and save as lightweight presets. No audio files stored — only the frequency envelope data that powers the signal strings. Preset history with selection.",
+  "mode": "managed",
+  "created": "2026-03-21T00:00:00Z",
+  "updated": "2026-03-21T00:05:00Z",
+  "base_commit": "0ab2306a6c25826dc22c8518770e3b7f099d332e",
+  "phases": {
+    "feature_forge": { "status": "done", "artifact": "specs/audio_presets.spec.md", "completed_at": "2026-03-21T00:01:00Z" },
+    "agent_plan": { "status": "done", "artifact": "plans/audio_presets_agent_plan.md", "completed_at": "2026-03-21T00:02:00Z" },
+    "execute_waves": { "status": "done", "artifact": "2 waves executed", "completed_at": "2026-03-21T00:05:00Z" },
+    "review_gauntlet": { "status": "pending", "artifact": null }
+  },
+  "current_phase": "review_gauntlet"
+}
