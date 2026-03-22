@@ -131,10 +131,10 @@ body {
    --------------------------------------------------------------------------- */
 .session-card {
   transition:
-    box-shadow 0.4s cubic-bezier(0.4, 0, 0.2, 1),
-    transform 0.4s cubic-bezier(0.4, 0, 0.2, 1),
-    background-color 0.4s ease,
-    border-color 0.4s ease;
+    box-shadow var(--key-release-speed, 0.4s) cubic-bezier(0.4, 0, 0.2, 1),
+    transform var(--key-release-speed, 0.4s) cubic-bezier(0.4, 0, 0.2, 1),
+    background-color var(--key-release-speed, 0.4s) ease,
+    border-color var(--key-release-speed, 0.4s) ease;
 }
 
 /* Default (dark mode) floating */
@@ -171,11 +171,11 @@ body {
 }
 
 .session-card--pressed {
-  animation: card-press-down 0.35s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  animation: card-press-down var(--key-press-speed, 0.35s) cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
 
 .session-card--floating {
-  animation: card-pop-up 0.4s cubic-bezier(0.0, 0, 0.2, 1) forwards;
+  animation: card-pop-up var(--key-release-speed, 0.4s) cubic-bezier(0.0, 0, 0.2, 1) forwards;
 }
 
 /* During slide-to-top: hold floating appearance, suppress press animation */
@@ -200,6 +200,128 @@ html[data-theme="light"] .session-card--pressed {
     inset 0 2px 8px rgba(0,0,0,0.14),
     inset 0 1px 3px rgba(0,0,0,0.08);
 }
+
+/* Waiting state — yellow highlight + construction tape stripes */
+.session-card--waiting {
+  background-color: rgba(255, 204, 0, 0.04) !important;
+  box-shadow:
+    0 1px 2px rgba(0,0,0,0.4),
+    0 4px 10px rgba(0,0,0,0.35),
+    inset 0 0 40px rgba(255, 204, 0, 0.12),
+    0 0 12px rgba(255, 204, 0, 0.08) !important;
+  border-color: rgba(255, 204, 0, 0.3) !important;
+}
+/* Hazard stripe bars — top and bottom of waiting card */
+.session-card--waiting::before,
+.session-card--waiting::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 4px;
+  z-index: 20;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 204, 0, 0.5),
+    rgba(255, 204, 0, 0.5) 6px,
+    rgba(0, 0, 0, 0.35) 6px,
+    rgba(0, 0, 0, 0.35) 12px
+  );
+  pointer-events: none;
+}
+.session-card--waiting::before { top: 0; border-radius: 0.5rem 0.5rem 0 0; }
+.session-card--waiting::after { bottom: 0; border-radius: 0 0 0.5rem 0.5rem; }
+
+/* Error state — red highlight + solid red bars */
+.session-card--error {
+  background-color: rgba(255, 69, 58, 0.03) !important;
+  box-shadow:
+    0 1px 2px rgba(0,0,0,0.4),
+    0 4px 10px rgba(0,0,0,0.35),
+    inset 0 0 30px rgba(255, 69, 58, 0.08) !important;
+  border-color: rgba(255, 69, 58, 0.2) !important;
+}
+.session-card--error::before,
+.session-card--error::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 4px;
+  z-index: 20;
+  background: rgba(255, 69, 58, 0.5);
+  pointer-events: none;
+}
+.session-card--error::before { top: 0; border-radius: 0.5rem 0.5rem 0 0; }
+.session-card--error::after { bottom: 0; border-radius: 0 0 0.5rem 0.5rem; }
+
+/* Light mode variants */
+html[data-theme="light"] .session-card--waiting {
+  background-color: rgba(255, 204, 0, 0.06) !important;
+  box-shadow:
+    0 1px 2px rgba(0,0,0,0.12),
+    0 4px 8px rgba(0,0,0,0.14),
+    inset 0 0 40px rgba(255, 204, 0, 0.12),
+    0 0 12px rgba(255, 204, 0, 0.06) !important;
+  border-color: rgba(200, 160, 0, 0.35) !important;
+}
+html[data-theme="light"] .session-card--waiting::before,
+html[data-theme="light"] .session-card--waiting::after {
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 204, 0, 0.6),
+    rgba(255, 204, 0, 0.6) 6px,
+    rgba(0, 0, 0, 0.15) 6px,
+    rgba(0, 0, 0, 0.15) 12px
+  );
+}
+html[data-theme="light"] .session-card--error {
+  background-color: rgba(255, 69, 58, 0.04) !important;
+  box-shadow:
+    0 1px 2px rgba(0,0,0,0.12),
+    0 4px 8px rgba(0,0,0,0.14),
+    inset 0 0 30px rgba(255, 69, 58, 0.1) !important;
+  border-color: rgba(220, 50, 40, 0.25) !important;
+}
+html[data-theme="light"] .session-card--error::before,
+html[data-theme="light"] .session-card--error::after {
+  background: rgba(220, 50, 40, 0.45);
+}
+
+/* ---------------------------------------------------------------------------
+   Keyboard Panel — theme-aware floating window
+   --------------------------------------------------------------------------- */
+.keyboard-panel {
+  background: rgba(30,30,30,0.92);
+  border-color: rgba(255,255,255,0.12);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.3);
+}
+.keyboard-panel-border { border-color: rgba(255,255,255,0.08); }
+.keyboard-panel-dim { color: rgba(255,255,255,0.4); }
+.keyboard-panel-close { color: rgba(255,255,255,0.3); }
+.keyboard-panel-close:hover { color: rgba(255,255,255,0.7); background: rgba(255,255,255,0.1); }
+.keyboard-key {
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.7);
+}
+.keyboard-key:hover { background: rgba(255,255,255,0.12); }
+.keyboard-key--active { background: rgba(255,255,255,0.2); box-shadow: inset 0 1px 4px rgba(0,0,0,0.3); }
+
+html[data-theme="light"] .keyboard-panel {
+  background: rgba(255,255,255,0.95);
+  border-color: rgba(0,0,0,0.12);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.08);
+}
+html[data-theme="light"] .keyboard-panel-border { border-color: rgba(0,0,0,0.08); }
+html[data-theme="light"] .keyboard-panel-dim { color: rgba(0,0,0,0.4); }
+html[data-theme="light"] .keyboard-panel-close { color: rgba(0,0,0,0.3); }
+html[data-theme="light"] .keyboard-panel-close:hover { color: rgba(0,0,0,0.7); background: rgba(0,0,0,0.06); }
+html[data-theme="light"] .keyboard-key {
+  background: rgba(0,0,0,0.04);
+  color: rgba(0,0,0,0.7);
+}
+html[data-theme="light"] .keyboard-key:hover { background: rgba(0,0,0,0.08); }
+html[data-theme="light"] .keyboard-key--active { background: rgba(0,0,0,0.14); box-shadow: inset 0 1px 4px rgba(0,0,0,0.1); }
 
 /* Reduced Motion */
 @media (prefers-reduced-motion: reduce) {

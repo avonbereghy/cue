@@ -346,6 +346,18 @@ pub struct Settings {
     /// UUID of the active signal preset
     #[serde(default)]
     pub active_preset_id: String,
+    /// Signal string color for dark mode (hex, e.g. "#ffffff")
+    #[serde(default = "default_signal_color_dark")]
+    pub signal_color_dark: String,
+    /// Signal string color for light mode (hex, e.g. "#000000")
+    #[serde(default = "default_signal_color_light")]
+    pub signal_color_light: String,
+    /// Piano key press-down speed in seconds
+    #[serde(default = "default_key_press_speed")]
+    pub key_press_speed: f64,
+    /// Piano key release speed in seconds
+    #[serde(default = "default_key_release_speed")]
+    pub key_release_speed: f64,
     /// Auto-reorder sessions by state priority (working first)
     #[serde(default)]
     pub auto_reorder: bool,
@@ -386,6 +398,22 @@ fn default_one() -> f64 {
     1.0
 }
 
+fn default_signal_color_dark() -> String {
+    "#ffffff".to_string()
+}
+
+fn default_signal_color_light() -> String {
+    "#000000".to_string()
+}
+
+fn default_key_press_speed() -> f64 {
+    0.35
+}
+
+fn default_key_release_speed() -> f64 {
+    0.4
+}
+
 fn default_gate() -> f64 {
     0.05
 }
@@ -415,6 +443,8 @@ impl Default for Settings {
             signal_mids: true,
             signal_treble: true,
             active_preset_id: String::new(),
+            key_press_speed: 0.35,
+            key_release_speed: 0.4,
             auto_reorder: false,
             test_mode: false,
         }

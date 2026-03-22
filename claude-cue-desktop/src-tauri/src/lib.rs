@@ -66,6 +66,22 @@ fn detect_system_theme() -> Theme {
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
+fn open_keyboard(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("keyboard") {
+        let _ = win.set_focus();
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(&app, "keyboard", WebviewUrl::App("index.html#/keyboard".into()))
+        .title("Keyboard")
+        .inner_size(240.0, 290.0)
+        .resizable(false)
+        .always_on_top(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn open_signal_settings(app: AppHandle) -> Result<(), String> {
     // If window already exists, just focus it
     if let Some(win) = app.get_webview_window("signal-settings") {
@@ -447,12 +463,16 @@ pub fn run() {
             delete_preset,
             rename_preset,
             open_signal_settings,
+            open_keyboard,
         ])
         .on_window_event(|window, event| {
-            // Hide window instead of quitting when user closes it — app stays in tray
+            // Hide main window instead of quitting — app stays in tray.
+            // Let secondary windows (signal-settings, etc.) close normally.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
-                api.prevent_close();
+                if window.label() == "main" {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
             }
         })
         .setup(move |app| {
