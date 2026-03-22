@@ -77,6 +77,10 @@ export interface Settings {
   signalMids: boolean;
   signalTreble: boolean;
   activePresetId: string;
+  signalColorDark: string;
+  signalColorLight: string;
+  keyPressSpeed: number;
+  keyReleaseSpeed: number;
   autoReorder: boolean;
   testMode: boolean;
 }

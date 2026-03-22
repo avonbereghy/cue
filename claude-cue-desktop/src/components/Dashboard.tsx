@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useSessionMonitor } from "@/hooks/useSessionMonitor";
 import { SessionsTab } from "./SessionsTab";
 import { SettingsView } from "./SettingsView";
@@ -74,6 +75,15 @@ export function Dashboard() {
             {t}
           </button>
         ))}
+        <button
+          onClick={() => invoke("open_keyboard").catch(() => {})}
+          className="ml-auto flex items-center gap-1 px-3 py-1.5 rounded-md text-sm transition-colors text-white/50 hover:text-white/70"
+          title="Animation Keyboard"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+          </svg>
+        </button>
       </div>
 
       {/* Tab content */}

@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Dashboard } from "./components/Dashboard";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { SignalSettingsPage } from "./components/SignalSettingsPage";
+import { KeyboardPage } from "./components/KeyboardPanel";
 import type { Settings } from "./lib/types";
 
 function App() {
@@ -11,9 +12,10 @@ function App() {
   const [onboardingComplete, setOnboardingComplete] = useState(false);
 
   const isSignalSettings = window.location.hash === "#/signal-settings";
+  const isKeyboard = window.location.hash === "#/keyboard";
 
   useEffect(() => {
-    if (isSignalSettings) {
+    if (isSignalSettings || isKeyboard) {
       setLoading(false);
       return;
     }
@@ -40,6 +42,10 @@ function App() {
 
   if (isSignalSettings) {
     return <SignalSettingsPage />;
+  }
+
+  if (isKeyboard) {
+    return <KeyboardPage />;
   }
 
   if (!onboardingComplete) {

@@ -21,9 +21,11 @@ interface SessionCardProps {
   signalMids?: boolean;
   signalTreble?: boolean;
   revived?: boolean;
+  keyPressSpeed?: number;
+  keyReleaseSpeed?: number;
 }
 
-export function SessionCard({ session, titleAnimation = "flip", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, revived = false }: SessionCardProps) {
+export function SessionCard({ session, titleAnimation = "flip", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4 }: SessionCardProps) {
   const { info, metrics } = session;
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -142,6 +144,8 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
   }, [isAnimating, signalString, session.displayTitle, titleAnimation, animationSpeed, randomAnimation]);
 
   const isWorking = info.state === "working" || info.state === "subagent";
+  const isWaiting = info.state === "waiting";
+  const isError = info.state === "error";
 
   const dotColor = STATE_DOT_COLORS[info.state] ?? "bg-green-500";
   const dotPulse = info.state === "working" || info.state === "waiting" || info.state === "subagent" ? "dot-pulse" : "";
@@ -187,6 +191,8 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
       className={`relative overflow-hidden rounded-lg border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 session-card ${
         isWorking ? "session-card--pressed" : "session-card--floating"
       } ${
+        isWaiting ? "session-card--waiting" : isError ? "session-card--error" : ""
+      } ${
         signalString && (signalMode === "preset" || signalMode === "audio") ? "px-4 py-5 space-y-5" : "p-3 space-y-2.5"
       }`}
       tabIndex={0}
@@ -194,6 +200,8 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
       title={info.workspace}
       style={{
         "--anim-speed": `${animationSpeed}s`,
+        "--key-press-speed": `${keyPressSpeed}s`,
+        "--key-release-speed": `${keyReleaseSpeed}s`,
       } as React.CSSProperties}
     >
       {/* Signal String background (audio mode) — only for active sessions, not revived */}
@@ -270,7 +278,7 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
         </span>
       </div>
 
-      {/* Signal String separator (simulated mode, or revived sessions in any mode) */}
+      {/* Signal String separator (simulated mode, revived sessions) */}
       {signalString && (revived || isWorking) && (signalMode !== "preset" && signalMode !== "audio") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} />}
 
       {/* Row 2: Metrics */}

@@ -1,5 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type { EnrichedSession, Settings, SignalPreset } from "@/lib/types";
 import { TITLE_ANIMATIONS, ANIMATION_SPEEDS } from "@/lib/types";
 import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, setGate as setGateEngine } from "@/lib/presetEngine";
@@ -64,6 +65,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [presetBootAttempted, setPresetBootAttempted] = useState(false);
   const [testMode, setTestMode] = useState(false);
   const [testState, setTestState] = useState<"working" | "idle">("working");
+  const [keyPressSpeed, setKeyPressSpeed] = useState(0.35);
+  const [keyReleaseSpeed, setKeyReleaseSpeed] = useState(0.4);
   const [autoReorder, setAutoReorder] = useState(false);
   const cardPositions = useRef<Map<string, DOMRect>>(new Map());
   const prevStates = useRef<Map<string, string>>(new Map());
@@ -201,6 +204,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setSignalTreble(s.signalTreble ?? true);
     setGateEngine(s.signalGate ?? 0.05);
     setActivePresetId(s.activePresetId ?? "");
+    setKeyPressSpeed(s.keyPressSpeed ?? 0.35);
+    setKeyReleaseSpeed(s.keyReleaseSpeed ?? 0.4);
     setAutoReorder(s.autoReorder ?? false);
     setTestMode(s.testMode ?? false);
   }, []);
@@ -398,6 +403,94 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     cardPositions.current = positions;
   }, [sortKey, stateKey, autoReorder]);
 
+  // Keyboard animation handler — listens for Tauri events from keyboard window
+  useEffect(() => {
+    const handler = (payload: { animation: string }) => {
+      const list = listRef.current;
+      if (!list) return;
+      const { animation } = payload;
+      // Only animate idle/done sessions — skip working/subagent/waiting
+      const cards = Array.from(list.querySelectorAll<HTMLElement>("[data-session-state]"))
+        .filter((wrapper) => {
+          const state = wrapper.dataset.sessionState;
+          return state !== "working" && state !== "subagent" && state !== "waiting";
+        })
+        .map((wrapper) => wrapper.querySelector<HTMLElement>(".session-card"))
+        .filter((el): el is HTMLElement => el !== null);
+      if (cards.length === 0) return;
+
+      const press = (el: HTMLElement) => {
+        el.classList.remove("session-card--floating");
+        el.classList.add("session-card--pressed");
+      };
+      const release = (el: HTMLElement) => {
+        el.classList.remove("session-card--pressed");
+        el.classList.add("session-card--floating");
+      };
+      const toggle = (el: HTMLElement, delay: number) => {
+        setTimeout(() => {
+          press(el);
+          setTimeout(() => release(el), 400);
+        }, delay);
+      };
+
+      switch (animation) {
+        case "all-press":
+          cards.forEach(press);
+          break;
+        case "all-release":
+          cards.forEach(release);
+          break;
+        case "random-keys": {
+          const count = Math.max(3, Math.ceil(cards.length * 0.6));
+          for (let i = 0; i < count; i++) {
+            const idx = Math.floor(Math.random() * cards.length);
+            toggle(cards[idx], Math.random() * 800);
+          }
+          break;
+        }
+        case "chord-ripple":
+          cards.forEach((el, i) => toggle(el, i * 80));
+          break;
+        case "wave-left":
+          cards.forEach((el, i) => toggle(el, i * 120));
+          break;
+        case "wave-right":
+          [...cards].reverse().forEach((el, i) => toggle(el, i * 120));
+          break;
+        case "alternating":
+          cards.forEach((el, i) => {
+            if (i % 2 === 0) toggle(el, 0);
+            else toggle(el, 300);
+          });
+          break;
+        case "cascade-down":
+          cards.forEach((el, i) => {
+            const delay = i * 150;
+            setTimeout(() => {
+              press(el);
+              // Each card stays pressed longer than the last
+              setTimeout(() => release(el), 300 + i * 100);
+            }, delay);
+          });
+          break;
+        case "heartbeat":
+          // Two quick beats
+          cards.forEach((el) => {
+            toggle(el, 0);
+            toggle(el, 500);
+          });
+          break;
+      }
+    };
+
+    let unlisten: (() => void) | undefined;
+    listen<{ animation: string }>("keyboard-animation", (event) => {
+      handler(event.payload);
+    }).then((fn) => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, []);
+
   // Helper to update a setting and persist immediately
   const updateSetting = useCallback(async (patch: Partial<Settings>) => {
     try {
@@ -459,8 +552,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             const isCollapsed = collapsedSessions.has(session.info.id);
 
             return (
-              <div key={session.info.id} data-session-id={session.info.id} className="space-y-2">
-                <SessionCard session={session} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} />
+              <div key={session.info.id} data-session-id={session.info.id} data-session-state={session.info.state} className="space-y-2">
+                <SessionCard session={session} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} />
 
                 {/* Permission section (when enabled and has activity) */}
                 {permissionsEnabled && hasPermissionActivity && (
