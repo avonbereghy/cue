@@ -97,7 +97,7 @@ export function SignalSettingsPage() {
       drawBandEnvelopes(ctx, w, h, preset, { bass, mids, treble }, undefined, gateVal);
 
       if (preset && preset.durationSecs > 0) {
-        const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        const isDark = document.documentElement.getAttribute("data-theme") !== "light";
         const step = preset.durationSecs > 120 ? 30 : 10;
         ctx.fillStyle = isDark ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.2)";
         ctx.font = "9px system-ui";

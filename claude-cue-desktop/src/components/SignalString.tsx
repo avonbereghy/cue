@@ -64,7 +64,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     if (!ctx) return;
 
     const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const isDark = document.documentElement.getAttribute("data-theme") !== "light";
 
     const a = signalAlpha;
     const strokeColor = revived
