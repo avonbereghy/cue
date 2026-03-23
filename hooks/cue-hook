@@ -294,12 +294,12 @@ def main():
             now = time.time()
 
             if action == "remove":
-                # Session ended — mark as "done" instead of deleting.
-                # The frontend captures this transition for the revive list.
-                # Done sessions are pruned after 5 minutes by the stale check below.
+                # Session exited — mark as "ended" (distinct from "done" which
+                # means "finished a turn, still at the prompt"). The frontend
+                # moves "ended" sessions to the revive list.
                 existing = status["sessions"].get(session_id, {})
                 if existing:
-                    existing["state"] = "done"
+                    existing["state"] = "ended"
                     existing["lastActivity"] = now
                     existing["activeSubagents"] = 0
                     status["sessions"][session_id] = existing
@@ -378,7 +378,7 @@ def main():
                 for sid, s in status["sessions"].items()
                 if (s.get("state") == "error"
                     and now - s.get("lastActivity", 0) > STALE_THRESHOLD)
-                or (s.get("state") == "done"
+                or (s.get("state") == "ended"
                     and now - s.get("lastActivity", 0) > DONE_THRESHOLD)
             ]
             for sid in stale:
