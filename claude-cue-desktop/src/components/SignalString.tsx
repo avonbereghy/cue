@@ -91,10 +91,12 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // [bass, mids, treble] — each travels at a slightly different rate
   const clipFractionsRef = useRef(isActive ? new Float64Array([1, 1, 1]) : new Float64Array(3));
   const clipVelsRef = useRef(new Float64Array(3));
-  const retractTimerRef = useRef<number | null>(null);
-  const retractReadyRef = useRef(!isActive); // true = allowed to retract (after delay)
-  const deployTimerRef = useRef<number | null>(null);
-  const deployReadyRef = useRef(isActive); // true = allowed to deploy (after key press delay)
+  // Per-band ready flags and timers — staggered: band 0 first, band 1 after 400ms, band 2 after 520ms
+  const bandStaggerMs = [0, 400, 520];
+  const retractTimersRef = useRef<(number | null)[]>([null, null, null]);
+  const retractReadyRef = useRef(isActive ? [false, false, false] : [true, true, true]);
+  const deployTimersRef = useRef<(number | null)[]>([null, null, null]);
+  const deployReadyRef = useRef(isActive ? [true, true, true] : [false, false, false]);
 
   // Store tuning props in a ref so the draw loop reads them live
   // without tearing down the animation pipeline on every slider change
@@ -114,49 +116,51 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   };
 
   useEffect(() => {
+    const clearAllTimers = () => {
+      for (let i = 0; i < 3; i++) {
+        if (retractTimersRef.current[i] !== null) {
+          clearTimeout(retractTimersRef.current[i]!);
+          retractTimersRef.current[i] = null;
+        }
+        if (deployTimersRef.current[i] !== null) {
+          clearTimeout(deployTimersRef.current[i]!);
+          deployTimersRef.current[i] = null;
+        }
+      }
+    };
+
     if (isActive) {
       deactivatedAtRef.current = null;
       // Cancel any pending retract
-      retractReadyRef.current = false;
-      if (retractTimerRef.current !== null) {
-        clearTimeout(retractTimerRef.current);
-        retractTimerRef.current = null;
+      retractReadyRef.current = [false, false, false];
+      clearAllTimers();
+      // Staggered deploy: band 0 first, band 1 after 800ms, band 2 after 950ms
+      deployReadyRef.current = [false, false, false];
+      const bandNudge = [0.35, 0.15, 0.15]; // first band gets a stronger initial push
+      for (let i = 0; i < 3; i++) {
+        const delay = 850 + bandStaggerMs[i];
+        deployTimersRef.current[i] = window.setTimeout(() => {
+          deployReadyRef.current[i] = true;
+          // Initial nudge — first band gets a stronger push to come out faster
+          clipVelsRef.current[i] = Math.max(clipVelsRef.current[i], bandNudge[i] * cordDeployForce);
+          deployTimersRef.current[i] = null;
+        }, delay);
       }
-      // Delay deploy so the key-press animation settles first (~0.35s press + 0.5s pause)
-      deployReadyRef.current = false;
-      deployTimerRef.current = window.setTimeout(() => {
-        deployReadyRef.current = true;
-        // Tiny nudge per band — cubic acceleration builds the rest
-        const vels = clipVelsRef.current;
-        for (let i = 0; i < 3; i++) {
-          vels[i] = Math.max(vels[i], 0.15 * cordDeployForce);
-        }
-        deployTimerRef.current = null;
-      }, 850);
     } else {
       // Cancel any pending deploy
-      deployReadyRef.current = false;
-      if (deployTimerRef.current !== null) {
-        clearTimeout(deployTimerRef.current);
-        deployTimerRef.current = null;
+      deployReadyRef.current = [false, false, false];
+      clearAllTimers();
+      // Staggered retract: band 0 first, band 1 after 500ms, band 2 after 600ms
+      retractReadyRef.current = [false, false, false];
+      for (let i = 0; i < 3; i++) {
+        const delay = cordRetractDelay * 1000 + bandStaggerMs[i];
+        retractTimersRef.current[i] = window.setTimeout(() => {
+          retractReadyRef.current[i] = true;
+          retractTimersRef.current[i] = null;
+        }, delay);
       }
-      // Retract after configurable delay (vacuum cord pause before retraction)
-      retractReadyRef.current = false;
-      retractTimerRef.current = window.setTimeout(() => {
-        retractReadyRef.current = true;
-        retractTimerRef.current = null;
-      }, cordRetractDelay * 1000);
     }
-    return () => {
-      if (retractTimerRef.current !== null) {
-        clearTimeout(retractTimerRef.current);
-        retractTimerRef.current = null;
-      }
-      if (deployTimerRef.current !== null) {
-        clearTimeout(deployTimerRef.current);
-        deployTimerRef.current = null;
-      }
-    };
+    return clearAllTimers;
   }, [isActive, cordRetractDelay, cordDeployForce]);
 
   useEffect(() => {
@@ -214,7 +218,6 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       const bandForceMult = [0.85, 1.0, 1.2];
       if (!revived) {
         const { cordDeployForce: deployF, cordRetractForce: retractF } = cfg;
-        const deployReady = deployReadyRef.current;
         const clipDt = 1 / 60; // approximate frame dt
         const fracs = clipFractionsRef.current;
         const vels = clipVelsRef.current;
@@ -223,12 +226,12 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           const clip = fracs[i];
           const fm = bandForceMult[i];
 
-          if (isActive && deployReady) {
+          if (isActive && deployReadyRef.current[i]) {
             // Deploy: magnetic acceleration — very slow buildup, explosive finish
             // Cubic ramp: near-zero force at start, steep ramp past ~60%
             const pullStrength = (0.4 + clip * clip * clip * 12) * deployF * fm;
             vels[i] += pullStrength * clipDt;
-          } else if (retractReadyRef.current) {
+          } else if (retractReadyRef.current[i]) {
             // Retract: accelerating pull toward left (vacuum cord feel)
             const pullStrength = (1.5 + (1 - clip) * 6) * retractF * fm;
             vels[i] -= pullStrength * clipDt;

@@ -13,6 +13,7 @@ import type { EnrichedSession } from "@/lib/types";
 import { STATE_HEX, STATE_HEX_LIGHT, STATE_DOT_HEX, STATE_DOT_HEX_LIGHT, STATE_BADGE_HEX, STATE_BADGE_HEX_LIGHT } from "@/lib/types";
 import { formatTokens, formatDuration } from "@/lib/format";
 import { SignalString } from "./SignalString";
+import { VineBorder } from "./VineBorder";
 import type { StrikePulse } from "./SignalString";
 
 interface SessionCardProps {
@@ -253,6 +254,9 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
         "--key-release-speed": `${keyReleaseSpeed}s`,
       } as React.CSSProperties}
     >
+      {/* Vine border — wraps card perimeter when working */}
+      <VineBorder active={isWorking} />
+
       {/* Signal String — renders behind all content (particles pass under pills/text) */}
       {signalString && (revived || info.state !== "ended") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} sessionId={info.id} contentRef={contentRef} />}
 
