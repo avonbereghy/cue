@@ -126,10 +126,10 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       deployReadyRef.current = false;
       deployTimerRef.current = window.setTimeout(() => {
         deployReadyRef.current = true;
-        // Small nudge per band — magnetic acceleration builds the rest
+        // Tiny nudge per band — cubic acceleration builds the rest
         const vels = clipVelsRef.current;
         for (let i = 0; i < 3; i++) {
-          vels[i] = Math.max(vels[i], 0.3 * cordDeployForce);
+          vels[i] = Math.max(vels[i], 0.15 * cordDeployForce);
         }
         deployTimerRef.current = null;
       }, 850);
@@ -224,8 +224,9 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           const fm = bandForceMult[i];
 
           if (isActive && deployReady) {
-            // Deploy: magnetic acceleration — slow start, zippy finish
-            const pullStrength = (1.5 + clip * 6) * deployF * fm;
+            // Deploy: magnetic acceleration — very slow buildup, explosive finish
+            // Cubic ramp: near-zero force at start, steep ramp past ~60%
+            const pullStrength = (0.4 + clip * clip * clip * 12) * deployF * fm;
             vels[i] += pullStrength * clipDt;
           } else if (retractReadyRef.current) {
             // Retract: accelerating pull toward left (vacuum cord feel)

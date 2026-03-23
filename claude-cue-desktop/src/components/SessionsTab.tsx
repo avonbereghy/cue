@@ -926,9 +926,15 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                     <div key={revived.session.info.id} className={`revived-card-wrapper relative ${pulseClass}`}>
                       <div key={clicks} className="revived-overlay" />
                       <SessionCard session={revived.session} titleAnimation="none" signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} revived />
-                      {/* Blur overlay — covers metrics rows but leaves title row visible */}
-                      <div className="absolute left-0 right-0 bottom-0 z-8 rounded-b-lg overflow-hidden" style={{ top: "2.25rem", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }} />
-                      <div className="absolute inset-0 flex items-center justify-center gap-4 z-10" style={{ paddingTop: "1.5rem" }}>
+                      {/* Full blur overlay */}
+                      <div className="absolute inset-0 z-8 rounded-lg overflow-hidden" style={{ backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }} />
+                      {/* Title re-rendered on top of blur in original position */}
+                      <div className="absolute top-0 left-0 right-0 z-9 px-3 pt-2.5 flex items-center gap-2 pointer-events-none">
+                        <span className="inline-block w-2.5 h-2.5 rounded-full bg-red-400 shrink-0" />
+                        <span className="font-semibold text-red-400 truncate">{revived.session.displayTitle}</span>
+                      </div>
+                      {/* Controls overlay */}
+                      <div className="absolute inset-0 flex items-center justify-center gap-4 z-10" style={{ paddingTop: "1rem" }}>
                         <span className="text-xs text-red-400/70 font-mono tabular-nums">
                           {formatReviveElapsed(revived.revivedAt)}
                         </span>
