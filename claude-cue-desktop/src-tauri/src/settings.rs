@@ -45,7 +45,7 @@ mod tests {
     #[test]
     fn test_default_settings() {
         let s = Settings::default();
-        assert_eq!(s.title_animation, "flip");
+        assert_eq!(s.title_animation, "none");
         assert!((s.animation_speed - 1.2).abs() < f64::EPSILON);
         assert!(!s.random_animation);
         assert!(!s.permissions_enabled);

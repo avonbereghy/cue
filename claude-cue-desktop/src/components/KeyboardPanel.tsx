@@ -44,7 +44,7 @@ export function KeyboardPage() {
     <div className="h-screen flex flex-col keyboard-panel" data-tauri-drag-region>
       {/* Title bar — draggable */}
       <div className="flex items-center px-3 py-1.5 border-b keyboard-panel-border" data-tauri-drag-region>
-        <span className="text-[10px] keyboard-panel-dim uppercase tracking-wider" data-tauri-drag-region>Keyboard</span>
+        <span className="text-[0.625rem] keyboard-panel-dim uppercase tracking-wider" data-tauri-drag-region>Keyboard</span>
       </div>
 
       {/* 3x3 Grid */}
@@ -59,7 +59,7 @@ export function KeyboardPage() {
             title={key.label}
           >
             <span className="text-base leading-none">{key.icon}</span>
-            <span className="text-[8px] keyboard-panel-dim mt-1">{key.label}</span>
+            <span className="text-[0.5rem] keyboard-panel-dim mt-1">{key.label}</span>
           </button>
         ))}
       </div>

@@ -47,7 +47,7 @@ export function PermissionPrompt({ request, onApprove, onDeny }: PermissionPromp
         >
           Deny
         </button>
-        <span className="text-[10px] text-white/30 ml-auto">
+        <span className="text-[0.625rem] text-white/30 ml-auto">
           {request.toolName}
         </span>
       </div>

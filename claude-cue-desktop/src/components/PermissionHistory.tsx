@@ -37,7 +37,7 @@ export function PermissionHistory({ entries }: PermissionHistoryProps) {
             {entry.toolInputSummary}
           </span>
           <span
-            className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+            className={`px-1.5 py-0.5 rounded-full text-[0.625rem] font-medium ${
               entry.decision.toLowerCase() === "allow"
                 ? "bg-green-500/20 text-green-400"
                 : "bg-red-500/20 text-red-400"

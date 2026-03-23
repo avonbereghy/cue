@@ -1,5 +1,5 @@
 import { useRef, useEffect } from "react";
-import { getFrequencyData, isPlaying, getOnsets } from "@/lib/presetEngine";
+import { getFrequencyData, getFrequencyDataAtTime, getCurrentTime, getDuration, isPlaying, getOnsets } from "@/lib/presetEngine";
 
 /**
  * Signal String — animated separator with two modes:
@@ -7,6 +7,16 @@ import { getFrequencyData, isPlaying, getOnsets } from "@/lib/presetEngine";
  * 2. Preset: extracted frequency envelope data drives displacement
  * Uses tanh activation to smoothly bound the result.
  */
+
+/** Parse hex color string to RGB components */
+function hexToRgb(hex: string) {
+  const h = hex.replace("#", "");
+  return {
+    r: parseInt(h.substring(0, 2), 16) || 0,
+    g: parseInt(h.substring(2, 4), 16) || 0,
+    b: parseInt(h.substring(4, 6), 16) || 0,
+  };
+}
 
 export interface StrikePulse {
   originX: number;   // 0..1 normalized position on the string
@@ -34,9 +44,25 @@ interface SignalStringProps {
   signalBass?: boolean;
   signalMids?: boolean;
   signalTreble?: boolean;
+  /** Custom string color for dark mode (hex) */
+  signalColorDark?: string;
+  /** Custom string color for light mode (hex) */
+  signalColorLight?: string;
+  /** Audio offset randomness (0 = all sessions synced, 1 = full random offset) */
+  signalOffset?: number;
+  /** Whether pulse particles are enabled */
+  particleEnabled?: boolean;
+  /** Particle speed multiplier */
+  particleSpeed?: number;
+  /** Particle spawn rate multiplier */
+  particleRate?: number;
+  /** Number of spark trails per particle */
+  particleSparks?: number;
+  /** Session ID used as seed for per-session random offset */
+  sessionId?: string;
 }
 
-export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true }: SignalStringProps) {
+export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, sessionId = "" }: SignalStringProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
 
@@ -51,6 +77,8 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   const lastFrameRef = useRef<number>(0);
   // Onset impulse accumulators per band (decays each frame)
   const onsetRef = useRef<Float64Array>(new Float64Array(3));
+  // Pulse particles traveling along strings
+  const particlesRef = useRef<{ x: number; speed: number; band: number; birth: number }[]>([]);
 
   useEffect(() => {
     if (isActive) {
@@ -68,13 +96,15 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const isDark = document.documentElement.getAttribute("data-theme") !== "light";
 
+    const sc = isDark ? hexToRgb(signalColorDark) : hexToRgb(signalColorLight);
+
     const a = signalAlpha;
     const strokeColor = revived
       ? `rgba(239, 68, 68, ${0.4 * a})`
-      : isDark ? `rgba(255, 255, 255, ${0.4 * a})` : `rgba(0, 0, 0, ${0.35 * a})`;
+      : `rgba(${sc.r}, ${sc.g}, ${sc.b}, ${0.4 * a})`;
     const flatColor = revived
       ? `rgba(239, 68, 68, ${0.5 * a})`
-      : isDark ? `rgba(255, 255, 255, ${0.35 * a})` : `rgba(0, 0, 0, ${0.3 * a})`;
+      : `rgba(${sc.r}, ${sc.g}, ${sc.b}, ${0.35 * a})`;
 
     const dpr = window.devicePixelRatio || 1;
 
@@ -116,7 +146,6 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       // ── Revived mode: red lightning bolts ──
       if (revived) {
         const t = now / 1000;
-        const a = signalAlpha;
 
         // Draw a forked lightning bolt path
         const drawBolt = (startX: number, seedBase: number, opacity: number, width: number) => {
@@ -170,15 +199,60 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
 
       // ── Audio mode: 3 strings (bass / mids / highs) with time accumulation ──
       if (isAudio) {
-        // Audio not loaded/playing yet — show flat line and keep polling
+        // Audio not loaded/playing yet — show breathing idle animation
         if (!isPlaying()) {
-          drawFlatLine(w, midY);
+          if (!isActive) {
+            drawFlatLine(w, midY);
+            animRef.current = requestAnimationFrame(draw);
+            return;
+          }
+          const t = now / 1000;
+          const amp = signalAmplitude;
+          const a = signalAlpha;
+          ctx.beginPath();
+          for (let x = 0; x <= w; x += 2) {
+            const xNorm = x / w;
+            const breath = amp * 0.4 * (
+              Math.sin(xNorm * 4.17 + t * 0.71) * 0.5 +
+              Math.sin(xNorm * 6.83 - t * 1.13) * 0.3 +
+              Math.sin(xNorm * 11.3 + t * 0.37) * 0.15 +
+              Math.sin(xNorm * 17.1 - t * 1.71) * 0.05
+            );
+            const y = midY + breath * halfH;
+            if (x === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.strokeStyle = isDark ? `rgba(${sc.r},${sc.g},${sc.b},${0.2 * a})` : `rgba(${sc.r},${sc.g},${sc.b},${0.15 * a})`;
+          ctx.lineWidth = 1;
+          ctx.stroke();
           animRef.current = requestAnimationFrame(draw);
           return;
         }
-        const freqData = getFrequencyData();
+
+        // Per-session offset: derive random position + speed from session ID
+        let freqData: Uint8Array;
+        let t: number;
+        if (signalOffset > 0 && sessionId) {
+          // Hash session ID to get deterministic random values
+          let hash = 0;
+          for (let i = 0; i < sessionId.length; i++) {
+            hash = ((hash << 5) - hash + sessionId.charCodeAt(i)) | 0;
+          }
+          const h1 = ((hash * 2654435761) >>> 0) / 0xFFFFFFFF; // 0..1 for position
+          const h2 = (((hash * 40503) >>> 0) & 0xFFFF) / 0xFFFF; // 0..1 for speed
+
+          const duration = getDuration() || 1;
+          const posOffset = h1 * duration * signalOffset;
+          const speedMult = 1 + (h2 - 0.5) * 0.08 * signalOffset; // +-4% max
+
+          const offsetTime = getCurrentTime() * speedMult + posOffset;
+          freqData = getFrequencyDataAtTime(offsetTime);
+          t = now / 1000 * speedMult;
+        } else {
+          freqData = getFrequencyData();
+          t = now / 1000;
+        }
         const numBins = freqData.length;
-        const t = now / 1000;
 
         // Decay envelope: when session stops, smoothly fade out over ~2 seconds
         let decayEnvelope = 1.0;
@@ -300,6 +374,9 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           );
         };
 
+        // Store trail-0 points per band for particle rendering
+        const bandPaths: number[][] = [];
+
         for (let bi = 0; bi < bands.length; bi++) {
           const band = bands[bi];
           const modeAmps = allModeAmps[bi];
@@ -336,6 +413,9 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
               points.push(midY + y);
             }
 
+            // Save trail-0 path for particles
+            if (trail === 0) bandPaths.push(points);
+
             // Draw glow layer (wider, semi-transparent) — trail 0 only
             if (trail === 0) {
               ctx.beginPath();
@@ -345,7 +425,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
                 else ctx.lineTo(x, points[i]);
               }
               const glowOp = op * 0.25;
-              ctx.strokeStyle = isDark ? `rgba(255,255,255,${glowOp})` : `rgba(0,0,0,${glowOp * 0.7})`;
+              ctx.strokeStyle = `rgba(${sc.r},${sc.g},${sc.b},${glowOp})`;
               ctx.lineWidth = band.lw * 4;
               ctx.stroke();
             }
@@ -357,11 +437,78 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
               if (i === 0) ctx.moveTo(x, points[i]);
               else ctx.lineTo(x, points[i]);
             }
-            const c = isDark ? `rgba(255,255,255,${op})` : `rgba(0,0,0,${op * 0.8})`;
+            const c = `rgba(${sc.r},${sc.g},${sc.b},${op})`;
             ctx.strokeStyle = c;
             ctx.lineWidth = trail === 0 ? band.lw : band.lw * 0.6;
             ctx.stroke();
           }
+        }
+
+        // ── Pulse particles: blobs that ride along the strings ──
+        if (isActive && bands.length > 0 && particleEnabled) {
+          const particles = particlesRef.current;
+          const baseSpeed = 150 * particleSpeed;
+          const speedRange = 200 * particleSpeed;
+          const spawnChance = 0.035 * particleRate;
+          const sparks = Math.round(particleSparks);
+
+          if (Math.random() < spawnChance * bands.length) {
+            const bandIdx = Math.floor(Math.random() * bands.length);
+            particles.push({
+              x: 0,
+              speed: baseSpeed + Math.random() * speedRange,
+              band: bandIdx,
+              birth: now,
+            });
+          }
+
+          for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            const age = (now - p.birth) / 1000;
+            p.x += p.speed * dt;
+
+            if (p.x > w + 10) { particles.splice(i, 1); continue; }
+
+            const path = bandPaths[p.band];
+            if (!path || path.length === 0) continue;
+            const pathIdx = p.x / 2;
+            const pi0 = Math.floor(pathIdx);
+            const pi1 = Math.min(pi0 + 1, path.length - 1);
+            const frac = pathIdx - pi0;
+            const py = pi0 < path.length ? path[pi0] * (1 - frac) + path[pi1] * frac : midY;
+
+            const fadeIn = Math.min(age / 0.15, 1);
+            const alpha = fadeIn * signalAlpha * 0.85;
+
+            const band = bands[p.band];
+            const radius = band.lw * 2;
+
+            // Sparks
+            for (let si = 0; si < sparks; si++) {
+              const sparkSeed = ((p.birth + si * 7919) * 2654435761) >>> 0;
+              const sx = p.x - (si + 1) * (3 + ((sparkSeed & 0xFF) / 255) * 5);
+              const sy = py + (((sparkSeed >> 8) & 0xFF) / 255 - 0.5) * 6;
+              const sparkAlpha = alpha * (0.6 - si * 0.1);
+              if (sx > 0 && sx < w) {
+                ctx.beginPath();
+                ctx.arc(sx, sy, 0.8, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(${sc.r},${sc.g},${sc.b},${sparkAlpha})`;
+                ctx.fill();
+              }
+            }
+
+            ctx.beginPath();
+            ctx.arc(p.x, py, radius, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(${sc.r},${sc.g},${sc.b},${alpha})`;
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.arc(p.x, py, radius * 0.4, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(255,255,255,${alpha * 0.5})`;
+            ctx.fill();
+          }
+
+          if (particles.length > 40) particles.splice(0, particles.length - 40);
         }
 
         animRef.current = requestAnimationFrame(draw);
@@ -391,6 +538,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
 
       ctx.beginPath();
 
+      const simPoints: number[] = [];
       for (let x = 0; x <= w; x += 2) {
         let sum = 0;
 
@@ -407,6 +555,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         }
 
         const y = Math.tanh(sum * 0.2) * halfH;
+        simPoints.push(midY + y);
 
         if (x === 0) {
           ctx.moveTo(x, midY + y);
@@ -419,6 +568,64 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       ctx.lineWidth = 1;
       ctx.stroke();
 
+      // ── Pulse particles for simulated mode ──
+      if (isActive && hasPulses && particleEnabled) {
+        const particles = particlesRef.current;
+        const baseSpeed = 150 * particleSpeed;
+        const speedRange = 200 * particleSpeed;
+        const sparks = Math.round(particleSparks);
+
+        if (Math.random() < 0.04 * particleRate) {
+          particles.push({
+            x: 0,
+            speed: baseSpeed + Math.random() * speedRange,
+            band: 0,
+            birth: now,
+          });
+        }
+
+        for (let i = particles.length - 1; i >= 0; i--) {
+          const p = particles[i];
+          const age = (now - p.birth) / 1000;
+          p.x += p.speed * (1 / 60);
+
+          if (p.x > w + 10) { particles.splice(i, 1); continue; }
+
+          const pi0 = Math.floor(p.x / 2);
+          const pi1 = Math.min(pi0 + 1, simPoints.length - 1);
+          const frac = (p.x / 2) - pi0;
+          const py = pi0 < simPoints.length ? simPoints[pi0] * (1 - frac) + simPoints[pi1] * frac : midY;
+
+          const fadeIn = Math.min(age / 0.15, 1);
+          const pAlpha = fadeIn * signalAlpha * 0.8;
+
+          for (let si = 0; si < sparks; si++) {
+            const sparkSeed = ((p.birth + si * 7919) * 2654435761) >>> 0;
+            const sx = p.x - (si + 1) * (3 + ((sparkSeed & 0xFF) / 255) * 4);
+            const sy = py + (((sparkSeed >> 8) & 0xFF) / 255 - 0.5) * 5;
+            const sparkAlpha = pAlpha * (0.5 - si * 0.1);
+            if (sx > 0 && sx < w) {
+              ctx.beginPath();
+              ctx.arc(sx, sy, 0.7, 0, Math.PI * 2);
+              ctx.fillStyle = `rgba(${sc.r},${sc.g},${sc.b},${sparkAlpha})`;
+              ctx.fill();
+            }
+          }
+
+          ctx.beginPath();
+          ctx.arc(p.x, py, 1.8, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(${sc.r},${sc.g},${sc.b},${pAlpha})`;
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.arc(p.x, py, 0.6, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(255,255,255,${pAlpha * 0.5})`;
+          ctx.fill();
+        }
+
+        if (particles.length > 30) particles.splice(0, particles.length - 30);
+      }
+
       animRef.current = requestAnimationFrame(draw);
     };
 
@@ -428,7 +635,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       cancelAnimationFrame(animRef.current);
       observer.disconnect();
     };
-  }, [state, isActive, frequency, revived, pulses, isAudio, signalAlpha, signalAmplitude, signalEcho, signalBass, signalMids, signalTreble]);
+  }, [state, isActive, frequency, revived, pulses, isAudio, signalAlpha, signalAmplitude, signalEcho, signalBass, signalMids, signalTreble, signalColorDark, signalColorLight, signalOffset, particleEnabled, particleSpeed, particleRate, particleSparks, sessionId]);
 
   if (isAudio) {
     // Audio mode: full-card background canvas

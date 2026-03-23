@@ -48,7 +48,7 @@ interface SessionsTabProps {
 
 export function SessionsTab({ sessions }: SessionsTabProps) {
   const [permissionsEnabled, setPermissionsEnabled] = useState(false);
-  const [titleAnimation, setTitleAnimation] = useState("flip");
+  const [titleAnimation, setTitleAnimation] = useState("none");
   const [animationSpeed, setAnimationSpeed] = useState(1.2);
   const [randomAnimation, setRandomAnimation] = useState(false);
   const [signalString, setSignalString] = useState(false);
@@ -62,7 +62,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [signalTreble, setSignalTreble] = useState(true);
   const [signalColorDark, setSignalColorDark] = useState("#ffffff");
   const [signalColorLight, setSignalColorLight] = useState("#000000");
-  const [signalOffset, setSignalOffset] = useState(0);
+  const [signalOffset, setSignalOffset] = useState(0.5);
   const [particleEnabled, setParticleEnabled] = useState(true);
   const [particleSpeed, setParticleSpeed] = useState(1.0);
   const [particleRate, setParticleRate] = useState(1.0);
@@ -195,7 +195,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // Load settings and poll for changes (so Signal Settings window edits sync)
   const applySettings = useCallback((s: Settings) => {
     setPermissionsEnabled(s.permissionsEnabled);
-    setTitleAnimation(s.titleAnimation ?? "flip");
+    setTitleAnimation(s.titleAnimation ?? "none");
     setAnimationSpeed(s.animationSpeed ?? 1.2);
     setRandomAnimation(s.randomAnimation ?? false);
     setSignalString(s.signalString ?? false);
@@ -210,7 +210,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setSignalTreble(s.signalTreble ?? true);
     setSignalColorDark(s.signalColorDark ?? "#ffffff");
     setSignalColorLight(s.signalColorLight ?? "#000000");
-    setSignalOffset(s.signalOffset ?? 0);
+    setSignalOffset(s.signalOffset ?? 0.5);
     setParticleEnabled(s.particleEnabled ?? true);
     setParticleSpeed(s.particleSpeed ?? 1.0);
     setParticleRate(s.particleRate ?? 1.0);
