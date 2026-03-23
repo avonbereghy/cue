@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import { usePageVisible } from "@/hooks/usePageVisible";
 
 /** Deterministic per-character hash for stable animation randomness */
 function charHash(i: number, title: string): number {
@@ -50,6 +51,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
   const { info, metrics } = session;
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const pageVisible = usePageVisible();
 
   // Sticky state: hold error/waiting states for a minimum duration before fading out
   const STICKY_HOLD_MS = 3500;
@@ -104,7 +106,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
   // Mathematical strike detection — computes each character's animation phase
   // and fires a pulse when it crosses the "peak displacement" threshold
   useEffect(() => {
-    if (!isAnimating || !signalString) {
+    if (!isAnimating || !signalString || !pageVisible) {
       lastStrikeCycleRef.current.clear();
       return;
     }
@@ -188,7 +190,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
     return () => {
       cancelAnimationFrame(strikeRafRef.current);
     };
-  }, [isAnimating, signalString, session.displayTitle, titleAnimation, animationSpeed, randomAnimation]);
+  }, [isAnimating, signalString, session.displayTitle, titleAnimation, animationSpeed, randomAnimation, pageVisible]);
 
   const isWorking = displayState === "working" || displayState === "subagent";
   const isWaiting = displayState === "waiting";
@@ -196,10 +198,16 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
 
   const isDark = typeof document !== "undefined" ? document.documentElement.getAttribute("data-theme") !== "light" : true;
 
+  const STATE_DISPLAY_NAME: Record<string, string> = {
+    working: "Working", waiting: "Waiting", error: "Error",
+    subagent: "Subagent", idle: "Idle", done: "Done", ended: "Ended",
+  };
+
   const dotHex = (isDark ? STATE_DOT_HEX : STATE_DOT_HEX_LIGHT)[displayState] ?? "#22c55e";
   const dotPulse = displayState === "working" || displayState === "waiting" || displayState === "subagent" ? "dot-pulse" : "";
   const badgeHex = (isDark ? STATE_BADGE_HEX : STATE_BADGE_HEX_LIGHT)[displayState] ?? { bg: "rgba(34,197,94,0.2)", text: "#22c55e" };
   const titleHex = (isDark ? STATE_HEX : STATE_HEX_LIGHT)[displayState] ?? "#22c55e";
+  const displayStateName = STATE_DISPLAY_NAME[displayState] ?? session.stateDisplayName;
 
   const stateTransition = "color 600ms ease, background-color 600ms ease";
 
@@ -231,7 +239,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
     }).catch(() => {});
   }, [info.id]);
 
-  const ariaLabel = `${session.stateDisplayName}: ${session.displayTitle}, running ${formatDuration(session.durationSecs)}`;
+  const ariaLabel = `${displayStateName}: ${session.displayTitle}, running ${formatDuration(session.durationSecs)}`;
 
   return (
     <div
@@ -306,7 +314,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
               </span>
             )}
             <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: badgeHex.bg, color: badgeHex.text, transition: stateTransition }}>
-              {session.stateDisplayName}
+              {displayStateName}
             </span>
             {!isNarrow && (
               <span className="text-[0.625rem] text-white/50 truncate font-mono" title={info.workspace}>
