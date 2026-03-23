@@ -1,4 +1,5 @@
 import { useRef, useEffect } from "react";
+import { usePageVisible } from "@/hooks/usePageVisible";
 
 /**
  * VineBorder — animated dark twisting vines that wrap the entire card perimeter.
@@ -37,10 +38,16 @@ export function VineBorder({ active }: VineBorderProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef(0);
   const opacityRef = useRef(active ? 1 : 0);
+  const pageVisible = usePageVisible();
+  const lastDrawRef = useRef(0);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+
+    // Pause when page is hidden
+    if (!pageVisible) return;
+
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
@@ -56,7 +63,17 @@ export function VineBorder({ active }: VineBorderProps) {
     const obs = new ResizeObserver(resize);
     obs.observe(canvas);
 
+    const FRAME_INTERVAL = 1000 / 30; // Target 30 FPS
+
     const draw = (now: number) => {
+      // Throttle to 30 FPS
+      const elapsed = now - lastDrawRef.current;
+      if (elapsed < FRAME_INTERVAL) {
+        animRef.current = requestAnimationFrame(draw);
+        return;
+      }
+      lastDrawRef.current = now - (elapsed % FRAME_INTERVAL);
+
       const t = now / 1000;
       const rect = canvas.getBoundingClientRect();
       const w = rect.width;
@@ -70,6 +87,11 @@ export function VineBorder({ active }: VineBorderProps) {
 
       ctx.clearRect(0, 0, w, h);
 
+      // Stop loop entirely when fully faded out and inactive
+      if (globalAlpha < 0.005 && !active) {
+        opacityRef.current = 0;
+        return;
+      }
       if (globalAlpha < 0.005) {
         animRef.current = requestAnimationFrame(draw);
         return;
@@ -205,12 +227,12 @@ export function VineBorder({ active }: VineBorderProps) {
       cancelAnimationFrame(animRef.current);
       obs.disconnect();
     };
-  }, [active]);
+  }, [active, pageVisible]);
 
   return (
     <canvas
       ref={canvasRef}
-      className="pointer-events-none"
+      className="w-full h-full pointer-events-none"
       style={{
         position: "absolute",
         inset: 0,

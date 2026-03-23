@@ -252,12 +252,14 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   }, []);
 
   useEffect(() => {
+    // Load settings on mount
     invoke<Settings>("get_settings").then(applySettings).catch(() => {});
-    // Poll every 2s so changes from Signal Settings window sync live
-    const id = setInterval(() => {
-      invoke<Settings>("get_settings").then(applySettings).catch(() => {});
-    }, 2000);
-    return () => clearInterval(id);
+    // Listen for settings changes from any window (replaces 2s polling)
+    let unlisten: (() => void) | undefined;
+    listen<Settings>("settings-changed", (event) => {
+      applySettings(event.payload);
+    }).then((fn) => { unlisten = fn; });
+    return () => { unlisten?.(); };
   }, [applySettings]);
 
   // Auto-load active preset on launch when preset mode is configured

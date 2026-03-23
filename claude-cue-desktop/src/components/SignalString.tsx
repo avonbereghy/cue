@@ -1,4 +1,5 @@
 import { useRef, useEffect } from "react";
+import { usePageVisible } from "@/hooks/usePageVisible";
 import { getFrequencyData, getFrequencyDataAtTime, getCurrentTime, getDuration, isPlaying, getOnsets } from "@/lib/presetEngine";
 
 /**
@@ -75,6 +76,8 @@ interface SignalStringProps {
 export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.0, cordRetractForce = 1.0, sessionId = "", contentRef }: SignalStringProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
+  const pageVisible = usePageVisible();
+  const lastDrawTimeRef = useRef(0);
 
   const isActive = state === "working" || state === "subagent";
   const isAudio = signalMode === "preset" || signalMode === "audio";
@@ -167,6 +170,9 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     const canvas = canvasRef.current;
     if (!canvas) return;
 
+    // Pause all rendering when page is hidden
+    if (!pageVisible) return;
+
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
@@ -185,7 +191,16 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     const observer = new ResizeObserver(resize);
     observer.observe(canvas);
 
+    const FRAME_INTERVAL = 1000 / 30; // Target 30 FPS
+
     const draw = (now: number) => {
+      // Throttle to 30 FPS
+      const frameElapsed = now - lastDrawTimeRef.current;
+      if (frameElapsed < FRAME_INTERVAL) {
+        animRef.current = requestAnimationFrame(draw);
+        return;
+      }
+      lastDrawTimeRef.current = now - (frameElapsed % FRAME_INTERVAL);
       const cfg = configRef.current;
       const { signalAlpha, signalAmplitude, signalEcho, frequency,
         signalBass, signalMids, signalTreble,
@@ -907,7 +922,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // Only re-create the animation pipeline for structural changes.
   // Tuning props (alpha, amplitude, colors, etc.) are read from configRef each frame.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, isActive, revived, isAudio, sessionId]);
+  }, [state, isActive, revived, isAudio, sessionId, pageVisible]);
 
   // Full-card background canvas — z-0 ensures content (z-10) renders above
   return (
