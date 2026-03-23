@@ -15,8 +15,7 @@ export function formatDuration(secs: number): string {
   const hrs = Math.floor(total / 3600);
   const mins = Math.floor((total % 3600) / 60);
   const s = total % 60;
-  if (hrs > 0) return `${hrs}h ${String(mins).padStart(2, "0")}m`;
-  return `${mins}m ${String(s).padStart(2, "0")}s`;
+  return `${String(hrs).padStart(2, "0")}:${String(mins).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
 export function formatCost(usd: number): string {

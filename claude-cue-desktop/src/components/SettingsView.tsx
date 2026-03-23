@@ -300,9 +300,7 @@ function BandWaveform({ presetId, signalBass, signalMids, signalTreble, signalGa
 
 export function SettingsView() {
   const [settings, setSettings] = useState<Settings | null>(null);
-  const [savedSettings, setSavedSettings] = useState<Settings | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const initialLoadRef = useRef(true);
   const [presets, setPresets] = useState<PresetSummary[]>([]);
   const [extracting, setExtracting] = useState(false);
   const [extractProgress, setExtractProgress] = useState("");
@@ -326,8 +324,8 @@ export function SettingsView() {
       const s = await invoke<Settings>("get_settings");
       // Backward compat
       if (s.signalMode === "audio") s.signalMode = "preset";
+      initialLoadRef.current = true;
       setSettings(s);
-      setSavedSettings(s);
     } catch (err) {
       console.error("Failed to load settings:", err);
     }
@@ -347,20 +345,18 @@ export function SettingsView() {
     loadPresets();
   }, [loadSettings, loadPresets]);
 
-  const handleSave = async () => {
+  // Auto-save: persist every settings change immediately
+  useEffect(() => {
     if (!settings) return;
-    setSaving(true);
-    try {
-      await invoke("update_settings", { newSettings: settings });
-      setSavedSettings(settings);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch (err) {
-      console.error("Failed to save settings:", err);
-    } finally {
-      setSaving(false);
+    // Skip the initial load — don't re-save what we just loaded
+    if (initialLoadRef.current) {
+      initialLoadRef.current = false;
+      return;
     }
-  };
+    invoke("update_settings", { newSettings: settings }).catch((err) =>
+      console.error("Failed to save settings:", err),
+    );
+  }, [settings]);
 
   const handleUploadAndExtract = async (file: File) => {
     if (!settings) return;
@@ -377,8 +373,6 @@ export function SettingsView() {
       // Activate the new preset
       const updated = { ...settings, signalMode: "preset", activePresetId: preset.id };
       setSettings(updated);
-      await invoke("update_settings", { newSettings: updated });
-      setSavedSettings(updated);
 
       // Load into engine
       loadPresetEngine(preset);
@@ -398,8 +392,6 @@ export function SettingsView() {
     if (!settings) return;
     const updated = { ...settings, signalMode: "preset", activePresetId: presetId };
     setSettings(updated);
-    await invoke("update_settings", { newSettings: updated });
-    setSavedSettings(updated);
 
     // Load into engine
     try {
@@ -415,10 +407,7 @@ export function SettingsView() {
       await invoke("delete_preset", { id: presetId });
       // If active preset was deleted, clear it
       if (settings?.activePresetId === presetId) {
-        const updated = { ...settings, activePresetId: "" };
-        setSettings(updated);
-        await invoke("update_settings", { newSettings: updated });
-        setSavedSettings(updated);
+        setSettings({ ...settings, activePresetId: "" });
       }
       await loadPresets();
     } catch (err) {
@@ -446,14 +435,14 @@ export function SettingsView() {
     setEditingPresetId(null);
   };
 
-  const handleResetDefaults = async () => {
+  const handleResetDefaults = () => {
     if (!settings) return;
     const defaults: Settings = {
       onboardingComplete: settings.onboardingComplete, // keep onboarding state
       permissionsEnabled: false,
       theme: "auto",
-      titleAnimation: "none",
-      animationSpeed: 1.2,
+      titleAnimation: "ripple",
+      animationSpeed: 3.5,
       randomAnimation: false,
       signalString: true,
       signalFrequency: 1.0,
@@ -474,6 +463,9 @@ export function SettingsView() {
       particleRate: 1.0,
       particleSparks: 3,
       particleAlpha: 1.0,
+      cordRetractDelay: 2.0,
+      cordDeployForce: 1.0,
+      cordRetractForce: 1.0,
       keyPressSpeed: 0.35,
       keyReleaseSpeed: 0.4,
       autoReorder: false,
@@ -481,23 +473,12 @@ export function SettingsView() {
       testMode: false,
     };
     setSettings(defaults);
-    try {
-      await invoke("update_settings", { newSettings: defaults });
-      setSavedSettings(defaults);
-      // Apply theme immediately
-      const win = window as unknown as Record<string, unknown>;
-      if (typeof win.__applyTheme === "function") {
-        (win.__applyTheme as (p: string) => void)("auto");
-      }
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch (err) {
-      console.error("Failed to reset settings:", err);
+    // Apply theme immediately
+    const win = window as unknown as Record<string, unknown>;
+    if (typeof win.__applyTheme === "function") {
+      (win.__applyTheme as (p: string) => void)("auto");
     }
   };
-
-  const isDirty = settings && savedSettings &&
-    JSON.stringify(settings) !== JSON.stringify(savedSettings);
 
   if (!settings) {
     return (
@@ -515,26 +496,13 @@ export function SettingsView() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-white">Settings</h2>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleResetDefaults}
-            className="px-2 py-1 rounded text-[0.625rem] text-white/30 hover:text-white/60 hover:bg-white/5 transition-colors"
-            title="Reset all settings to defaults (preserves presets)"
-          >
-            Reset Defaults
-          </button>
-          {isDirty ? (
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="px-3 py-1 rounded text-xs font-medium bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 disabled:opacity-50"
-            >
-              {saving ? "Saving..." : "Save"}
-            </button>
-          ) : saved ? (
-            <span className="px-3 py-1 rounded text-xs font-medium bg-green-500/20 text-green-400">Saved</span>
-          ) : null}
-        </div>
+        <button
+          onClick={handleResetDefaults}
+          className="px-2 py-1 rounded text-[0.625rem] text-white/30 hover:text-white/60 hover:bg-white/5 transition-colors"
+          title="Reset all settings to defaults (preserves presets)"
+        >
+          Reset Defaults
+        </button>
       </div>
 
       {/* Theme */}
@@ -557,14 +525,14 @@ export function SettingsView() {
 
       {/* Animation */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
-        <SettingRow label="Title Animation" description="Effect on working session titles" onReset={settings.titleAnimation !== "flip" ? () => setSettings({ ...settings, titleAnimation: "none" }) : undefined}>
+        <SettingRow label="Title Animation" description="Effect on working session titles" onReset={settings.titleAnimation !== "ripple" ? () => setSettings({ ...settings, titleAnimation: "ripple" }) : undefined}>
           <Select
             value={settings.titleAnimation}
             options={TITLE_ANIMATIONS.map((a) => ({ id: a.id, label: a.label }))}
             onChange={(v) => setSettings({ ...settings, titleAnimation: v })}
           />
         </SettingRow>
-        <SettingRow label="Animation Speed" onReset={settings.animationSpeed !== 1.2 ? () => setSettings({ ...settings, animationSpeed: 1.2 }) : undefined}>
+        <SettingRow label="Animation Speed" onReset={settings.animationSpeed !== 3.5 ? () => setSettings({ ...settings, animationSpeed: 3.5 }) : undefined}>
           <Select
             value={settings.animationSpeed}
             options={ANIMATION_SPEEDS.map((s) => ({ id: String(s.id), label: s.label }))}
@@ -722,6 +690,17 @@ export function SettingsView() {
                 </SettingRow>
               </>
             )}
+
+            {/* Cord Animation */}
+            <SettingRow label="Retract Delay" description="Seconds before strings retract after session stops">
+              <Slider value={settings.cordRetractDelay ?? 2.0} min={0.2} max={6.0} step={0.1} defaultValue={2.0} format={(v) => `${v.toFixed(1)}s`} onChange={(v) => setSettings({ ...settings, cordRetractDelay: v })} />
+            </SettingRow>
+            <SettingRow label="Deploy Force" description="How forcefully strings launch when session starts working">
+              <Slider value={settings.cordDeployForce ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, cordDeployForce: v })} />
+            </SettingRow>
+            <SettingRow label="Retract Force" description="How hard the vacuum pulls the strings back">
+              <Slider value={settings.cordRetractForce ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, cordRetractForce: v })} />
+            </SettingRow>
 
             {/* Effect Presets — combined color + signal + particle presets */}
             <div className="py-2 space-y-2">
@@ -902,7 +881,8 @@ export function SettingsView() {
         )}
       </section>
 
-      {/* Permissions & Test Mode */}
+      {/* Beta Features */}
+      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Beta Features</h3>
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
         <SettingRow label="Auto Reorder" description="Move working and waiting sessions to the top automatically" onReset={(settings.autoReorder ?? false) ? () => setSettings({ ...settings, autoReorder: false }) : undefined}>
           <Toggle
