@@ -756,7 +756,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             </div>
           </div>
         ) : (
-          <div ref={listRef} className="flex-1 overflow-y-auto p-4 pb-8 space-y-3">
+          <div ref={listRef} className="flex-1 overflow-y-auto p-4 pb-4 space-y-3">
             {sortedSandbox.map((session) => {
               // Apply keyboard state override if active
               const overrideState = stateOverrides[session.info.id];
@@ -828,7 +828,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           <span className="text-sm">Sessions will appear here when Claude Code is running</span>
         </div>
       ) : (
-        <div ref={listRef} className="flex-1 overflow-y-auto p-4 pb-8 space-y-3">
+        <div ref={listRef} className="flex-1 overflow-y-auto p-4 pb-4 space-y-3">
           {/* Active sessions */}
           {sortedSessions.map((session) => {
             const pending = pendingBySession[session.info.id] ?? [];
