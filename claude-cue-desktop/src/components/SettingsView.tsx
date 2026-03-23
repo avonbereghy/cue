@@ -473,6 +473,7 @@ export function SettingsView() {
       particleSpeed: 1.0,
       particleRate: 1.0,
       particleSparks: 3,
+      particleAlpha: 1.0,
       keyPressSpeed: 0.35,
       keyReleaseSpeed: 0.4,
       autoReorder: false,
@@ -716,6 +717,9 @@ export function SettingsView() {
                 <SettingRow label="Sparks" description="Trailing spark dots behind each particle">
                   <Slider value={settings.particleSparks ?? 3} min={0} max={6} step={1} defaultValue={3} format={(v) => `${v}`} onChange={(v) => setSettings({ ...settings, particleSparks: v })} />
                 </SettingRow>
+                <SettingRow label="Particle Opacity" description="Brightness of particles, independent of string opacity">
+                  <Slider value={settings.particleAlpha ?? 1.0} min={0.05} max={1.0} step={0.01} defaultValue={1.0} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, particleAlpha: v })} />
+                </SettingRow>
               </>
             )}
 
@@ -724,13 +728,13 @@ export function SettingsView() {
               <div className="text-[0.625rem] text-white/40 uppercase tracking-wider">Effect Presets</div>
               <div className="flex flex-wrap gap-1.5">
                 {([
-                  { label: "Default", colorDark: "#ffffff", colorLight: "#000000", alpha: 0.25, amplitude: 0.25, echo: 1.0, pSpeed: 1.0, pRate: 1.0, pSparks: 3, particles: true },
-                  { label: "Neon", colorDark: "#00e5ff", colorLight: "#0097a7", alpha: 0.5, amplitude: 0.4, echo: 1.5, pSpeed: 1.5, pRate: 2.0, pSparks: 5, particles: true },
-                  { label: "Ember", colorDark: "#ffab00", colorLight: "#e65100", alpha: 0.4, amplitude: 0.3, echo: 0.8, pSpeed: 0.7, pRate: 3.0, pSparks: 4, particles: true },
-                  { label: "Ghost", colorDark: "#b388ff", colorLight: "#7b1fa2", alpha: 0.15, amplitude: 0.5, echo: 2.0, pSpeed: 0.5, pRate: 0.5, pSparks: 0, particles: true },
-                  { label: "Pulse", colorDark: "#ff4081", colorLight: "#c2185b", alpha: 0.35, amplitude: 0.6, echo: 0.4, pSpeed: 2.5, pRate: 1.5, pSparks: 6, particles: true },
-                  { label: "Minimal", colorDark: "#ffffff", colorLight: "#000000", alpha: 0.12, amplitude: 0.15, echo: 0.3, pSpeed: 1.0, pRate: 0.3, pSparks: 0, particles: false },
-                  { label: "Aurora", colorDark: "#00e676", colorLight: "#2e7d32", alpha: 0.3, amplitude: 0.35, echo: 1.8, pSpeed: 0.8, pRate: 1.2, pSparks: 2, particles: true },
+                  { label: "Default", colorDark: "#ffffff", colorLight: "#000000", alpha: 0.25, amplitude: 0.25, echo: 1.0, pSpeed: 1.0, pRate: 1.0, pSparks: 3, pAlpha: 1.0, particles: true },
+                  { label: "Neon", colorDark: "#00e5ff", colorLight: "#0097a7", alpha: 0.5, amplitude: 0.4, echo: 1.5, pSpeed: 1.5, pRate: 2.0, pSparks: 5, pAlpha: 0.9, particles: true },
+                  { label: "Ember", colorDark: "#ffab00", colorLight: "#e65100", alpha: 0.4, amplitude: 0.3, echo: 0.8, pSpeed: 0.7, pRate: 3.0, pSparks: 4, pAlpha: 0.8, particles: true },
+                  { label: "Ghost", colorDark: "#b388ff", colorLight: "#7b1fa2", alpha: 0.15, amplitude: 0.5, echo: 2.0, pSpeed: 0.5, pRate: 0.5, pSparks: 0, pAlpha: 0.4, particles: true },
+                  { label: "Pulse", colorDark: "#ff4081", colorLight: "#c2185b", alpha: 0.35, amplitude: 0.6, echo: 0.4, pSpeed: 2.5, pRate: 1.5, pSparks: 6, pAlpha: 1.0, particles: true },
+                  { label: "Minimal", colorDark: "#ffffff", colorLight: "#000000", alpha: 0.12, amplitude: 0.15, echo: 0.3, pSpeed: 1.0, pRate: 0.3, pSparks: 0, pAlpha: 0.5, particles: false },
+                  { label: "Aurora", colorDark: "#00e676", colorLight: "#2e7d32", alpha: 0.3, amplitude: 0.35, echo: 1.8, pSpeed: 0.8, pRate: 1.2, pSparks: 2, pAlpha: 0.7, particles: true },
                 ] as const).map((preset) => (
                   <button
                     key={preset.label}
@@ -744,6 +748,7 @@ export function SettingsView() {
                       particleSpeed: preset.pSpeed,
                       particleRate: preset.pRate,
                       particleSparks: preset.pSparks,
+                      particleAlpha: preset.pAlpha,
                       particleEnabled: preset.particles,
                     })}
                     className="px-2.5 py-1 rounded-full text-[0.625rem] bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/70 transition-colors flex items-center gap-1.5"

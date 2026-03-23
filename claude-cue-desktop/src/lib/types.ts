@@ -84,6 +84,7 @@ export interface Settings {
   particleSpeed: number;
   particleRate: number;
   particleSparks: number;
+  particleAlpha: number;
   keyPressSpeed: number;
   keyReleaseSpeed: number;
   autoReorder: boolean;
