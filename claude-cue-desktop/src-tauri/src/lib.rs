@@ -108,8 +108,10 @@ fn get_settings() -> Settings {
 }
 
 #[tauri::command]
-fn update_settings(new_settings: Settings) -> Result<(), String> {
-    settings::save_settings(&new_settings)
+fn update_settings(app: tauri::AppHandle, new_settings: Settings) -> Result<(), String> {
+    settings::save_settings(&new_settings)?;
+    let _ = app.emit("settings-changed", &new_settings);
+    Ok(())
 }
 
 #[tauri::command]
