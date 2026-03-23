@@ -60,18 +60,24 @@ interface SignalStringProps {
   particleSparks?: number;
   /** Particle opacity (independent of string opacity) */
   particleAlpha?: number;
+  /** Delay before cord retracts after stopping (seconds) */
+  cordRetractDelay?: number;
+  /** Deploy force multiplier (how fast strings launch out) */
+  cordDeployForce?: number;
+  /** Retract force multiplier (how hard the vacuum pulls) */
+  cordRetractForce?: number;
   /** Session ID used as seed for per-session random offset */
   sessionId?: string;
+  /** Ref to content wrapper — used to clip particles behind content rows */
+  contentRef?: React.RefObject<HTMLDivElement | null>;
 }
 
-export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, sessionId = "" }: SignalStringProps) {
+export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.0, cordRetractForce = 1.0, sessionId = "", contentRef }: SignalStringProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
 
   const isActive = state === "working" || state === "subagent";
   const isAudio = signalMode === "preset" || signalMode === "audio";
-  // Track energy level for smooth decay when session stops
-  const energyRef = useRef(0);
   // Track when session became inactive for decay timing
   const deactivatedAtRef = useRef<number | null>(null);
   // Driven oscillator state: position + velocity per mode per band (max 3 bands × 6 modes)
@@ -81,6 +87,13 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   const onsetRef = useRef<Float64Array>(new Float64Array(3));
   // Pulse particles traveling along strings
   const particlesRef = useRef<{ x: number; speed: number; band: number; birth: number }[]>([]);
+  // Vacuum cord retract/deploy: 0 = fully retracted (left), 1 = fully deployed (right)
+  const clipFractionRef = useRef(isActive ? 1 : 0);
+  const clipVelRef = useRef(0);
+  const retractTimerRef = useRef<number | null>(null);
+  const retractReadyRef = useRef(!isActive); // true = allowed to retract (after delay)
+  const deployTimerRef = useRef<number | null>(null);
+  const deployReadyRef = useRef(isActive); // true = allowed to deploy (after key press delay)
 
   // Store tuning props in a ref so the draw loop reads them live
   // without tearing down the animation pipeline on every slider change
@@ -89,19 +102,58 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     signalBass, signalMids, signalTreble,
     signalColorDark, signalColorLight, signalOffset,
     particleEnabled, particleSpeed, particleRate, particleSparks, particleAlpha,
+    cordRetractDelay, cordDeployForce, cordRetractForce,
   });
   configRef.current = {
     signalAlpha, signalAmplitude, signalEcho, frequency,
     signalBass, signalMids, signalTreble,
     signalColorDark, signalColorLight, signalOffset,
     particleEnabled, particleSpeed, particleRate, particleSparks, particleAlpha,
+    cordRetractDelay, cordDeployForce, cordRetractForce,
   };
 
   useEffect(() => {
     if (isActive) {
       deactivatedAtRef.current = null;
+      // Cancel any pending retract
+      retractReadyRef.current = false;
+      if (retractTimerRef.current !== null) {
+        clearTimeout(retractTimerRef.current);
+        retractTimerRef.current = null;
+      }
+      // Delay deploy so the key-press animation settles first (~0.35s press + 0.5s pause)
+      deployReadyRef.current = false;
+      deployTimerRef.current = window.setTimeout(() => {
+        deployReadyRef.current = true;
+        // Kick initial velocity once the delay expires
+        clipVelRef.current = Math.max(clipVelRef.current, 1.5 * cordDeployForce);
+        deployTimerRef.current = null;
+      }, 850);
+    } else {
+      // Cancel any pending deploy
+      deployReadyRef.current = false;
+      if (deployTimerRef.current !== null) {
+        clearTimeout(deployTimerRef.current);
+        deployTimerRef.current = null;
+      }
+      // Retract after configurable delay (vacuum cord pause before retraction)
+      retractReadyRef.current = false;
+      retractTimerRef.current = window.setTimeout(() => {
+        retractReadyRef.current = true;
+        retractTimerRef.current = null;
+      }, cordRetractDelay * 1000);
     }
-  }, [isActive]);
+    return () => {
+      if (retractTimerRef.current !== null) {
+        clearTimeout(retractTimerRef.current);
+        retractTimerRef.current = null;
+      }
+      if (deployTimerRef.current !== null) {
+        clearTimeout(deployTimerRef.current);
+        deployTimerRef.current = null;
+      }
+    };
+  }, [isActive, cordRetractDelay, cordDeployForce]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -137,18 +189,6 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       const strokeColor = revived
         ? `rgba(239, 68, 68, ${0.4 * a})`
         : `rgba(${sc.r}, ${sc.g}, ${sc.b}, ${0.4 * a})`;
-      const flatColor = revived
-        ? `rgba(239, 68, 68, ${0.5 * a})`
-        : `rgba(${sc.r}, ${sc.g}, ${sc.b}, ${0.35 * a})`;
-
-      const drawFlatLine = (w: number, midY: number) => {
-        ctx.beginPath();
-        ctx.moveTo(0, midY);
-        ctx.lineTo(w, midY);
-        ctx.strokeStyle = flatColor;
-        ctx.lineWidth = 1;
-        ctx.stroke();
-      };
 
       const rect = canvas.getBoundingClientRect();
       const w = rect.width;
@@ -160,58 +200,172 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
 
       // Reduced motion — flat line, no animation
       if (prefersReducedMotion) {
-        drawFlatLine(w, midY);
         return;
       }
 
-      // ── Revived mode: red lightning bolts ──
+      // ── Vacuum cord deploy/retract animation ──
+      // Skip for revived mode (lightning bolts don't retract)
+      if (!revived) {
+        const { cordDeployForce: deployF, cordRetractForce: retractF } = cfg;
+        const deployReady = deployReadyRef.current;
+        const clipTarget = isActive ? (deployReady ? 1 : clipFractionRef.current) : (retractReadyRef.current ? 0 : clipFractionRef.current);
+        const clipDt = 1 / 60; // approximate frame dt
+        const clip = clipFractionRef.current;
+
+        if (isActive && deployReady) {
+          // Deploy: spring-like launch from left → right with configurable force
+          const springForce = (clipTarget - clip) * 8 * deployF;
+          const damping = -clipVelRef.current * 3.5;
+          clipVelRef.current += (springForce + damping) * clipDt;
+        } else if (retractReadyRef.current) {
+          // Retract: accelerating pull toward left (vacuum cord feel)
+          // Pull gets stronger as more cord is wound up — the classic snap
+          const pullStrength = (1.5 + (1 - clip) * 6) * retractF;
+          clipVelRef.current -= pullStrength * clipDt;
+        }
+
+        clipFractionRef.current = Math.max(0, Math.min(1, clip + clipVelRef.current * clipDt));
+
+        // Clamp velocity when hitting bounds
+        if (clipFractionRef.current <= 0) { clipFractionRef.current = 0; clipVelRef.current = 0; }
+        if (clipFractionRef.current >= 1) clipVelRef.current = Math.max(0, clipVelRef.current * 0.9);
+
+        // Fully retracted — nothing to draw, just keep the loop alive
+        if (clipFractionRef.current < 0.001 && !isActive) {
+          animRef.current = requestAnimationFrame(draw);
+          return;
+        }
+
+        // Apply clip region: strings visible from left edge to clipX
+        const clipX = clipFractionRef.current * w;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, clipX, h);
+        ctx.clip();
+      }
+
+      let clipped = !revived;
+
+      // ── Revived mode: randomized lightning strikes ──
       if (revived) {
         const t = now / 1000;
+        const a = signalAlpha;
+        const hash = (v: number) => ((v * 2654435761) >>> 0);
+        const hashF = (v: number) => (hash(v) >>> 0) / 0xFFFFFFFF; // 0..1
 
-        // Draw a forked lightning bolt path
-        const drawBolt = (startX: number, seedBase: number, opacity: number, width: number) => {
-          ctx.beginPath();
-          let x = startX;
-          let y = midY;
-          ctx.moveTo(x, y);
+        // Variable cycle duration: 3–6s, derived from cycle index
+        // We iterate to find current cycle since durations vary
+        let elapsed = 0;
+        let cycle = 0;
+        while (true) {
+          const dur = 3.0 + hashF(cycle * 31337) * 3.0;
+          if (elapsed + dur > t) {
+            // We're in this cycle
+            const phase = (t - elapsed) / dur;
+            const cycleSeed = hash(cycle * 2654435761);
 
-          const steps = 12 + Math.floor(Math.random() * 6);
-          const dx = (w * 0.3) / steps;
+            // Per-cycle randomization
+            const goRight = (cycleSeed & 1) === 0;  // bolt direction
+            const mainYOff = (hashF(cycleSeed + 999) - 0.5) * halfH * 0.4; // vertical wander
+            const jitterScale = 0.7 + hashF(cycleSeed + 777) * 0.6; // zigzag intensity 0.7–1.3
+            const numBranches = 2 + (cycleSeed >> 4 & 3); // 2–5 branches
+            const crawlSpeed = 0.4 + hashF(cycleSeed + 555) * 0.2; // crawl takes 40–60% of cycle
 
-          for (let i = 0; i < steps; i++) {
-            const seed = (seedBase + i * 2654435761) >>> 0;
-            const jitterY = ((seed & 0xFFFF) / 0xFFFF - 0.5) * halfH * 1.4;
-            const jitterX = ((seed >> 16) & 0xFF) / 255 * dx * 0.6;
-            x += dx + jitterX;
-            y = midY + jitterY;
-            ctx.lineTo(x, y);
+            const crawlEnd = crawlSpeed;
+            const holdEnd = crawlEnd + 0.2;
+
+            let tipProgress: number;
+            let brightness: number;
+
+            if (phase < crawlEnd) {
+              tipProgress = phase / crawlEnd;
+              // Stutter: occasional micro-pauses during crawl
+              const stutterSeed = hashF(cycleSeed + Math.floor(phase * 8) * 1009);
+              if (stutterSeed > 0.7) tipProgress *= 0.92 + stutterSeed * 0.08;
+              brightness = 0.7 + hashF(cycleSeed + 111) * 0.2;
+            } else if (phase < holdEnd) {
+              tipProgress = 1.0;
+              const holdPhase = (phase - crawlEnd) / (holdEnd - crawlEnd);
+              brightness = 0.8 + 0.3 * Math.exp(-holdPhase * 3);
+            } else {
+              tipProgress = 1.0;
+              const fadePhase = (phase - holdEnd) / (1.0 - holdEnd);
+              brightness = 0.8 * (1.0 - fadePhase);
+            }
+
+            // Flicker: random brightness wobble
+            const flicker = 1.0 + (hashF(cycleSeed + Math.floor(now / 50)) - 0.5) * 0.15;
+            brightness *= flicker;
+
+            const tipX = goRight ? tipProgress * w : (1 - tipProgress) * w;
+
+            const drawBolt = (yBase: number, seedOff: number, opacity: number, lineWidth: number, isBranch: boolean) => {
+              const steps = isBranch ? 6 + (hash(seedOff) & 7) : 16 + (hash(seedOff + 3) & 7);
+              const segLen = w / steps;
+
+              ctx.beginPath();
+              let bx = goRight ? 0 : w;
+              let by = yBase;
+              ctx.moveTo(bx, by);
+
+              for (let i = 0; i < steps; i++) {
+                const s = hash(cycleSeed + seedOff + i * 7919);
+                const zigDir = (i % 2 === 0) ? 1 : -1;
+                const jY = zigDir * ((s & 0xFFFF) / 0xFFFF) * halfH * jitterScale * (isBranch ? 0.5 : 1.0);
+                const jX = ((s >> 16) & 0xFF) / 255 * segLen * 0.3;
+                bx += (goRight ? 1 : -1) * (segLen + jX);
+                by = yBase + jY;
+
+                const pastTip = goRight ? bx > tipX : bx < tipX;
+                if (pastTip) {
+                  const prevBx = bx - (goRight ? 1 : -1) * (segLen + jX);
+                  const frac = Math.abs(tipX - prevBx) / Math.abs(bx - prevBx);
+                  ctx.lineTo(prevBx + frac * (bx - prevBx), yBase + frac * jY);
+                  break;
+                }
+                ctx.lineTo(bx, by);
+              }
+
+              const op = opacity * brightness * a;
+              ctx.strokeStyle = `rgba(255, 69, 58, ${op})`;
+              ctx.lineWidth = lineWidth;
+              ctx.stroke();
+              ctx.strokeStyle = `rgba(255, 120, 100, ${op * 0.3})`;
+              ctx.lineWidth = lineWidth * 4;
+              ctx.stroke();
+            };
+
+            // Main bolt
+            drawBolt(midY + mainYOff, 0, 0.9, 2.0, false);
+
+            // Random branches
+            for (let b = 0; b < numBranches; b++) {
+              const bs = hash(cycleSeed + (b + 1) * 104729);
+              const branchStart = hashF(bs) * 0.6 + 0.15;
+              if (tipProgress > branchStart) {
+                const yOff = midY + mainYOff + (hashF(bs + 7) - 0.5) * halfH * 0.8;
+                const branchOpacity = 0.25 + hashF(bs + 13) * 0.3;
+                const branchWidth = 0.7 + hashF(bs + 19) * 0.8;
+                drawBolt(yOff, (b + 1) * 50000, branchOpacity, branchWidth, true);
+              }
+            }
+
+            // Tip glow
+            if (phase < crawlEnd && brightness > 0.3) {
+              const tipY = midY + mainYOff;
+              const glowR = 8 + hashF(cycleSeed + 888) * 10;
+              const grad = ctx.createRadialGradient(tipX, tipY, 0, tipX, tipY, glowR);
+              grad.addColorStop(0, `rgba(255, 200, 180, ${0.4 * a * brightness})`);
+              grad.addColorStop(1, `rgba(255, 69, 58, 0)`);
+              ctx.fillStyle = grad;
+              ctx.fillRect(tipX - glowR, tipY - glowR, glowR * 2, glowR * 2);
+            }
+
+            break;
           }
-
-          ctx.strokeStyle = `rgba(255, 69, 58, ${opacity * a})`;
-          ctx.lineWidth = width;
-          ctx.stroke();
-
-          // Glow layer
-          ctx.strokeStyle = `rgba(255, 120, 100, ${opacity * a * 0.3})`;
-          ctx.lineWidth = width * 3;
-          ctx.stroke();
-        };
-
-        // Shift lightning positions over time — new bolts every ~200ms
-        const frame = Math.floor(t * 5);
-        const seed1 = (frame * 2654435761) >>> 0;
-        const seed2 = ((frame + 1000) * 2654435761) >>> 0;
-        const seed3 = ((frame + 2000) * 2654435761) >>> 0;
-
-        // 2-3 bolts at different positions
-        const x1 = ((seed1 & 0xFFFF) / 0xFFFF) * w * 0.6;
-        const x2 = ((seed2 & 0xFFFF) / 0xFFFF) * w * 0.4 + w * 0.3;
-        drawBolt(x1, seed1, 0.7, 1.5);
-        drawBolt(x2, seed2, 0.5, 1.0);
-        // Third bolt appears intermittently
-        if ((seed3 & 0x3) === 0) {
-          const x3 = ((seed3 & 0xFFFF) / 0xFFFF) * w * 0.5 + w * 0.2;
-          drawBolt(x3, seed3, 0.35, 0.75);
+          elapsed += 3.0 + hashF(cycle * 31337) * 3.0;
+          cycle++;
+          if (cycle > 10000) break; // safety
         }
 
         animRef.current = requestAnimationFrame(draw);
@@ -222,11 +376,6 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       if (isAudio) {
         // Audio not loaded/playing yet — show breathing idle animation
         if (!isPlaying()) {
-          if (!isActive) {
-            drawFlatLine(w, midY);
-            animRef.current = requestAnimationFrame(draw);
-            return;
-          }
           const t = now / 1000;
           const amp = signalAmplitude;
           const a = signalAlpha;
@@ -246,6 +395,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           ctx.strokeStyle = isDark ? `rgba(${sc.r},${sc.g},${sc.b},${0.2 * a})` : `rgba(${sc.r},${sc.g},${sc.b},${0.15 * a})`;
           ctx.lineWidth = 1;
           ctx.stroke();
+          if (clipped) ctx.restore();
           animRef.current = requestAnimationFrame(draw);
           return;
         }
@@ -275,7 +425,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         }
         const numBins = freqData.length;
 
-        // Decay envelope: when session stops, smoothly fade out over ~2 seconds
+        // Decay envelope: when session stops, smoothly settle to resting state
         let decayEnvelope = 1.0;
         if (!isActive) {
           if (deactivatedAtRef.current === null) {
@@ -283,12 +433,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           }
           const elapsed = (now - deactivatedAtRef.current) / 1000;
           decayEnvelope = Math.exp(-elapsed * 2.0); // ~2s decay
-          if (decayEnvelope < 0.005) {
-            drawFlatLine(w, midY);
-            energyRef.current = 0;
-            animRef.current = requestAnimationFrame(draw);
-            return;
-          }
+          if (decayEnvelope < 0.005) decayEnvelope = 0;
         }
 
         // Three strings with DIFFERENT spatial modes so they visually separate:
@@ -298,9 +443,9 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         const amp = signalAmplitude;
         const INHARMONICITY = 0.0005; // slight detuning for organic phase drift
         const allBands = [
-          { enabled: signalBass, bandIdx: 0, binStart: 0, binEnd: Math.floor(numBins * 0.25), startMode: 1, numModes: 3, speed: 0.7, travel: -0.3, phaseOff: 0, gain: 2.2 * amp, lw: 1.5, opacity: 0.3, baseDamping: 8 },
-          { enabled: signalMids, bandIdx: 1, binStart: Math.floor(numBins * 0.25), binEnd: Math.floor(numBins * 0.6), startMode: 2, numModes: 4, speed: 1.4, travel: 0, phaseOff: 2.1, gain: 1.8 * amp, lw: 1.0, opacity: 0.25, baseDamping: 10 },
-          { enabled: signalTreble, bandIdx: 2, binStart: Math.floor(numBins * 0.6), binEnd: numBins, startMode: 4, numModes: 6, speed: 2.8, travel: 0.4, phaseOff: 4.5, gain: 1.5 * amp, lw: 0.75, opacity: 0.2, baseDamping: 12 },
+          { enabled: signalBass, bandIdx: 0, binStart: 0, binEnd: Math.floor(numBins * 0.25), startMode: 1, numModes: 3, speed: 0.7, travel: -0.3, phaseOff: 0, gain: 2.2 * amp, lw: 1.5, opacity: 0.3, baseDamping: 4 },
+          { enabled: signalMids, bandIdx: 1, binStart: Math.floor(numBins * 0.25), binEnd: Math.floor(numBins * 0.6), startMode: 2, numModes: 4, speed: 1.4, travel: 0, phaseOff: 2.1, gain: 1.8 * amp, lw: 1.0, opacity: 0.25, baseDamping: 5 },
+          { enabled: signalTreble, bandIdx: 2, binStart: Math.floor(numBins * 0.6), binEnd: numBins, startMode: 4, numModes: 6, speed: 2.8, travel: 0.4, phaseOff: 4.5, gain: 1.5 * amp, lw: 0.75, opacity: 0.2, baseDamping: 6 },
         ];
         const bands = allBands.filter(b => b.enabled);
 
@@ -314,19 +459,23 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         lastFrameRef.current = now;
 
         // Oscillator constants
-        const STIFFNESS = 120;
+        const STIFFNESS = 200;
 
         // Onset detection — inject impulses on beat hits
         const onsets = getOnsets();
         const onsetArr = onsetRef.current;
         const onsetValues = [onsets.bass, onsets.mids, onsets.treble];
         for (let i = 0; i < 3; i++) {
-          if (onsetValues[i] > 0) onsetArr[i] = Math.min(onsetArr[i] + onsetValues[i] * 8, 3.0);
-          else onsetArr[i] *= 0.85; // decay impulse
+          if (onsetValues[i] > 0) onsetArr[i] = Math.min(onsetArr[i] + onsetValues[i] * 12, 4.0);
+          else onsetArr[i] *= 0.8; // decay impulse
         }
 
-        const numTrails = Math.max(1, Math.round(32 * signalEcho));
-        const trailSpacing = 0.018;
+        // Cap trails to avoid quadratic cost at high echo values.
+        // Spread them over the same time span so the echo depth is preserved.
+        const maxTrails = 16;
+        const rawTrails = Math.round(32 * signalEcho);
+        const numTrails = Math.max(1, Math.min(rawTrails, maxTrails));
+        const trailSpacing = rawTrails > maxTrails ? (0.018 * rawTrails) / numTrails : 0.018;
 
         // Collect all band mode amplitudes for sympathetic resonance
         const allModeAmps: number[][] = [];
@@ -346,10 +495,10 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             let target = Math.sqrt(raw);
 
             // Add onset impulse — a burst that excites the mode
-            target += onsetArr[band.bandIdx] * 0.15;
+            target += onsetArr[band.bandIdx] * 0.35;
 
             // Frequency-dependent damping: higher modes decay faster
-            const modeDamping = band.baseDamping * (1 + m * 0.6);
+            const modeDamping = band.baseDamping * (1 + m * 0.3);
 
             // Driven oscillator: position tracks target with inertia
             const idx = bi * 6 + m;
@@ -395,6 +544,38 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           );
         };
 
+        // Collect element rects for soft-erase after drawing
+        const eraseRects: { x: number; y: number; w: number; h: number }[] = [];
+        if (contentRef?.current && canvas) {
+          const canvasRect = canvas.getBoundingClientRect();
+          const rows = contentRef.current.children;
+          for (let ri = 0; ri < rows.length; ri++) {
+            const row = rows[ri] as HTMLElement;
+            const items = row.children;
+            if (items.length > 0) {
+              for (let ci = 0; ci < items.length; ci++) {
+                const el = items[ci] as HTMLElement;
+                const er = el.getBoundingClientRect();
+                if (er.width < 1 || er.height < 1) continue;
+                eraseRects.push({
+                  x: er.left - canvasRect.left,
+                  y: er.top - canvasRect.top,
+                  w: er.width,
+                  h: er.height,
+                });
+              }
+            } else {
+              const rr = row.getBoundingClientRect();
+              eraseRects.push({
+                x: rr.left - canvasRect.left,
+                y: rr.top - canvasRect.top,
+                w: rr.width,
+                h: rr.height,
+              });
+            }
+          }
+        }
+
         // Store trail-0 points per band for particle rendering
         const bandPaths: number[][] = [];
 
@@ -403,11 +584,25 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           const modeAmps = allModeAmps[bi];
           const avgAmp = modeAmps.reduce((s, v) => s + v, 0) / modeAmps.length;
 
+          // Precompute per-mode constants (avoids sqrt per point per trail)
+          const modeConsts = new Array(band.numModes);
+          for (let m = 0; m < band.numModes; m++) {
+            const n = band.startMode + m;
+            modeConsts[m] = {
+              n,
+              nEff: n * Math.sqrt(1 + INHARMONICITY * n * n),
+              mAmp: modeAmps[m],
+            };
+          }
+
           for (let trail = 0; trail < numTrails; trail++) {
             const tOff = t - trail * trailSpacing;
             const alpha = 1.0 - (trail / numTrails);
             const echoFade = trail === 0 ? 1.0 : signalEcho;
             const op = alpha * alpha * band.opacity * signalAlpha * echoFade;
+
+            // Skip invisible trails
+            if (op < 0.005) continue;
 
             // Build path once, draw twice (glow + core) for trail 0
             const points: number[] = [];
@@ -416,21 +611,18 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
               const xNorm = x / w;
 
               for (let m = 0; m < band.numModes; m++) {
-                const n = band.startMode + m;
-                const mAmp = modeAmps[m];
-                // Inharmonicity: slight frequency detuning for organic phase drift
-                const nEff = n * Math.sqrt(1 + INHARMONICITY * n * n);
-                const standing = Math.sin(nEff * Math.PI * xNorm);
-                const traveling = Math.sin(nEff * Math.PI * xNorm - band.travel * tOff * n);
+                const mc = modeConsts[m];
+                const standing = Math.sin(mc.nEff * Math.PI * xNorm);
+                const traveling = Math.sin(mc.nEff * Math.PI * xNorm - band.travel * tOff * mc.n);
                 const spatial = standing * 0.6 + traveling * 0.4;
                 const temporal = Math.cos(tOff * (band.speed + m * 0.35) + band.phaseOff + m * 1.9);
-                sum += mAmp * spatial * temporal;
+                sum += mc.mAmp * spatial * temporal;
               }
 
-              // Add breathing noise
-              sum += breathe(xNorm, tOff, avgAmp);
+              // Add breathing noise — persists even when inactive (not scaled by decayEnvelope)
+              const breath = breathe(xNorm, tOff, decayEnvelope > 0.01 ? avgAmp : 0);
 
-              const y = Math.tanh(sum * band.gain) * halfH * decayEnvelope;
+              const y = Math.tanh((sum * decayEnvelope + breath) * band.gain) * halfH;
               points.push(midY + y);
             }
 
@@ -532,6 +724,29 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           if (particles.length > 40) particles.splice(0, particles.length - 40);
         }
 
+        // Soft-erase: two-pass rounded-rect erase behind each content element
+        // 1) Soft outer halo (feathered edge)  2) Hard inner core matching pill shape
+        if (eraseRects.length > 0) {
+          ctx.save();
+          ctx.globalCompositeOperation = "destination-out";
+          for (const r of eraseRects) {
+            // Outer feather: slightly larger, semi-transparent
+            const fo = 3; // feather outset
+            ctx.beginPath();
+            ctx.roundRect(r.x - fo, r.y - fo, r.w + fo * 2, r.h + fo * 2, r.h / 2 + fo);
+            ctx.fillStyle = "rgba(0,0,0,0.5)";
+            ctx.fill();
+
+            // Inner core: exact pill shape, fully opaque
+            ctx.beginPath();
+            ctx.roundRect(r.x, r.y, r.w, r.h, r.h / 2);
+            ctx.fillStyle = "rgba(0,0,0,1)";
+            ctx.fill();
+          }
+          ctx.restore();
+        }
+
+        if (clipped) ctx.restore();
         animRef.current = requestAnimationFrame(draw);
         return;
       }
@@ -545,9 +760,16 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       }
       const hasPulses = activePulses.length > 0;
 
-      // Inactive with no pulses to drain — flat line, stop animation
+      // Inactive with no pulses to drain — draw resting string and keep animating
       if (!isActive && !hasPulses) {
-        drawFlatLine(w, midY);
+        ctx.beginPath();
+        ctx.moveTo(0, midY);
+        ctx.lineTo(w, midY);
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        if (clipped) ctx.restore();
+        animRef.current = requestAnimationFrame(draw);
         return;
       }
 
@@ -585,7 +807,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         }
       }
 
-      ctx.strokeStyle = hasPulses ? strokeColor : flatColor;
+      ctx.strokeStyle = strokeColor;
       ctx.lineWidth = 1;
       ctx.stroke();
 
@@ -647,6 +869,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         if (particles.length > 30) particles.splice(0, particles.length - 30);
       }
 
+      if (clipped) ctx.restore();
       animRef.current = requestAnimationFrame(draw);
     };
 
@@ -661,26 +884,13 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, isActive, revived, isAudio, sessionId]);
 
-  if (isAudio) {
-    // Audio mode: full-card background canvas
-    return (
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0 w-full h-full pointer-events-none"
-        aria-hidden="true"
-      />
-    );
-  }
-
-  // Simulated mode: separator — clips downward, overflows upward into title row
+  // Full-card background canvas — z-0 ensures content (z-10) renders above
   return (
-    <div className="relative w-full" style={{ height: "8px", clipPath: "inset(-40px 0 0 0)" }}>
-      <canvas
-        ref={canvasRef}
-        className="absolute left-0 w-full pointer-events-none"
-        style={{ height: "50px", top: "-34px" }}
-        aria-hidden="true"
-      />
-    </div>
+    <canvas
+      ref={canvasRef}
+      className="w-full h-full pointer-events-none"
+      style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}
+      aria-hidden="true"
+    />
   );
 }

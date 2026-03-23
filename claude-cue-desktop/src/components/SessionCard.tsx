@@ -10,7 +10,7 @@ function bellFromHash(hash: number): number {
   return ((hash & 0xFF) / 255 + ((hash >> 8) & 0xFF) / 255 + ((hash >> 16) & 0xFF) / 255) / 3;
 }
 import type { EnrichedSession } from "@/lib/types";
-import { STATE_DOT_COLORS, STATE_BADGE_BG, STATE_COLORS } from "@/lib/types";
+import { STATE_HEX, STATE_HEX_LIGHT, STATE_DOT_HEX, STATE_DOT_HEX_LIGHT, STATE_BADGE_HEX, STATE_BADGE_HEX_LIGHT } from "@/lib/types";
 import { formatTokens, formatDuration } from "@/lib/format";
 import { SignalString } from "./SignalString";
 import type { StrikePulse } from "./SignalString";
@@ -37,18 +37,50 @@ interface SessionCardProps {
   particleRate?: number;
   particleSparks?: number;
   particleAlpha?: number;
+  cordRetractDelay?: number;
+  cordDeployForce?: number;
+  cordRetractForce?: number;
   revived?: boolean;
   keyPressSpeed?: number;
   keyReleaseSpeed?: number;
 }
 
-export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4 }: SessionCardProps) {
+export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.0, cordRetractForce = 1.0, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4 }: SessionCardProps) {
   const { info, metrics } = session;
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
+  // Sticky state: hold error/waiting states for a minimum duration before fading out
+  const STICKY_HOLD_MS = 3500;
+  const [displayState, setDisplayState] = useState(info.state);
+  const stickyUntilRef = useRef(0);
+
+  useEffect(() => {
+    const now = Date.now();
+    const isSticky = displayState === "error" || displayState === "waiting";
+
+    if (info.state === displayState) return;
+
+    // Entering a sticky state — record hold deadline
+    if (info.state === "error" || info.state === "waiting") {
+      stickyUntilRef.current = now + STICKY_HOLD_MS;
+      setDisplayState(info.state);
+      return;
+    }
+
+    // Leaving a sticky state — delay if hold hasn't expired
+    if (isSticky && now < stickyUntilRef.current) {
+      const remaining = stickyUntilRef.current - now;
+      const timer = setTimeout(() => setDisplayState(info.state), remaining);
+      return () => clearTimeout(timer);
+    }
+
+    setDisplayState(info.state);
+  }, [info.state, displayState]);
+
   // Strike detection refs for piano string physics
   const cardRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const titleContainerRef = useRef<HTMLSpanElement>(null);
   const pulsesRef = useRef<StrikePulse[]>([]);
   const lastStrikeCycleRef = useRef<Map<number, number>>(new Map());
@@ -157,14 +189,18 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
     };
   }, [isAnimating, signalString, session.displayTitle, titleAnimation, animationSpeed, randomAnimation]);
 
-  const isWorking = info.state === "working" || info.state === "subagent";
-  const isWaiting = info.state === "waiting";
-  const isError = info.state === "error";
+  const isWorking = displayState === "working" || displayState === "subagent";
+  const isWaiting = displayState === "waiting";
+  const isError = displayState === "error";
 
-  const dotColor = STATE_DOT_COLORS[info.state] ?? "bg-green-500";
-  const dotPulse = info.state === "working" || info.state === "waiting" || info.state === "subagent" ? "dot-pulse" : "";
-  const badgeBg = STATE_BADGE_BG[info.state] ?? "bg-green-500/20 text-green-500";
-  const titleColor = STATE_COLORS[info.state] ?? "text-green-500";
+  const isDark = typeof document !== "undefined" ? document.documentElement.getAttribute("data-theme") !== "light" : true;
+
+  const dotHex = (isDark ? STATE_DOT_HEX : STATE_DOT_HEX_LIGHT)[displayState] ?? "#22c55e";
+  const dotPulse = displayState === "working" || displayState === "waiting" || displayState === "subagent" ? "dot-pulse" : "";
+  const badgeHex = (isDark ? STATE_BADGE_HEX : STATE_BADGE_HEX_LIGHT)[displayState] ?? { bg: "rgba(34,197,94,0.2)", text: "#22c55e" };
+  const titleHex = (isDark ? STATE_HEX : STATE_HEX_LIGHT)[displayState] ?? "#22c55e";
+
+  const stateTransition = "color 600ms ease, background-color 600ms ease";
 
   const subagents = metrics.subagents ?? [];
   const hasSubagents = session.hasSubagents;
@@ -199,7 +235,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
   return (
     <div
       ref={cardRef}
-      className={`relative overflow-hidden rounded-lg border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 session-card ${
+      className={`overflow-hidden rounded-lg border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 session-card ${
         isWorking ? "session-card--pressed" : "session-card--floating"
       } ${
         isWaiting ? "session-card--waiting" : isError ? "session-card--error" : ""
@@ -210,22 +246,25 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
       aria-label={ariaLabel}
 
       style={{
+        position: "relative",
+        isolation: "isolate",
         "--anim-speed": `${animationSpeed}s`,
         "--key-press-speed": `${keyPressSpeed}s`,
         "--key-release-speed": `${keyReleaseSpeed}s`,
       } as React.CSSProperties}
     >
-      {/* Signal String background — audio mode only (absolute positioned canvas) */}
-      {signalString && !revived && isWorking && (signalMode === "preset" || signalMode === "audio") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} sessionId={info.id} />}
+      {/* Signal String — renders behind all content (particles pass under pills/text) */}
+      {signalString && (revived || info.state !== "ended") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} sessionId={info.id} contentRef={contentRef} />}
 
-      <div className="relative z-10 space-y-2.5">
+      <div ref={contentRef} className="space-y-2.5" style={{ position: "relative" }}>
           {/* Row 1: Status dot + title + state badge + git branch + duration */}
-          <div className="flex items-center gap-2">
-            <span className={`inline-block w-2.5 h-2.5 rounded-full ${dotColor} ${dotPulse} shrink-0`} aria-hidden="true" />
+          <div className="relative flex items-center gap-2">
+            <span className={`inline-block w-2.5 h-2.5 rounded-full ${dotPulse} shrink-0`} style={{ backgroundColor: dotHex, transition: "background-color 600ms ease" }} aria-hidden="true" />
             {(info.state === "working" || info.state === "subagent") && titleAnimation !== "none" ? (
               <span
                 ref={titleContainerRef}
-                className={`font-semibold ${titleColor} anim-${titleAnimation} whitespace-nowrap overflow-hidden`}
+                className={`font-semibold anim-${titleAnimation} whitespace-nowrap overflow-hidden`}
+                style={{ color: titleHex, transition: stateTransition }}
                 aria-label={session.displayTitle}
               >
                 {[...session.displayTitle].map((ch, i) => {
@@ -253,7 +292,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                 })}
               </span>
             ) : (
-              <span className={`font-semibold truncate ${titleColor}`}>
+              <span className="font-semibold truncate" style={{ color: titleHex, transition: stateTransition }}>
                 {session.displayTitle}
               </span>
             )}
@@ -262,7 +301,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                 {session.workspaceName}
               </span>
             )}
-            <span className={`text-xs px-2 py-0.5 rounded-full ${badgeBg}`}>
+            <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: badgeHex.bg, color: badgeHex.text, transition: stateTransition }}>
               {session.stateDisplayName}
             </span>
             {!isNarrow && (
@@ -276,45 +315,42 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                 {metrics.gitBranch}
               </span>
             )}
-            <span className="ml-auto text-sm font-mono text-white/50 mono-nums shrink-0">
+            <span className="ml-auto text-[0.625rem] font-mono text-white/40 mono-nums shrink-0">
               {formatDuration(session.durationSecs)}
             </span>
           </div>
 
-          {/* Signal String separator — simulated mode between rows */}
-          {signalString && (revived || isWorking) && (signalMode !== "preset" && signalMode !== "audio") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} sessionId={info.id} />}
-
           {/* Row 2: Metrics */}
-          <div className="flex items-center gap-x-4 gap-y-1 text-xs text-white/50">
+          <div className="relative flex items-center gap-1.5 flex-wrap text-xs text-white/50">
             {!isNarrow && truncatedId && (
               <button
                 onClick={copySessionId}
-                className="flex items-center gap-1 font-mono text-white/30 hover:text-white/60 transition-colors cursor-pointer whitespace-nowrap"
+                className="flex items-center gap-1 font-mono text-[0.625rem] px-1.5 py-0.5 rounded-full bg-white/10 text-white/30 hover:text-white/60 transition-colors cursor-pointer whitespace-nowrap"
                 title={`Copy session ID: ${info.id}`}
                 aria-label={`Copy session ID ${info.id}`}
               >
                 {truncatedId}&hellip;
-                <span className="text-[0.625rem]">{copied ? "\u2713" : ""}</span>
+                {copied && <span>\u2713</span>}
               </button>
             )}
-            <span className="whitespace-nowrap" title="User / Total messages">
+            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 whitespace-nowrap" title="User / Total messages">
               &#128172; {metrics.userMessageCount}/{metrics.messageCount}
             </span>
-            <span className="whitespace-nowrap">
+            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 whitespace-nowrap">
               &#8595; {formatTokens(aggregatedInputTokens)} in
             </span>
-            <span className="whitespace-nowrap">
+            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 whitespace-nowrap">
               &#8593; {formatTokens(aggregatedOutputTokens)} out
             </span>
             {aggregatedToolUses > 0 && (
-              <span className="whitespace-nowrap">
+              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 whitespace-nowrap">
                 &#128295; {aggregatedToolUses} tools
               </span>
             )}
             {hasSubagents && (
               <button
                 onClick={() => setExpanded(!expanded)}
-                className="flex items-center gap-1 text-cyan-600 hover:text-cyan-500 transition-colors cursor-pointer text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full border border-cyan-600/40 hover:border-cyan-500/50 whitespace-nowrap"
+                className="flex items-center gap-1 text-blue-600 hover:text-blue-500 transition-colors cursor-pointer text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full border border-blue-600/40 hover:border-blue-500/50 whitespace-nowrap"
                 aria-label={expanded ? "Collapse agent team" : "Expand agent team"}
                 aria-expanded={expanded}
               >
@@ -323,12 +359,12 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
               </button>
             )}
             {!isNarrow && session.modelDisplayName !== "\u2014" && (
-              <span className="text-[0.625rem] text-white/30 whitespace-nowrap">
+              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/30 whitespace-nowrap">
                 {session.modelDisplayName}
               </span>
             )}
             {!isNarrow && session.sourceDisplay !== "\u2014" && (
-              <span className="text-[0.625rem] text-white/30 whitespace-nowrap">
+              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/30 whitespace-nowrap">
                 {session.sourceDisplay}
               </span>
             )}
@@ -336,7 +372,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
 
           {/* Row 3: Tool chips + cache hit rate */}
           {topTools.length > 0 && (
-            <div className="flex items-center gap-1.5 flex-wrap">
+            <div className="relative flex items-center gap-1.5 flex-wrap">
               {topTools.map(([name, count]) => (
                 <span
                   key={name}
@@ -354,7 +390,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
 
           {/* Row 4: Context usage — horizontal bar with spread labels */}
           {metrics.lastInputTokens > 0 && (
-            <div className="flex items-center gap-2">
+            <div className="relative flex items-center gap-2">
               <span className="text-[0.625rem] text-white/40 shrink-0">Context</span>
               <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden">
                 <div
@@ -364,7 +400,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                     background: session.contextUsagePercent > 0.8
                       ? session.contextUsagePercent > 0.95 ? "#ef4444" : "#f59e0b"
                       : "#22c55e",
-                    opacity: 0.5,
+                    opacity: 0.25,
                   }}
                 />
               </div>
@@ -392,7 +428,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
           return (
             <div key={agent.agentId || i} className="flex items-center gap-2 text-xs text-white/50">
               <span className="font-mono text-white/30 shrink-0">{prefix}</span>
-              <span className={`shrink-0 ${agent.isActive ? "text-cyan-400/80" : "text-white/30"}`}>
+              <span className={`shrink-0 ${agent.isActive ? "text-blue-400/80" : "text-white/30"}`}>
                 @{label}
               </span>
               {agent.description && (
@@ -411,7 +447,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
         };
 
         return (
-          <div className="pl-3 space-y-1 border-l-2 border-cyan-400/20">
+          <div className="pl-3 space-y-1 border-l-2 border-blue-400/20">
             {activeAgents.map((agent, i) => renderAgent(agent, i, activeAgents))}
             {completedAgents.length > 0 && (
               <details className="text-xs">

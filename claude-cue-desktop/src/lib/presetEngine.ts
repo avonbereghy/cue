@@ -155,9 +155,28 @@ export function getFrequencyData(): Uint8Array {
   const scale = gate < 1 ? 1 / (1 - gate) : 0;
   const applyGate = (v: number) => v <= gate ? 0 : (v - gate) * scale;
 
-  const rawBass = applyGate(preset.bands.bass[idx0] * (1 - frac) + preset.bands.bass[idx1] * frac);
-  const rawMids = applyGate(preset.bands.mids[idx0] * (1 - frac) + preset.bands.mids[idx1] * frac);
-  const rawTreble = applyGate(preset.bands.treble[idx0] * (1 - frac) + preset.bands.treble[idx1] * frac);
+  let rawBass = applyGate(preset.bands.bass[idx0] * (1 - frac) + preset.bands.bass[idx1] * frac);
+  let rawMids = applyGate(preset.bands.mids[idx0] * (1 - frac) + preset.bands.mids[idx1] * frac);
+  let rawTreble = applyGate(preset.bands.treble[idx0] * (1 - frac) + preset.bands.treble[idx1] * frac);
+
+  // Crossfade near loop boundary to avoid a hard jump between end and start
+  const XFADE_SECS = 1.5;
+  const duration = preset.durationSecs || 1;
+  const timeLeft = duration - t;
+  if (timeLeft < XFADE_SECS && duration > XFADE_SECS * 2) {
+    const blend = timeLeft / XFADE_SECS; // 1 at edge, 0 at loop point
+    // Sample the start of the track
+    const startPos = (t - duration + XFADE_SECS) * preset.sampleRate; // mirror position from start
+    const sIdx0 = Math.floor(startPos) % totalSamples;
+    const sIdx1 = (sIdx0 + 1) % totalSamples;
+    const sFrac = startPos - Math.floor(startPos);
+    const startBass = applyGate(preset.bands.bass[sIdx0] * (1 - sFrac) + preset.bands.bass[sIdx1] * sFrac);
+    const startMids = applyGate(preset.bands.mids[sIdx0] * (1 - sFrac) + preset.bands.mids[sIdx1] * sFrac);
+    const startTreble = applyGate(preset.bands.treble[sIdx0] * (1 - sFrac) + preset.bands.treble[sIdx1] * sFrac);
+    rawBass = rawBass * blend + startBass * (1 - blend);
+    rawMids = rawMids * blend + startMids * (1 - blend);
+    rawTreble = rawTreble * blend + startTreble * (1 - blend);
+  }
 
   // Asymmetric attack/release smoothing: fast rise, slow fall
   const smooth = (raw: number, prev: number, attack: number, release: number) =>
@@ -228,9 +247,27 @@ export function getFrequencyDataAtTime(timeSecs: number): Uint8Array {
   const scale = gate < 1 ? 1 / (1 - gate) : 0;
   const applyGate = (v: number) => v <= gate ? 0 : (v - gate) * scale;
 
-  const bass = applyGate(preset.bands.bass[idx0] * (1 - frac) + preset.bands.bass[idx1] * frac);
-  const mids = applyGate(preset.bands.mids[idx0] * (1 - frac) + preset.bands.mids[idx1] * frac);
-  const treble = applyGate(preset.bands.treble[idx0] * (1 - frac) + preset.bands.treble[idx1] * frac);
+  let bass = applyGate(preset.bands.bass[idx0] * (1 - frac) + preset.bands.bass[idx1] * frac);
+  let mids = applyGate(preset.bands.mids[idx0] * (1 - frac) + preset.bands.mids[idx1] * frac);
+  let treble = applyGate(preset.bands.treble[idx0] * (1 - frac) + preset.bands.treble[idx1] * frac);
+
+  // Crossfade near loop boundary
+  const XFADE_SECS = 1.5;
+  const dur = preset.durationSecs || 1;
+  const timeLeft = dur - t;
+  if (timeLeft < XFADE_SECS && dur > XFADE_SECS * 2) {
+    const blend = timeLeft / XFADE_SECS;
+    const startPos = (t - dur + XFADE_SECS) * preset.sampleRate;
+    const sIdx0 = Math.floor(startPos) % totalSamples;
+    const sIdx1 = (sIdx0 + 1) % totalSamples;
+    const sFrac = startPos - Math.floor(startPos);
+    const sBass = applyGate(preset.bands.bass[sIdx0] * (1 - sFrac) + preset.bands.bass[sIdx1] * sFrac);
+    const sMids = applyGate(preset.bands.mids[sIdx0] * (1 - sFrac) + preset.bands.mids[sIdx1] * sFrac);
+    const sTreble = applyGate(preset.bands.treble[sIdx0] * (1 - sFrac) + preset.bands.treble[sIdx1] * sFrac);
+    bass = bass * blend + sBass * (1 - blend);
+    mids = mids * blend + sMids * (1 - blend);
+    treble = treble * blend + sTreble * (1 - blend);
+  }
 
   const bassBins = Math.floor(NUM_BINS * 0.25);
   const midsBins = Math.floor(NUM_BINS * 0.6);

@@ -10,7 +10,9 @@ export type KeyAnimation =
   | "wave-right"
   | "alternating"
   | "cascade-down"
-  | "heartbeat";
+  | "heartbeat"
+  | "connect"
+  | "disconnect";
 
 interface KeyDef {
   id: KeyAnimation;
@@ -28,6 +30,8 @@ const KEYS: KeyDef[] = [
   { id: "alternating",  label: "Alternate",   icon: "◑" },
   { id: "cascade-down", label: "Cascade",     icon: "▽" },
   { id: "heartbeat",    label: "Heartbeat",   icon: "♥" },
+  { id: "connect",      label: "Connect",     icon: "🔌" },
+  { id: "disconnect",   label: "Disconnect",  icon: "⏏" },
 ];
 
 /** Standalone window page for the keyboard */
@@ -47,7 +51,7 @@ export function KeyboardPage() {
         <span className="text-[0.625rem] keyboard-panel-dim uppercase tracking-wider" data-tauri-drag-region>Keyboard</span>
       </div>
 
-      {/* 3x3 Grid */}
+      {/* Button Grid */}
       <div className="flex-1 grid grid-cols-3 gap-1.5 p-2.5 content-center">
         {KEYS.map((key) => (
           <button

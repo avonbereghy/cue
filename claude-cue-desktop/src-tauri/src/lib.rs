@@ -73,7 +73,7 @@ fn open_keyboard(app: AppHandle) -> Result<(), String> {
     }
     tauri::WebviewWindowBuilder::new(&app, "keyboard", WebviewUrl::App("index.html#/keyboard".into()))
         .title("Keyboard")
-        .inner_size(240.0, 290.0)
+        .inner_size(240.0, 360.0)
         .resizable(false)
         .always_on_top(true)
         .build()
