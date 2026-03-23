@@ -85,6 +85,9 @@ export interface Settings {
   particleRate: number;
   particleSparks: number;
   particleAlpha: number;
+  cordRetractDelay: number;
+  cordDeployForce: number;
+  cordRetractForce: number;
   keyPressSpeed: number;
   keyReleaseSpeed: number;
   autoReorder: boolean;
@@ -143,27 +146,91 @@ export const STATE_COLORS: Record<string, string> = {
   working: "text-white/80",
   waiting: "text-yellow-400",
   error: "text-red-500",
-  subagent: "text-cyan-400",
+  subagent: "text-blue-400",
   idle: "text-gray-500",
   done: "text-green-500",
+  ended: "text-red-400",
 };
 
 export const STATE_DOT_COLORS: Record<string, string> = {
   working: "bg-white/80",
   waiting: "bg-yellow-400",
   error: "bg-red-500",
-  subagent: "bg-cyan-400",
+  subagent: "bg-blue-400",
   idle: "bg-gray-500",
   done: "bg-green-500",
+  ended: "bg-red-400",
 };
 
 export const STATE_BADGE_BG: Record<string, string> = {
   working: "bg-white/10 text-white/80",
   waiting: "bg-yellow-400/20 text-yellow-400",
   error: "bg-red-500/20 text-red-500",
-  subagent: "bg-cyan-400/20 text-cyan-400",
+  subagent: "bg-blue-400/20 text-blue-400",
   idle: "bg-gray-500/20 text-gray-500",
   done: "bg-green-500/20 text-green-500",
+  ended: "bg-red-400/20 text-red-400",
+};
+
+/** Raw hex/rgba colors for inline styles (enables CSS transitions between states) */
+export const STATE_HEX: Record<string, string> = {
+  working: "rgba(255,255,255,0.8)",
+  waiting: "#facc15",
+  error: "#ef4444",
+  subagent: "#60a5fa",
+  idle: "#6b7280",
+  done: "#22c55e",
+  ended: "#f87171",
+};
+
+export const STATE_HEX_LIGHT: Record<string, string> = {
+  working: "rgba(0,0,0,0.85)",
+  waiting: "#a16207",
+  error: "#dc2626",
+  subagent: "#2563eb",
+  idle: "#4b5563",
+  done: "#16a34a",
+  ended: "#dc2626",
+};
+
+export const STATE_DOT_HEX: Record<string, string> = {
+  working: "rgba(255,255,255,0.8)",
+  waiting: "#facc15",
+  error: "#ef4444",
+  subagent: "#60a5fa",
+  idle: "#6b7280",
+  done: "#22c55e",
+  ended: "#f87171",
+};
+
+export const STATE_DOT_HEX_LIGHT: Record<string, string> = {
+  working: "rgba(0,0,0,0.7)",
+  waiting: "#ca8a04",
+  error: "#dc2626",
+  subagent: "#2563eb",
+  idle: "#6b7280",
+  done: "#16a34a",
+  ended: "#dc2626",
+};
+
+export const STATE_BADGE_HEX: Record<string, { bg: string; text: string }> = {
+  working: { bg: "rgba(255,255,255,0.1)", text: "rgba(255,255,255,0.8)" },
+  waiting: { bg: "rgba(250,204,21,0.2)", text: "#facc15" },
+  error: { bg: "rgba(239,68,68,0.2)", text: "#ef4444" },
+  subagent: { bg: "rgba(96,165,250,0.2)", text: "#60a5fa" },
+  idle: { bg: "rgba(107,114,128,0.2)", text: "#6b7280" },
+  done: { bg: "rgba(34,197,94,0.2)", text: "#22c55e" },
+  ended: { bg: "rgba(248,113,113,0.2)", text: "#f87171" },
+};
+
+export const STATE_BADGE_HEX_LIGHT: Record<string, { bg: string; text: string }> = {
+  working: { bg: "rgba(0,0,0,0.08)", text: "rgba(0,0,0,0.85)" },
+  waiting: { bg: "rgba(202,138,4,0.15)", text: "#a16207" },
+  error: { bg: "rgba(220,38,38,0.12)", text: "#dc2626" },
+  subagent: { bg: "rgba(37,99,235,0.12)", text: "#2563eb" },
+  idle: { bg: "rgba(75,85,99,0.12)", text: "#4b5563" },
+  done: { bg: "rgba(22,163,74,0.12)", text: "#16a34a" },
+  ended: { bg: "rgba(220,38,38,0.12)", text: "#dc2626" },
 };
 
 // ---------------------------------------------------------------------------

@@ -128,12 +128,14 @@ body {
   border-color: rgba(239, 68, 68, 0.60);
 }
 
+
 /* ---------------------------------------------------------------------------
    Session Card: Piano Key Press / Float Effect
    Floating = raised off the surface (idle/done)
    Pressed  = sunk into the surface like a depressed piano key (working)
    --------------------------------------------------------------------------- */
 .session-card {
+  min-height: 10rem;
   transition:
     box-shadow var(--key-release-speed, 0.4s) cubic-bezier(0.4, 0, 0.2, 1),
     transform var(--key-release-speed, 0.4s) cubic-bezier(0.4, 0, 0.2, 1),
@@ -143,6 +145,7 @@ body {
 
 /* Default (dark mode) floating — soft white glow for elevation */
 .session-card--floating {
+
   background-color: rgba(255,255,255,0.04);
   border-color: rgba(255,255,255,0.08);
   box-shadow:
@@ -154,6 +157,7 @@ body {
 
 /* Default (dark mode) pressed — subtle inset with faint light rim */
 .session-card--pressed {
+
   background-color: rgba(255,255,255,0.01);
   border-color: rgba(255,255,255,0.03);
   box-shadow:
@@ -190,6 +194,7 @@ body {
 
 /* Light mode — driven by data-theme attribute only, not media query */
 html[data-theme="light"] .session-card--floating {
+
   background-color: rgba(255,255,255,0.97);
   border-color: rgba(0,0,0,0.08);
   box-shadow:
@@ -199,6 +204,7 @@ html[data-theme="light"] .session-card--floating {
     0 20px 40px rgba(0,0,0,0.10);
 }
 html[data-theme="light"] .session-card--pressed {
+
   background-color: rgba(0,0,0,0.03);
   border-color: rgba(0,0,0,0.10);
   box-shadow:
@@ -217,15 +223,26 @@ html[data-theme="light"] .session-card--pressed {
   border-color: rgba(255, 204, 0, 0.4) !important;
   transform: translateY(-2px);
 }
-/* Hazard stripe bars — top and bottom of waiting card */
-.session-card--waiting::before,
-.session-card--waiting::after {
+/* State accent bars — shared base for pseudo-element transitions */
+.session-card::before,
+.session-card::after {
   content: "";
   position: absolute;
   left: 0;
   right: 0;
   height: 4px;
   z-index: 20;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 600ms ease, background 600ms ease;
+}
+.session-card::before { top: 0; border-radius: 0.5rem 0.5rem 0 0; }
+.session-card::after { bottom: 0; border-radius: 0 0 0.5rem 0.5rem; }
+
+/* Hazard stripe bars — top and bottom of waiting card */
+.session-card--waiting::before,
+.session-card--waiting::after {
+  opacity: 1;
   background: repeating-linear-gradient(
     -45deg,
     rgba(255, 204, 0, 0.5),
@@ -233,10 +250,7 @@ html[data-theme="light"] .session-card--pressed {
     rgba(0, 0, 0, 0.35) 6px,
     rgba(0, 0, 0, 0.35) 12px
   );
-  pointer-events: none;
 }
-.session-card--waiting::before { top: 0; border-radius: 0.5rem 0.5rem 0 0; }
-.session-card--waiting::after { bottom: 0; border-radius: 0 0 0.5rem 0.5rem; }
 
 /* Error state — red highlight + solid red bars + elevated */
 .session-card--error {
@@ -250,17 +264,9 @@ html[data-theme="light"] .session-card--pressed {
 }
 .session-card--error::before,
 .session-card--error::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 4px;
-  z-index: 20;
+  opacity: 1;
   background: rgba(255, 69, 58, 0.5);
-  pointer-events: none;
 }
-.session-card--error::before { top: 0; border-radius: 0.5rem 0.5rem 0 0; }
-.session-card--error::after { bottom: 0; border-radius: 0 0 0.5rem 0.5rem; }
 
 /* Light mode variants */
 html[data-theme="light"] .session-card--waiting {

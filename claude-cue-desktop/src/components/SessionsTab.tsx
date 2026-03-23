@@ -48,8 +48,8 @@ interface SessionsTabProps {
 
 export function SessionsTab({ sessions }: SessionsTabProps) {
   const [permissionsEnabled, setPermissionsEnabled] = useState(false);
-  const [titleAnimation, setTitleAnimation] = useState("none");
-  const [animationSpeed, setAnimationSpeed] = useState(1.2);
+  const [titleAnimation, setTitleAnimation] = useState("ripple");
+  const [animationSpeed, setAnimationSpeed] = useState(3.5);
   const [randomAnimation, setRandomAnimation] = useState(false);
   const [signalString, setSignalString] = useState(false);
   const [signalFrequency, setSignalFrequency] = useState(1.0);
@@ -68,12 +68,16 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [particleRate, setParticleRate] = useState(1.0);
   const [particleSparks, setParticleSparks] = useState(3);
   const [particleAlpha, setParticleAlpha] = useState(1.0);
+  const [cordRetractDelay, setCordRetractDelay] = useState(2.0);
+  const [cordDeployForce, setCordDeployForce] = useState(1.0);
+  const [cordRetractForce, setCordRetractForce] = useState(1.0);
   const [activePresetId, setActivePresetId] = useState("");
   const [presetBootAttempted, setPresetBootAttempted] = useState(false);
   const [testMode, setTestMode] = useState(false);
   const testState = "working" as const;
   const [keyPressSpeed, setKeyPressSpeed] = useState(0.35);
   const [keyReleaseSpeed, setKeyReleaseSpeed] = useState(0.4);
+  const [stateOverrides, setStateOverrides] = useState<Record<string, string>>({});
   const [autoReorder, setAutoReorder] = useState(false);
   const cardPositions = useRef<Map<string, DOMRect>>(new Map());
   const prevStates = useRef<Map<string, string>>(new Map());
@@ -85,6 +89,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [reviveClicks, setReviveClicks] = useState<Record<string, number>>({});
   const prevSessionIdsRef = useRef<Set<string>>(new Set());
   const prevSessionsRef = useRef<EnrichedSession[]>([]);
+  const dismissedIdsRef = useRef<Set<string>>(new Set());
 
   // Track ended sessions: sessions that disappear OR transition to "done" state
   // get moved to the revive list. Sessions that reappear get removed from revive.
@@ -111,7 +116,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
         // Sessions that transitioned to "ended" (SessionEnd fired — chat exited)
         for (const session of sessions) {
-          if (session.info.state === "ended" && !alreadyRevived.has(session.info.id)) {
+          if (session.info.state === "ended" && !alreadyRevived.has(session.info.id) && !dismissedIdsRef.current.has(session.info.id)) {
             ended.push({ session, revivedAt: Date.now() });
           }
         }
@@ -172,6 +177,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   }, [reviveClicks]);
 
   const handleDismissRevived = useCallback((sessionId: string) => {
+    dismissedIdsRef.current.add(sessionId);
     setRevivedSessions((prev) => {
       const next = prev.filter((r) => r.session.info.id !== sessionId);
       saveRevivedSessions(next);
@@ -180,9 +186,12 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   }, []);
 
   const handleClearAllRevived = useCallback(() => {
+    for (const r of revivedSessions) {
+      dismissedIdsRef.current.add(r.session.info.id);
+    }
     setRevivedSessions([]);
     saveRevivedSessions([]);
-  }, []);
+  }, [revivedSessions]);
 
   const totalMessages = sessions.reduce((sum, s) => sum + s.metrics.messageCount, 0);
   const totalTokens = sessions.reduce(
@@ -210,8 +219,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // Load settings and poll for changes (so Signal Settings window edits sync)
   const applySettings = useCallback((s: Settings) => {
     setPermissionsEnabled(s.permissionsEnabled);
-    setTitleAnimation(s.titleAnimation ?? "none");
-    setAnimationSpeed(s.animationSpeed ?? 1.2);
+    setTitleAnimation(s.titleAnimation ?? "ripple");
+    setAnimationSpeed(s.animationSpeed ?? 3.5);
     setRandomAnimation(s.randomAnimation ?? false);
     setSignalString(s.signalString ?? false);
     setSignalFrequency(s.signalFrequency ?? 1.0);
@@ -231,6 +240,9 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setParticleRate(s.particleRate ?? 1.0);
     setParticleSparks(s.particleSparks ?? 3);
     setParticleAlpha(s.particleAlpha ?? 1.0);
+    setCordRetractDelay(s.cordRetractDelay ?? 2.0);
+    setCordDeployForce(s.cordDeployForce ?? 1.0);
+    setCordRetractForce(s.cordRetractForce ?? 1.0);
     setGateEngine(s.signalGate ?? 0.05);
     setActivePresetId(s.activePresetId ?? "");
     setKeyPressSpeed(s.keyPressSpeed ?? 0.35);
@@ -515,6 +527,24 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             toggle(el, 500);
           });
           break;
+        case "connect":
+          // Override all non-working sessions to "working" → triggers cord deploy
+          setStateOverrides((prev) => {
+            const next = { ...prev };
+            sessions.forEach((s) => {
+              if (s.info.state !== "working" && s.info.state !== "subagent") {
+                next[s.info.id] = "working";
+              }
+            });
+            return next;
+          });
+          cards.forEach(press);
+          break;
+        case "disconnect":
+          // Clear all overrides → sessions revert to real state, triggers cord retract
+          setStateOverrides({});
+          cards.forEach(release);
+          break;
       }
     };
 
@@ -549,7 +579,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           <span className="text-sm">Sessions will appear here when Claude Code is running</span>
         </div>
       ) : (
-        <div ref={listRef} className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div ref={listRef} className="flex-1 overflow-y-auto p-4 pb-8 space-y-3">
           {/* Active sessions */}
           {sortedSessions.map((session) => {
             const pending = pendingBySession[session.info.id] ?? [];
@@ -557,9 +587,15 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             const hasPermissionActivity = pending.length > 0 || history.length > 0;
             const isCollapsed = collapsedSessions.has(session.info.id);
 
+            // Apply keyboard state override if active
+            const overrideState = stateOverrides[session.info.id];
+            const effectiveSession = overrideState
+              ? { ...session, info: { ...session.info, state: overrideState } }
+              : session;
+
             return (
-              <div key={session.info.id} data-session-id={session.info.id} data-session-state={session.info.state} className="space-y-2">
-                <SessionCard session={session} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} />
+              <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="space-y-2">
+                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} />
 
                 {/* Permission section (when enabled and has activity) */}
                 {permissionsEnabled && hasPermissionActivity && (
@@ -609,64 +645,69 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             );
           })}
 
-          {/* Revived (ended) sessions */}
+          {/* Revived (ended) sessions — collapsible, collapsed by default */}
           {revivedSessions.length > 0 && (
-            <>
-              <div className="flex items-center gap-3 pt-4 pb-1">
+            <details className="pt-4 group/revive">
+              <summary className="flex items-center gap-3 pb-1 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden rounded-lg px-3 py-2 -mx-3 hover:bg-red-500/8 transition-colors">
                 <div className="flex-1 border-t border-red-500/20" />
-                <span className="text-xs text-red-400/60 uppercase tracking-wider font-medium">
-                  Ended Sessions
+                <span className="text-xs text-red-400/60 group-hover/revive:text-red-400/90 uppercase tracking-wider font-medium flex items-center gap-1.5 transition-colors">
+                  <span className="inline-block transition-transform duration-200 group-open/revive:rotate-90">&#9656;</span>
+                  Ended Sessions ({revivedSessions.length})
                 </span>
                 <div className="flex-1 border-t border-red-500/20" />
                 <button
-                  onClick={handleClearAllRevived}
+                  onClick={(e) => { e.preventDefault(); handleClearAllRevived(); }}
                   className="text-xs text-red-400/50 hover:text-red-400 transition-colors px-2 py-0.5 rounded hover:bg-red-500/10"
                 >
                   Clear All
                 </button>
-              </div>
-              {revivedSessions.map((revived) => {
-                const clicks = reviveClicks[revived.session.info.id] ?? 0;
-                const pulseClass = clicks > 0 ? `revived-pulse-${Math.min(clicks, 2)}` : "";
-                const remaining = REVIVE_CLICKS_REQUIRED - clicks;
-                const buttonLabel = clicks === 0
-                  ? "Revive"
-                  : remaining === 1
-                    ? "Confirm!"
-                    : `Revive (${clicks}/${REVIVE_CLICKS_REQUIRED})`;
+              </summary>
+              <div className="space-y-2.5 pt-2">
+                {revivedSessions.map((revived) => {
+                  const clicks = reviveClicks[revived.session.info.id] ?? 0;
+                  const pulseClass = clicks > 0 ? `revived-pulse-${Math.min(clicks, 2)}` : "";
+                  const remaining = REVIVE_CLICKS_REQUIRED - clicks;
+                  const buttonLabel = clicks === 0
+                    ? "Revive"
+                    : remaining === 1
+                      ? "Confirm!"
+                      : `Revive (${clicks}/${REVIVE_CLICKS_REQUIRED})`;
 
-                return (
-                  <div key={revived.session.info.id} className={`revived-card-wrapper relative ${pulseClass}`}>
-                    <div key={clicks} className="revived-overlay" />
-                    <SessionCard session={revived.session} titleAnimation="none" signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} revived />
-                    <div className="absolute inset-0 flex items-center justify-center gap-3 z-10">
-                      <span className="text-xs text-red-400/70 font-mono tabular-nums">
-                        {formatReviveElapsed(revived.revivedAt)}
-                      </span>
-                      <button
-                        onClick={() => handleReviveClick(revived.session)}
-                        className={`px-4 py-2 rounded-lg text-white text-sm font-semibold transition-colors shadow-lg ${
-                          clicks >= 2
-                            ? "bg-red-600 hover:bg-red-500 shadow-red-600/40"
-                            : clicks >= 1
-                              ? "bg-red-500 hover:bg-red-400 shadow-red-500/30"
-                              : "bg-red-500 hover:bg-red-400 shadow-red-500/25"
-                        }`}
-                      >
-                        {buttonLabel}
-                      </button>
-                      <button
-                        onClick={() => handleDismissRevived(revived.session.info.id)}
-                        className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white/60 hover:text-white/80 text-sm transition-colors"
-                        title="Dismiss"
-                      >
-                        Dismiss
-                      </button>
+                  return (
+                    <div key={revived.session.info.id} className={`revived-card-wrapper relative ${pulseClass}`}>
+                      <div key={clicks} className="revived-overlay" />
+                      <SessionCard session={revived.session} titleAnimation="none" signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} revived />
+                      {/* Blur overlay — covers metrics rows but leaves title row visible */}
+                      <div className="absolute left-0 right-0 bottom-0 z-8 rounded-b-lg overflow-hidden" style={{ top: "2.25rem", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }} />
+                      <div className="absolute inset-0 flex items-center justify-center gap-4 z-10" style={{ paddingTop: "1.5rem" }}>
+                        <span className="text-xs text-red-400/70 font-mono tabular-nums">
+                          {formatReviveElapsed(revived.revivedAt)}
+                        </span>
+                        <button
+                          onClick={() => handleReviveClick(revived.session)}
+                          className={`px-6 py-2.5 rounded-lg text-white text-base font-semibold transition-colors shadow-lg ${
+                            clicks >= 2
+                              ? "bg-red-600 hover:bg-red-500 shadow-red-600/40"
+                              : clicks >= 1
+                                ? "bg-red-500 hover:bg-red-400 shadow-red-500/30"
+                                : "bg-red-500 hover:bg-red-400 shadow-red-500/25"
+                          }`}
+                        >
+                          {buttonLabel}
+                        </button>
+                        <button
+                          onClick={() => handleDismissRevived(revived.session.info.id)}
+                          className="px-5 py-2.5 rounded-lg bg-white/10 hover:bg-white/20 text-white/60 hover:text-white/80 text-base font-medium transition-colors"
+                          title="Dismiss"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-            </>
+                  );
+                })}
+              </div>
+            </details>
           )}
 
         </div>
