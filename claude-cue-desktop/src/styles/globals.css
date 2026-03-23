@@ -3,12 +3,16 @@
 /* Follow system appearance */
 html {
   color-scheme: light dark;
+  /* Scale ALL text: Tailwind's rem-based sizes (text-xs, text-sm, etc.)
+     resolve against the root font-size, so scaling here propagates everywhere.
+     The [10px] pixel overrides below convert to rem equivalents. */
+  font-size: calc(16px * var(--font-scale, 1));
 }
 
 body {
   @apply antialiased;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  background-color: #1a1a1a;
+  background-color: #0e0e0e;
   color: #fff;
 }
 
@@ -137,24 +141,25 @@ body {
     border-color var(--key-release-speed, 0.4s) ease;
 }
 
-/* Default (dark mode) floating */
+/* Default (dark mode) floating — soft white glow for elevation */
 .session-card--floating {
-  background-color: rgba(255,255,255,0.06);
+  background-color: rgba(255,255,255,0.04);
   border-color: rgba(255,255,255,0.08);
   box-shadow:
-    0 1px 2px rgba(0,0,0,0.4),
-    0 4px 10px rgba(0,0,0,0.35),
-    0 8px 20px rgba(0,0,0,0.2);
+    0 1px 3px rgba(255,255,255,0.06),
+    0 4px 14px rgba(255,255,255,0.05),
+    0 10px 30px rgba(255,255,255,0.03);
   transform: translateY(0);
 }
 
-/* Default (dark mode) pressed */
+/* Default (dark mode) pressed — subtle inset with faint light rim */
 .session-card--pressed {
-  background-color: rgba(255,255,255,0.02);
-  border-color: rgba(255,255,255,0.04);
+  background-color: rgba(255,255,255,0.01);
+  border-color: rgba(255,255,255,0.03);
   box-shadow:
-    inset 0 2px 8px rgba(0,0,0,0.5),
-    inset 0 1px 3px rgba(0,0,0,0.4);
+    inset 0 2px 8px rgba(0,0,0,0.6),
+    inset 0 1px 3px rgba(0,0,0,0.4),
+    0 0 1px rgba(255,255,255,0.05);
   transform: translateY(3px);
 }
 
@@ -201,15 +206,16 @@ html[data-theme="light"] .session-card--pressed {
     inset 0 1px 3px rgba(0,0,0,0.08);
 }
 
-/* Waiting state — yellow highlight + construction tape stripes */
+/* Waiting state — yellow highlight + construction tape stripes + elevated */
 .session-card--waiting {
-  background-color: rgba(255, 204, 0, 0.04) !important;
+  background-color: rgba(255, 204, 0, 0.06) !important;
   box-shadow:
-    0 1px 2px rgba(0,0,0,0.4),
-    0 4px 10px rgba(0,0,0,0.35),
-    inset 0 0 40px rgba(255, 204, 0, 0.12),
-    0 0 12px rgba(255, 204, 0, 0.08) !important;
-  border-color: rgba(255, 204, 0, 0.3) !important;
+    0 2px 6px rgba(255, 204, 0, 0.08),
+    0 6px 20px rgba(255, 204, 0, 0.06),
+    inset 0 0 40px rgba(255, 204, 0, 0.15),
+    0 0 20px rgba(255, 204, 0, 0.10) !important;
+  border-color: rgba(255, 204, 0, 0.4) !important;
+  transform: translateY(-2px);
 }
 /* Hazard stripe bars — top and bottom of waiting card */
 .session-card--waiting::before,
@@ -232,14 +238,15 @@ html[data-theme="light"] .session-card--pressed {
 .session-card--waiting::before { top: 0; border-radius: 0.5rem 0.5rem 0 0; }
 .session-card--waiting::after { bottom: 0; border-radius: 0 0 0.5rem 0.5rem; }
 
-/* Error state — red highlight + solid red bars */
+/* Error state — red highlight + solid red bars + elevated */
 .session-card--error {
-  background-color: rgba(255, 69, 58, 0.03) !important;
+  background-color: rgba(255, 69, 58, 0.05) !important;
   box-shadow:
-    0 1px 2px rgba(0,0,0,0.4),
-    0 4px 10px rgba(0,0,0,0.35),
-    inset 0 0 30px rgba(255, 69, 58, 0.08) !important;
-  border-color: rgba(255, 69, 58, 0.2) !important;
+    0 2px 6px rgba(255, 69, 58, 0.08),
+    0 6px 20px rgba(255, 69, 58, 0.06),
+    inset 0 0 30px rgba(255, 69, 58, 0.12) !important;
+  border-color: rgba(255, 69, 58, 0.3) !important;
+  transform: translateY(-2px);
 }
 .session-card--error::before,
 .session-card--error::after {
@@ -257,13 +264,15 @@ html[data-theme="light"] .session-card--pressed {
 
 /* Light mode variants */
 html[data-theme="light"] .session-card--waiting {
-  background-color: rgba(255, 204, 0, 0.06) !important;
+  background-color: rgba(255, 204, 0, 0.08) !important;
   box-shadow:
-    0 1px 2px rgba(0,0,0,0.12),
-    0 4px 8px rgba(0,0,0,0.14),
-    inset 0 0 40px rgba(255, 204, 0, 0.12),
-    0 0 12px rgba(255, 204, 0, 0.06) !important;
-  border-color: rgba(200, 160, 0, 0.35) !important;
+    0 2px 4px rgba(0,0,0,0.1),
+    0 6px 16px rgba(0,0,0,0.12),
+    0 14px 36px rgba(0,0,0,0.14),
+    inset 0 0 40px rgba(255, 204, 0, 0.15),
+    0 0 20px rgba(255, 204, 0, 0.1) !important;
+  border-color: rgba(200, 160, 0, 0.4) !important;
+  transform: translateY(-2px);
 }
 html[data-theme="light"] .session-card--waiting::before,
 html[data-theme="light"] .session-card--waiting::after {
@@ -276,12 +285,14 @@ html[data-theme="light"] .session-card--waiting::after {
   );
 }
 html[data-theme="light"] .session-card--error {
-  background-color: rgba(255, 69, 58, 0.04) !important;
+  background-color: rgba(255, 69, 58, 0.06) !important;
   box-shadow:
-    0 1px 2px rgba(0,0,0,0.12),
-    0 4px 8px rgba(0,0,0,0.14),
-    inset 0 0 30px rgba(255, 69, 58, 0.1) !important;
-  border-color: rgba(220, 50, 40, 0.25) !important;
+    0 2px 4px rgba(0,0,0,0.1),
+    0 6px 16px rgba(0,0,0,0.12),
+    0 14px 36px rgba(0,0,0,0.14),
+    inset 0 0 30px rgba(255, 69, 58, 0.12) !important;
+  border-color: rgba(220, 50, 40, 0.3) !important;
+  transform: translateY(-2px);
 }
 html[data-theme="light"] .session-card--error::before,
 html[data-theme="light"] .session-card--error::after {
@@ -355,8 +366,27 @@ html[data-theme="light"] .keyboard-key--active { background: rgba(0,0,0,0.14); b
 
 html[data-theme="light"] {
   --color-white: #000000;
+  /* Boost text contrast: light-mode opacity fractions are too faint.
+     Remap low-opacity text to higher contrast values globally. */
+  --text-boost: 1.6;
 }
 html[data-theme="light"] body {
   background-color: #f5f5f5;
   color: #1a1a1a;
 }
+/* Boost muted text classes that are too faint in light mode */
+html[data-theme="light"] [class*="text-white/30"] { color: rgba(0,0,0,0.5) !important; }
+html[data-theme="light"] [class*="text-white/40"] { color: rgba(0,0,0,0.6) !important; }
+html[data-theme="light"] [class*="text-white/50"] { color: rgba(0,0,0,0.7) !important; }
+html[data-theme="light"] [class*="text-white/60"] { color: rgba(0,0,0,0.75) !important; }
+html[data-theme="light"] [class*="text-white/70"] { color: rgba(0,0,0,0.82) !important; }
+html[data-theme="light"] [class*="text-white/80"] { color: rgba(0,0,0,0.88) !important; }
+html[data-theme="light"] [class*="text-white/90"] { color: rgba(0,0,0,0.95) !important; }
+
+/* Boost muted text in dark mode — default white/N% is too dim */
+html:not([data-theme="light"]) [class*="text-white/25"] { color: rgba(255,255,255,0.50) !important; }
+html:not([data-theme="light"]) [class*="text-white/30"] { color: rgba(255,255,255,0.58) !important; }
+html:not([data-theme="light"]) [class*="text-white/40"] { color: rgba(255,255,255,0.65) !important; }
+html:not([data-theme="light"]) [class*="text-white/50"] { color: rgba(255,255,255,0.75) !important; }
+html:not([data-theme="light"]) [class*="text-white/60"] { color: rgba(255,255,255,0.82) !important; }
+html:not([data-theme="light"]) [class*="text-white/70"] { color: rgba(255,255,255,0.88) !important; }

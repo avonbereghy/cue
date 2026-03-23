@@ -79,9 +79,15 @@ export interface Settings {
   activePresetId: string;
   signalColorDark: string;
   signalColorLight: string;
+  signalOffset: number;
+  particleEnabled: boolean;
+  particleSpeed: number;
+  particleRate: number;
+  particleSparks: number;
   keyPressSpeed: number;
   keyReleaseSpeed: number;
   autoReorder: boolean;
+  fontScale: number;
   testMode: boolean;
 }
 

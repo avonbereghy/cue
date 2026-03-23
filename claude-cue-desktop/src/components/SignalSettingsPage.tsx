@@ -159,7 +159,7 @@ export function SignalSettingsPage() {
       <div className="px-4 py-3 space-y-2 border-b border-white/10 shrink-0 overflow-y-auto">
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium text-white/70">Signal Settings</span>
-          {presetName && <span className="text-[10px] text-white/30">{presetName}</span>}
+          {presetName && <span className="text-[0.625rem] text-white/30">{presetName}</span>}
         </div>
 
         {/* Mode */}
@@ -178,7 +178,7 @@ export function SignalSettingsPage() {
         {/* Opacity */}
         <div className="flex items-center gap-2">
           <span className="text-xs text-white/70 w-16 shrink-0">Opacity</span>
-          <span className="text-[10px] text-white/30 font-mono w-8 text-right shrink-0">{Math.round(alpha * 100)}%</span>
+          <span className="text-[0.625rem] text-white/30 font-mono w-8 text-right shrink-0">{Math.round(alpha * 100)}%</span>
           <input type="range" min={0.05} max={1.0} step={0.01} value={alpha}
             onChange={(e) => { const v = parseFloat(e.target.value); setAlpha(v); updateSetting({ signalAlpha: v }); }}
             className={sliderClass}
@@ -188,7 +188,7 @@ export function SignalSettingsPage() {
         {/* Amplitude */}
         <div className="flex items-center gap-2">
           <span className="text-xs text-white/70 w-16 shrink-0">Amplitude</span>
-          <span className="text-[10px] text-white/30 font-mono w-8 text-right shrink-0">{amplitude.toFixed(2)}x</span>
+          <span className="text-[0.625rem] text-white/30 font-mono w-8 text-right shrink-0">{amplitude.toFixed(2)}x</span>
           <input type="range" min={0.01} max={1.0} step={0.01} value={amplitude}
             onChange={(e) => { const v = parseFloat(e.target.value); setAmplitude(v); updateSetting({ signalAmplitude: v }); }}
             className={sliderClass}
@@ -198,7 +198,7 @@ export function SignalSettingsPage() {
         {/* Echo */}
         <div className="flex items-center gap-2">
           <span className="text-xs text-white/70 w-16 shrink-0">Echo</span>
-          <span className="text-[10px] text-white/30 font-mono w-8 text-right shrink-0">{Math.round(echo * 50)}%</span>
+          <span className="text-[0.625rem] text-white/30 font-mono w-8 text-right shrink-0">{Math.round(echo * 50)}%</span>
           <input type="range" min={0} max={2.0} step={0.01} value={echo}
             onChange={(e) => { const v = parseFloat(e.target.value); setEcho(v); updateSetting({ signalEcho: v }); }}
             className={sliderClass}
@@ -208,7 +208,7 @@ export function SignalSettingsPage() {
         {/* Gate */}
         <div className="flex items-center gap-2">
           <span className="text-xs text-white/70 w-16 shrink-0">Gate</span>
-          <span className="text-[10px] text-white/30 font-mono w-8 text-right shrink-0">{Math.round(gateVal * 100)}%</span>
+          <span className="text-[0.625rem] text-white/30 font-mono w-8 text-right shrink-0">{Math.round(gateVal * 100)}%</span>
           <input type="range" min={0} max={0.5} step={0.01} value={gateVal}
             onChange={(e) => { const v = parseFloat(e.target.value); setGateVal(v); setGate(v); updateSetting({ signalGate: v }); }}
             className={sliderClass}
@@ -219,7 +219,7 @@ export function SignalSettingsPage() {
         {mode !== "preset" && (
           <div className="flex items-center gap-2">
             <span className="text-xs text-white/70 w-16 shrink-0">Frequency</span>
-            <span className="text-[10px] text-white/30 font-mono w-8 text-right shrink-0">{frequency.toFixed(2)}x</span>
+            <span className="text-[0.625rem] text-white/30 font-mono w-8 text-right shrink-0">{frequency.toFixed(2)}x</span>
             <input type="range" min={0.2} max={3.0} step={0.01} value={frequency}
               onChange={(e) => { const v = parseFloat(e.target.value); setFrequency(v); updateSetting({ signalFrequency: v }); }}
               className={sliderClass}
@@ -236,7 +236,7 @@ export function SignalSettingsPage() {
                 onChange={() => { const nv = !val; (setter as (v: boolean) => void)(nv); updateSetting({ [key]: nv }); }}
                 className="w-3 h-3 rounded accent-blue-500 cursor-pointer"
               />
-              <span className="text-[10px] text-white/50">{label}</span>
+              <span className="text-[0.625rem] text-white/50">{label}</span>
             </label>
           ))}
         </div>
@@ -258,9 +258,9 @@ export function SignalSettingsPage() {
         >
           {playing ? "⏸" : "▶"}
         </button>
-        <span className="text-[10px] text-white/40 font-mono w-10 shrink-0">{formatTime(time)}</span>
-        <span className="text-[10px] text-white/20">/</span>
-        <span className="text-[10px] text-white/40 font-mono w-10 shrink-0">{formatTime(duration)}</span>
+        <span className="text-[0.625rem] text-white/40 font-mono w-10 shrink-0">{formatTime(time)}</span>
+        <span className="text-[0.625rem] text-white/20">/</span>
+        <span className="text-[0.625rem] text-white/40 font-mono w-10 shrink-0">{formatTime(duration)}</span>
       </div>
     </div>
   );

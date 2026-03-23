@@ -35,12 +35,17 @@ function Select({ value, options, onChange }: { value: string | number; options:
   );
 }
 
-function SettingRow({ label, description, children }: { label: string; description?: string; children: React.ReactNode }) {
+function SettingRow({ label, description, children, onReset }: { label: string; description?: string; children: React.ReactNode; onReset?: () => void }) {
   return (
     <div className="flex items-center justify-between gap-4 py-2">
-      <div className="min-w-0 shrink-0">
-        <div className="text-xs text-white/70">{label}</div>
-        {description && <div className="text-[10px] text-white/35 mt-0.5">{description}</div>}
+      <div className="min-w-0 shrink-0 flex items-center gap-1.5">
+        <div>
+          <div className="text-xs text-white/70">{label}</div>
+          {description && <div className="text-[0.625rem] text-white/35 mt-0.5">{description}</div>}
+        </div>
+        {onReset && (
+          <button onClick={onReset} className="text-[0.5625rem] text-white/15 hover:text-white/50 transition-colors" title="Reset to default">↺</button>
+        )}
       </div>
       <div className="flex-1 flex items-center justify-end gap-2">{children}</div>
     </div>
@@ -78,12 +83,12 @@ function Slider({ value, min, max, step, defaultValue, format, isPct, onChange }
           onChange={(e) => setText(e.target.value)}
           onBlur={finishEdit}
           onKeyDown={(e) => { if (e.key === "Enter") finishEdit(); if (e.key === "Escape") setEditing(false); }}
-          className="w-10 text-[10px] text-white/70 font-mono text-right bg-white/10 border border-white/20 rounded px-1 py-0 outline-none"
+          className="w-10 text-[0.625rem] text-white/70 font-mono text-right bg-white/10 border border-white/20 rounded px-1 py-0 outline-none"
         />
       ) : (
         <button
           onClick={startEdit}
-          className="text-[10px] text-white/30 font-mono w-10 text-right hover:text-white/60 transition-colors cursor-text"
+          className="text-[0.625rem] text-white/30 font-mono w-10 text-right hover:text-white/60 transition-colors cursor-text"
           title="Click to edit"
         >
           {format(value)}
@@ -95,10 +100,10 @@ function Slider({ value, min, max, step, defaultValue, format, isPct, onChange }
         onChange={(e) => onChange(parseFloat(e.target.value))}
         className="flex-1 h-1 rounded appearance-none cursor-pointer bg-white/10 accent-blue-500"
       />
-      {value !== defaultValue && (
+      {Math.abs(value - defaultValue) > 0.001 && (
         <button
           onClick={() => onChange(defaultValue)}
-          className="text-[9px] text-white/20 hover:text-white/50 transition-colors"
+          className="text-[0.5625rem] text-white/20 hover:text-white/50 transition-colors"
           title="Reset to default"
         >
           ↺
@@ -447,7 +452,7 @@ export function SettingsView() {
       onboardingComplete: settings.onboardingComplete, // keep onboarding state
       permissionsEnabled: false,
       theme: "auto",
-      titleAnimation: "flip",
+      titleAnimation: "none",
       animationSpeed: 1.2,
       randomAnimation: false,
       signalString: true,
@@ -461,9 +466,17 @@ export function SettingsView() {
       signalMids: true,
       signalTreble: true,
       activePresetId: settings.activePresetId, // preserve preset selection
+      signalColorDark: "#ffffff",
+      signalColorLight: "#000000",
+      signalOffset: 0.5,
+      particleEnabled: true,
+      particleSpeed: 1.0,
+      particleRate: 1.0,
+      particleSparks: 3,
       keyPressSpeed: 0.35,
       keyReleaseSpeed: 0.4,
       autoReorder: false,
+      fontScale: 1.0,
       testMode: false,
     };
     setSettings(defaults);
@@ -504,7 +517,7 @@ export function SettingsView() {
         <div className="flex items-center gap-2">
           <button
             onClick={handleResetDefaults}
-            className="px-2 py-1 rounded text-[10px] text-white/30 hover:text-white/60 hover:bg-white/5 transition-colors"
+            className="px-2 py-1 rounded text-[0.625rem] text-white/30 hover:text-white/60 hover:bg-white/5 transition-colors"
             title="Reset all settings to defaults (preserves presets)"
           >
             Reset Defaults
@@ -525,7 +538,7 @@ export function SettingsView() {
 
       {/* Theme */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1">
-        <SettingRow label="Theme" description="Light, Dark, or follow system">
+        <SettingRow label="Theme" description="Light, Dark, or follow system" onReset={(settings.theme ?? "auto") !== "auto" ? () => { setSettings({ ...settings, theme: "auto" }); const win = window as unknown as Record<string, unknown>; if (typeof win.__applyTheme === "function") (win.__applyTheme as (p: string) => void)("auto"); } : undefined}>
           <Select
             value={settings.theme ?? "auto"}
             options={[{ id: "auto", label: "Auto" }, { id: "light", label: "Light" }, { id: "dark", label: "Dark" }]}
@@ -543,21 +556,21 @@ export function SettingsView() {
 
       {/* Animation */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
-        <SettingRow label="Title Animation" description="Effect on working session titles">
+        <SettingRow label="Title Animation" description="Effect on working session titles" onReset={settings.titleAnimation !== "flip" ? () => setSettings({ ...settings, titleAnimation: "none" }) : undefined}>
           <Select
             value={settings.titleAnimation}
             options={TITLE_ANIMATIONS.map((a) => ({ id: a.id, label: a.label }))}
             onChange={(v) => setSettings({ ...settings, titleAnimation: v })}
           />
         </SettingRow>
-        <SettingRow label="Animation Speed">
+        <SettingRow label="Animation Speed" onReset={settings.animationSpeed !== 1.2 ? () => setSettings({ ...settings, animationSpeed: 1.2 }) : undefined}>
           <Select
             value={settings.animationSpeed}
             options={ANIMATION_SPEEDS.map((s) => ({ id: String(s.id), label: s.label }))}
             onChange={(v) => setSettings({ ...settings, animationSpeed: parseFloat(v) })}
           />
         </SettingRow>
-        <SettingRow label="Random Delays" description="Per-character random timing instead of uniform wave">
+        <SettingRow label="Random Delays" description="Per-character random timing instead of uniform wave" onReset={settings.randomAnimation ? () => setSettings({ ...settings, randomAnimation: false }) : undefined}>
           <Toggle checked={settings.randomAnimation} onChange={() => setSettings({ ...settings, randomAnimation: !settings.randomAnimation })} label="Random animation" />
         </SettingRow>
         <SettingRow label="Key Press" description="Speed of the press-down animation">
@@ -568,15 +581,22 @@ export function SettingsView() {
         </SettingRow>
       </section>
 
+      {/* Display */}
+      <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
+        <SettingRow label="Font Scale" description="Adjust text size across the entire app">
+          <Slider value={settings.fontScale ?? 1.0} min={0.75} max={1.5} step={0.05} defaultValue={1.0} format={(v) => `${v.toFixed(2)}x`} onChange={(v) => { setSettings({ ...settings, fontScale: v }); document.documentElement.style.setProperty("--font-scale", String(v)); }} />
+        </SettingRow>
+      </section>
+
       {/* Signal String */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
-        <SettingRow label="Signal String" description="Animated separator reflecting session activity">
+        <SettingRow label="Signal String" description="Animated separator reflecting session activity" onReset={!settings.signalString ? () => setSettings({ ...settings, signalString: true }) : undefined}>
           <Toggle checked={settings.signalString} onChange={() => setSettings({ ...settings, signalString: !settings.signalString })} label="Signal string" />
         </SettingRow>
 
         {settings.signalString && (
           <>
-            <SettingRow label="Mode">
+            <SettingRow label="Mode" onReset={signalMode !== "preset" ? () => setSettings({ ...settings, signalMode: "preset" }) : undefined}>
               <Select
                 value={signalMode}
                 options={[{ id: "simulated", label: "Simulated" }, { id: "preset", label: "Preset" }]}
@@ -596,11 +616,15 @@ export function SettingsView() {
               <Slider value={settings.signalEcho ?? 1.0} min={0} max={2.0} step={0.01} defaultValue={1.0} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalEcho: v })} />
             </SettingRow>
 
+            <SettingRow label="Offset" description="Randomize audio position and speed per session — each thread plays from a different point">
+              <Slider value={settings.signalOffset ?? 0.5} min={0} max={1.0} step={0.01} defaultValue={0.5} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalOffset: v })} />
+            </SettingRow>
+
             <SettingRow label="Gate" description="Noise floor threshold — clips quiet ambient noise">
               <Slider value={settings.signalGate ?? 0.05} min={0} max={0.5} step={0.01} defaultValue={0.05} format={formatPct} isPct onChange={(v) => { setSettings({ ...settings, signalGate: v }); setGateEngine(v); }} />
             </SettingRow>
 
-            <SettingRow label="Bands" description="Toggle bass, mids, and treble strings">
+            <SettingRow label="Bands" description="Toggle bass, mids, and treble strings" onReset={(!settings.signalBass || !settings.signalMids || !settings.signalTreble) ? () => setSettings({ ...settings, signalBass: true, signalMids: true, signalTreble: true }) : undefined}>
               <div className="flex items-center gap-3">
                 {([["Bass", "signalBass"], ["Mids", "signalMids"], ["Treble", "signalTreble"]] as const).map(([label, key]) => (
                   <label key={key} className="flex items-center gap-1 cursor-pointer select-none">
@@ -615,6 +639,121 @@ export function SettingsView() {
                 ))}
               </div>
             </SettingRow>
+
+            <SettingRow label="Color" description="String color for dark and light mode" onReset={((settings.signalColorDark ?? "#ffffff") !== "#ffffff" || (settings.signalColorLight ?? "#000000") !== "#000000") ? () => setSettings({ ...settings, signalColorDark: "#ffffff", signalColorLight: "#000000" }) : undefined}>
+              <div className="space-y-2">
+                {/* Presets */}
+                <div className="flex flex-wrap gap-1.5">
+                  {([
+                    { label: "White", dark: "#ffffff", light: "#000000" },
+                    { label: "Black", dark: "#000000", light: "#ffffff" },
+                    { label: "Cyan", dark: "#00e5ff", light: "#0097a7" },
+                    { label: "Amber", dark: "#ffab00", light: "#e65100" },
+                    { label: "Emerald", dark: "#00e676", light: "#2e7d32" },
+                    { label: "Rose", dark: "#ff4081", light: "#c2185b" },
+                    { label: "Violet", dark: "#b388ff", light: "#7b1fa2" },
+                    { label: "Gold", dark: "#ffd740", light: "#bf360c" },
+                  ] as const).map((preset) => {
+                    const isActive = (settings.signalColorDark ?? "#ffffff") === preset.dark
+                      && (settings.signalColorLight ?? "#000000") === preset.light;
+                    return (
+                      <button
+                        key={preset.label}
+                        onClick={() => setSettings({ ...settings, signalColorDark: preset.dark, signalColorLight: preset.light })}
+                        className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[0.625rem] transition-colors ${
+                          isActive
+                            ? "bg-white/15 text-white/90 ring-1 ring-white/30"
+                            : "bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/70"
+                        }`}
+                        title={`Dark: ${preset.dark} / Light: ${preset.light}`}
+                      >
+                        <span className="flex gap-0.5">
+                          <span className="w-2.5 h-2.5 rounded-full border border-white/20" style={{ backgroundColor: preset.dark }} />
+                          <span className="w-2.5 h-2.5 rounded-full border border-white/20" style={{ backgroundColor: preset.light }} />
+                        </span>
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                {/* Custom color pickers */}
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <span className="text-[0.625rem] text-white/40">Dark</span>
+                    <input
+                      type="color"
+                      value={settings.signalColorDark ?? "#ffffff"}
+                      onChange={(e) => setSettings({ ...settings, signalColorDark: e.target.value })}
+                      className="w-5 h-5 rounded cursor-pointer border border-white/20 bg-transparent"
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <span className="text-[0.625rem] text-white/40">Light</span>
+                    <input
+                      type="color"
+                      value={settings.signalColorLight ?? "#000000"}
+                      onChange={(e) => setSettings({ ...settings, signalColorLight: e.target.value })}
+                      className="w-5 h-5 rounded cursor-pointer border border-white/20 bg-transparent"
+                    />
+                  </label>
+                </div>
+              </div>
+            </SettingRow>
+
+            {/* Particles */}
+            <SettingRow label="Particles" description="Pulse blobs that travel along the strings" onReset={!(settings.particleEnabled ?? true) ? () => setSettings({ ...settings, particleEnabled: true }) : undefined}>
+              <Toggle checked={settings.particleEnabled ?? true} onChange={() => setSettings({ ...settings, particleEnabled: !(settings.particleEnabled ?? true) })} label="Particles" />
+            </SettingRow>
+
+            {(settings.particleEnabled ?? true) && (
+              <>
+                <SettingRow label="Speed" description="How fast particles travel across the card">
+                  <Slider value={settings.particleSpeed ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, particleSpeed: v })} />
+                </SettingRow>
+                <SettingRow label="Rate" description="How often new particles spawn">
+                  <Slider value={settings.particleRate ?? 1.0} min={0.1} max={4.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, particleRate: v })} />
+                </SettingRow>
+                <SettingRow label="Sparks" description="Trailing spark dots behind each particle">
+                  <Slider value={settings.particleSparks ?? 3} min={0} max={6} step={1} defaultValue={3} format={(v) => `${v}`} onChange={(v) => setSettings({ ...settings, particleSparks: v })} />
+                </SettingRow>
+              </>
+            )}
+
+            {/* Effect Presets — combined color + signal + particle presets */}
+            <div className="py-2 space-y-2">
+              <div className="text-[0.625rem] text-white/40 uppercase tracking-wider">Effect Presets</div>
+              <div className="flex flex-wrap gap-1.5">
+                {([
+                  { label: "Default", colorDark: "#ffffff", colorLight: "#000000", alpha: 0.25, amplitude: 0.25, echo: 1.0, pSpeed: 1.0, pRate: 1.0, pSparks: 3, particles: true },
+                  { label: "Neon", colorDark: "#00e5ff", colorLight: "#0097a7", alpha: 0.5, amplitude: 0.4, echo: 1.5, pSpeed: 1.5, pRate: 2.0, pSparks: 5, particles: true },
+                  { label: "Ember", colorDark: "#ffab00", colorLight: "#e65100", alpha: 0.4, amplitude: 0.3, echo: 0.8, pSpeed: 0.7, pRate: 3.0, pSparks: 4, particles: true },
+                  { label: "Ghost", colorDark: "#b388ff", colorLight: "#7b1fa2", alpha: 0.15, amplitude: 0.5, echo: 2.0, pSpeed: 0.5, pRate: 0.5, pSparks: 0, particles: true },
+                  { label: "Pulse", colorDark: "#ff4081", colorLight: "#c2185b", alpha: 0.35, amplitude: 0.6, echo: 0.4, pSpeed: 2.5, pRate: 1.5, pSparks: 6, particles: true },
+                  { label: "Minimal", colorDark: "#ffffff", colorLight: "#000000", alpha: 0.12, amplitude: 0.15, echo: 0.3, pSpeed: 1.0, pRate: 0.3, pSparks: 0, particles: false },
+                  { label: "Aurora", colorDark: "#00e676", colorLight: "#2e7d32", alpha: 0.3, amplitude: 0.35, echo: 1.8, pSpeed: 0.8, pRate: 1.2, pSparks: 2, particles: true },
+                ] as const).map((preset) => (
+                  <button
+                    key={preset.label}
+                    onClick={() => setSettings({
+                      ...settings,
+                      signalColorDark: preset.colorDark,
+                      signalColorLight: preset.colorLight,
+                      signalAlpha: preset.alpha,
+                      signalAmplitude: preset.amplitude,
+                      signalEcho: preset.echo,
+                      particleSpeed: preset.pSpeed,
+                      particleRate: preset.pRate,
+                      particleSparks: preset.pSparks,
+                      particleEnabled: preset.particles,
+                    })}
+                    className="px-2.5 py-1 rounded-full text-[0.625rem] bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/70 transition-colors flex items-center gap-1.5"
+                  >
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: preset.colorDark }} />
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
 
             {!isPresetMode && (
               <SettingRow label="Frequency">
@@ -640,22 +779,22 @@ export function SettingsView() {
                   <button
                     onClick={() => fileInputRef.current?.click()}
                     disabled={extracting}
-                    className="px-2 py-1 rounded text-[10px] font-medium bg-white/10 hover:bg-white/20 text-white/60 hover:text-white transition-colors disabled:opacity-50"
+                    className="px-2 py-1 rounded text-[0.625rem] font-medium bg-white/10 hover:bg-white/20 text-white/60 hover:text-white transition-colors disabled:opacity-50"
                   >
                     {extracting ? "Extracting..." : "Upload Song"}
                   </button>
                   {extractProgress && (
-                    <span className="text-[10px] text-white/40">{extractProgress}</span>
+                    <span className="text-[0.625rem] text-white/40">{extractProgress}</span>
                   )}
                   {!extractProgress && !extracting && (
-                    <span className="text-[10px] text-white/30">Upload to create a new preset</span>
+                    <span className="text-[0.625rem] text-white/30">Upload to create a new preset</span>
                   )}
                 </div>
 
                 {/* Preset Library */}
                 {presets.length > 0 && (
                   <div className="space-y-1 pt-1">
-                    <div className="text-[10px] text-white/40 uppercase tracking-wider">Presets</div>
+                    <div className="text-[0.625rem] text-white/40 uppercase tracking-wider">Presets</div>
                     {presets.map((p) => {
                       const isActive = settings.activePresetId === p.id;
                       const isEditing = editingPresetId === p.id;
@@ -696,12 +835,12 @@ export function SettingsView() {
                           )}
 
                           {/* Duration */}
-                          <span className="text-[10px] text-white/30 font-mono tabular-nums shrink-0">
+                          <span className="text-[0.625rem] text-white/30 font-mono tabular-nums shrink-0">
                             {formatDuration(p.durationSecs)}
                           </span>
 
                           {/* Date */}
-                          <span className="text-[10px] text-white/20 shrink-0">
+                          <span className="text-[0.625rem] text-white/20 shrink-0">
                             {formatDate(p.createdAt)}
                           </span>
 
@@ -709,7 +848,7 @@ export function SettingsView() {
                           {!isActive && (
                             <button
                               onClick={() => handleActivatePreset(p.id)}
-                              className="text-[10px] text-blue-400/60 hover:text-blue-400 transition-colors shrink-0"
+                              className="text-[0.625rem] text-blue-400/60 hover:text-blue-400 transition-colors shrink-0"
                               title="Activate"
                             >
                               Use
@@ -719,7 +858,7 @@ export function SettingsView() {
                           {/* Delete button */}
                           <button
                             onClick={() => handleDeletePreset(p.id)}
-                            className="text-[10px] text-red-400/40 hover:text-red-400 transition-colors shrink-0"
+                            className="text-[0.625rem] text-red-400/40 hover:text-red-400 transition-colors shrink-0"
                             title="Delete preset"
                           >
                             &times;
@@ -731,7 +870,7 @@ export function SettingsView() {
                 )}
 
                 {presets.length === 0 && !extracting && (
-                  <div className="text-[10px] text-white/25 py-1">
+                  <div className="text-[0.625rem] text-white/25 py-1">
                     No presets yet — upload a song to create one
                   </div>
                 )}
@@ -740,10 +879,10 @@ export function SettingsView() {
                 {settings.activePresetId && (
                   <div className="pt-2 space-y-1">
                     <div className="flex items-center justify-between">
-                      <div className="text-[10px] text-white/40 uppercase tracking-wider">Band Envelopes</div>
+                      <div className="text-[0.625rem] text-white/40 uppercase tracking-wider">Band Envelopes</div>
                       <button
                         onClick={() => invoke("open_signal_settings")}
-                        className="text-[10px] text-white/30 hover:text-white/60 transition-colors"
+                        className="text-[0.625rem] text-white/30 hover:text-white/60 transition-colors"
                         title="Open in separate window"
                       >
                         ↗ Expand
@@ -760,14 +899,21 @@ export function SettingsView() {
 
       {/* Permissions & Test Mode */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
-        <SettingRow label="Permission Requests" description="Respond to Claude Code prompts from this dashboard (requires restart)">
+        <SettingRow label="Auto Reorder" description="Move working and waiting sessions to the top automatically" onReset={(settings.autoReorder ?? false) ? () => setSettings({ ...settings, autoReorder: false }) : undefined}>
+          <Toggle
+            checked={settings.autoReorder ?? false}
+            onChange={() => setSettings({ ...settings, autoReorder: !(settings.autoReorder ?? false) })}
+            label="Auto reorder"
+          />
+        </SettingRow>
+        <SettingRow label="Permission Requests" description="Respond to Claude Code prompts from this dashboard (requires restart)" onReset={settings.permissionsEnabled ? () => setSettings({ ...settings, permissionsEnabled: false }) : undefined}>
           <Toggle
             checked={settings.permissionsEnabled}
             onChange={() => setSettings({ ...settings, permissionsEnabled: !settings.permissionsEnabled })}
             label="Permission requests"
           />
         </SettingRow>
-        <SettingRow label="Test Mode" description="Add a synthetic session to preview animations in real time">
+        <SettingRow label="Test Mode" description="Add a synthetic session to preview animations in real time" onReset={(settings.testMode ?? false) ? () => setSettings({ ...settings, testMode: false }) : undefined}>
           <Toggle
             checked={settings.testMode ?? false}
             onChange={() => setSettings({ ...settings, testMode: !settings.testMode })}
@@ -781,7 +927,7 @@ export function SettingsView() {
         <summary className="text-xs text-white/40 cursor-pointer hover:text-white/60 transition-colors select-none">
           Session Card Reference
         </summary>
-        <div className="mt-2 space-y-2 text-[10px] text-white/40 leading-relaxed pb-1">
+        <div className="mt-2 space-y-2 text-[0.625rem] text-white/40 leading-relaxed pb-1">
           <div>
             <span className="text-white/50 font-medium">Row 1</span> &mdash; Status dot, title, state badge, branch, duration
           </div>

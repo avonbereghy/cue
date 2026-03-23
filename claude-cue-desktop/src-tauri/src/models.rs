@@ -352,6 +352,21 @@ pub struct Settings {
     /// Signal string color for light mode (hex, e.g. "#000000")
     #[serde(default = "default_signal_color_light")]
     pub signal_color_light: String,
+    /// Audio offset: randomizes position/speed per session (0 = sync, 1 = full random)
+    #[serde(default = "default_signal_offset")]
+    pub signal_offset: f64,
+    /// Whether pulse particles are enabled
+    #[serde(default = "default_true")]
+    pub particle_enabled: bool,
+    /// Particle speed multiplier (1.0 = default 150-350 px/s)
+    #[serde(default = "default_one")]
+    pub particle_speed: f64,
+    /// Particle spawn rate multiplier (1.0 = default ~2/sec/band)
+    #[serde(default = "default_one")]
+    pub particle_rate: f64,
+    /// Number of spark trails per particle (0-6)
+    #[serde(default = "default_sparks")]
+    pub particle_sparks: f64,
     /// Piano key press-down speed in seconds
     #[serde(default = "default_key_press_speed")]
     pub key_press_speed: f64,
@@ -361,6 +376,9 @@ pub struct Settings {
     /// Auto-reorder sessions by state priority (working first)
     #[serde(default)]
     pub auto_reorder: bool,
+    /// Global font size scale (1.0 = default, 1.25 = larger)
+    #[serde(default = "default_font_scale")]
+    pub font_scale: f64,
     /// Test mode: adds a synthetic session for previewing animations
     #[serde(default)]
     pub test_mode: bool,
@@ -371,7 +389,7 @@ fn default_theme() -> String {
 }
 
 fn default_title_animation() -> String {
-    "flip".to_string()
+    "none".to_string()
 }
 
 fn default_animation_speed() -> f64 {
@@ -391,7 +409,7 @@ fn default_true() -> bool {
 }
 
 fn default_signal_alpha() -> f64 {
-    1.0
+    0.25
 }
 
 fn default_one() -> f64 {
@@ -406,6 +424,14 @@ fn default_signal_color_light() -> String {
     "#000000".to_string()
 }
 
+fn default_signal_offset() -> f64 {
+    0.5
+}
+
+fn default_sparks() -> f64 {
+    3.0
+}
+
 fn default_key_press_speed() -> f64 {
     0.35
 }
@@ -416,6 +442,10 @@ fn default_key_release_speed() -> f64 {
 
 fn default_gate() -> f64 {
     0.05
+}
+
+fn default_font_scale() -> f64 {
+    1.0
 }
 
 impl Default for Settings {
@@ -429,7 +459,7 @@ impl Default for Settings {
             onboarding_complete: false,
             permissions_enabled: false,
             theme: "auto".to_string(),
-            title_animation: "flip".to_string(),
+            title_animation: "none".to_string(),
             animation_speed: 1.2,
             random_animation: false,
             signal_string: true,
@@ -443,9 +473,17 @@ impl Default for Settings {
             signal_mids: true,
             signal_treble: true,
             active_preset_id: String::new(),
+            signal_color_dark: "#ffffff".to_string(),
+            signal_color_light: "#000000".to_string(),
+            signal_offset: 0.5,
+            particle_enabled: true,
+            particle_speed: 1.0,
+            particle_rate: 1.0,
+            particle_sparks: 3.0,
             key_press_speed: 0.35,
             key_release_speed: 0.4,
             auto_reorder: false,
+            font_scale: 1.0,
             test_mode: false,
         }
     }
