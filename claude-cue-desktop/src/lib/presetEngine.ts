@@ -77,6 +77,7 @@ export function stop(): void {
   paused = false;
   pauseOffset = 0;
   frequencyData = new Uint8Array(NUM_BINS);
+  offsetFreqData = new Uint8Array(NUM_BINS);
   smoothBass = smoothMids = smoothTreble = 0;
   prevBass = prevMids = prevTreble = 0;
   fluxBass = fluxMids = fluxTreble = 0;
@@ -198,6 +199,47 @@ export function getFrequencyData(): Uint8Array {
   }
 
   return frequencyData;
+}
+
+// Reusable buffer for getFrequencyDataAtTime — avoids allocation per frame
+let offsetFreqData = new Uint8Array(NUM_BINS);
+
+/**
+ * Get frequency data at an arbitrary time position (no smoothing/onset detection).
+ * Used by per-session offset to sample different points in the song.
+ * Returns a shared buffer — callers must consume before next call.
+ */
+export function getFrequencyDataAtTime(timeSecs: number): Uint8Array {
+  if (!preset) { offsetFreqData.fill(0); return offsetFreqData; }
+
+  const totalSamples = preset.bands.bass.length;
+  if (totalSamples === 0) { offsetFreqData.fill(0); return offsetFreqData; }
+
+  // Wrap time into track duration
+  const duration = preset.durationSecs || 1;
+  const t = ((timeSecs % duration) + duration) % duration; // handle negatives
+  const samplePos = t * preset.sampleRate;
+
+  const idx0 = Math.floor(samplePos) % totalSamples;
+  const idx1 = (idx0 + 1) % totalSamples;
+  const frac = samplePos - Math.floor(samplePos);
+
+  const gate = gateThreshold;
+  const scale = gate < 1 ? 1 / (1 - gate) : 0;
+  const applyGate = (v: number) => v <= gate ? 0 : (v - gate) * scale;
+
+  const bass = applyGate(preset.bands.bass[idx0] * (1 - frac) + preset.bands.bass[idx1] * frac);
+  const mids = applyGate(preset.bands.mids[idx0] * (1 - frac) + preset.bands.mids[idx1] * frac);
+  const treble = applyGate(preset.bands.treble[idx0] * (1 - frac) + preset.bands.treble[idx1] * frac);
+
+  const bassBins = Math.floor(NUM_BINS * 0.25);
+  const midsBins = Math.floor(NUM_BINS * 0.6);
+
+  for (let i = 0; i < NUM_BINS; i++) {
+    offsetFreqData[i] = Math.round((i < bassBins ? bass : i < midsBins ? mids : treble) * 255);
+  }
+
+  return offsetFreqData;
 }
 
 /**

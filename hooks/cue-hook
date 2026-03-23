@@ -316,6 +316,14 @@ def main():
                 if existing.get("state") == "waiting" and action in ("done", "idle"):
                     return
 
+                # Hold "error" state for at least 3 seconds so the user
+                # can see the red highlight before it's overwritten by the
+                # next PreToolUse/PostToolUse "working" event.
+                if existing.get("state") == "error" and action == "working":
+                    error_at = existing.get("lastActivity", 0)
+                    if now - error_at < 3.0:
+                        return
+
                 # Subagent tracking: maintain a count of active subagents.
                 # "subagent" increments, "subagent_stop" decrements.
                 # While count > 0, state stays "subagent" even if

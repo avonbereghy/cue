@@ -41,7 +41,7 @@ interface SessionCardProps {
   keyReleaseSpeed?: number;
 }
 
-export function SessionCard({ session, titleAnimation = "flip", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4 }: SessionCardProps) {
+export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4 }: SessionCardProps) {
   const { info, metrics } = session;
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -366,11 +366,11 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
                   background: session.contextUsagePercent > 0.8
                     ? session.contextUsagePercent > 0.95 ? "#ef4444" : "#f59e0b"
                     : "#22c55e",
-                  opacity: 0.8,
+                  opacity: 0.5,
                 }}
               />
               <span
-                className="absolute inset-0 flex items-center justify-center text-[0.5rem] font-semibold text-white/25 tracking-widest uppercase pointer-events-none"
+                className="absolute inset-0 flex items-center justify-center text-[0.5rem] font-semibold text-white/60 tracking-widest uppercase pointer-events-none"
                 style={{ writingMode: "vertical-rl", textOrientation: "mixed" }}
               >
                 Context
