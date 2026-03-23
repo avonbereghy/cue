@@ -366,11 +366,11 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                   background: session.contextUsagePercent > 0.8
                     ? session.contextUsagePercent > 0.95 ? "#ef4444" : "#f59e0b"
                     : "#22c55e",
-                  opacity: 0.5,
+                  opacity: 0.35,
                 }}
               />
               <span
-                className="absolute inset-0 flex items-center justify-center text-[0.5rem] font-semibold text-white/60 tracking-widest uppercase pointer-events-none"
+                className="absolute inset-0 z-10 flex items-center justify-center text-[0.5rem] font-semibold text-white/60 tracking-widest uppercase pointer-events-none"
                 style={{ writingMode: "vertical-rl", textOrientation: "mixed" }}
               >
                 Context
