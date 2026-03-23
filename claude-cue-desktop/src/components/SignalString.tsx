@@ -87,9 +87,10 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   const onsetRef = useRef<Float64Array>(new Float64Array(3));
   // Pulse particles traveling along strings
   const particlesRef = useRef<{ x: number; speed: number; band: number; birth: number }[]>([]);
-  // Vacuum cord retract/deploy: 0 = fully retracted (left), 1 = fully deployed (right)
-  const clipFractionRef = useRef(isActive ? 1 : 0);
-  const clipVelRef = useRef(0);
+  // Vacuum cord retract/deploy per band: 0 = fully retracted (left), 1 = fully deployed (right)
+  // [bass, mids, treble] — each travels at a slightly different rate
+  const clipFractionsRef = useRef(isActive ? new Float64Array([1, 1, 1]) : new Float64Array(3));
+  const clipVelsRef = useRef(new Float64Array(3));
   const retractTimerRef = useRef<number | null>(null);
   const retractReadyRef = useRef(!isActive); // true = allowed to retract (after delay)
   const deployTimerRef = useRef<number | null>(null);
@@ -125,8 +126,11 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       deployReadyRef.current = false;
       deployTimerRef.current = window.setTimeout(() => {
         deployReadyRef.current = true;
-        // Kick initial velocity once the delay expires
-        clipVelRef.current = Math.max(clipVelRef.current, 1.5 * cordDeployForce);
+        // Small nudge per band — magnetic acceleration builds the rest
+        const vels = clipVelsRef.current;
+        for (let i = 0; i < 3; i++) {
+          vels[i] = Math.max(vels[i], 0.3 * cordDeployForce);
+        }
         deployTimerRef.current = null;
       }, 850);
     } else {
@@ -203,41 +207,46 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         return;
       }
 
-      // ── Vacuum cord deploy/retract animation ──
+      // ── Vacuum cord deploy/retract animation (per-band) ──
       // Skip for revived mode (lightning bolts don't retract)
+      // Each of the 3 strings (bass/mids/treble) travels at a slightly different rate
+      // bandForceMult: bass=slowest, treble=fastest (staggered arrival)
+      const bandForceMult = [0.85, 1.0, 1.2];
       if (!revived) {
         const { cordDeployForce: deployF, cordRetractForce: retractF } = cfg;
         const deployReady = deployReadyRef.current;
-        const clipTarget = isActive ? (deployReady ? 1 : clipFractionRef.current) : (retractReadyRef.current ? 0 : clipFractionRef.current);
         const clipDt = 1 / 60; // approximate frame dt
-        const clip = clipFractionRef.current;
+        const fracs = clipFractionsRef.current;
+        const vels = clipVelsRef.current;
 
-        if (isActive && deployReady) {
-          // Deploy: spring-like launch from left → right with configurable force
-          const springForce = (clipTarget - clip) * 8 * deployF;
-          const damping = -clipVelRef.current * 3.5;
-          clipVelRef.current += (springForce + damping) * clipDt;
-        } else if (retractReadyRef.current) {
-          // Retract: accelerating pull toward left (vacuum cord feel)
-          // Pull gets stronger as more cord is wound up — the classic snap
-          const pullStrength = (1.5 + (1 - clip) * 6) * retractF;
-          clipVelRef.current -= pullStrength * clipDt;
+        for (let i = 0; i < 3; i++) {
+          const clip = fracs[i];
+          const fm = bandForceMult[i];
+
+          if (isActive && deployReady) {
+            // Deploy: magnetic acceleration — slow start, zippy finish
+            const pullStrength = (1.5 + clip * 6) * deployF * fm;
+            vels[i] += pullStrength * clipDt;
+          } else if (retractReadyRef.current) {
+            // Retract: accelerating pull toward left (vacuum cord feel)
+            const pullStrength = (1.5 + (1 - clip) * 6) * retractF * fm;
+            vels[i] -= pullStrength * clipDt;
+          }
+
+          fracs[i] = Math.max(0, Math.min(1, clip + vels[i] * clipDt));
+          if (fracs[i] <= 0) { fracs[i] = 0; vels[i] = 0; }
+          if (fracs[i] >= 1) vels[i] = Math.max(0, vels[i] * 0.9);
         }
 
-        clipFractionRef.current = Math.max(0, Math.min(1, clip + clipVelRef.current * clipDt));
-
-        // Clamp velocity when hitting bounds
-        if (clipFractionRef.current <= 0) { clipFractionRef.current = 0; clipVelRef.current = 0; }
-        if (clipFractionRef.current >= 1) clipVelRef.current = Math.max(0, clipVelRef.current * 0.9);
-
         // Fully retracted — nothing to draw, just keep the loop alive
-        if (clipFractionRef.current < 0.001 && !isActive) {
+        const maxClip = Math.max(fracs[0], fracs[1], fracs[2]);
+        if (maxClip < 0.001 && !isActive) {
           animRef.current = requestAnimationFrame(draw);
           return;
         }
 
-        // Apply clip region: strings visible from left edge to clipX
-        const clipX = clipFractionRef.current * w;
+        // Apply global clip at the widest band (particles/erase rects need it)
+        const clipX = maxClip * w;
         ctx.save();
         ctx.beginPath();
         ctx.rect(0, 0, clipX, h);
@@ -584,6 +593,15 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           const modeAmps = allModeAmps[bi];
           const avgAmp = modeAmps.reduce((s, v) => s + v, 0) / modeAmps.length;
 
+          // Per-band clip region (each string deploys/retracts at its own speed)
+          if (!revived) {
+            const bandClipX = clipFractionsRef.current[band.bandIdx] * w;
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(0, 0, bandClipX, h);
+            ctx.clip();
+          }
+
           // Precompute per-mode constants (avoids sqrt per point per trail)
           const modeConsts = new Array(band.numModes);
           for (let m = 0; m < band.numModes; m++) {
@@ -655,6 +673,9 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             ctx.lineWidth = trail === 0 ? band.lw : band.lw * 0.6;
             ctx.stroke();
           }
+
+          // Restore per-band clip
+          if (!revived) ctx.restore();
         }
 
         // ── Pulse particles: blobs that ride along the strings ──

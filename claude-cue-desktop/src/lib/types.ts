@@ -118,6 +118,7 @@ export interface PresetSummary {
 export const TITLE_ANIMATIONS = [
   { id: "flip", label: "Rotate Flip" },
   { id: "ripple", label: "Ripple" },
+  { id: "shine", label: "Shine" },
   { id: "glow", label: "Pulse Glow" },
   { id: "bounce", label: "Bounce" },
   { id: "none", label: "None" },

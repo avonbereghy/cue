@@ -63,6 +63,26 @@ body {
   animation: anim-ripple var(--anim-speed, 1.2s) ease-in-out infinite;
 }
 
+/* Shine (ripple color without movement, tighter radius) */
+@keyframes anim-shine {
+  0%, 100% { color: #fff; }
+  40% { color: #fff; }
+  50% { color: #2a2a2a; }
+  60% { color: #fff; }
+}
+@keyframes anim-shine-light {
+  0%, 100% { color: #000; }
+  40% { color: #000; }
+  50% { color: #aaa; }
+  60% { color: #000; }
+}
+.anim-shine .title-char {
+  animation: anim-shine var(--anim-speed, 1.2s) ease-in-out infinite;
+}
+html[data-theme="light"] .anim-shine .title-char {
+  animation-name: anim-shine-light;
+}
+
 /* Pulse Glow (cyan highlight) */
 @keyframes anim-glow {
   0%, 100% { color: #fff; text-shadow: none; }

@@ -40,8 +40,8 @@ function SettingRow({ label, description, children, onReset }: { label: string; 
     <div className="flex items-center justify-between gap-4 py-2">
       <div className="min-w-0 shrink-0 flex items-center gap-1.5">
         <div>
-          <div className="text-xs text-white/70">{label}</div>
-          {description && <div className="text-[0.625rem] text-white/35 mt-0.5">{description}</div>}
+          <div className="text-xs text-white/90">{label}</div>
+          {description && <div className="text-[0.625rem] text-white/50 mt-0.5">{description}</div>}
         </div>
         {onReset && (
           <button onClick={onReset} className="text-[0.5625rem] text-white/15 hover:text-white/50 transition-colors" title="Reset to default">↺</button>
@@ -898,11 +898,11 @@ export function SettingsView() {
             label="Permission requests"
           />
         </SettingRow>
-        <SettingRow label="Test Mode" description="Add a synthetic session to preview animations in real time" onReset={(settings.testMode ?? false) ? () => setSettings({ ...settings, testMode: false }) : undefined}>
+        <SettingRow label="Sandbox Mode" description="Independent sandbox with simulated sessions to preview all animations and state transitions" onReset={(settings.testMode ?? false) ? () => setSettings({ ...settings, testMode: false }) : undefined}>
           <Toggle
             checked={settings.testMode ?? false}
             onChange={() => setSettings({ ...settings, testMode: !settings.testMode })}
-            label="Test mode"
+            label="Sandbox mode"
           />
         </SettingRow>
       </section>
