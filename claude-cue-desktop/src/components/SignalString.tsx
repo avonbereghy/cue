@@ -58,11 +58,13 @@ interface SignalStringProps {
   particleRate?: number;
   /** Number of spark trails per particle */
   particleSparks?: number;
+  /** Particle opacity (independent of string opacity) */
+  particleAlpha?: number;
   /** Session ID used as seed for per-session random offset */
   sessionId?: string;
 }
 
-export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, sessionId = "" }: SignalStringProps) {
+export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, sessionId = "" }: SignalStringProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
 
@@ -80,6 +82,21 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // Pulse particles traveling along strings
   const particlesRef = useRef<{ x: number; speed: number; band: number; birth: number }[]>([]);
 
+  // Store tuning props in a ref so the draw loop reads them live
+  // without tearing down the animation pipeline on every slider change
+  const configRef = useRef({
+    signalAlpha, signalAmplitude, signalEcho, frequency,
+    signalBass, signalMids, signalTreble,
+    signalColorDark, signalColorLight, signalOffset,
+    particleEnabled, particleSpeed, particleRate, particleSparks, particleAlpha,
+  });
+  configRef.current = {
+    signalAlpha, signalAmplitude, signalEcho, frequency,
+    signalBass, signalMids, signalTreble,
+    signalColorDark, signalColorLight, signalOffset,
+    particleEnabled, particleSpeed, particleRate, particleSparks, particleAlpha,
+  };
+
   useEffect(() => {
     if (isActive) {
       deactivatedAtRef.current = null;
@@ -94,17 +111,6 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     if (!ctx) return;
 
     const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const isDark = document.documentElement.getAttribute("data-theme") !== "light";
-
-    const sc = isDark ? hexToRgb(signalColorDark) : hexToRgb(signalColorLight);
-
-    const a = signalAlpha;
-    const strokeColor = revived
-      ? `rgba(239, 68, 68, ${0.4 * a})`
-      : `rgba(${sc.r}, ${sc.g}, ${sc.b}, ${0.4 * a})`;
-    const flatColor = revived
-      ? `rgba(239, 68, 68, ${0.5 * a})`
-      : `rgba(${sc.r}, ${sc.g}, ${sc.b}, ${0.35 * a})`;
 
     const dpr = window.devicePixelRatio || 1;
 
@@ -119,16 +125,31 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     const observer = new ResizeObserver(resize);
     observer.observe(canvas);
 
-    const drawFlatLine = (w: number, midY: number) => {
-      ctx.beginPath();
-      ctx.moveTo(0, midY);
-      ctx.lineTo(w, midY);
-      ctx.strokeStyle = flatColor;
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    };
-
     const draw = (now: number) => {
+      const cfg = configRef.current;
+      const { signalAlpha, signalAmplitude, signalEcho, frequency,
+        signalBass, signalMids, signalTreble,
+        signalColorDark, signalColorLight, signalOffset,
+        particleEnabled, particleSpeed, particleRate, particleSparks } = cfg;
+      const isDark = document.documentElement.getAttribute("data-theme") !== "light";
+      const sc = isDark ? hexToRgb(signalColorDark) : hexToRgb(signalColorLight);
+      const a = signalAlpha;
+      const strokeColor = revived
+        ? `rgba(239, 68, 68, ${0.4 * a})`
+        : `rgba(${sc.r}, ${sc.g}, ${sc.b}, ${0.4 * a})`;
+      const flatColor = revived
+        ? `rgba(239, 68, 68, ${0.5 * a})`
+        : `rgba(${sc.r}, ${sc.g}, ${sc.b}, ${0.35 * a})`;
+
+      const drawFlatLine = (w: number, midY: number) => {
+        ctx.beginPath();
+        ctx.moveTo(0, midY);
+        ctx.lineTo(w, midY);
+        ctx.strokeStyle = flatColor;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      };
+
       const rect = canvas.getBoundingClientRect();
       const w = rect.width;
       const h = rect.height;
@@ -477,8 +498,8 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             const frac = pathIdx - pi0;
             const py = pi0 < path.length ? path[pi0] * (1 - frac) + path[pi1] * frac : midY;
 
-            const fadeIn = Math.min(age / 0.15, 1);
-            const alpha = fadeIn * signalAlpha * 0.85;
+            const fadeIn = Math.min(age / 0.1, 1);
+            const alpha = fadeIn * particleAlpha;
 
             const band = bands[p.band];
             const radius = band.lw * 2;
@@ -488,7 +509,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
               const sparkSeed = ((p.birth + si * 7919) * 2654435761) >>> 0;
               const sx = p.x - (si + 1) * (3 + ((sparkSeed & 0xFF) / 255) * 5);
               const sy = py + (((sparkSeed >> 8) & 0xFF) / 255 - 0.5) * 6;
-              const sparkAlpha = alpha * (0.6 - si * 0.1);
+              const sparkAlpha = alpha * (0.5 - si * 0.08);
               if (sx > 0 && sx < w) {
                 ctx.beginPath();
                 ctx.arc(sx, sy, 0.8, 0, Math.PI * 2);
@@ -596,14 +617,14 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           const frac = (p.x / 2) - pi0;
           const py = pi0 < simPoints.length ? simPoints[pi0] * (1 - frac) + simPoints[pi1] * frac : midY;
 
-          const fadeIn = Math.min(age / 0.15, 1);
-          const pAlpha = fadeIn * signalAlpha * 0.8;
+          const fadeIn = Math.min(age / 0.1, 1);
+          const pAlpha = fadeIn * particleAlpha;
 
           for (let si = 0; si < sparks; si++) {
             const sparkSeed = ((p.birth + si * 7919) * 2654435761) >>> 0;
             const sx = p.x - (si + 1) * (3 + ((sparkSeed & 0xFF) / 255) * 4);
             const sy = py + (((sparkSeed >> 8) & 0xFF) / 255 - 0.5) * 5;
-            const sparkAlpha = pAlpha * (0.5 - si * 0.1);
+            const sparkAlpha = pAlpha * (0.5 - si * 0.08);
             if (sx > 0 && sx < w) {
               ctx.beginPath();
               ctx.arc(sx, sy, 0.7, 0, Math.PI * 2);
@@ -635,7 +656,10 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       cancelAnimationFrame(animRef.current);
       observer.disconnect();
     };
-  }, [state, isActive, frequency, revived, pulses, isAudio, signalAlpha, signalAmplitude, signalEcho, signalBass, signalMids, signalTreble, signalColorDark, signalColorLight, signalOffset, particleEnabled, particleSpeed, particleRate, particleSparks, sessionId]);
+  // Only re-create the animation pipeline for structural changes.
+  // Tuning props (alpha, amplitude, colors, etc.) are read from configRef each frame.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, isActive, revived, isAudio, sessionId]);
 
   if (isAudio) {
     // Audio mode: full-card background canvas
@@ -648,13 +672,13 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     );
   }
 
-  // Simulated mode: separator with overflow
+  // Simulated mode: separator — clips downward, overflows upward into title row
   return (
-    <div className="relative w-full" style={{ height: "12px" }}>
+    <div className="relative w-full" style={{ height: "8px", clipPath: "inset(-40px 0 0 0)" }}>
       <canvas
         ref={canvasRef}
         className="absolute left-0 w-full pointer-events-none"
-        style={{ height: "60px", top: "-24px" }}
+        style={{ height: "50px", top: "-34px" }}
         aria-hidden="true"
       />
     </div>

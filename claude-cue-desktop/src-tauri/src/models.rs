@@ -367,6 +367,9 @@ pub struct Settings {
     /// Number of spark trails per particle (0-6)
     #[serde(default = "default_sparks")]
     pub particle_sparks: f64,
+    /// Particle opacity (independent of string opacity)
+    #[serde(default = "default_one")]
+    pub particle_alpha: f64,
     /// Piano key press-down speed in seconds
     #[serde(default = "default_key_press_speed")]
     pub key_press_speed: f64,
@@ -480,6 +483,7 @@ impl Default for Settings {
             particle_speed: 1.0,
             particle_rate: 1.0,
             particle_sparks: 3.0,
+            particle_alpha: 1.0,
             key_press_speed: 0.35,
             key_release_speed: 0.4,
             auto_reorder: false,

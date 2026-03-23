@@ -67,6 +67,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [particleSpeed, setParticleSpeed] = useState(1.0);
   const [particleRate, setParticleRate] = useState(1.0);
   const [particleSparks, setParticleSparks] = useState(3);
+  const [particleAlpha, setParticleAlpha] = useState(1.0);
   const [activePresetId, setActivePresetId] = useState("");
   const [presetBootAttempted, setPresetBootAttempted] = useState(false);
   const [testMode, setTestMode] = useState(false);
@@ -85,32 +86,46 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const prevSessionIdsRef = useRef<Set<string>>(new Set());
   const prevSessionsRef = useRef<EnrichedSession[]>([]);
 
-  // Track disappeared sessions (-> add to revived) and reappeared ones (-> remove from revived)
+  // Track ended sessions: sessions that disappear OR transition to "done" state
+  // get moved to the revive list. Sessions that reappear get removed from revive.
   useEffect(() => {
     const currentIds = new Set(sessions.map((s) => s.info.id));
     const prevIds = prevSessionIdsRef.current;
 
     setRevivedSessions((prev) => {
       let next = prev;
+      const alreadyRevived = new Set(prev.map((r) => r.session.info.id));
 
-      // Add newly disappeared sessions
       if (prevIds.size > 0) {
-        const disappeared: RevivedSession[] = [];
+        const ended: RevivedSession[] = [];
+
+        // Sessions that disappeared entirely
         for (const id of prevIds) {
-          if (!currentIds.has(id) && !prev.some((r) => r.session.info.id === id)) {
+          if (!currentIds.has(id) && !alreadyRevived.has(id)) {
             const snapshot = prevSessionsRef.current.find((s) => s.info.id === id);
             if (snapshot) {
-              disappeared.push({ session: snapshot, revivedAt: Date.now() });
+              ended.push({ session: snapshot, revivedAt: Date.now() });
             }
           }
         }
-        if (disappeared.length > 0) {
-          next = [...next, ...disappeared];
+
+        // Sessions that transitioned to "ended" (SessionEnd fired — chat exited)
+        for (const session of sessions) {
+          if (session.info.state === "ended" && !alreadyRevived.has(session.info.id)) {
+            ended.push({ session, revivedAt: Date.now() });
+          }
+        }
+
+        if (ended.length > 0) {
+          next = [...next, ...ended];
         }
       }
 
-      // Remove revived sessions that reappeared (revive succeeded)
-      const filtered = next.filter((r) => !currentIds.has(r.session.info.id));
+      // Remove revived sessions that reappeared with a non-ended state (revive succeeded)
+      const filtered = next.filter((r) => {
+        const active = sessions.find((s) => s.info.id === r.session.info.id);
+        return !active || active.info.state === "ended";
+      });
 
       if (filtered.length !== prev.length || filtered !== next) {
         saveRevivedSessions(filtered);
@@ -215,6 +230,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setParticleSpeed(s.particleSpeed ?? 1.0);
     setParticleRate(s.particleRate ?? 1.0);
     setParticleSparks(s.particleSparks ?? 3);
+    setParticleAlpha(s.particleAlpha ?? 1.0);
     setGateEngine(s.signalGate ?? 0.05);
     setActivePresetId(s.activePresetId ?? "");
     setKeyPressSpeed(s.keyPressSpeed ?? 0.35);
@@ -293,8 +309,10 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
   // Sort sessions: autoReorder moves working/waiting/error to top.
   // Without autoReorder: arrival order (oldest first).
+  // Filter out "ended" sessions — they've exited and are in the revive list.
   const sortedSessions = (() => {
-    const all = testMode && testSession ? [...sessions, testSession] : [...sessions];
+    const active = sessions.filter((s) => s.info.state !== "ended");
+    const all = testMode && testSession ? [...active, testSession] : [...active];
     if (autoReorder) {
       const priority = (s: EnrichedSession) => {
         const st = s.info.state;
@@ -541,7 +559,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
             return (
               <div key={session.info.id} data-session-id={session.info.id} data-session-state={session.info.state} className="space-y-2">
-                <SessionCard session={session} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} />
+                <SessionCard session={session} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} />
 
                 {/* Permission section (when enabled and has activity) */}
                 {permissionsEnabled && hasPermissionActivity && (
@@ -620,7 +638,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                 return (
                   <div key={revived.session.info.id} className={`revived-card-wrapper relative ${pulseClass}`}>
                     <div key={clicks} className="revived-overlay" />
-                    <SessionCard session={revived.session} titleAnimation="none" signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} revived />
+                    <SessionCard session={revived.session} titleAnimation="none" signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} revived />
                     <div className="absolute inset-0 flex items-center justify-center gap-3 z-10">
                       <span className="text-xs text-red-400/70 font-mono tabular-nums">
                         {formatReviveElapsed(revived.revivedAt)}

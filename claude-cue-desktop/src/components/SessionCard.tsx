@@ -36,12 +36,13 @@ interface SessionCardProps {
   particleSpeed?: number;
   particleRate?: number;
   particleSparks?: number;
+  particleAlpha?: number;
   revived?: boolean;
   keyPressSpeed?: number;
   keyReleaseSpeed?: number;
 }
 
-export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4 }: SessionCardProps) {
+export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4 }: SessionCardProps) {
   const { info, metrics } = session;
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -214,12 +215,10 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
         "--key-release-speed": `${keyReleaseSpeed}s`,
       } as React.CSSProperties}
     >
-      {/* Signal String background — audio-driven strings behind card content */}
-      {signalString && !revived && isWorking && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} sessionId={info.id} />}
+      {/* Signal String background — audio mode only (absolute positioned canvas) */}
+      {signalString && !revived && isWorking && (signalMode === "preset" || signalMode === "audio") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} sessionId={info.id} />}
 
-      <div className="relative z-10 flex gap-3">
-        {/* Left: all content rows */}
-        <div className="flex-1 min-w-0 space-y-2.5">
+      <div className="relative z-10 space-y-2.5">
           {/* Row 1: Status dot + title + state badge + git branch + duration */}
           <div className="flex items-center gap-2">
             <span className={`inline-block w-2.5 h-2.5 rounded-full ${dotColor} ${dotPulse} shrink-0`} aria-hidden="true" />
@@ -282,9 +281,8 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
             </span>
           </div>
 
-          {/* Signal String separator — always present for consistent card height; animates only when working/revived */}
-          {/* Spacer — consistent card height whether strings are active or not */}
-          {signalString && <div style={{ height: "12px" }} />}
+          {/* Signal String separator — simulated mode between rows */}
+          {signalString && (revived || isWorking) && (signalMode !== "preset" && signalMode !== "audio") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} sessionId={info.id} />}
 
           {/* Row 2: Metrics */}
           <div className="flex items-center gap-x-4 gap-y-1 text-xs text-white/50">
@@ -353,34 +351,31 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
               <span className="ml-auto" />
             </div>
           )}
-        </div>
 
-        {/* Right: Context bar — full card height with vertical "Context" label */}
-        {metrics.lastInputTokens > 0 && (
-          <div className="flex flex-col items-center shrink-0" title={`Context: ${formatTokens(metrics.lastInputTokens)} / ${formatTokens(session.contextLimit)}`}>
-            <div className="relative flex-1 w-3 rounded-full bg-white/8 overflow-hidden">
-              <div
-                className="absolute bottom-0 left-0 right-0 rounded-full transition-all duration-500"
-                style={{
-                  height: `${Math.min(session.contextUsagePercent * 100, 100)}%`,
-                  background: session.contextUsagePercent > 0.8
-                    ? session.contextUsagePercent > 0.95 ? "#ef4444" : "#f59e0b"
-                    : "#22c55e",
-                  opacity: 0.35,
-                }}
-              />
-              <span
-                className="absolute inset-0 z-10 flex items-center justify-center text-[0.5rem] font-semibold text-white/60 tracking-widest uppercase pointer-events-none"
-                style={{ writingMode: "vertical-rl", textOrientation: "mixed" }}
-              >
-                Context
+          {/* Row 4: Context usage — horizontal bar with spread labels */}
+          {metrics.lastInputTokens > 0 && (
+            <div className="flex items-center gap-2">
+              <span className="text-[0.625rem] text-white/40 shrink-0">Context</span>
+              <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden">
+                <div
+                  className="absolute left-0 top-0 bottom-0 rounded-full transition-all duration-500"
+                  style={{
+                    width: `${Math.min(session.contextUsagePercent * 100, 100)}%`,
+                    background: session.contextUsagePercent > 0.8
+                      ? session.contextUsagePercent > 0.95 ? "#ef4444" : "#f59e0b"
+                      : "#22c55e",
+                    opacity: 0.5,
+                  }}
+                />
+              </div>
+              <span className="text-[0.625rem] text-white/50 mono-nums shrink-0">
+                {Math.round(session.contextUsagePercent * 100)}%
+              </span>
+              <span className="text-[0.625rem] text-white/30 mono-nums shrink-0">
+                {formatTokens(metrics.lastInputTokens)} / {formatTokens(session.contextLimit)}
               </span>
             </div>
-            <span className="text-[0.5625rem] text-white/30 mono-nums leading-none mt-0.5">
-              {Math.round(session.contextUsagePercent * 100)}%
-            </span>
-          </div>
-        )}
+          )}
       </div>
 
       {/* Row 5: Expanded agent team */}
