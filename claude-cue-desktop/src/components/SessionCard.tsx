@@ -32,12 +32,16 @@ interface SessionCardProps {
   signalColorDark?: string;
   signalColorLight?: string;
   signalOffset?: number;
+  particleEnabled?: boolean;
+  particleSpeed?: number;
+  particleRate?: number;
+  particleSparks?: number;
   revived?: boolean;
   keyPressSpeed?: number;
   keyReleaseSpeed?: number;
 }
 
-export function SessionCard({ session, titleAnimation = "flip", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4 }: SessionCardProps) {
+export function SessionCard({ session, titleAnimation = "flip", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4 }: SessionCardProps) {
   const { info, metrics } = session;
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -176,9 +180,6 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
     .slice(0, maxTools);
   const remainingTools = Object.keys(metrics.toolCounts).length - maxTools;
 
-  const cacheTotal = metrics.cacheCreationTokens + metrics.cacheReadTokens;
-  const cacheHitRate = cacheTotal > 0 ? Math.round((metrics.cacheReadTokens / cacheTotal) * 100) : 0;
-
   const truncatedId = info.id ? info.id.slice(0, 8) : "";
 
   // Shorten workspace path: replace home dir with ~
@@ -206,15 +207,15 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
       }`}
       tabIndex={0}
       aria-label={ariaLabel}
-      title={info.workspace}
+
       style={{
         "--anim-speed": `${animationSpeed}s`,
         "--key-press-speed": `${keyPressSpeed}s`,
         "--key-release-speed": `${keyReleaseSpeed}s`,
       } as React.CSSProperties}
     >
-      {/* Signal String background (audio mode) — only for active sessions, not revived */}
-      {signalString && !revived && isWorking && (signalMode === "preset" || signalMode === "audio") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} sessionId={info.id} />}
+      {/* Signal String background — audio-driven strings behind card content */}
+      {signalString && !revived && isWorking && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} sessionId={info.id} />}
 
       <div className="relative z-10 flex gap-3">
         {/* Left: all content rows */}
@@ -266,12 +267,12 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
               {session.stateDisplayName}
             </span>
             {!isNarrow && (
-              <span className="text-[10px] text-white/50 truncate font-mono" title={info.workspace}>
+              <span className="text-[0.625rem] text-white/50 truncate font-mono" title={info.workspace}>
                 {shortPath}
               </span>
             )}
             {!isNarrow && metrics.gitBranch && (
-              <span className="text-[10px] text-white/30 truncate shrink-0">
+              <span className="text-[0.625rem] text-white/30 truncate shrink-0">
                 <span className="mr-0.5">&#9702;</span>
                 {metrics.gitBranch}
               </span>
@@ -281,8 +282,9 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
             </span>
           </div>
 
-          {/* Signal String separator (simulated mode, revived sessions) */}
-          {signalString && (revived || isWorking) && (signalMode !== "preset" && signalMode !== "audio") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} sessionId={info.id} />}
+          {/* Signal String separator — always present for consistent card height; animates only when working/revived */}
+          {/* Spacer — consistent card height whether strings are active or not */}
+          {signalString && <div style={{ height: "12px" }} />}
 
           {/* Row 2: Metrics */}
           <div className="flex items-center gap-x-4 gap-y-1 text-xs text-white/50">
@@ -294,7 +296,7 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
                 aria-label={`Copy session ID ${info.id}`}
               >
                 {truncatedId}&hellip;
-                <span className="text-[10px]">{copied ? "\u2713" : ""}</span>
+                <span className="text-[0.625rem]">{copied ? "\u2713" : ""}</span>
               </button>
             )}
             <span className="whitespace-nowrap" title="User / Total messages">
@@ -314,7 +316,7 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
             {hasSubagents && (
               <button
                 onClick={() => setExpanded(!expanded)}
-                className="flex items-center gap-1 text-cyan-600 hover:text-cyan-500 transition-colors cursor-pointer text-[10px] font-mono px-1.5 py-0.5 rounded-full border border-cyan-600/40 hover:border-cyan-500/50 whitespace-nowrap"
+                className="flex items-center gap-1 text-cyan-600 hover:text-cyan-500 transition-colors cursor-pointer text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full border border-cyan-600/40 hover:border-cyan-500/50 whitespace-nowrap"
                 aria-label={expanded ? "Collapse agent team" : "Expand agent team"}
                 aria-expanded={expanded}
               >
@@ -323,12 +325,12 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
               </button>
             )}
             {!isNarrow && session.modelDisplayName !== "\u2014" && (
-              <span className="text-[10px] text-white/30 whitespace-nowrap">
+              <span className="text-[0.625rem] text-white/30 whitespace-nowrap">
                 {session.modelDisplayName}
               </span>
             )}
             {!isNarrow && session.sourceDisplay !== "\u2014" && (
-              <span className="text-[10px] text-white/30 whitespace-nowrap">
+              <span className="text-[0.625rem] text-white/30 whitespace-nowrap">
                 {session.sourceDisplay}
               </span>
             )}
@@ -340,28 +342,23 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
               {topTools.map(([name, count]) => (
                 <span
                   key={name}
-                  className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-white/10"
+                  className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10"
                 >
                   {name} {count}
                 </span>
               ))}
               {remainingTools > 0 && (
-                <span className="text-[10px] text-white/30">+{remainingTools}</span>
+                <span className="text-[0.625rem] text-white/30">+{remainingTools}</span>
               )}
               <span className="ml-auto" />
-              {cacheTotal > 0 && (
-                <span className="text-[10px] text-white/30">
-                  Cache {cacheHitRate}%
-                </span>
-              )}
             </div>
           )}
         </div>
 
-        {/* Right: Vertical context bar */}
+        {/* Right: Context bar — full card height with vertical "Context" label */}
         {metrics.lastInputTokens > 0 && (
-          <div className="flex flex-col items-end gap-0.5 shrink-0 pt-7" title={`Context: ${formatTokens(metrics.lastInputTokens)} / ${formatTokens(session.contextLimit)}`}>
-            <div className="relative w-2 flex-1 min-h-[40px] rounded-full bg-white/8 overflow-hidden">
+          <div className="flex flex-col items-center shrink-0" title={`Context: ${formatTokens(metrics.lastInputTokens)} / ${formatTokens(session.contextLimit)}`}>
+            <div className="relative flex-1 w-3 rounded-full bg-white/8 overflow-hidden">
               <div
                 className="absolute bottom-0 left-0 right-0 rounded-full transition-all duration-500"
                 style={{
@@ -372,8 +369,14 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
                   opacity: 0.8,
                 }}
               />
+              <span
+                className="absolute inset-0 flex items-center justify-center text-[0.5rem] font-semibold text-white/25 tracking-widest uppercase pointer-events-none"
+                style={{ writingMode: "vertical-rl", textOrientation: "mixed" }}
+              >
+                Context
+              </span>
             </div>
-            <span className="text-[9px] text-white/30 mono-nums leading-none">
+            <span className="text-[0.5625rem] text-white/30 mono-nums leading-none mt-0.5">
               {Math.round(session.contextUsagePercent * 100)}%
             </span>
           </div>
@@ -398,15 +401,15 @@ export function SessionCard({ session, titleAnimation = "flip", animationSpeed =
                 @{label}
               </span>
               {agent.description && (
-                <span className="text-white/30 truncate text-[10px]" title={agent.description}>
+                <span className="text-white/30 truncate text-[0.625rem]" title={agent.description}>
                   {agent.description}
                 </span>
               )}
               <span className="ml-auto flex items-center gap-3 shrink-0 mono-nums">
                 {agentToolUses > 0 && (
-                  <span className="text-[10px]">{agentToolUses} tools</span>
+                  <span className="text-[0.625rem]">{agentToolUses} tools</span>
                 )}
-                <span className="text-[10px]">{formatTokens(agentTotalTokens)} tokens</span>
+                <span className="text-[0.625rem]">{formatTokens(agentTotalTokens)} tokens</span>
               </span>
             </div>
           );
