@@ -2,7 +2,6 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { EnrichedSession, Settings, SignalPreset } from "@/lib/types";
-import { TITLE_ANIMATIONS, ANIMATION_SPEEDS } from "@/lib/types";
 import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, setGate as setGateEngine } from "@/lib/presetEngine";
 import { formatTokens } from "@/lib/format";
 import { StatBadge } from "./StatBadge";
@@ -61,10 +60,17 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [signalBass, setSignalBass] = useState(true);
   const [signalMids, setSignalMids] = useState(true);
   const [signalTreble, setSignalTreble] = useState(true);
+  const [signalColorDark, setSignalColorDark] = useState("#ffffff");
+  const [signalColorLight, setSignalColorLight] = useState("#000000");
+  const [signalOffset, setSignalOffset] = useState(0);
+  const [particleEnabled, setParticleEnabled] = useState(true);
+  const [particleSpeed, setParticleSpeed] = useState(1.0);
+  const [particleRate, setParticleRate] = useState(1.0);
+  const [particleSparks, setParticleSparks] = useState(3);
   const [activePresetId, setActivePresetId] = useState("");
   const [presetBootAttempted, setPresetBootAttempted] = useState(false);
   const [testMode, setTestMode] = useState(false);
-  const [testState, setTestState] = useState<"working" | "idle">("working");
+  const testState = "working" as const;
   const [keyPressSpeed, setKeyPressSpeed] = useState(0.35);
   const [keyReleaseSpeed, setKeyReleaseSpeed] = useState(0.4);
   const [autoReorder, setAutoReorder] = useState(false);
@@ -202,11 +208,19 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setSignalBass(s.signalBass ?? true);
     setSignalMids(s.signalMids ?? true);
     setSignalTreble(s.signalTreble ?? true);
+    setSignalColorDark(s.signalColorDark ?? "#ffffff");
+    setSignalColorLight(s.signalColorLight ?? "#000000");
+    setSignalOffset(s.signalOffset ?? 0);
+    setParticleEnabled(s.particleEnabled ?? true);
+    setParticleSpeed(s.particleSpeed ?? 1.0);
+    setParticleRate(s.particleRate ?? 1.0);
+    setParticleSparks(s.particleSparks ?? 3);
     setGateEngine(s.signalGate ?? 0.05);
     setActivePresetId(s.activePresetId ?? "");
     setKeyPressSpeed(s.keyPressSpeed ?? 0.35);
     setKeyReleaseSpeed(s.keyReleaseSpeed ?? 0.4);
     setAutoReorder(s.autoReorder ?? false);
+    document.documentElement.style.setProperty("--font-scale", String(s.fontScale ?? 1.0));
     setTestMode(s.testMode ?? false);
   }, []);
 
@@ -277,23 +291,25 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     hasSubagents: false,
   } : null;
 
-  // Sort sessions: default is most recently active first (stable arrival order).
-  // When autoReorder is on, working/waiting sessions float to the top.
+  // Sort sessions: autoReorder moves working/waiting/error to top.
+  // Without autoReorder: arrival order (oldest first).
   const sortedSessions = (() => {
     const all = testMode && testSession ? [...sessions, testSession] : [...sessions];
     if (autoReorder) {
+      const priority = (s: EnrichedSession) => {
+        const st = s.info.state;
+        if (st === "waiting") return 0;
+        if (st === "error") return 1;
+        if (st === "working" || st === "subagent") return 2;
+        return 3;
+      };
       return all.sort((a, b) => {
-        const priority = (s: EnrichedSession) =>
-          s.info.state === "waiting" ? 0
-          : s.info.state === "working" || s.info.state === "subagent" ? 1
-          : 2;
         const pa = priority(a);
         const pb = priority(b);
         if (pa !== pb) return pa - pb;
         return b.info.lastActivity - a.info.lastActivity;
       });
     }
-    // Default: oldest first, new sessions go to bottom
     return all.sort((a, b) => a.info.startedAt - b.info.startedAt);
   })();
 
@@ -492,15 +508,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   }, []);
 
   // Helper to update a setting and persist immediately
-  const updateSetting = useCallback(async (patch: Partial<Settings>) => {
-    try {
-      const current = await invoke<Settings>("get_settings");
-      const updated = { ...current, ...patch };
-      await invoke("update_settings", { newSettings: updated });
-    } catch (err) {
-      console.error("Failed to update setting:", err);
-    }
-  }, []);
 
   const hasContent = sessions.length > 0 || revivedSessions.length > 0 || testMode;
 
@@ -514,25 +521,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         {totalPending > 0 && (
           <StatBadge icon="⏸" label="Pending" value={`${totalPending}`} color="text-yellow-400" />
         )}
-        <div className="ml-auto">
-          <button
-            onClick={() => {
-              const next = !autoReorder;
-              setAutoReorder(next);
-              updateSetting({ autoReorder: next });
-            }}
-            className={`flex items-center justify-center w-6 h-6 rounded transition-colors ${
-              autoReorder
-                ? "bg-blue-500/15 text-blue-400 hover:bg-blue-500/25"
-                : "bg-white/5 text-white/30 hover:text-white/50 hover:bg-white/10"
-            }`}
-            title={autoReorder ? "Auto Reorder: ON (working sessions move to top)" : "Auto Reorder: OFF (arrival order)"}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 6h18M3 12h12M3 18h6" />
-            </svg>
-          </button>
-        </div>
       </div>
 
       {/* Session list or empty state */}
@@ -553,7 +541,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
             return (
               <div key={session.info.id} data-session-id={session.info.id} data-session-state={session.info.state} className="space-y-2">
-                <SessionCard session={session} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} />
+                <SessionCard session={session} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} />
 
                 {/* Permission section (when enabled and has activity) */}
                 {permissionsEnabled && hasPermissionActivity && (
@@ -632,7 +620,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                 return (
                   <div key={revived.session.info.id} className={`revived-card-wrapper relative ${pulseClass}`}>
                     <div key={clicks} className="revived-overlay" />
-                    <SessionCard session={revived.session} titleAnimation="none" signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} revived />
+                    <SessionCard session={revived.session} titleAnimation="none" signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} revived />
                     <div className="absolute inset-0 flex items-center justify-center gap-3 z-10">
                       <span className="text-xs text-red-400/70 font-mono tabular-nums">
                         {formatReviveElapsed(revived.revivedAt)}
@@ -663,106 +651,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             </>
           )}
 
-          {/* Test mode: inline animation settings */}
-          {testMode && (
-            <>
-              <div className="flex items-center gap-3 pt-6 pb-2">
-                <div className="flex-1 border-t border-white/10" />
-                <span className="text-[10px] text-white/30 uppercase tracking-wider">
-                  Test Settings
-                </span>
-                <div className="flex-1 border-t border-white/10" />
-              </div>
-              <div className="rounded-lg bg-white/5 border border-white/10 px-3 py-2 space-y-2">
-                {/* State toggle pills */}
-                <div className="flex items-center justify-between gap-4 py-1">
-                  <span className="text-xs text-white/70">Session State</span>
-                  <div className="flex items-center gap-1">
-                    {(["working", "idle"] as const).map((st) => (
-                      <button
-                        key={st}
-                        onClick={() => setTestState(st)}
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors ${
-                          testState === st
-                            ? st === "working"
-                              ? "bg-white/20 text-white"
-                              : "bg-gray-500/20 text-gray-400"
-                            : "bg-white/5 text-white/30 hover:bg-white/10 hover:text-white/50"
-                        }`}
-                      >
-                        {st === "working" ? "Working" : "Idle"}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                {/* Title Animation */}
-                <div className="flex items-center justify-between gap-4 py-1">
-                  <span className="text-xs text-white/70">Title Animation</span>
-                  <select
-                    value={titleAnimation}
-                    onChange={(e) => {
-                      setTitleAnimation(e.target.value);
-                      updateSetting({ titleAnimation: e.target.value });
-                    }}
-                    className="bg-white/10 border border-white/10 rounded px-2 py-1 text-xs text-white/70 outline-none cursor-pointer hover:bg-white/15 transition-colors"
-                  >
-                    {TITLE_ANIMATIONS.map((a) => (
-                      <option key={a.id} value={a.id} className="bg-neutral-800 text-white">{a.label}</option>
-                    ))}
-                  </select>
-                </div>
-                {/* Animation Speed */}
-                <div className="flex items-center justify-between gap-4 py-1">
-                  <span className="text-xs text-white/70">Speed</span>
-                  <select
-                    value={animationSpeed}
-                    onChange={(e) => {
-                      const v = parseFloat(e.target.value);
-                      setAnimationSpeed(v);
-                      updateSetting({ animationSpeed: v });
-                    }}
-                    className="bg-white/10 border border-white/10 rounded px-2 py-1 text-xs text-white/70 outline-none cursor-pointer hover:bg-white/15 transition-colors"
-                  >
-                    {ANIMATION_SPEEDS.map((s) => (
-                      <option key={s.id} value={s.id} className="bg-neutral-800 text-white">{s.label}</option>
-                    ))}
-                  </select>
-                </div>
-                {/* Random Delays */}
-                <div className="flex items-center justify-between gap-4 py-1">
-                  <span className="text-xs text-white/70">Random Delays</span>
-                  <button
-                    onClick={() => {
-                      const v = !randomAnimation;
-                      setRandomAnimation(v);
-                      updateSetting({ randomAnimation: v });
-                    }}
-                    className={`relative shrink-0 w-9 h-5 rounded-full transition-colors ${randomAnimation ? "bg-blue-500" : "bg-white/20"}`}
-                    role="switch"
-                    aria-checked={randomAnimation}
-                  >
-                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${randomAnimation ? "translate-x-4" : ""}`} />
-                  </button>
-                </div>
-                {/* Signal String */}
-                <div className="flex items-center justify-between gap-4 py-1">
-                  <span className="text-xs text-white/70">Signal String</span>
-                  <button
-                    onClick={() => {
-                      const v = !signalString;
-                      setSignalString(v);
-                      updateSetting({ signalString: v });
-                    }}
-                    className={`relative shrink-0 w-9 h-5 rounded-full transition-colors ${signalString ? "bg-blue-500" : "bg-white/20"}`}
-                    role="switch"
-                    aria-checked={signalString}
-                  >
-                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${signalString ? "translate-x-4" : ""}`} />
-                  </button>
-                </div>
-              </div>
-            </>
-          )}
         </div>
       )}
     </div>
