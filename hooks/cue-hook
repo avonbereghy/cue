@@ -294,8 +294,15 @@ def main():
             now = time.time()
 
             if action == "remove":
-                # Session closed — remove it entirely
-                status["sessions"].pop(session_id, None)
+                # Session ended — mark as "done" instead of deleting.
+                # The frontend captures this transition for the revive list.
+                # Done sessions are pruned after 5 minutes by the stale check below.
+                existing = status["sessions"].get(session_id, {})
+                if existing:
+                    existing["state"] = "done"
+                    existing["lastActivity"] = now
+                    existing["activeSubagents"] = 0
+                    status["sessions"][session_id] = existing
             else:
                 # Update or create session
                 existing = status["sessions"].get(session_id, {})
@@ -362,14 +369,17 @@ def main():
                     entry["model"] = existing.get("model", "")
                 status["sessions"][session_id] = entry
 
-            # Prune stale sessions — only "error" sessions auto-expire.
-            # "done" means "finished current turn" (session is still alive at
-            # the prompt). Only the SessionEnd hook ("remove") closes a session.
+            # Prune stale sessions: "error" and "done" sessions auto-expire.
+            # "done" from SessionEnd means the session has exited — keep it
+            # around for 5 minutes so the frontend can capture it for revive.
+            DONE_THRESHOLD = 300  # 5 minutes
             stale = [
                 sid
                 for sid, s in status["sessions"].items()
-                if s.get("state") == "error"
-                and now - s.get("lastActivity", 0) > STALE_THRESHOLD
+                if (s.get("state") == "error"
+                    and now - s.get("lastActivity", 0) > STALE_THRESHOLD)
+                or (s.get("state") == "done"
+                    and now - s.get("lastActivity", 0) > DONE_THRESHOLD)
             ]
             for sid in stale:
                 del status["sessions"][sid]
