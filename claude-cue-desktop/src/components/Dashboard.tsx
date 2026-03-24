@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useSessionMonitor } from "@/hooks/useSessionMonitor";
 import { SessionsTab } from "./SessionsTab";
 import { SettingsView } from "./SettingsView";
+import type { Settings } from "@/lib/types";
 
 type Tab = "Sessions" | "Settings";
 
@@ -20,7 +22,16 @@ const TAB_PANEL_IDS: Record<Tab, string> = {
 
 export function Dashboard() {
   const [tab, setTab] = useState<Tab>("Sessions");
+  const [compactMode, setCompactMode] = useState(false);
   const sessions = useSessionMonitor();
+
+  useEffect(() => {
+    invoke<Settings>("get_settings").then((s) => setCompactMode(s.compactMode ?? false)).catch(() => {});
+    let unlisten: (() => void) | undefined;
+    listen<Settings>("settings-changed", (e) => setCompactMode(e.payload.compactMode ?? false))
+      .then((fn) => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("selectedDashboardTab", tab);
@@ -48,7 +59,7 @@ export function Dashboard() {
   );
 
   return (
-    <div className="flex flex-col h-screen">
+    <div className={`flex flex-col ${compactMode ? "" : "h-screen"}`}>
       {/* Tab bar */}
       <div
         className="flex items-center px-4 py-2 bg-white/5 border-b border-white/10"
@@ -75,15 +86,36 @@ export function Dashboard() {
             {t}
           </button>
         ))}
-        <button
-          onClick={() => invoke("open_keyboard").catch(() => {})}
-          className="ml-auto flex items-center gap-1 px-3 py-1.5 rounded-md text-sm transition-colors text-white/50 hover:text-white/70"
-          title="Animation Keyboard"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-          </svg>
-        </button>
+        <div className="ml-auto flex items-center gap-1">
+          <button
+            onClick={() => {
+              const next = !compactMode;
+              setCompactMode(next);
+              invoke<Settings>("get_settings").then((s) => {
+                invoke("update_settings", { newSettings: { ...s, compactMode: next } });
+              }).catch(() => {});
+            }}
+            className={`flex items-center gap-1 px-3 py-1.5 rounded-md text-sm transition-colors ${
+              compactMode ? "bg-blue-500/15 text-white" : "text-white/50 hover:text-white/70"
+            }`}
+            title={compactMode ? "Exit Compact Mode" : "Compact Mode"}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <line x1="3" y1="9" x2="21" y2="9" />
+              <line x1="3" y1="15" x2="21" y2="15" />
+            </svg>
+          </button>
+          <button
+            onClick={() => invoke("open_keyboard").catch(() => {})}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-md text-sm transition-colors text-white/50 hover:text-white/70"
+            title="Animation Keyboard"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {/* Tab content */}

@@ -250,11 +250,13 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
     <div
       ref={cardRef}
       className={`overflow-hidden rounded-lg border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 session-card ${
+        compactMode ? "session-card--compact" : ""
+      } ${
         isWorking ? "session-card--pressed" : "session-card--floating"
       } ${
         isWaiting ? "session-card--waiting" : isError ? "session-card--error" : ""
       } ${
-        compactMode ? "px-2.5 py-2 space-y-0"
+        compactMode ? "px-2.5 py-1.5 space-y-0"
         : signalString && (signalMode === "preset" || signalMode === "audio") ? "px-4 py-5 space-y-5" : "p-3 space-y-2.5"
       }`}
       tabIndex={0}
