@@ -78,6 +78,9 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   const animRef = useRef<number>(0);
   const pageVisible = usePageVisible();
 
+  // Smoothly interpolated string color (r,g,b) — transitions between states
+  const currentColorRef = useRef<{ r: number; g: number; b: number } | null>(null);
+
   const isActive = state === "working" || state === "subagent";
   const isAudio = signalMode === "preset" || signalMode === "audio";
   // Track when session became inactive for decay timing
@@ -197,11 +200,31 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         signalColorDark, signalColorLight, signalOffset,
         particleEnabled, particleSpeed, particleRate, particleSparks } = cfg;
       const isDark = document.documentElement.getAttribute("data-theme") !== "light";
-      const sc = isDark ? hexToRgb(signalColorDark) : hexToRgb(signalColorLight);
+      const defaultColor = isDark ? hexToRgb(signalColorDark) : hexToRgb(signalColorLight);
       const a = signalAlpha;
+
+      // State-aware target color: waiting=yellow, error=red, default=configured color
+      const targetColor = state === "waiting"
+        ? { r: 234, g: 179, b: 8 }   // amber/yellow
+        : state === "error"
+        ? { r: 239, g: 68, b: 68 }    // red
+        : defaultColor;
+
+      // Initialize on first frame
+      if (!currentColorRef.current) {
+        currentColorRef.current = { ...targetColor };
+      }
+      // Smooth lerp toward target color (~8 frames to converge)
+      const cc = currentColorRef.current;
+      const lerpSpeed = 0.12;
+      cc.r += (targetColor.r - cc.r) * lerpSpeed;
+      cc.g += (targetColor.g - cc.g) * lerpSpeed;
+      cc.b += (targetColor.b - cc.b) * lerpSpeed;
+
+      const sc = cc;
       const strokeColor = revived
         ? `rgba(239, 68, 68, ${0.4 * a})`
-        : `rgba(${sc.r}, ${sc.g}, ${sc.b}, ${0.4 * a})`;
+        : `rgba(${Math.round(sc.r)}, ${Math.round(sc.g)}, ${Math.round(sc.b)}, ${0.4 * a})`;
 
       const rect = canvas.getBoundingClientRect();
       const w = rect.width;
@@ -444,13 +467,14 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         const numBins = freqData.length;
 
         // Decay envelope: when session stops, smoothly settle to resting state
+        // Uses a slower decay so the strings gracefully fade rather than jumping
         let decayEnvelope = 1.0;
         if (!isActive) {
           if (deactivatedAtRef.current === null) {
             deactivatedAtRef.current = now;
           }
           const elapsed = (now - deactivatedAtRef.current) / 1000;
-          decayEnvelope = Math.exp(-elapsed * 2.0); // ~2s decay
+          decayEnvelope = Math.exp(-elapsed * 1.2); // ~3s smooth fade
           if (decayEnvelope < 0.005) decayEnvelope = 0;
         }
 
@@ -520,10 +544,19 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
 
             // Driven oscillator: position tracks target with inertia
             const idx = bi * 6 + m;
-            const force = (target - ms.pos[idx]) * STIFFNESS - ms.vel[idx] * modeDamping;
-            ms.vel[idx] += force * dt;
-            ms.pos[idx] += ms.vel[idx] * dt;
-            ms.pos[idx] = Math.max(0, Math.min(1.5, ms.pos[idx]));
+            if (isActive) {
+              // Active: drive oscillator toward FFT target
+              const force = (target - ms.pos[idx]) * STIFFNESS - ms.vel[idx] * modeDamping;
+              ms.vel[idx] += force * dt;
+              ms.pos[idx] += ms.vel[idx] * dt;
+              ms.pos[idx] = Math.max(0, Math.min(1.5, ms.pos[idx]));
+            } else {
+              // Inactive: freeze oscillator positions — let decayEnvelope handle fade
+              // Just gently damp velocity so any residual motion settles smoothly
+              ms.vel[idx] *= 0.92;
+              ms.pos[idx] += ms.vel[idx] * dt;
+              ms.pos[idx] = Math.max(0, Math.min(1.5, ms.pos[idx]));
+            }
             modeAmps.push(ms.pos[idx]);
           }
           allModeAmps.push(modeAmps);
@@ -791,13 +824,18 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       const hasPulses = activePulses.length > 0;
 
       // Inactive with no pulses to drain — draw resting string and keep animating
+      // (no abrupt snap — the cord retract handles the visual fade-out)
       if (!isActive && !hasPulses) {
-        ctx.beginPath();
-        ctx.moveTo(0, midY);
-        ctx.lineTo(w, midY);
-        ctx.strokeStyle = strokeColor;
-        ctx.lineWidth = 1;
-        ctx.stroke();
+        // Only draw the resting line if the cord is still visible
+        const maxClipSim = Math.max(clipFractionsRef.current[0], clipFractionsRef.current[1], clipFractionsRef.current[2]);
+        if (maxClipSim > 0.001) {
+          ctx.beginPath();
+          ctx.moveTo(0, midY);
+          ctx.lineTo(w, midY);
+          ctx.strokeStyle = strokeColor;
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
         if (clipped) ctx.restore();
         animRef.current = requestAnimationFrame(draw);
         return;
