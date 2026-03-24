@@ -93,6 +93,8 @@ export interface Settings {
   autoReorder: boolean;
   fontScale: number;
   testMode: boolean;
+  vineBorder: boolean;
+  compactMode: boolean;
 }
 
 export interface SignalPreset {

@@ -77,7 +77,6 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const pageVisible = usePageVisible();
-  const lastDrawTimeRef = useRef(0);
 
   const isActive = state === "working" || state === "subagent";
   const isAudio = signalMode === "preset" || signalMode === "audio";
@@ -191,16 +190,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     const observer = new ResizeObserver(resize);
     observer.observe(canvas);
 
-    const FRAME_INTERVAL = 1000 / 30; // Target 30 FPS
-
     const draw = (now: number) => {
-      // Throttle to 30 FPS
-      const frameElapsed = now - lastDrawTimeRef.current;
-      if (frameElapsed < FRAME_INTERVAL) {
-        animRef.current = requestAnimationFrame(draw);
-        return;
-      }
-      lastDrawTimeRef.current = now - (frameElapsed % FRAME_INTERVAL);
       const cfg = configRef.current;
       const { signalAlpha, signalAmplitude, signalEcho, frequency,
         signalBass, signalMids, signalTreble,
