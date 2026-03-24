@@ -1,6 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import type { EnrichedSession, Settings, SignalPreset } from "@/lib/types";
 import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, setGate as setGateEngine } from "@/lib/presetEngine";
 import { formatTokens } from "@/lib/format";
@@ -91,6 +92,41 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const prevSessionIdsRef = useRef<Set<string>>(new Set());
   const prevSessionsRef = useRef<EnrichedSession[]>([]);
   const dismissedIdsRef = useRef<Set<string>>(new Set());
+  const preCompactSizeRef = useRef<{ width: number; height: number } | null>(null);
+
+  // Auto-resize window to wrap content in compact mode
+  useEffect(() => {
+    const win = getCurrentWindow();
+    if (!compactMode) {
+      if (preCompactSizeRef.current) {
+        const { width, height } = preCompactSizeRef.current;
+        win.setSize(new LogicalSize(width, height));
+        win.setMinSize(null);
+        preCompactSizeRef.current = null;
+      }
+      return;
+    }
+
+    // Save current logical size before shrinking (only on first activation)
+    if (!preCompactSizeRef.current) {
+      win.innerSize().then((phys) => {
+        const dpr = window.devicePixelRatio || 1;
+        preCompactSizeRef.current = { width: phys.width / dpr, height: phys.height / dpr };
+      });
+    }
+
+    // Deterministic sizing: fixed card height * session count + chrome
+    const activeCount = sessions.filter(s => s.info.state !== "ended").length;
+    const CARD_H = 52;     // compact card height (py-1.5 + content + border)
+    const CARD_GAP = 6;    // space-y-1.5 = 6px
+    const TAB_BAR = 44;    // tab bar height
+    const LIST_PAD = 16;   // p-2 top + bottom
+    const compactWidth = 420;
+    const totalHeight = TAB_BAR + LIST_PAD + activeCount * CARD_H + Math.max(0, activeCount - 1) * CARD_GAP;
+
+    win.setSize(new LogicalSize(compactWidth, totalHeight));
+    win.setMinSize(new LogicalSize(200, 60));
+  }, [compactMode, sessions.length]);
 
   // Track ended sessions: sessions that disappear OR transition to "done" state
   // get moved to the revive list. Sessions that reappear get removed from revive.
@@ -762,7 +798,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             </div>
           </div>
         ) : (
-          <div ref={listRef} className={`flex-1 overflow-y-auto ${compactMode ? "p-2 space-y-1.5" : "p-4 pb-4 space-y-3"}`}>
+          <div ref={listRef} className={`flex-1 ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto p-4 pb-12 space-y-3"}`}>
             {sortedSandbox.map((session) => {
               // Apply keyboard state override if active
               const overrideState = stateOverrides[session.info.id];
@@ -815,7 +851,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // Normal mode render
   // ---------------------------------------------------------------------------
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className={compactMode ? "flex flex-col" : "flex flex-col flex-1 min-h-0"}>
       {/* Stats header */}
       {!compactMode && (
       <div className="flex items-center gap-6 px-4 py-3 bg-white/5 border-b border-white/10">
@@ -836,7 +872,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           <span className="text-sm">Sessions will appear here when Claude Code is running</span>
         </div>
       ) : (
-        <div ref={listRef} className={`flex-1 overflow-y-auto ${compactMode ? "p-2 space-y-1.5" : "p-4 pb-4 space-y-3"}`}>
+        <div ref={listRef} className={`flex-1 ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto p-4 pb-12 space-y-3"}`}>
           {/* Active sessions */}
           {sortedSessions.map((session) => {
             const pending = pendingBySession[session.info.id] ?? [];
