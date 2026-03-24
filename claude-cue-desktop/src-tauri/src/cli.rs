@@ -876,9 +876,13 @@ mod tests {
 
     #[test]
     fn test_json_output_with_session() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
         let mut info = make_test_info("test-123", "/home/user/my-project", "working");
-        info.last_activity = 1000.0;
-        info.started_at = 900.0;
+        info.last_activity = now;
+        info.started_at = now - 100.0;
         let sessions = vec![EnrichedSession::from_info_and_metrics(
             info,
             SessionMetrics::default(),

@@ -352,7 +352,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                 aria-label={`Copy session ID ${info.id}`}
               >
                 {truncatedId}&hellip;
-                {copied && <span>\u2713</span>}
+                {copied && <span>{"\u2713"}</span>}
               </button>
             )}
             <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 whitespace-nowrap" title="User / Total messages">

@@ -148,10 +148,16 @@ impl EnrichedSession {
             .unwrap_or_default()
             .as_secs_f64();
 
-        // NOTE: Previously overrode hook state to "waiting" when JSONL showed a
-        // pending tool_use with no tool_result. Removed because hooks reliably
-        // report state and JSONL metrics only refresh every 5s, causing the
-        // stale override to clobber correct hook states.
+        // Stale "working" detection: if a session claims working/subagent but
+        // lastActivity is older than 90s, the hook stopped firing (session ended
+        // without a Stop event). Downgrade to "idle" so the UI doesn't show
+        // animated working state for dead sessions.
+        let mut info = info;
+        if (info.state == "working" || info.state == "subagent")
+            && (now - info.last_activity) > 90.0
+        {
+            info.state = "idle".to_string();
+        }
 
         let workspace_name = std::path::Path::new(&info.workspace)
             .file_name()
@@ -611,12 +617,16 @@ mod tests {
     }
 
     fn make_test_info(id: &str, workspace: &str, state: &str) -> SessionInfo {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
         SessionInfo {
             id: id.to_string(),
             workspace: workspace.to_string(),
             state: state.to_string(),
-            last_activity: 0.0,
-            started_at: 0.0,
+            last_activity: now,
+            started_at: now - 60.0,
             source: None,
             hook_input_tokens: 0,
             hook_output_tokens: 0,
@@ -634,6 +644,44 @@ mod tests {
         assert_eq!(make("waiting").state_icon, "\u{23F8}");
         assert_eq!(make("error").state_icon, "\u{2717}");
         assert_eq!(make("done").state_display_name, "Done");
+    }
+
+    #[test]
+    fn test_stale_working_downgrades_to_idle() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+
+        // Fresh working session (10s ago) — stays working
+        let mut info = make_test_info("s1", "/tmp", "working");
+        info.last_activity = now - 10.0;
+        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default());
+        assert_eq!(es.info.state, "working");
+
+        // Stale working session (120s ago) — downgraded to idle
+        let mut info = make_test_info("s2", "/tmp", "working");
+        info.last_activity = now - 120.0;
+        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default());
+        assert_eq!(es.info.state, "idle");
+
+        // Stale subagent (100s ago) — downgraded to idle
+        let mut info = make_test_info("s3", "/tmp", "subagent");
+        info.last_activity = now - 100.0;
+        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default());
+        assert_eq!(es.info.state, "idle");
+
+        // Idle session stays idle regardless of age
+        let mut info = make_test_info("s4", "/tmp", "idle");
+        info.last_activity = now - 500.0;
+        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default());
+        assert_eq!(es.info.state, "idle");
+
+        // Done session stays done regardless of age
+        let mut info = make_test_info("s5", "/tmp", "done");
+        info.last_activity = now - 500.0;
+        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default());
+        assert_eq!(es.info.state, "done");
     }
 
     #[test]
