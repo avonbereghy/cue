@@ -3,18 +3,9 @@ import { usePageVisible } from "@/hooks/usePageVisible";
 
 /**
  * VineBorder — animated dark twisting vines that wrap the entire card perimeter.
- * Multiple vine strands travel along the edges, intertwining with organic curves.
- * Each vine is a series of cubic bezier segments with randomized offsets.
+ * Only mounted when the card is working/subagent. Unmounting removes the canvas
+ * and stops all rAF loops — zero overhead on idle cards.
  */
-
-interface VineBorderProps {
-  active: boolean;
-}
-
-/** Deterministic hash for stable per-vine randomness */
-function hash(seed: number): number {
-  return ((seed * 2654435761) >>> 0) / 0xFFFFFFFF;
-}
 
 // Vine strand definition — each vine has its own speed, thickness, and wobble
 interface VineStrand {
@@ -34,12 +25,10 @@ const STRANDS: VineStrand[] = [
   { seed: 5, speed: 0.28, thickness: 1.5, wobble: 4,  offset: 0.7,  opacity: 0.55 },
 ];
 
-export function VineBorder({ active }: VineBorderProps) {
+export function VineBorder() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef(0);
-  const opacityRef = useRef(active ? 1 : 0);
   const pageVisible = usePageVisible();
-  const lastDrawRef = useRef(0);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -63,68 +52,47 @@ export function VineBorder({ active }: VineBorderProps) {
     const obs = new ResizeObserver(resize);
     obs.observe(canvas);
 
-    const FRAME_INTERVAL = 1000 / 30; // Target 30 FPS
-
     const draw = (now: number) => {
-      // Throttle to 30 FPS
-      const elapsed = now - lastDrawRef.current;
-      if (elapsed < FRAME_INTERVAL) {
-        animRef.current = requestAnimationFrame(draw);
-        return;
-      }
-      lastDrawRef.current = now - (elapsed % FRAME_INTERVAL);
-
       const t = now / 1000;
       const rect = canvas.getBoundingClientRect();
       const w = rect.width;
       const h = rect.height;
 
-      // Fade in/out
-      const targetOpacity = active ? 1 : 0;
-      const fadeSpeed = active ? 0.03 : 0.015;
-      opacityRef.current += (targetOpacity - opacityRef.current) * fadeSpeed;
-      const globalAlpha = opacityRef.current;
-
       ctx.clearRect(0, 0, w, h);
-
-      // Stop loop entirely when fully faded out and inactive
-      if (globalAlpha < 0.005 && !active) {
-        opacityRef.current = 0;
-        return;
-      }
-      if (globalAlpha < 0.005) {
-        animRef.current = requestAnimationFrame(draw);
-        return;
-      }
 
       const isDark = document.documentElement.getAttribute("data-theme") !== "light";
 
-      // Perimeter: total distance around the card
-      const perimeter = 2 * (w + h);
+      // The canvas extends OVERFLOW px beyond the card on each side.
+      // The card edge sits at (ov, ov) to (w - ov, h - ov) in canvas coords.
+      const ov = 12; // must match OVERFLOW constant
+      const cardW = w - ov * 2;
+      const cardH = h - ov * 2;
+
+      // Perimeter: total distance around the card edge
+      const perimeter = 2 * (cardW + cardH);
 
       // Convert perimeter distance to x,y point + normal direction
-      // Inset by 4px so the vine center sits inside the card edge
-      const inset = 4;
+      // Normal points inward; vines wobble both inward and outward (overflow)
       const perimeterToXY = (d: number): { x: number; y: number; nx: number; ny: number } => {
         const pd = ((d % perimeter) + perimeter) % perimeter;
 
         // Top edge (left to right)
-        if (pd < w) {
-          return { x: pd, y: inset, nx: 0, ny: 1 };
+        if (pd < cardW) {
+          return { x: ov + pd, y: ov, nx: 0, ny: 1 };
         }
         // Right edge (top to bottom)
-        if (pd < w + h) {
-          const along = pd - w;
-          return { x: w - inset, y: along, nx: -1, ny: 0 };
+        if (pd < cardW + cardH) {
+          const along = pd - cardW;
+          return { x: ov + cardW, y: ov + along, nx: -1, ny: 0 };
         }
         // Bottom edge (right to left)
-        if (pd < 2 * w + h) {
-          const along = pd - w - h;
-          return { x: w - along, y: h - inset, nx: 0, ny: -1 };
+        if (pd < 2 * cardW + cardH) {
+          const along = pd - cardW - cardH;
+          return { x: ov + cardW - along, y: ov + cardH, nx: 0, ny: -1 };
         }
         // Left edge (bottom to top)
-        const along = pd - 2 * w - h;
-        return { x: inset, y: h - along, nx: 1, ny: 0 };
+        const along = pd - 2 * cardW - cardH;
+        return { x: ov, y: ov + cardH - along, nx: 1, ny: 0 };
       };
 
       // Draw each vine strand
@@ -135,8 +103,8 @@ export function VineBorder({ active }: VineBorderProps) {
         ctx.lineWidth = thickness;
 
         const baseColor = isDark
-          ? `rgba(30, 25, 22, ${opacity * globalAlpha})`
-          : `rgba(50, 40, 35, ${opacity * globalAlpha})`;
+          ? `rgba(30, 25, 22, ${opacity})`
+          : `rgba(50, 40, 35, ${opacity})`;
         ctx.strokeStyle = baseColor;
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
@@ -171,8 +139,8 @@ export function VineBorder({ active }: VineBorderProps) {
         ctx.beginPath();
         ctx.lineWidth = thickness * 0.3;
         const highlightColor = isDark
-          ? `rgba(55, 45, 40, ${opacity * 0.5 * globalAlpha})`
-          : `rgba(75, 60, 50, ${opacity * 0.4 * globalAlpha})`;
+          ? `rgba(55, 45, 40, ${opacity * 0.5})`
+          : `rgba(75, 60, 50, ${opacity * 0.4})`;
         ctx.strokeStyle = highlightColor;
 
         for (let i = 0; i <= steps; i++) {
@@ -195,28 +163,6 @@ export function VineBorder({ active }: VineBorderProps) {
         }
 
         ctx.stroke();
-
-        // Small thorns/knots along the vine at intervals
-        const knots = 8 + seed * 3;
-        for (let k = 0; k < knots; k++) {
-          const kd = (k / knots) * perimeter + offset * perimeter + t * speed * 40;
-          const pt = perimeterToXY(kd);
-          const s = seed * 1000;
-          const wave = Math.sin(kd * 0.02 + t * speed * 2 + s) * wobble
-            + Math.sin(kd * 0.035 - t * speed * 1.3 + s * 0.7) * wobble * 0.5;
-
-          const kx = pt.x + pt.nx * wave;
-          const ky = pt.y + pt.ny * wave;
-
-          // Small circular knot
-          const knotSize = thickness * (0.5 + hash(seed * 100 + k) * 0.8);
-          ctx.beginPath();
-          ctx.arc(kx, ky, knotSize, 0, Math.PI * 2);
-          ctx.fillStyle = isDark
-            ? `rgba(25, 20, 18, ${opacity * 0.7 * globalAlpha})`
-            : `rgba(40, 32, 28, ${opacity * 0.6 * globalAlpha})`;
-          ctx.fill();
-        }
       }
 
       animRef.current = requestAnimationFrame(draw);
@@ -227,17 +173,22 @@ export function VineBorder({ active }: VineBorderProps) {
       cancelAnimationFrame(animRef.current);
       obs.disconnect();
     };
-  }, [active, pageVisible]);
+  }, [pageVisible]);
+
+  // Overflow margin: vines extend this many px beyond the card edge
+  const OVERFLOW = 12;
 
   return (
     <canvas
       ref={canvasRef}
-      className="w-full h-full pointer-events-none"
+      className="pointer-events-none"
       style={{
         position: "absolute",
-        inset: 0,
+        top: -OVERFLOW,
+        left: -OVERFLOW,
+        width: `calc(100% + ${OVERFLOW * 2}px)`,
+        height: `calc(100% + ${OVERFLOW * 2}px)`,
         zIndex: 20,
-        borderRadius: "inherit",
       }}
       aria-hidden="true"
     />
