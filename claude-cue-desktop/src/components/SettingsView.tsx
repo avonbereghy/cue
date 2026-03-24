@@ -471,6 +471,8 @@ export function SettingsView() {
       autoReorder: false,
       fontScale: 1.0,
       testMode: false,
+      vineBorder: false,
+      compactMode: false,
     };
     setSettings(defaults);
     // Apply theme immediately
@@ -554,6 +556,16 @@ export function SettingsView() {
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
         <SettingRow label="Font Scale" description="Adjust text size across the entire app">
           <Slider value={settings.fontScale ?? 1.0} min={0.75} max={1.5} step={0.05} defaultValue={1.0} format={(v) => `${v.toFixed(2)}x`} onChange={(v) => { setSettings({ ...settings, fontScale: v }); document.documentElement.style.setProperty("--font-scale", String(v)); }} />
+        </SettingRow>
+        <SettingRow label="Compact Mode" description="Mini cards with just title, status, and animation" onReset={settings.compactMode ? () => setSettings({ ...settings, compactMode: false }) : undefined}>
+          <Toggle checked={settings.compactMode ?? false} onChange={() => setSettings({ ...settings, compactMode: !(settings.compactMode ?? false) })} label="Compact mode" />
+        </SettingRow>
+      </section>
+
+      {/* Vine Border */}
+      <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
+        <SettingRow label="Vine Border" description="Animated twisting vines around working session cards" onReset={settings.vineBorder ? () => setSettings({ ...settings, vineBorder: false }) : undefined}>
+          <Toggle checked={settings.vineBorder ?? false} onChange={() => setSettings({ ...settings, vineBorder: !(settings.vineBorder ?? false) })} label="Vine border" />
         </SettingRow>
       </section>
 

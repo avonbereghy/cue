@@ -45,9 +45,11 @@ interface SessionCardProps {
   revived?: boolean;
   keyPressSpeed?: number;
   keyReleaseSpeed?: number;
+  vineBorder?: boolean;
+  compactMode?: boolean;
 }
 
-export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.0, cordRetractForce = 1.0, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4 }: SessionCardProps) {
+export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.0, cordRetractForce = 1.0, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, vineBorder = false, compactMode = false }: SessionCardProps) {
   const { info, metrics } = session;
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -242,6 +244,9 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
   const ariaLabel = `${displayStateName}: ${session.displayTitle}, running ${formatDuration(session.durationSecs)}`;
 
   return (
+    <div style={{ position: "relative" }}>
+      {/* Vine border — rendered OUTSIDE the card's overflow-hidden so vines can overflow */}
+      {vineBorder && isWorking && <VineBorder />}
     <div
       ref={cardRef}
       className={`overflow-hidden rounded-lg border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 session-card ${
@@ -249,7 +254,8 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
       } ${
         isWaiting ? "session-card--waiting" : isError ? "session-card--error" : ""
       } ${
-        signalString && (signalMode === "preset" || signalMode === "audio") ? "px-4 py-5 space-y-5" : "p-3 space-y-2.5"
+        compactMode ? "px-2.5 py-2 space-y-0"
+        : signalString && (signalMode === "preset" || signalMode === "audio") ? "px-4 py-5 space-y-5" : "p-3 space-y-2.5"
       }`}
       tabIndex={0}
       aria-label={ariaLabel}
@@ -262,13 +268,11 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
         "--key-release-speed": `${keyReleaseSpeed}s`,
       } as React.CSSProperties}
     >
-      {/* Vine border — wraps card perimeter when working */}
-      <VineBorder active={isWorking} />
 
       {/* Signal String — renders behind all content (particles pass under pills/text) */}
       {signalString && (revived || info.state !== "ended") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} sessionId={info.id} contentRef={contentRef} />}
 
-      <div ref={contentRef} className="space-y-2.5" style={{ position: "relative" }}>
+      <div ref={contentRef} className={compactMode ? "space-y-0" : "space-y-2.5"} style={{ position: "relative" }}>
           {/* Row 1: Status dot + title + state badge + git branch + duration */}
           <div className="relative flex items-center gap-2">
             <span className={`inline-block w-2.5 h-2.5 rounded-full ${dotPulse} shrink-0`} style={{ backgroundColor: dotHex, transition: "background-color 600ms ease" }} aria-hidden="true" />
@@ -316,22 +320,26 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
             <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: badgeHex.bg, color: badgeHex.text, transition: stateTransition }}>
               {displayStateName}
             </span>
-            {!isNarrow && (
+            {!isNarrow && !compactMode && (
               <span className="text-[0.625rem] text-white/50 truncate font-mono" title={info.workspace}>
                 {shortPath}
               </span>
             )}
-            {!isNarrow && metrics.gitBranch && (
+            {!isNarrow && !compactMode && metrics.gitBranch && (
               <span className="text-[0.625rem] text-white/30 truncate shrink-0">
                 <span className="mr-0.5">&#9702;</span>
                 {metrics.gitBranch}
               </span>
             )}
+            {!compactMode && (
             <span className="ml-auto text-[0.625rem] font-mono text-white/40 mono-nums shrink-0">
               {formatDuration(session.durationSecs)}
             </span>
+            )}
           </div>
 
+          {/* Rows 2-4 hidden in compact mode */}
+          {!compactMode && (<>
           {/* Row 2: Metrics */}
           <div className="relative flex items-center gap-1.5 flex-wrap text-xs text-white/50">
             {!isNarrow && truncatedId && (
@@ -424,10 +432,11 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
               </span>
             </div>
           )}
+          </>)}
       </div>
 
       {/* Row 5: Expanded agent team */}
-      {expanded && hasSubagents && (() => {
+      {!compactMode && expanded && hasSubagents && (() => {
         const activeAgents = subagents.filter(a => a.isActive);
         const completedAgents = subagents.filter(a => !a.isActive);
 
@@ -474,6 +483,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
           </div>
         );
       })()}
+    </div>
     </div>
   );
 }

@@ -74,6 +74,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [activePresetId, setActivePresetId] = useState("");
   const [presetBootAttempted, setPresetBootAttempted] = useState(false);
   const [testMode, setTestMode] = useState(false);
+  const [vineBorder, setVineBorder] = useState(false);
+  const [compactMode, setCompactMode] = useState(false);
   const [keyPressSpeed, setKeyPressSpeed] = useState(0.35);
   const [keyReleaseSpeed, setKeyReleaseSpeed] = useState(0.4);
   const [stateOverrides, setStateOverrides] = useState<Record<string, string>>({});
@@ -249,6 +251,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setAutoReorder(s.autoReorder ?? false);
     document.documentElement.style.setProperty("--font-scale", String(s.fontScale ?? 1.0));
     setTestMode(s.testMode ?? false);
+    setVineBorder(s.vineBorder ?? false);
+    setCompactMode(s.compactMode ?? false);
   }, []);
 
   useEffect(() => {
@@ -758,7 +762,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             </div>
           </div>
         ) : (
-          <div ref={listRef} className="flex-1 overflow-y-auto p-4 pb-4 space-y-3">
+          <div ref={listRef} className={`flex-1 overflow-y-auto ${compactMode ? "p-2 space-y-1.5" : "p-4 pb-4 space-y-3"}`}>
             {sortedSandbox.map((session) => {
               // Apply keyboard state override if active
               const overrideState = stateOverrides[session.info.id];
@@ -768,7 +772,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
               return (
                 <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="space-y-0">
-                  <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} />
+                  <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} vineBorder={vineBorder} compactMode={compactMode} />
 
                   {/* State transition controls */}
                   <div className="flex items-center gap-1 px-2 py-1.5 rounded-b-lg bg-white/3 border border-t-0 border-white/5 -mt-px">
@@ -813,6 +817,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   return (
     <div className="flex flex-col flex-1 min-h-0">
       {/* Stats header */}
+      {!compactMode && (
       <div className="flex items-center gap-6 px-4 py-3 bg-white/5 border-b border-white/10">
         <StatBadge icon="●" label="Sessions" value={`${sessions.length}`} color="text-green-500" />
         <StatBadge icon="💬" label="Messages" value={`${totalMessages}`} color="text-blue-400" />
@@ -821,6 +826,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           <StatBadge icon="⏸" label="Pending" value={`${totalPending}`} color="text-yellow-400" />
         )}
       </div>
+      )}
 
       {/* Session list or empty state */}
       {!hasContent ? (
@@ -830,7 +836,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           <span className="text-sm">Sessions will appear here when Claude Code is running</span>
         </div>
       ) : (
-        <div ref={listRef} className="flex-1 overflow-y-auto p-4 pb-4 space-y-3">
+        <div ref={listRef} className={`flex-1 overflow-y-auto ${compactMode ? "p-2 space-y-1.5" : "p-4 pb-4 space-y-3"}`}>
           {/* Active sessions */}
           {sortedSessions.map((session) => {
             const pending = pendingBySession[session.info.id] ?? [];
@@ -846,10 +852,10 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
             return (
               <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="space-y-2">
-                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} />
+                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} vineBorder={vineBorder} compactMode={compactMode} />
 
                 {/* Permission section (when enabled and has activity) */}
-                {permissionsEnabled && hasPermissionActivity && (
+                {!compactMode && permissionsEnabled && hasPermissionActivity && (
                   <div className="ml-3 border-l-2 border-yellow-400/20 pl-3 space-y-2">
                     {pending.length > 0 && (
                       <button
@@ -897,7 +903,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           })}
 
           {/* Revived (ended) sessions — collapsible, collapsed by default */}
-          {revivedSessions.length > 0 && (
+          {!compactMode && revivedSessions.length > 0 && (
             <details className="pt-4 group/revive">
               <summary className="flex items-center gap-3 pb-1 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden rounded-lg px-3 py-2 -mx-3 hover:bg-red-500/8 transition-colors">
                 <div className="flex-1 border-t border-red-500/20" />

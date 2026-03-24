@@ -385,6 +385,12 @@ pub struct Settings {
     /// Test mode: adds a synthetic session for previewing animations
     #[serde(default)]
     pub test_mode: bool,
+    /// Show animated vine border on working/subagent session cards
+    #[serde(default)]
+    pub vine_border: bool,
+    /// Compact mode: strip cards to title, status, and animation only
+    #[serde(default)]
+    pub compact_mode: bool,
 }
 
 fn default_theme() -> String {
@@ -489,6 +495,8 @@ impl Default for Settings {
             auto_reorder: false,
             font_scale: 1.0,
             test_mode: false,
+            vine_border: false,
+            compact_mode: false,
         }
     }
 }
