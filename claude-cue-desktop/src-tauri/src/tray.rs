@@ -308,12 +308,16 @@ mod tests {
     use crate::models::{SessionInfo, SessionMetrics};
 
     fn make_session(state: &str) -> EnrichedSession {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
         let info = SessionInfo {
             id: "test".to_string(),
             workspace: "/tmp/test-project".to_string(),
             state: state.to_string(),
-            last_activity: 0.0,
-            started_at: 0.0,
+            last_activity: now,
+            started_at: now - 60.0,
             source: None,
             hook_input_tokens: 0,
             hook_output_tokens: 0,
