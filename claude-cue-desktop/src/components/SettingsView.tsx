@@ -473,6 +473,7 @@ export function SettingsView() {
       testMode: false,
       vineBorder: false,
       compactMode: false,
+      slimMode: false,
     };
     setSettings(defaults);
     // Apply theme immediately
