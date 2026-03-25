@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import { usePageVisible } from "@/hooks/usePageVisible";
 import { getFrequencyData, getFrequencyDataAtTime, getCurrentTime, getDuration, isPlaying, getOnsets } from "@/lib/presetEngine";
 
@@ -71,9 +71,11 @@ interface SignalStringProps {
   sessionId?: string;
   /** Ref to content wrapper — used to clip particles behind content rows */
   contentRef?: React.RefObject<HTMLDivElement | null>;
+  /** Key release animation duration (seconds) — strings stay active until key finishes rising */
+  keyReleaseSpeed?: number;
 }
 
-export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.0, cordRetractForce = 1.0, sessionId = "", contentRef }: SignalStringProps) {
+export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.0, cordRetractForce = 1.0, sessionId = "", contentRef, keyReleaseSpeed = 0.4 }: SignalStringProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const pageVisible = usePageVisible();
@@ -81,7 +83,20 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // Smoothly interpolated string color (r,g,b) — transitions between states
   const currentColorRef = useRef<{ r: number; g: number; b: number } | null>(null);
 
-  const isActive = state === "working" || state === "subagent";
+  const stateIsActive = state === "working" || state === "subagent";
+  // Delayed deactivation: keep strings active while the key release animation plays,
+  // then cut input and begin the retract sequence. Activation is instant.
+  const [isActive, setIsActive] = useState(stateIsActive);
+  useEffect(() => {
+    if (stateIsActive) {
+      setIsActive(true);
+      return;
+    }
+    // State left working/subagent — hold strings active for key release duration
+    const timer = setTimeout(() => setIsActive(false), keyReleaseSpeed * 1000);
+    return () => clearTimeout(timer);
+  }, [stateIsActive, keyReleaseSpeed]);
+
   const isAudio = signalMode === "preset" || signalMode === "audio";
   // Track when session became inactive for decay timing
   const deactivatedAtRef = useRef<number | null>(null);
