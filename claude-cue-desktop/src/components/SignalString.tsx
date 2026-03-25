@@ -258,7 +258,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       // Skip for revived mode (lightning bolts don't retract)
       // Each of the 3 strings (bass/mids/treble) travels at a slightly different rate
       // bandForceMult: bass=slowest, treble=fastest (staggered arrival)
-      const bandForceMult = [0.85, 1.0, 1.2];
+      const bandForceMult = [0.85, 0.75, 0.70];
       if (!revived) {
         const { cordDeployForce: deployF, cordRetractForce: retractF } = cfg;
         const clipDt = 1 / 60; // approximate frame dt
@@ -272,7 +272,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           if (isActive && deployReadyRef.current[i]) {
             // Deploy: magnetic acceleration — very slow buildup, explosive finish
             // Cubic ramp: near-zero force at start, steep ramp past ~60%
-            const pullStrength = (0.4 + clip * clip * clip * 12) * deployF * fm;
+            const pullStrength = (0.4 + clip * clip * clip * 8) * deployF * fm;
             vels[i] += pullStrength * clipDt;
           } else if (retractReadyRef.current[i]) {
             // Retract: accelerating pull toward left (vacuum cord feel)
