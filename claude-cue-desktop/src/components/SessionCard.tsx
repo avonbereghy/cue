@@ -47,9 +47,10 @@ interface SessionCardProps {
   keyReleaseSpeed?: number;
   vineBorder?: boolean;
   compactMode?: boolean;
+  slimMode?: boolean;
 }
 
-export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.0, cordRetractForce = 1.0, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, vineBorder = false, compactMode = false }: SessionCardProps) {
+export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.0, cordRetractForce = 1.0, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, vineBorder = false, compactMode = false, slimMode = false }: SessionCardProps) {
   const { info, metrics } = session;
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -259,7 +260,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
       } ${
         compactMode ? "px-2.5 py-1.5 space-y-0"
         : signalString && (signalMode === "preset" || signalMode === "audio") ? "px-4 py-5 space-y-5" : "p-3 space-y-2.5"
-      }`}
+      } ${slimMode ? "flex flex-col" : ""}`}
       tabIndex={0}
       aria-label={ariaLabel}
 
@@ -269,13 +270,14 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
         "--anim-speed": `${animationSpeed}s`,
         "--key-press-speed": `${keyPressSpeed}s`,
         "--key-release-speed": `${keyReleaseSpeed}s`,
+        ...(slimMode ? { minHeight: "120px" } : {}),
       } as React.CSSProperties}
     >
 
       {/* Signal String — renders behind all content (particles pass under pills/text) */}
       {signalString && (revived || info.state !== "ended") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} sessionId={info.id} contentRef={contentRef} keyReleaseSpeed={keyReleaseSpeed} />}
 
-      <div ref={contentRef} className={compactMode ? "space-y-0" : "space-y-2.5"} style={{ position: "relative" }}>
+      <div ref={contentRef} className={`${compactMode ? "space-y-0" : "space-y-2.5"} ${slimMode ? "flex flex-col flex-1" : ""}`} style={{ position: "relative" }}>
           {/* Row 1: Status dot + title + state badge + git branch + duration */}
           <div className="relative flex items-center gap-2">
             <span className={`inline-block w-2.5 h-2.5 rounded-full ${dotPulse} shrink-0`} style={{ backgroundColor: dotHex, transition: "background-color 600ms ease" }} aria-hidden="true" />
@@ -341,8 +343,8 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
             )}
           </div>
 
-          {/* Rows 2-4 hidden in compact mode */}
-          {!compactMode && (<>
+          {/* Rows 2-3 hidden in compact and slim mode */}
+          {!compactMode && !slimMode && (<>
           {/* Row 2: Metrics */}
           <div className="relative flex items-center gap-1.5 flex-wrap text-xs text-white/50">
             {!isNarrow && truncatedId && (
@@ -410,9 +412,13 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
               <span className="ml-auto" />
             </div>
           )}
+          </>)}
 
-          {/* Row 4: Context usage — horizontal bar with spread labels */}
-          {metrics.lastInputTokens > 0 && (
+          {/* Spacer pushes context bar to bottom in slim mode */}
+          {slimMode && <div className="flex-1" />}
+
+          {/* Row 4: Context usage — visible in regular and slim mode, hidden in compact */}
+          {!compactMode && metrics.lastInputTokens > 0 && (
             <div className="relative flex items-center gap-2">
               <span className="text-[0.625rem] text-white/40 shrink-0">Context</span>
               <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden">
@@ -448,11 +454,10 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
               </span>
             </div>
           )}
-          </>)}
       </div>
 
       {/* Row 5: Expanded agent team */}
-      {!compactMode && expanded && hasSubagents && (() => {
+      {!compactMode && !slimMode && expanded && hasSubagents && (() => {
         const activeAgents = subagents.filter(a => a.isActive);
         const completedAgents = subagents.filter(a => !a.isActive);
 
