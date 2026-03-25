@@ -208,7 +208,7 @@ impl EnrichedSession {
 
         let context_limit = {
             let m = effective_model.to_lowercase();
-            if (m.contains("opus") || m.contains("sonnet")) && m.contains("4-6") {
+            if m.contains("4-6") || m.contains("4.6") || m.contains("4-5") || m.contains("4.5") || m == "<synthetic>" {
                 1_000_000
             } else {
                 200_000
@@ -397,6 +397,9 @@ pub struct Settings {
     /// Compact mode: strip cards to title, status, and animation only
     #[serde(default)]
     pub compact_mode: bool,
+    /// Slim mode: hide metrics and tool chips, keep title, timer, context bar, and animations
+    #[serde(default)]
+    pub slim_mode: bool,
 }
 
 fn default_theme() -> String {
@@ -503,6 +506,7 @@ impl Default for Settings {
             test_mode: false,
             vine_border: false,
             compact_mode: false,
+            slim_mode: false,
         }
     }
 }
@@ -695,6 +699,14 @@ mod tests {
         let es = EnrichedSession::from_info_and_metrics(info.clone(), metrics_opus);
         assert_eq!(es.context_limit, 1_000_000);
         assert!((es.context_usage_percent - 0.5).abs() < 0.001);
+
+        let metrics_synthetic = SessionMetrics {
+            model: "<synthetic>".to_string(),
+            last_input_tokens: 500_000,
+            ..Default::default()
+        };
+        let es_syn = EnrichedSession::from_info_and_metrics(info.clone(), metrics_synthetic);
+        assert_eq!(es_syn.context_limit, 1_000_000);
 
         let metrics_old = SessionMetrics {
             model: "claude-sonnet-3-5".to_string(),

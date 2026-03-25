@@ -23,13 +23,19 @@ const TAB_PANEL_IDS: Record<Tab, string> = {
 export function Dashboard() {
   const [tab, setTab] = useState<Tab>("Sessions");
   const [compactMode, setCompactMode] = useState(false);
+  const [slimMode, setSlimMode] = useState(false);
   const sessions = useSessionMonitor();
 
   useEffect(() => {
-    invoke<Settings>("get_settings").then((s) => setCompactMode(s.compactMode ?? false)).catch(() => {});
+    invoke<Settings>("get_settings").then((s) => {
+      setCompactMode(s.compactMode ?? false);
+      setSlimMode(s.slimMode ?? false);
+    }).catch(() => {});
     let unlisten: (() => void) | undefined;
-    listen<Settings>("settings-changed", (e) => setCompactMode(e.payload.compactMode ?? false))
-      .then((fn) => { unlisten = fn; });
+    listen<Settings>("settings-changed", (e) => {
+      setCompactMode(e.payload.compactMode ?? false);
+      setSlimMode(e.payload.slimMode ?? false);
+    }).then((fn) => { unlisten = fn; });
     return () => { unlisten?.(); };
   }, []);
 
@@ -106,6 +112,27 @@ export function Dashboard() {
               <line x1="3" y1="15" x2="21" y2="15" />
             </svg>
           </button>
+          {!compactMode && (
+          <button
+            onClick={() => {
+              const next = !slimMode;
+              setSlimMode(next);
+              invoke<Settings>("get_settings").then((s) => {
+                invoke("update_settings", { newSettings: { ...s, slimMode: next } });
+              }).catch(() => {});
+            }}
+            className={`flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors ${
+              slimMode ? "bg-blue-500/15 text-white" : "text-white/50 hover:text-white/70"
+            }`}
+            title={slimMode ? "Show Details" : "Hide Details"}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="16" x2="12" y2="12" />
+              <line x1="12" y1="8" x2="12.01" y2="8" />
+            </svg>
+          </button>
+          )}
           <button
             onClick={() => invoke("open_keyboard").catch(() => {})}
             className="flex items-center gap-1 px-3 py-1.5 rounded-md text-sm transition-colors text-white/50 hover:text-white/70"

@@ -95,6 +95,7 @@ export interface Settings {
   testMode: boolean;
   vineBorder: boolean;
   compactMode: boolean;
+  slimMode: boolean;
 }
 
 export interface SignalPreset {
