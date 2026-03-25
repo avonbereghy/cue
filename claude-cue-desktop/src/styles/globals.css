@@ -38,8 +38,15 @@ body {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.25; }
 }
+@keyframes dot-pulse-light {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
 .dot-pulse {
   animation: dot-pulse var(--anim-speed, 2s) ease-in-out infinite;
+}
+html[data-theme="light"] .dot-pulse {
+  animation-name: dot-pulse-light;
 }
 
 /* Working title animations — per-character */

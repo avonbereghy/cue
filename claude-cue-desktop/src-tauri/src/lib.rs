@@ -739,6 +739,17 @@ async fn handle_permission_connection(
 // Tray Setup
 // ---------------------------------------------------------------------------
 
+/// Filter sessions to only those that are actively running or need attention.
+/// Excludes "done" and "ended" sessions — these are shown as revivable in the
+/// frontend and should not appear as tray dots or menu items.
+fn tray_active_sessions(sessions: &[EnrichedSession]) -> Vec<EnrichedSession> {
+    sessions
+        .iter()
+        .filter(|s| s.info.state.as_str() != "ended")
+        .cloned()
+        .collect()
+}
+
 /// Format a descriptive tooltip showing session count and state breakdown.
 fn format_tooltip(sessions: &[EnrichedSession]) -> String {
     let count = sessions.len();
@@ -797,7 +808,8 @@ fn setup_tray(
     handle: &AppHandle,
     monitor: &Arc<SessionMonitorState>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let sessions = monitor.enriched_sessions.lock().unwrap().clone();
+    let all_sessions = monitor.enriched_sessions.lock().unwrap().clone();
+    let sessions = tray_active_sessions(&all_sessions);
     let png_bytes = tray::render_dot_grid(&sessions, true, 44);
     let icon = tauri::image::Image::from_bytes(&png_bytes)?;
 
@@ -915,7 +927,8 @@ fn spawn_blink_timer(handle: AppHandle, monitor: Arc<SessionMonitorState>) {
         loop {
             interval.tick().await;
 
-            let sessions = monitor.enriched_sessions.lock().unwrap().clone();
+            let all_sessions = monitor.enriched_sessions.lock().unwrap().clone();
+            let sessions = tray_active_sessions(&all_sessions);
             let has_blinking = sessions
                 .iter()
                 .any(|s| s.info.state == "working" || s.info.state == "subagent");
