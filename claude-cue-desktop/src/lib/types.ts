@@ -207,7 +207,7 @@ export const STATE_DOT_HEX: Record<string, string> = {
 };
 
 export const STATE_DOT_HEX_LIGHT: Record<string, string> = {
-  working: "rgba(0,0,0,0.7)",
+  working: "#16a34a",
   waiting: "#ca8a04",
   error: "#dc2626",
   subagent: "#2563eb",
