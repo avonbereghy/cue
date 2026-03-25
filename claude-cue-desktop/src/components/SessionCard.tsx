@@ -205,8 +205,9 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
     subagent: "Subagent", idle: "Idle", done: "Done", ended: "Ended",
   };
 
-  const dotHex = (isDark ? STATE_DOT_HEX : STATE_DOT_HEX_LIGHT)[displayState] ?? "#22c55e";
-  const dotPulse = displayState === "working" || displayState === "waiting" || displayState === "subagent" ? "dot-pulse" : "";
+  // Dot always reflects the real state immediately (no sticky delay)
+  const dotHex = (isDark ? STATE_DOT_HEX : STATE_DOT_HEX_LIGHT)[info.state] ?? "#e0e0e0";
+  const dotPulse = info.state === "working" || info.state === "waiting" || info.state === "subagent" ? "dot-pulse" : "";
   const badgeHex = (isDark ? STATE_BADGE_HEX : STATE_BADGE_HEX_LIGHT)[displayState] ?? { bg: "rgba(34,197,94,0.2)", text: "#22c55e" };
   const titleHex = (isDark ? STATE_HEX : STATE_HEX_LIGHT)[displayState] ?? "#22c55e";
   const displayStateName = STATE_DISPLAY_NAME[displayState] ?? session.stateDisplayName;
@@ -419,9 +420,22 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                   className="absolute left-0 top-0 bottom-0 rounded-full transition-all duration-500"
                   style={{
                     width: `${Math.min(session.contextUsagePercent * 100, 100)}%`,
-                    background: session.contextUsagePercent > 0.8
-                      ? session.contextUsagePercent > 0.95 ? "#ef4444" : "#f59e0b"
-                      : "#22c55e",
+                    background: (() => {
+                      const tok = metrics.lastInputTokens;
+                      if (tok >= 400000) return "#ef4444";
+                      if (tok >= 200000) {
+                        const t = (tok - 200000) / 200000;
+                        const r = Math.round(245 + (239 - 245) * t);
+                        const g = Math.round(158 - 158 * t + 68 * t);
+                        const b = Math.round(11 + (68 - 11) * t);
+                        return `rgb(${r},${g},${b})`;
+                      }
+                      const t = tok / 200000;
+                      const r = Math.round(34 + (245 - 34) * t);
+                      const g = Math.round(197 + (158 - 197) * t);
+                      const b = Math.round(94 + (11 - 94) * t);
+                      return `rgb(${r},${g},${b})`;
+                    })(),
                     opacity: 0.25,
                   }}
                 />
