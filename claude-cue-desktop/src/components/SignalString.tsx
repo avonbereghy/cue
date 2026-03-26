@@ -75,7 +75,7 @@ interface SignalStringProps {
   keyReleaseSpeed?: number;
 }
 
-export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.0, cordRetractForce = 1.0, sessionId = "", contentRef, keyReleaseSpeed = 0.4 }: SignalStringProps) {
+export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.0, cordRetractForce = 1.0, sessionId = "", contentRef, keyReleaseSpeed: _keyReleaseSpeed = 0.4 }: SignalStringProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const pageVisible = usePageVisible();
@@ -84,18 +84,32 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   const currentColorRef = useRef<{ r: number; g: number; b: number } | null>(null);
 
   const stateIsActive = state === "working" || state === "subagent";
-  // Delayed deactivation: keep strings active while the key release animation plays,
+  // Delayed deactivation: keep strings active while the audio fades out,
   // then cut input and begin the retract sequence. Activation is instant.
   const [isActive, setIsActive] = useState(stateIsActive);
+  // Mirror isActive into a ref so the draw loop reads the latest value
+  // without requiring isActive in the animation effect's dependency array.
+  const isActiveRef = useRef(isActive);
+  isActiveRef.current = isActive;
+  // Track when state left working for gradual FFT drive fade
+  const fadingRef = useRef(false);
+  const fadeStartRef = useRef<number>(0);
+  const FADE_DURATION = 1.5; // seconds to fade FFT drive to zero
   useEffect(() => {
     if (stateIsActive) {
       setIsActive(true);
+      fadingRef.current = false;
       return;
     }
-    // State left working/subagent — hold strings active for key release duration
-    const timer = setTimeout(() => setIsActive(false), keyReleaseSpeed * 1000);
+    // State left working/subagent — begin fade, then deactivate after fade completes
+    fadingRef.current = true;
+    fadeStartRef.current = performance.now();
+    const timer = setTimeout(() => {
+      setIsActive(false);
+      fadingRef.current = false;
+    }, FADE_DURATION * 1000);
     return () => clearTimeout(timer);
-  }, [stateIsActive, keyReleaseSpeed]);
+  }, [stateIsActive]);
 
   const isAudio = signalMode === "preset" || signalMode === "audio";
   // Track when session became inactive for decay timing
@@ -269,7 +283,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           const clip = fracs[i];
           const fm = bandForceMult[i];
 
-          if (isActive && deployReadyRef.current[i]) {
+          if (isActiveRef.current && deployReadyRef.current[i]) {
             // Deploy: magnetic acceleration — very slow buildup, explosive finish
             // Cubic ramp: near-zero force at start, steep ramp past ~60%
             const pullStrength = (0.4 + clip * clip * clip * 8) * deployF * fm;
@@ -287,7 +301,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
 
         // Fully retracted — nothing to draw, just keep the loop alive
         const maxClip = Math.max(fracs[0], fracs[1], fracs[2]);
-        if (maxClip < 0.001 && !isActive) {
+        if (maxClip < 0.001 && !isActiveRef.current) {
           animRef.current = requestAnimationFrame(draw);
           return;
         }
@@ -481,15 +495,23 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         }
         const numBins = freqData.length;
 
-        // Decay envelope: when session stops, smoothly settle to resting state
-        // Uses a slower decay so the strings gracefully fade rather than jumping
+        // Fade envelope: smoothly reduces FFT drive and string opacity
+        // during the fade-out period (while fading) and after (when fully inactive).
+        let fadeEnvelope = 1.0;
         let decayEnvelope = 1.0;
-        if (!isActive) {
+        if (fadingRef.current) {
+          // Fading: gradually reduce over FADE_DURATION
+          const elapsed = (now - fadeStartRef.current) / 1000;
+          fadeEnvelope = Math.max(0, 1.0 - elapsed / FADE_DURATION);
+          // Ease out for smoother tail
+          fadeEnvelope = fadeEnvelope * fadeEnvelope;
+        }
+        if (!isActiveRef.current) {
           if (deactivatedAtRef.current === null) {
             deactivatedAtRef.current = now;
           }
           const elapsed = (now - deactivatedAtRef.current) / 1000;
-          decayEnvelope = Math.exp(-elapsed * 1.2); // ~3s smooth fade
+          decayEnvelope = Math.exp(-elapsed * 1.2); // post-fade cord retract decay
           if (decayEnvelope < 0.005) decayEnvelope = 0;
         }
 
@@ -558,16 +580,18 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             const modeDamping = band.baseDamping * (1 + m * 0.3);
 
             // Driven oscillator: position tracks target with inertia
+            // fadeEnvelope gradually reduces drive force during transition
             const idx = bi * 6 + m;
-            if (isActive) {
-              // Active: drive oscillator toward FFT target
-              const force = (target - ms.pos[idx]) * STIFFNESS - ms.vel[idx] * modeDamping;
+            const drive = fadeEnvelope;
+            if (isActiveRef.current || fadingRef.current) {
+              // Drive oscillator toward FFT target, scaled by fade envelope
+              const scaledTarget = target * drive;
+              const force = (scaledTarget - ms.pos[idx]) * STIFFNESS - ms.vel[idx] * modeDamping;
               ms.vel[idx] += force * dt;
               ms.pos[idx] += ms.vel[idx] * dt;
               ms.pos[idx] = Math.max(0, Math.min(1.5, ms.pos[idx]));
             } else {
-              // Inactive: freeze oscillator positions — let decayEnvelope handle fade
-              // Just gently damp velocity so any residual motion settles smoothly
+              // Fully inactive: gently damp residual motion
               ms.vel[idx] *= 0.92;
               ms.pos[idx] += ms.vel[idx] * dt;
               ms.pos[idx] = Math.max(0, Math.min(1.5, ms.pos[idx]));
@@ -741,7 +765,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         }
 
         // ── Pulse particles: blobs that ride along the strings ──
-        if (isActive && bands.length > 0 && particleEnabled) {
+        if (isActiveRef.current && bands.length > 0 && particleEnabled) {
           const particles = particlesRef.current;
           const baseSpeed = 150 * particleSpeed;
           const speedRange = 200 * particleSpeed;
@@ -845,7 +869,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
 
       // Inactive with no pulses to drain — draw resting string and keep animating
       // (no abrupt snap — the cord retract handles the visual fade-out)
-      if (!isActive && !hasPulses) {
+      if (!isActiveRef.current && !hasPulses) {
         // Only draw the resting line if the cord is still visible
         const maxClipSim = Math.max(clipFractionsRef.current[0], clipFractionsRef.current[1], clipFractionsRef.current[2]);
         if (maxClipSim > 0.001) {
@@ -900,7 +924,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       ctx.stroke();
 
       // ── Pulse particles for simulated mode ──
-      if (isActive && hasPulses && particleEnabled) {
+      if (isActiveRef.current && hasPulses && particleEnabled) {
         const particles = particlesRef.current;
         const baseSpeed = 150 * particleSpeed;
         const speedRange = 200 * particleSpeed;
@@ -970,7 +994,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // Only re-create the animation pipeline for structural changes.
   // Tuning props (alpha, amplitude, colors, etc.) are read from configRef each frame.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, isActive, revived, isAudio, sessionId, pageVisible]);
+  }, [state, revived, isAudio, sessionId, pageVisible]);
 
   // Full-card background canvas — z-0 ensures content (z-10) renders above
   return (
