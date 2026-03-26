@@ -4,8 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import type { EnrichedSession, Settings, SignalPreset } from "@/lib/types";
 import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, setGate as setGateEngine } from "@/lib/presetEngine";
-import { formatTokens } from "@/lib/format";
-import { StatBadge } from "./StatBadge";
+// import { formatTokens } from "@/lib/format";
+// import { StatBadge } from "./StatBadge";
 import { SessionCard } from "./SessionCard";
 import { PermissionPrompt } from "./PermissionPrompt";
 import { PermissionHistory } from "./PermissionHistory";
@@ -81,6 +81,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [keyPressSpeed, setKeyPressSpeed] = useState(0.35);
   const [keyReleaseSpeed, setKeyReleaseSpeed] = useState(0.4);
   const [stateOverrides, setStateOverrides] = useState<Record<string, string>>({});
+  // Per-session expand level in compact mode: 0=compact, 1=slim, 2=full. Undefined = follow global.
+  const [expandOverrides, setExpandOverrides] = useState<Record<string, number>>({});
   const [autoReorder, setAutoReorder] = useState(false);
   // Ref to current sessions so keyboard handler reads latest value
   const sessionsRef = useRef(sessions);
@@ -98,11 +100,15 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const dismissedIdsRef = useRef<Set<string>>(new Set());
   const preCompactSizeRef = useRef<{ width: number; height: number } | null>(null);
 
-  // Auto-resize window to wrap content in compact mode
+  // Auto-resize window only when compact mode is toggled on/off
+  const prevCompactRef = useRef(compactMode);
   useEffect(() => {
     const win = getCurrentWindow();
+    const wasCompact = prevCompactRef.current;
+    prevCompactRef.current = compactMode;
+
     if (!compactMode) {
-      if (preCompactSizeRef.current) {
+      if (wasCompact && preCompactSizeRef.current) {
         const { width, height } = preCompactSizeRef.current;
         win.setSize(new LogicalSize(width, height));
         win.setMinSize(null);
@@ -111,26 +117,26 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       return;
     }
 
-    // Save current logical size before shrinking (only on first activation)
-    if (!preCompactSizeRef.current) {
+    if (!wasCompact) {
+      // Save current logical size before shrinking (only on transition into compact)
       win.innerSize().then((phys) => {
         const dpr = window.devicePixelRatio || 1;
         preCompactSizeRef.current = { width: phys.width / dpr, height: phys.height / dpr };
+
+        // Deterministic sizing: fixed card height * session count + chrome
+        const activeCount = sessions.filter(s => s.info.state !== "ended").length;
+        const CARD_H = 52;     // compact card height (py-1.5 + content + border)
+        const CARD_GAP = 6;    // space-y-1.5 = 6px
+        const TAB_BAR = 44;    // tab bar height
+        const LIST_PAD = 16;   // p-2 top + bottom
+        const compactWidth = 420;
+        const totalHeight = TAB_BAR + LIST_PAD + activeCount * CARD_H + Math.max(0, activeCount - 1) * CARD_GAP;
+
+        win.setSize(new LogicalSize(compactWidth, totalHeight));
+        win.setMinSize(new LogicalSize(200, 60));
       });
     }
-
-    // Deterministic sizing: fixed card height * session count + chrome
-    const activeCount = sessions.filter(s => s.info.state !== "ended").length;
-    const CARD_H = 52;     // compact card height (py-1.5 + content + border)
-    const CARD_GAP = 6;    // space-y-1.5 = 6px
-    const TAB_BAR = 44;    // tab bar height
-    const LIST_PAD = 16;   // p-2 top + bottom
-    const compactWidth = 420;
-    const totalHeight = TAB_BAR + LIST_PAD + activeCount * CARD_H + Math.max(0, activeCount - 1) * CARD_GAP;
-
-    win.setSize(new LogicalSize(compactWidth, totalHeight));
-    win.setMinSize(new LogicalSize(200, 60));
-  }, [compactMode, sessions.length]);
+  }, [compactMode]);
 
   // Track ended sessions: sessions that disappear OR transition to "done" state
   // get moved to the revive list. Sessions that reappear get removed from revive.
@@ -234,16 +240,16 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     saveRevivedSessions([]);
   }, [revivedSessions]);
 
-  const totalMessages = sessions.reduce((sum, s) => sum + s.metrics.messageCount, 0);
-  const totalTokens = sessions.reduce(
-    (sum, s) => {
-      const subTokens = (s.metrics.subagents ?? []).reduce(
-        (sub, a) => sub + a.inputTokens + a.outputTokens, 0,
-      );
-      return sum + s.metrics.inputTokens + s.metrics.outputTokens + subTokens;
-    },
-    0,
-  );
+  // const totalMessages = sessions.reduce((sum, s) => sum + s.metrics.messageCount, 0);
+  // const totalTokens = sessions.reduce(
+  //   (sum, s) => {
+  //     const subTokens = (s.metrics.subagents ?? []).reduce(
+  //       (sub, a) => sub + a.inputTokens + a.outputTokens, 0,
+  //     );
+  //     return sum + s.metrics.inputTokens + s.metrics.outputTokens + subTokens;
+  //   },
+  //   0,
+  // );
   const {
     pendingBySession,
     permissionHistory,
@@ -252,10 +258,10 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     refreshHistory,
   } = usePermissions();
 
-  const totalPending = Object.values(pendingBySession).reduce(
-    (sum, reqs) => sum + reqs.length,
-    0,
-  );
+  // const totalPending = Object.values(pendingBySession).reduce(
+  //   (sum, reqs) => sum + reqs.length,
+  //   0,
+  // );
 
   // Load settings and poll for changes (so Signal Settings window edits sync)
   const applySettings = useCallback((s: Settings) => {
@@ -293,6 +299,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setTestMode(s.testMode ?? false);
     setVineBorder(s.vineBorder ?? false);
     setCompactMode(s.compactMode ?? false);
+    if (!(s.compactMode ?? false)) setExpandOverrides({});
     setSlimMode(s.slimMode ?? false);
   }, []);
 
@@ -861,7 +868,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // ---------------------------------------------------------------------------
   return (
     <div className={compactMode ? "flex flex-col" : "flex flex-col flex-1 min-h-0"}>
-      {/* Stats header */}
+      {/* Stats header — commented out for now
       {!compactMode && (
       <div className="flex items-center gap-6 px-4 py-3 bg-white/5 border-b border-white/10">
         <StatBadge icon="●" label="Sessions" value={`${sessions.length}`} color="text-green-500" />
@@ -872,6 +879,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         )}
       </div>
       )}
+      */}
 
       {/* Session list or empty state */}
       {!hasContent ? (
@@ -897,7 +905,18 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
             return (
               <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="space-y-2">
-                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} vineBorder={vineBorder} compactMode={compactMode} slimMode={slimMode} />
+                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} vineBorder={vineBorder} compactMode={compactMode} slimMode={slimMode} expandOverride={compactMode ? expandOverrides[session.info.id] : undefined} onExpandCycle={compactMode ? () => {
+                  setExpandOverrides((prev) => {
+                    const current = prev[session.info.id] ?? 0;
+                    const next = (current + 1) % 3;
+                    if (next === 0) {
+                      const copy = { ...prev };
+                      delete copy[session.info.id];
+                      return copy;
+                    }
+                    return { ...prev, [session.info.id]: next };
+                  });
+                } : undefined} />
 
                 {/* Permission section (when enabled and has activity) */}
                 {!compactMode && permissionsEnabled && hasPermissionActivity && (

@@ -322,6 +322,7 @@ mod tests {
             hook_input_tokens: 0,
             hook_output_tokens: 0,
             hook_model: String::new(),
+            active_subagents: 0,
         };
         EnrichedSession::from_info_and_metrics(info, SessionMetrics::default())
     }
