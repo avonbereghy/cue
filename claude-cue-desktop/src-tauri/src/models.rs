@@ -364,6 +364,9 @@ pub struct Settings {
     /// Signal string color for light mode (hex, e.g. "#000000")
     #[serde(default = "default_signal_color_light")]
     pub signal_color_light: String,
+    /// Active signal theme ID (e.g. "default", "neon", "ember")
+    #[serde(default)]
+    pub active_theme_id: String,
     /// Audio offset: randomizes position/speed per session (0 = sync, 1 = full random)
     #[serde(default = "default_signal_offset")]
     pub signal_offset: f64,
@@ -406,6 +409,9 @@ pub struct Settings {
     /// Slim mode: hide metrics and tool chips, keep title, timer, context bar, and animations
     #[serde(default = "default_true")]
     pub slim_mode: bool,
+    /// Only show context bar when usage >= 200k tokens
+    #[serde(default)]
+    pub context_threshold: bool,
 }
 
 fn default_theme() -> String {
@@ -499,6 +505,7 @@ impl Default for Settings {
             active_preset_id: String::new(),
             signal_color_dark: "#ffffff".to_string(),
             signal_color_light: "#000000".to_string(),
+            active_theme_id: String::new(),
             signal_offset: 0.5,
             particle_enabled: true,
             particle_speed: 1.0,
@@ -513,6 +520,7 @@ impl Default for Settings {
             vine_border: false,
             compact_mode: false,
             slim_mode: true,
+            context_threshold: false,
         }
     }
 }
