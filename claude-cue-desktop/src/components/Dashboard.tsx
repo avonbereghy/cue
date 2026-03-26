@@ -36,7 +36,8 @@ export function Dashboard() {
     <div className={`flex flex-col ${compactMode ? "" : "h-screen"}`}>
       {/* Tab bar */}
       <div
-        className="flex items-center px-4 py-2 bg-white/5 border-b border-white/10"
+        className="flex items-center px-4 py-2 border-b"
+        style={{ backgroundColor: "var(--surface-bg)", borderColor: "var(--surface-border)" }}
       >
         {tab === "Settings" && (
           <button
@@ -47,7 +48,7 @@ export function Dashboard() {
             &larr;
           </button>
         )}
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-0.5">
           <button
             onClick={() => {
               const next = !compactMode;
@@ -56,9 +57,10 @@ export function Dashboard() {
                 invoke("update_settings", { newSettings: { ...s, compactMode: next } });
               }).catch(() => {});
             }}
-            className={`flex items-center gap-1 px-3 py-1.5 rounded-md text-sm transition-colors ${
-              compactMode ? "bg-blue-500/15 text-white" : "text-white/50 hover:text-white/70"
+            className={`flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors ${
+              compactMode ? "text-white" : "text-white/50 hover:text-white/70"
             }`}
+            style={compactMode ? { backgroundColor: "var(--accent-bg)" } : undefined}
             title={compactMode ? "Exit Compact Mode" : "Compact Mode"}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -78,8 +80,9 @@ export function Dashboard() {
             }}
             className={`flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors ${
               compactMode ? "text-white/15 cursor-not-allowed"
-              : !slimMode ? "bg-blue-500/15 text-white" : "text-white/50 hover:text-white/70"
+              : !slimMode ? "text-white" : "text-white/50 hover:text-white/70"
             }`}
+            style={!compactMode && !slimMode ? { backgroundColor: "var(--accent-bg)" } : undefined}
             title={compactMode ? "Details unavailable in compact mode" : slimMode ? "Show Details" : "Hide Details"}
             disabled={compactMode}
           >
@@ -91,7 +94,7 @@ export function Dashboard() {
           </button>
           <button
             onClick={() => invoke("open_keyboard").catch(() => {})}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-md text-sm transition-colors text-white/50 hover:text-white/70"
+            className="flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors text-white/50 hover:text-white/70"
             title="Animation Keyboard"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -99,10 +102,24 @@ export function Dashboard() {
             </svg>
           </button>
           <button
+            onClick={() => invoke("open_theme_picker").catch(() => {})}
+            className="flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors text-white/50 hover:text-white/70"
+            title="Theme Picker"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="13.5" cy="6.5" r="2" />
+              <circle cx="17.5" cy="10.5" r="2" />
+              <circle cx="8.5" cy="7.5" r="2" />
+              <circle cx="6.5" cy="12" r="2" />
+              <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.5-.7 1.5-1.5 0-.4-.1-.7-.4-1-.3-.3-.4-.7-.4-1 0-.8.7-1.5 1.5-1.5H16c3.3 0 6-2.7 6-6 0-5.5-4.5-9-10-9z" />
+            </svg>
+          </button>
+          <button
             onClick={() => setTab(tab === "Settings" ? "Sessions" : "Settings")}
             className={`flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors ${
-              tab === "Settings" ? "bg-blue-500/15 text-white" : "text-white/50 hover:text-white/70"
+              tab === "Settings" ? "text-white" : "text-white/50 hover:text-white/70"
             }`}
+            style={tab === "Settings" ? { backgroundColor: "var(--accent-bg)" } : undefined}
             title="Settings"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

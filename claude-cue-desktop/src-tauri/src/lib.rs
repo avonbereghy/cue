@@ -82,6 +82,22 @@ fn open_keyboard(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_theme_picker(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("theme-picker") {
+        let _ = win.set_focus();
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(&app, "theme-picker", WebviewUrl::App("index.html#/theme-picker".into()))
+        .title("Themes")
+        .inner_size(240.0, 360.0)
+        .resizable(false)
+        .always_on_top(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn open_signal_settings(app: AppHandle) -> Result<(), String> {
     // If window already exists, just focus it
     if let Some(win) = app.get_webview_window("signal-settings") {
@@ -466,6 +482,7 @@ pub fn run() {
             rename_preset,
             open_signal_settings,
             open_keyboard,
+            open_theme_picker,
         ])
         .on_window_event(|window, event| {
             // Hide main window instead of quitting — app stays in tray.
