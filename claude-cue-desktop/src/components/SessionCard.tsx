@@ -227,7 +227,10 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
   const dotPulse = info.state === "working" || info.state === "waiting" || info.state === "subagent" ? "dot-pulse" : "";
   const badgeHex = (isDark ? STATE_BADGE_HEX : STATE_BADGE_HEX_LIGHT)[displayState] ?? { bg: "rgba(34,197,94,0.2)", text: "#22c55e" };
   const titleHex = (isDark ? STATE_HEX : STATE_HEX_LIGHT)[displayState] ?? "#22c55e";
-  const displayStateName = STATE_DISPLAY_NAME[displayState] ?? session.stateDisplayName;
+  const activeSubs = info.activeSubagents ?? 0;
+  const displayStateName = displayState === "subagent" && activeSubs > 0
+    ? `Subagents(${activeSubs})`
+    : STATE_DISPLAY_NAME[displayState] ?? session.stateDisplayName;
 
   const stateTransition = "color 600ms ease, background-color 600ms ease";
 
@@ -338,7 +341,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                 {session.workspaceName}
               </span>
             )}
-            <span className="text-xs px-2 py-0.5 rounded-full text-center" style={{ backgroundColor: badgeHex.bg, color: badgeHex.text, transition: stateTransition, minWidth: "5.2em" }}>
+            <span className="text-xs px-2 py-0.5 rounded-full text-center" style={{ backgroundColor: badgeHex.bg, color: badgeHex.text, transition: stateTransition, minWidth: "8.5em" }}>
               {displayStateName}
             </span>
             {!isNarrow && !compactMode && (

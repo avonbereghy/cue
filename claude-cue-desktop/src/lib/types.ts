@@ -9,6 +9,8 @@ export interface SessionInfo {
   startedAt: number;
   /** Client that launched the session: "vscode", "cursor", "iterm", "terminal", etc. */
   source?: string;
+  /** Number of currently active subagents (from hook). */
+  activeSubagents?: number;
 }
 
 export interface SubagentMetrics {
