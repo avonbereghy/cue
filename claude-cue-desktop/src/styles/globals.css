@@ -163,6 +163,10 @@ html[data-theme="light"] .anim-shine .title-char {
    --------------------------------------------------------------------------- */
 .session-card {
   min-height: 10rem;
+  transition:
+    box-shadow var(--key-release-speed, 0.4s) cubic-bezier(0.4, 0, 0.2, 1),
+    background-color var(--key-release-speed, 0.4s) ease,
+    border-color var(--key-release-speed, 0.4s) ease;
 }
 .session-card.session-card--compact {
   min-height: 0;
@@ -188,16 +192,15 @@ html[data-theme="light"] .session-card--compact.session-card--pressed {
   box-shadow: inset 0 1px 4px rgba(0,0,0,0.08);
 }
 
-/* Default (dark mode) floating — white glow for strong elevation */
+/* Default (dark mode) floating — subtle drop shadow with faint light rim */
 .session-card--floating {
 
   background-color: rgba(255,255,255,0.07);
-  border-color: rgba(255,255,255,0.12);
+  border-color: rgba(255,255,255,0.10);
   box-shadow:
-    0 1px 4px rgba(255,255,255,0.14),
-    0 4px 16px rgba(255,255,255,0.10),
-    0 12px 40px rgba(255,255,255,0.06),
-    0 0 1px rgba(255,255,255,0.20);
+    0 2px 6px rgba(0,0,0,0.35),
+    0 8px 24px rgba(0,0,0,0.25),
+    0 0 0 0.5px rgba(255,255,255,0.08);
   transform: translateY(0);
 }
 

@@ -2,10 +2,10 @@ import { useState, useCallback } from "react";
 import { emitTo } from "@tauri-apps/api/event";
 
 export type KeyAnimation =
+  | "tap"
   | "all-press"
   | "all-release"
   | "random-keys"
-  | "chord-ripple"
   | "wave-left"
   | "wave-right"
   | "alternating"
@@ -21,10 +21,10 @@ interface KeyDef {
 }
 
 const KEYS: KeyDef[] = [
+  { id: "tap",          label: "Tap",         icon: "⏎" },
   { id: "all-press",    label: "All Down",    icon: "⬇" },
   { id: "all-release",  label: "All Up",      icon: "⬆" },
   { id: "random-keys",  label: "Random",      icon: "⚄" },
-  { id: "chord-ripple", label: "Chord",       icon: "♫" },
   { id: "wave-left",    label: "Wave →",      icon: "〜" },
   { id: "wave-right",   label: "Wave ←",      icon: "〜" },
   { id: "alternating",  label: "Alternate",   icon: "◑" },
