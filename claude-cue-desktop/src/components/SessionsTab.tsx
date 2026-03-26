@@ -82,6 +82,9 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [keyReleaseSpeed, setKeyReleaseSpeed] = useState(0.4);
   const [stateOverrides, setStateOverrides] = useState<Record<string, string>>({});
   const [autoReorder, setAutoReorder] = useState(false);
+  // Ref to current sessions so keyboard handler reads latest value
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   const cardPositions = useRef<Map<string, DOMRect>>(new Map());
   const prevStates = useRef<Map<string, string>>(new Map());
   const listRef = useRef<HTMLDivElement>(null);
@@ -598,6 +601,10 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       };
 
       switch (animation) {
+        case "tap":
+          cards.forEach(press);
+          setTimeout(() => cards.forEach(release), 400);
+          break;
         case "all-press":
           cards.forEach(press);
           break;
@@ -662,7 +669,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           });
           setStateOverrides((prev) => {
             const next = { ...prev };
-            sessions.forEach((s) => {
+            sessionsRef.current.forEach((s) => {
               const st = s.info.state;
               if (st !== "working" && st !== "subagent" && st !== "waiting") {
                 next[s.info.id] = "working";

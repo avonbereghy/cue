@@ -50,7 +50,7 @@ interface SessionCardProps {
   slimMode?: boolean;
 }
 
-export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.0, cordRetractForce = 1.0, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, vineBorder = false, compactMode = false, slimMode = false }: SessionCardProps) {
+export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, vineBorder = false, compactMode = false, slimMode = false }: SessionCardProps) {
   const { info, metrics } = session;
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -206,8 +206,8 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
     subagent: "Subagent", idle: "Idle", done: "Done", ended: "Ended",
   };
 
-  // Dot always reflects the real state immediately (no sticky delay)
-  const dotHex = (isDark ? STATE_DOT_HEX : STATE_DOT_HEX_LIGHT)[info.state] ?? "#e0e0e0";
+  // Dot color follows displayState so it transitions smoothly with the badge
+  const dotHex = (isDark ? STATE_DOT_HEX : STATE_DOT_HEX_LIGHT)[displayState] ?? "#e0e0e0";
   const dotPulse = info.state === "working" || info.state === "waiting" || info.state === "subagent" ? "dot-pulse" : "";
   const badgeHex = (isDark ? STATE_BADGE_HEX : STATE_BADGE_HEX_LIGHT)[displayState] ?? { bg: "rgba(34,197,94,0.2)", text: "#22c55e" };
   const titleHex = (isDark ? STATE_HEX : STATE_HEX_LIGHT)[displayState] ?? "#22c55e";
@@ -322,7 +322,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                 {session.workspaceName}
               </span>
             )}
-            <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: badgeHex.bg, color: badgeHex.text, transition: stateTransition }}>
+            <span className="text-xs px-2 py-0.5 rounded-full text-center" style={{ backgroundColor: badgeHex.bg, color: badgeHex.text, transition: stateTransition, minWidth: "5.2em" }}>
               {displayStateName}
             </span>
             {!isNarrow && !compactMode && (
