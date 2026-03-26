@@ -1,6 +1,6 @@
 # Claude Cue
 
-A real-time session monitor for Claude Code — see at a glance if Claude is working, waiting for permission, hit an error, or finished. Cross-platform desktop app for macOS, Windows, and Linux.
+A real-time session monitor for Claude Code — see at a glance if Claude is working, waiting for permission, spawning subagents, hit an error, or finished. Cross-platform desktop app for macOS, Windows, and Linux.
 
 ![Rust](https://img.shields.io/badge/Rust-Tauri_v2-000000?logo=rust&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-macOS_|_Windows_|_Linux-blue)
@@ -15,7 +15,7 @@ Each Claude Code session appears as a colored dot in your menu bar / system tray
 | Color | Meaning |
 |-------|---------|
 | Blinking white | Claude is working |
-| Blinking cyan | Subagent running |
+| Blinking cyan | Subagent(s) running |
 | Yellow | Waiting for your permission |
 | Red | Tool error |
 | Green | Done |
@@ -26,16 +26,40 @@ Multiple sessions show as a grid of dots — see all your sessions at once.
 
 ## Features
 
+### Session Monitoring
 - **Real-time status** — polls every second, blink animation for active sessions
 - **Multi-session support** — tracks up to 8 concurrent sessions as a dot grid
-- **Permission approval** — approve/deny Claude Code permissions directly from the dashboard via HTTP hook
-- **Token metrics** — incremental JSONL parsing for input/output/cache token counts per session
+- **Subagent awareness** — tracks active subagent count per session, displays "Subagents(N)" badge with live count; parent sessions stay in subagent state while children are running (won't falsely drop to idle/error/waiting from subagent events)
+- **Session dashboard** — detailed view with workspace, duration, model, git branch, tool usage, context usage bar
+- **Token metrics** — incremental JSONL parsing for input/output/cache token counts per session, aggregated across parent and all subagents
+- **Context usage bar** — color-coded progress bar (green → amber → red) showing token usage relative to model context limit (auto-detected: 1M for Opus/Sonnet 4.6, 200K for older models)
 - **Agent team tracking** — expandable subagent view showing active and completed agents with token/tool breakdowns
 - **Session revive** — ended sessions move to a revive section with elapsed timer and 3-click confirmation to resume
-- **Animation controls** — configurable title animations (Rotate Flip, Ripple, Pulse Glow, Bounce), speed presets, and random per-character mode with bell-curve speed variance
-- **Session dashboard** — detailed view with workspace, duration, model, git branch, tool usage, context usage bar
+
+### Display Modes
+- **Regular mode** — full metrics, tool chips, context bar, and signal string animations
+- **Slim mode** (default) — hides metrics and tool chips, keeps title, status, timer, context bar, and animations
+- **Compact mode** — minimal cards with title and status only, auto-resizes window to fit content
+- **(i) button** — toggle details on/off; highlighted when details are visible, grayed out in compact mode
+
+### Permissions
+- **Permission approval** — approve/deny Claude Code permissions directly from the dashboard via HTTP hook
 - **Smart summaries** — human-readable tool descriptions ("Run: `npm install`", "Edit: `src/main.rs`")
 - **Audit log** — every permission decision logged to JSONL with timestamp and tool details
+
+### Animations
+- **Signal strings** — audio-driven oscillating strings rendered behind card content using driven oscillator physics with FFT frequency data
+- **Audio presets** — upload songs to extract frequency envelopes (bass/mids/treble) with playhead scrubbing and per-session offset randomization
+- **Particles** — configurable pulse blobs traveling along strings with adjustable speed, spawn rate, spark count, and opacity
+- **Piano key cards** — cards press down when working and pop up when idle, with configurable press/release speed
+- **Title animations** — ripple, wave, pulse, glow, shimmer, bounce, shine, and more with per-character random timing
+- **Vine border** — animated twisting vines around working/subagent cards
+- **Effect presets** — bundled presets (Default, Neon, Ember, Ghost, Pulse, Minimal, Aurora)
+- **Animation keyboard** — standalone window with buttons for triggering card animations (tap, wave, cascade, heartbeat, etc.)
+- **Smooth transitions** — card background, border, shadow, and dot colors transition smoothly between states; signal strings fade out gradually (0.5s) when leaving working state
+
+### Other
+- **Auto theme detection** — follows system light/dark mode via Rust-side polling (works correctly in Tauri webviews where `matchMedia` doesn't)
 - **CLI with full stats** — `--status --pretty` for SSH/tiling WM users, `--compact` for dense output, ANSI colors auto-detected
 - **Privacy-first** — shows only leaf directory names, full paths on hover only
 - **Security-first** — no outbound network calls, atomic file writes, 0600 permissions, path sanitization
@@ -91,6 +115,16 @@ SessionEnd         → remove
 ```
 
 The app reads `sessions.json` and renders the dot grid. Metrics are parsed incrementally from Claude's `.jsonl` conversation logs — only new bytes are read on each cycle, keeping CPU near 0%.
+
+### Subagent state protection
+
+The hook tracks an `activeSubagents` counter per session. While subagents are running (`activeSubagents > 0`), the parent session is locked to the "subagent" state:
+
+- **working/waiting/error/done/idle** events from subagent activity are suppressed — the parent stays "subagent"
+- The counter only resets when all subagents complete (via `SubagentStop` events decrementing to 0)
+- The Rust backend won't downgrade a "subagent" session to "idle" due to inactivity while subagents are active
+
+### Session lifecycle
 
 Sessions are never pruned by timeout (except `error` state after 10 minutes). Only the `SessionEnd` hook removes a session. This means `done` sessions (waiting at the prompt for the next input) remain visible until the terminal is closed.
 
