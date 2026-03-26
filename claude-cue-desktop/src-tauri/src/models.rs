@@ -30,6 +30,9 @@ pub struct SessionInfo {
     /// Model name from last API call (written by hook from JSONL).
     #[serde(default, rename = "model")]
     pub hook_model: String,
+    /// Number of currently active subagents (written by hook).
+    #[serde(default)]
+    pub active_subagents: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,9 +155,12 @@ impl EnrichedSession {
         // lastActivity is older than 90s, the hook stopped firing (session ended
         // without a Stop event). Downgrade to "idle" so the UI doesn't show
         // animated working state for dead sessions.
+        // Exception: sessions with active subagents — the parent is legitimately
+        // idle while waiting for long-running subagents to complete.
         let mut info = info;
         if (info.state == "working" || info.state == "subagent")
             && (now - info.last_activity) > 90.0
+            && info.active_subagents <= 0
         {
             info.state = "idle".to_string();
         }
@@ -398,7 +404,7 @@ pub struct Settings {
     #[serde(default)]
     pub compact_mode: bool,
     /// Slim mode: hide metrics and tool chips, keep title, timer, context bar, and animations
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub slim_mode: bool,
 }
 
@@ -506,7 +512,7 @@ impl Default for Settings {
             test_mode: false,
             vine_border: false,
             compact_mode: false,
-            slim_mode: false,
+            slim_mode: true,
         }
     }
 }

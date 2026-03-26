@@ -94,7 +94,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // Track when state left working for gradual FFT drive fade
   const fadingRef = useRef(false);
   const fadeStartRef = useRef<number>(0);
-  const FADE_DURATION = 1.5; // seconds to fade FFT drive to zero
+  const FADE_DURATION = 0.5; // seconds to fade FFT drive to zero
   useEffect(() => {
     if (stateIsActive) {
       setIsActive(true);
