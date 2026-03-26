@@ -344,8 +344,21 @@ def main():
                 elif action == "working" and active_subs > 0:
                     # Parent is doing work but subagents are still running
                     action = "subagent"
-                elif action in ("done", "idle", "error"):
-                    # Session turn ended — reset subagent counter
+                elif action == "waiting" and active_subs > 0:
+                    # Subagent permission requests auto-resolve — don't flash
+                    # the parent card to "waiting" (yellow) for something that
+                    # doesn't need human attention.
+                    action = "subagent"
+                elif action == "error" and active_subs > 0:
+                    # Subagent tool failures shouldn't flash the parent card
+                    # red — keep showing subagent state.
+                    action = "subagent"
+                elif action in ("done", "idle") and active_subs > 0:
+                    # Parent emitted done/idle but subagents are still running —
+                    # keep showing subagent state, don't reset the counter.
+                    action = "subagent"
+                elif action in ("done", "idle"):
+                    # Session turn truly ended — reset subagent counter
                     active_subs = 0
 
                 entry = {
