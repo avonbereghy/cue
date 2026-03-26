@@ -60,6 +60,8 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
   const STICKY_HOLD_MS = 3500;
   const [displayState, setDisplayState] = useState(info.state);
   const stickyUntilRef = useRef(0);
+  // Track when leaving a sticky state so the dot color snaps (no red→white fade)
+  const [leavingSticky, setLeavingSticky] = useState(false);
 
   useEffect(() => {
     const now = Date.now();
@@ -70,6 +72,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
     // Entering a sticky state — record hold deadline
     if (info.state === "error" || info.state === "waiting") {
       stickyUntilRef.current = now + STICKY_HOLD_MS;
+      setLeavingSticky(false);
       setDisplayState(info.state);
       return;
     }
@@ -77,8 +80,21 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
     // Leaving a sticky state — delay if hold hasn't expired
     if (isSticky && now < stickyUntilRef.current) {
       const remaining = stickyUntilRef.current - now;
-      const timer = setTimeout(() => setDisplayState(info.state), remaining);
+      const timer = setTimeout(() => {
+        setLeavingSticky(true);
+        setDisplayState(info.state);
+        // Re-enable transitions after one frame
+        requestAnimationFrame(() => requestAnimationFrame(() => setLeavingSticky(false)));
+      }, remaining);
       return () => clearTimeout(timer);
+    }
+
+    // Instant transition out of sticky — also snap
+    if (isSticky) {
+      setLeavingSticky(true);
+      setDisplayState(info.state);
+      requestAnimationFrame(() => requestAnimationFrame(() => setLeavingSticky(false)));
+      return;
     }
 
     setDisplayState(info.state);
@@ -260,7 +276,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
       } ${
         compactMode ? "px-2.5 py-1.5 space-y-0"
         : signalString && (signalMode === "preset" || signalMode === "audio") ? "px-4 py-5 space-y-5" : "p-3 space-y-2.5"
-      } ${slimMode ? "flex flex-col" : ""}`}
+      } ${slimMode && !compactMode ? "flex flex-col" : ""}`}
       tabIndex={0}
       aria-label={ariaLabel}
 
@@ -277,10 +293,10 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
       {/* Signal String — renders behind all content (particles pass under pills/text) */}
       {signalString && (revived || info.state !== "ended") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} sessionId={info.id} contentRef={contentRef} keyReleaseSpeed={keyReleaseSpeed} />}
 
-      <div ref={contentRef} className={`${compactMode ? "space-y-0" : "space-y-2.5"} ${slimMode ? "flex flex-col flex-1" : ""}`} style={{ position: "relative" }}>
+      <div ref={contentRef} className={`${compactMode ? "space-y-0" : "space-y-2.5"} ${slimMode && !compactMode ? "flex flex-col flex-1" : ""}`} style={{ position: "relative" }}>
           {/* Row 1: Status dot + title + state badge + git branch + duration */}
           <div className="relative flex items-center gap-2">
-            <span className={`inline-block w-2.5 h-2.5 rounded-full ${dotPulse} shrink-0`} style={{ backgroundColor: dotHex, transition: "background-color 600ms ease" }} aria-hidden="true" />
+            <span className={`inline-block w-2.5 h-2.5 rounded-full ${dotPulse} shrink-0`} style={{ backgroundColor: dotHex, transition: leavingSticky ? "none" : "background-color 600ms ease" }} aria-hidden="true" />
             {(info.state === "working" || info.state === "subagent") && titleAnimation !== "none" ? (
               <span
                 ref={titleContainerRef}
@@ -347,10 +363,10 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
           {!compactMode && !slimMode && (<>
           {/* Row 2: Metrics */}
           <div className="relative flex items-center gap-1.5 flex-wrap text-xs text-white/50">
-            {!isNarrow && truncatedId && (
+            {truncatedId && (
               <button
                 onClick={copySessionId}
-                className="flex items-center gap-1 font-mono text-[0.625rem] px-1.5 py-0.5 rounded-full bg-white/10 text-white/30 hover:text-white/60 transition-colors cursor-pointer whitespace-nowrap"
+                className="flex items-center gap-1 font-mono text-[0.625rem] px-1.5 py-0.5 rounded-full bg-white/10 text-white/30 hover:text-white/60 transition-colors cursor-pointer whitespace-nowrap shrink-0"
                 title={`Copy session ID: ${info.id}`}
                 aria-label={`Copy session ID ${info.id}`}
               >
@@ -418,7 +434,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
           {slimMode && <div className="flex-1" />}
 
           {/* Row 4: Context usage — visible in regular and slim mode, hidden in compact */}
-          {!compactMode && metrics.lastInputTokens > 0 && (
+          {!compactMode && (
             <div className="relative flex items-center gap-2">
               <span className="text-[0.625rem] text-white/40 shrink-0">Context</span>
               <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden">

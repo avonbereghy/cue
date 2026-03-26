@@ -122,7 +122,7 @@ export function Dashboard() {
               }).catch(() => {});
             }}
             className={`flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors ${
-              slimMode ? "bg-blue-500/15 text-white" : "text-white/50 hover:text-white/70"
+              !slimMode ? "bg-blue-500/15 text-white" : "text-white/50 hover:text-white/70"
             }`}
             title={slimMode ? "Show Details" : "Hide Details"}
           >

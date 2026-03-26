@@ -169,7 +169,7 @@ html[data-theme="light"] .anim-shine .title-char {
     border-color var(--key-release-speed, 0.4s) ease;
 }
 .session-card.session-card--compact {
-  min-height: 0;
+  min-height: 0 !important;
   /* Disable press/pop animations — no translateY shift in compact mode */
   animation: none !important;
   transform: none !important;
