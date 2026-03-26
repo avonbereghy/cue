@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Settings, TITLE_ANIMATIONS, ANIMATION_SPEEDS } from "@/lib/types";
+import { Settings, TITLE_ANIMATIONS, ANIMATION_SPEEDS, SIGNAL_THEMES, applyThemeCssVars } from "@/lib/types";
 import type { PresetSummary, SignalPreset } from "@/lib/types";
 import { extractPreset } from "@/lib/audioExtractor";
 import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, getCurrentTime as getPresetTime, seek as presetSeek, setGate as setGateEngine } from "@/lib/presetEngine";
@@ -447,7 +447,7 @@ export function SettingsView() {
       signalString: true,
       signalFrequency: 1.0,
       signalMode: "preset",
-      signalAlpha: 0.25,
+      signalAlpha: 0.75,
       signalAmplitude: 0.25,
       signalEcho: 1.0,
       signalGate: 0.05,
@@ -457,8 +457,9 @@ export function SettingsView() {
       activePresetId: settings.activePresetId, // preserve preset selection
       signalColorDark: "#ffffff",
       signalColorLight: "#000000",
+      activeThemeId: "default",
       signalOffset: 0.5,
-      particleEnabled: true,
+      particleEnabled: false,
       particleSpeed: 1.0,
       particleRate: 1.0,
       particleSparks: 3,
@@ -471,9 +472,9 @@ export function SettingsView() {
       autoReorder: false,
       fontScale: 1.0,
       testMode: false,
-      vineBorder: false,
       compactMode: false,
       slimMode: false,
+      contextThreshold: false,
     };
     setSettings(defaults);
     // Apply theme immediately
@@ -561,14 +562,11 @@ export function SettingsView() {
         <SettingRow label="Compact Mode" description="Mini cards with just title, status, and animation" onReset={settings.compactMode ? () => setSettings({ ...settings, compactMode: false }) : undefined}>
           <Toggle checked={settings.compactMode ?? false} onChange={() => setSettings({ ...settings, compactMode: !(settings.compactMode ?? false) })} label="Compact mode" />
         </SettingRow>
-      </section>
-
-      {/* Vine Border */}
-      <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
-        <SettingRow label="Vine Border" description="Animated twisting vines around working session cards" onReset={settings.vineBorder ? () => setSettings({ ...settings, vineBorder: false }) : undefined}>
-          <Toggle checked={settings.vineBorder ?? false} onChange={() => setSettings({ ...settings, vineBorder: !(settings.vineBorder ?? false) })} label="Vine border" />
+        <SettingRow label="Context After 200k" description="Only show the context bar when token usage reaches 200k+" onReset={settings.contextThreshold ? () => setSettings({ ...settings, contextThreshold: false }) : undefined}>
+          <Toggle checked={settings.contextThreshold ?? false} onChange={() => setSettings({ ...settings, contextThreshold: !(settings.contextThreshold ?? false) })} label="Context threshold" />
         </SettingRow>
       </section>
+
 
       {/* Signal String */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
@@ -587,11 +585,11 @@ export function SettingsView() {
             </SettingRow>
 
             <SettingRow label="Opacity" description="String transparency">
-              <Slider value={settings.signalAlpha ?? 0.25} min={0.05} max={1.0} step={0.01} defaultValue={0.25} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalAlpha: v })} />
+              <Slider value={settings.signalAlpha ?? 0.25} min={0.05} max={1.0} step={0.01} defaultValue={0.75} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalAlpha: v })} />
             </SettingRow>
 
             <SettingRow label="Amplitude" description="String displacement intensity">
-              <Slider value={settings.signalAmplitude ?? 0.25} min={0.01} max={1.0} step={0.01} defaultValue={0.25} format={formatMul} onChange={(v) => setSettings({ ...settings, signalAmplitude: v })} />
+              <Slider value={settings.signalAmplitude ?? 0.25} min={0.01} max={1.0} step={0.01} defaultValue={0.75} format={formatMul} onChange={(v) => setSettings({ ...settings, signalAmplitude: v })} />
             </SettingRow>
 
             <SettingRow label="Echo" description="Trailing reverb lines behind the main string">
@@ -622,72 +620,51 @@ export function SettingsView() {
               </div>
             </SettingRow>
 
-            <SettingRow label="Color" description="String color for dark and light mode" onReset={((settings.signalColorDark ?? "#ffffff") !== "#ffffff" || (settings.signalColorLight ?? "#000000") !== "#000000") ? () => setSettings({ ...settings, signalColorDark: "#ffffff", signalColorLight: "#000000" }) : undefined}>
-              <div className="space-y-2">
-                {/* Presets */}
-                <div className="flex flex-wrap gap-1.5">
-                  {([
-                    { label: "White", dark: "#ffffff", light: "#000000" },
-                    { label: "Black", dark: "#000000", light: "#ffffff" },
-                    { label: "Cyan", dark: "#00e5ff", light: "#0097a7" },
-                    { label: "Amber", dark: "#ffab00", light: "#e65100" },
-                    { label: "Emerald", dark: "#00e676", light: "#2e7d32" },
-                    { label: "Rose", dark: "#ff4081", light: "#c2185b" },
-                    { label: "Violet", dark: "#b388ff", light: "#7b1fa2" },
-                    { label: "Gold", dark: "#ffd740", light: "#bf360c" },
-                  ] as const).map((preset) => {
-                    const isActive = (settings.signalColorDark ?? "#ffffff") === preset.dark
-                      && (settings.signalColorLight ?? "#000000") === preset.light;
-                    return (
-                      <button
-                        key={preset.label}
-                        onClick={() => setSettings({ ...settings, signalColorDark: preset.dark, signalColorLight: preset.light })}
-                        className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[0.625rem] transition-colors ${
-                          isActive
-                            ? "bg-white/15 text-white/90 ring-1 ring-white/30"
-                            : "bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/70"
-                        }`}
-                        title={`Dark: ${preset.dark} / Light: ${preset.light}`}
-                      >
-                        <span className="flex gap-0.5">
-                          <span className="w-2.5 h-2.5 rounded-full border border-white/20" style={{ backgroundColor: preset.dark }} />
-                          <span className="w-2.5 h-2.5 rounded-full border border-white/20" style={{ backgroundColor: preset.light }} />
-                        </span>
-                        {preset.label}
-                      </button>
-                    );
-                  })}
-                </div>
-                {/* Custom color pickers */}
-                <div className="flex items-center gap-4">
-                  <label className="flex items-center gap-1.5 cursor-pointer">
-                    <span className="text-[0.625rem] text-white/40">Dark</span>
-                    <input
-                      type="color"
-                      value={settings.signalColorDark ?? "#ffffff"}
-                      onChange={(e) => setSettings({ ...settings, signalColorDark: e.target.value })}
-                      className="w-5 h-5 rounded cursor-pointer border border-white/20 bg-transparent"
-                    />
-                  </label>
-                  <label className="flex items-center gap-1.5 cursor-pointer">
-                    <span className="text-[0.625rem] text-white/40">Light</span>
-                    <input
-                      type="color"
-                      value={settings.signalColorLight ?? "#000000"}
-                      onChange={(e) => setSettings({ ...settings, signalColorLight: e.target.value })}
-                      className="w-5 h-5 rounded cursor-pointer border border-white/20 bg-transparent"
-                    />
-                  </label>
-                </div>
+            {/* Signal Themes — unified color + behavior presets */}
+            <div className="py-2 space-y-2">
+              <div className="text-[0.625rem] text-white/40 uppercase tracking-wider">Theme</div>
+              <div className="flex flex-wrap gap-1.5">
+                {SIGNAL_THEMES.map((theme) => {
+                  const isActive = (settings.activeThemeId ?? "default") === theme.id;
+                  return (
+                    <button
+                      key={theme.id}
+                      onClick={() => {
+                        applyThemeCssVars(theme);
+                        setSettings({
+                          ...settings,
+                          activeThemeId: theme.id,
+                          signalColorDark: theme.colorDark,
+                          signalColorLight: theme.colorLight,
+                          signalAlpha: theme.alpha,
+                          signalAmplitude: theme.amplitude,
+                          signalEcho: theme.echo,
+                          particleSpeed: theme.particleSpeed,
+                          particleRate: theme.particleRate,
+                          particleSparks: theme.particleSparks,
+                          particleAlpha: theme.particleAlpha,
+                        });
+                      }}
+                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[0.625rem] transition-colors ${
+                        isActive
+                          ? "bg-white/15 text-white/90 ring-1 ring-white/30"
+                          : "bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/70"
+                      }`}
+                    >
+                      <span className="w-2.5 h-2.5 rounded-full border border-white/20" style={{ backgroundColor: theme.accent }} />
+                      {theme.label}
+                    </button>
+                  );
+                })}
               </div>
-            </SettingRow>
+            </div>
 
             {/* Particles */}
-            <SettingRow label="Particles" description="Pulse blobs that travel along the strings" onReset={!(settings.particleEnabled ?? true) ? () => setSettings({ ...settings, particleEnabled: true }) : undefined}>
-              <Toggle checked={settings.particleEnabled ?? true} onChange={() => setSettings({ ...settings, particleEnabled: !(settings.particleEnabled ?? true) })} label="Particles" />
+            <SettingRow label="Particles" description="Pulse blobs that travel along the strings" onReset={(settings.particleEnabled ?? false) ? () => setSettings({ ...settings, particleEnabled: false }) : undefined}>
+              <Toggle checked={settings.particleEnabled ?? false} onChange={() => setSettings({ ...settings, particleEnabled: !(settings.particleEnabled ?? false) })} label="Particles" />
             </SettingRow>
 
-            {(settings.particleEnabled ?? true) && (
+            {(settings.particleEnabled ?? false) && (
               <>
                 <SettingRow label="Speed" description="How fast particles travel across the card">
                   <Slider value={settings.particleSpeed ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, particleSpeed: v })} />
@@ -715,42 +692,6 @@ export function SettingsView() {
               <Slider value={settings.cordRetractForce ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, cordRetractForce: v })} />
             </SettingRow>
 
-            {/* Effect Presets — combined color + signal + particle presets */}
-            <div className="py-2 space-y-2">
-              <div className="text-[0.625rem] text-white/40 uppercase tracking-wider">Effect Presets</div>
-              <div className="flex flex-wrap gap-1.5">
-                {([
-                  { label: "Default", colorDark: "#ffffff", colorLight: "#000000", alpha: 0.25, amplitude: 0.25, echo: 1.0, pSpeed: 1.0, pRate: 1.0, pSparks: 3, pAlpha: 1.0, particles: true },
-                  { label: "Neon", colorDark: "#00e5ff", colorLight: "#0097a7", alpha: 0.5, amplitude: 0.4, echo: 1.5, pSpeed: 1.5, pRate: 2.0, pSparks: 5, pAlpha: 0.9, particles: true },
-                  { label: "Ember", colorDark: "#ffab00", colorLight: "#e65100", alpha: 0.4, amplitude: 0.3, echo: 0.8, pSpeed: 0.7, pRate: 3.0, pSparks: 4, pAlpha: 0.8, particles: true },
-                  { label: "Ghost", colorDark: "#b388ff", colorLight: "#7b1fa2", alpha: 0.15, amplitude: 0.5, echo: 2.0, pSpeed: 0.5, pRate: 0.5, pSparks: 0, pAlpha: 0.4, particles: true },
-                  { label: "Pulse", colorDark: "#ff4081", colorLight: "#c2185b", alpha: 0.35, amplitude: 0.6, echo: 0.4, pSpeed: 2.5, pRate: 1.5, pSparks: 6, pAlpha: 1.0, particles: true },
-                  { label: "Minimal", colorDark: "#ffffff", colorLight: "#000000", alpha: 0.12, amplitude: 0.15, echo: 0.3, pSpeed: 1.0, pRate: 0.3, pSparks: 0, pAlpha: 0.5, particles: false },
-                  { label: "Aurora", colorDark: "#00e676", colorLight: "#2e7d32", alpha: 0.3, amplitude: 0.35, echo: 1.8, pSpeed: 0.8, pRate: 1.2, pSparks: 2, pAlpha: 0.7, particles: true },
-                ] as const).map((preset) => (
-                  <button
-                    key={preset.label}
-                    onClick={() => setSettings({
-                      ...settings,
-                      signalColorDark: preset.colorDark,
-                      signalColorLight: preset.colorLight,
-                      signalAlpha: preset.alpha,
-                      signalAmplitude: preset.amplitude,
-                      signalEcho: preset.echo,
-                      particleSpeed: preset.pSpeed,
-                      particleRate: preset.pRate,
-                      particleSparks: preset.pSparks,
-                      particleAlpha: preset.pAlpha,
-                      particleEnabled: preset.particles,
-                    })}
-                    className="px-2.5 py-1 rounded-full text-[0.625rem] bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/70 transition-colors flex items-center gap-1.5"
-                  >
-                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: preset.colorDark }} />
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
-            </div>
 
             {!isPresetMode && (
               <SettingRow label="Frequency">

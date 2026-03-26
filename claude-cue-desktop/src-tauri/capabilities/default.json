@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Minimal capabilities for Claude Cue",
-  "windows": ["main", "signal-settings", "keyboard"],
+  "windows": ["main", "signal-settings", "keyboard", "theme-picker"],
   "permissions": [
     "core:default",
     "core:event:default",

@@ -14,7 +14,6 @@ import type { EnrichedSession } from "@/lib/types";
 import { STATE_HEX, STATE_HEX_LIGHT, STATE_DOT_HEX, STATE_DOT_HEX_LIGHT, STATE_BADGE_HEX, STATE_BADGE_HEX_LIGHT } from "@/lib/types";
 import { formatTokens, formatDuration } from "@/lib/format";
 import { SignalString } from "./SignalString";
-import { VineBorder } from "./VineBorder";
 import type { StrikePulse } from "./SignalString";
 
 interface SessionCardProps {
@@ -45,15 +44,15 @@ interface SessionCardProps {
   revived?: boolean;
   keyPressSpeed?: number;
   keyReleaseSpeed?: number;
-  vineBorder?: boolean;
   compactMode?: boolean;
   slimMode?: boolean;
+  contextThreshold?: boolean;
   /** Per-card expand override: 0=compact, 1=slim (no details), 2=full details. undefined = use global mode. */
   expandOverride?: number;
   onExpandCycle?: () => void;
 }
 
-export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, vineBorder = false, compactMode = false, slimMode = false, expandOverride, onExpandCycle }: SessionCardProps) {
+export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = false, expandOverride, onExpandCycle }: SessionCardProps) {
   // Effective display mode: expandOverride takes precedence over global compact/slim
   const effectiveCompact = expandOverride !== undefined ? expandOverride === 0 : compactMode;
   const effectiveSlim = expandOverride !== undefined ? expandOverride <= 1 : slimMode;
@@ -257,7 +256,6 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
   return (
     <div style={{ position: "relative" }}>
       {/* Vine border — rendered OUTSIDE the card's overflow-hidden so vines can overflow */}
-      {vineBorder && isWorking && <VineBorder />}
     <div
       ref={cardRef}
       className={`overflow-hidden rounded-lg border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 session-card ${
@@ -330,7 +328,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
               </span>
             )}
             {metrics.customTitle && (
-              <span className="text-xs text-white/30 truncate">
+              <span className="text-xs text-white/40 truncate">
                 {session.workspaceName}
               </span>
             )}
@@ -343,7 +341,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
               </span>
             )}
             {!isNarrow && !effectiveCompact && metrics.gitBranch && (
-              <span className="text-[0.625rem] text-white/30 truncate shrink-0 flex items-center gap-1">
+              <span className="text-[0.625rem] text-white/40 truncate shrink-0 flex items-center gap-1">
                 <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" className="shrink-0 opacity-50"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5z" /></svg>
                 {metrics.gitBranch}
               </span>
@@ -370,17 +368,17 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                 {copied && <span>{"\u2713"}</span>}
               </button>
             )}
-            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 whitespace-nowrap" title="User / Total messages">
+            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap" title="User / Total messages">
               &#128172; {metrics.userMessageCount}/{metrics.messageCount}
             </span>
-            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 whitespace-nowrap">
+            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
               &#8595; {formatTokens(aggregatedInputTokens)} in
             </span>
-            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 whitespace-nowrap">
+            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
               &#8593; {formatTokens(aggregatedOutputTokens)} out
             </span>
             {aggregatedToolUses > 0 && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 whitespace-nowrap">
+              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
                 &#128295; {aggregatedToolUses} tools
               </span>
             )}
@@ -396,12 +394,12 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
               </button>
             )}
             {!isNarrow && session.modelDisplayName !== "\u2014" && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/30 whitespace-nowrap">
+              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
                 {session.modelDisplayName}
               </span>
             )}
             {!isNarrow && session.sourceDisplay !== "\u2014" && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/30 whitespace-nowrap">
+              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
                 {session.sourceDisplay}
               </span>
             )}
@@ -413,13 +411,13 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
               {topTools.map(([name, count]) => (
                 <span
                   key={name}
-                  className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10"
+                  className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40"
                 >
                   {name} {count}
                 </span>
               ))}
               {remainingTools > 0 && (
-                <span className="text-[0.625rem] text-white/30">+{remainingTools}</span>
+                <span className="text-[0.625rem] text-white/40">+{remainingTools}</span>
               )}
               <span className="ml-auto" />
             </div>
@@ -430,7 +428,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
           {effectiveSlim && !effectiveCompact && <div className="flex-1" />}
 
           {/* Row 4: Context usage — visible in regular and slim mode, hidden in compact */}
-          {!effectiveCompact && (
+          {!effectiveCompact && (!contextThreshold || metrics.lastInputTokens >= 200000) && (
             <div className="relative flex items-center gap-2">
               <span className="text-[0.625rem] text-white/40 shrink-0">Context</span>
               <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden">

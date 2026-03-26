@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import type { EnrichedSession, Settings, SignalPreset } from "@/lib/types";
+import { SIGNAL_THEMES, applyThemeCssVars } from "@/lib/types";
 import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, setGate as setGateEngine } from "@/lib/presetEngine";
 // import { formatTokens } from "@/lib/format";
 // import { StatBadge } from "./StatBadge";
@@ -55,7 +56,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [signalString, setSignalString] = useState(false);
   const [signalFrequency, setSignalFrequency] = useState(1.0);
   const [signalMode, setSignalMode] = useState("simulated");
-  const [signalAlpha, setSignalAlpha] = useState(0.25);
+  const [signalAlpha, setSignalAlpha] = useState(0.75);
   const [signalAmplitude, setSignalAmplitude] = useState(0.25);
   const [signalEcho, setSignalEcho] = useState(1.0);
   const [signalBass, setSignalBass] = useState(true);
@@ -64,7 +65,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [signalColorDark, setSignalColorDark] = useState("#ffffff");
   const [signalColorLight, setSignalColorLight] = useState("#000000");
   const [signalOffset, setSignalOffset] = useState(0.5);
-  const [particleEnabled, setParticleEnabled] = useState(true);
+  const [particleEnabled, setParticleEnabled] = useState(false);
   const [particleSpeed, setParticleSpeed] = useState(1.0);
   const [particleRate, setParticleRate] = useState(1.0);
   const [particleSparks, setParticleSparks] = useState(3);
@@ -75,9 +76,9 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [activePresetId, setActivePresetId] = useState("");
   const [presetBootAttempted, setPresetBootAttempted] = useState(false);
   const [testMode, setTestMode] = useState(false);
-  const [vineBorder, setVineBorder] = useState(false);
   const [compactMode, setCompactMode] = useState(false);
   const [slimMode, setSlimMode] = useState(false);
+  const [contextThreshold, setContextThreshold] = useState(false);
   const [keyPressSpeed, setKeyPressSpeed] = useState(0.35);
   const [keyReleaseSpeed, setKeyReleaseSpeed] = useState(0.4);
   const [stateOverrides, setStateOverrides] = useState<Record<string, string>>({});
@@ -297,10 +298,14 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setAutoReorder(s.autoReorder ?? false);
     document.documentElement.style.setProperty("--font-scale", String(s.fontScale ?? 1.0));
     setTestMode(s.testMode ?? false);
-    setVineBorder(s.vineBorder ?? false);
     setCompactMode(s.compactMode ?? false);
     if (!(s.compactMode ?? false)) setExpandOverrides({});
     setSlimMode(s.slimMode ?? false);
+    setContextThreshold(s.contextThreshold ?? false);
+    // Apply theme CSS variables for UI surfaces
+    const themeId = s.activeThemeId ?? "default";
+    const theme = SIGNAL_THEMES.find(t => t.id === themeId) ?? SIGNAL_THEMES[0];
+    applyThemeCssVars(theme);
   }, []);
 
   useEffect(() => {
@@ -824,7 +829,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
               return (
                 <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="space-y-0">
-                  <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} vineBorder={vineBorder} compactMode={compactMode} slimMode={slimMode} />
+                  <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} />
 
                   {/* State transition controls */}
                   <div className="flex items-center gap-1 px-2 py-1.5 rounded-b-lg bg-white/3 border border-t-0 border-white/5 -mt-px">
@@ -891,7 +896,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       ) : (
         <div ref={listRef} className={`flex-1 ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto p-4 pb-12 space-y-3"}`}>
           {/* Active sessions */}
-          {sortedSessions.map((session) => {
+          {sortedSessions.map((session, idx) => {
             const pending = pendingBySession[session.info.id] ?? [];
             const history = permissionHistory[session.info.id] ?? [];
             const hasPermissionActivity = pending.length > 0 || history.length > 0;
@@ -904,8 +909,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
               : session;
 
             return (
-              <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="space-y-2">
-                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} vineBorder={vineBorder} compactMode={compactMode} slimMode={slimMode} expandOverride={compactMode ? expandOverrides[session.info.id] : undefined} onExpandCycle={compactMode ? () => {
+              <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="relative space-y-2" style={{ zIndex: idx + 1 }}>
+                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} expandOverride={compactMode ? expandOverrides[session.info.id] : undefined} onExpandCycle={compactMode ? () => {
                   setExpandOverrides((prev) => {
                     const current = prev[session.info.id] ?? 0;
                     const next = (current + 1) % 3;
