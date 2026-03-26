@@ -487,6 +487,32 @@ pub fn run() {
                 let _ = window.set_theme(Some(system_theme));
             }
 
+            // --- Theme change polling (for "auto" mode) ---
+            {
+                let theme_handle = handle.clone();
+                let mut last_theme = detect_system_theme();
+                tauri::async_runtime::spawn(async move {
+                    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(2));
+                    loop {
+                        interval.tick().await;
+                        let current = detect_system_theme();
+                        if current != last_theme {
+                            last_theme = current;
+                            let theme_str = match current {
+                                Theme::Light => "light",
+                                Theme::Dark => "dark",
+                                _ => "dark",
+                            };
+                            let _ = theme_handle.emit("system-theme-changed", theme_str);
+                            // Also update the webview window theme so CSS media queries work
+                            if let Some(w) = theme_handle.get_webview_window("main") {
+                                let _ = w.set_theme(Some(current));
+                            }
+                        }
+                    }
+                });
+            }
+
             // --- System Tray ---
             setup_tray(&handle, &monitor_tray)?;
 

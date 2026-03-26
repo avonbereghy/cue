@@ -611,12 +611,16 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         };
 
         // Collect element rects for soft-erase after drawing
+        // Skip empty spacer divs (no text/visible content) to avoid erasing
+        // the waveform behind invisible layout elements in slim mode.
         const eraseRects: { x: number; y: number; w: number; h: number }[] = [];
         if (contentRef?.current && canvas) {
           const canvasRect = canvas.getBoundingClientRect();
           const rows = contentRef.current.children;
           for (let ri = 0; ri < rows.length; ri++) {
             const row = rows[ri] as HTMLElement;
+            // Skip empty spacer elements (no children AND no text content)
+            if (row.children.length === 0 && !row.textContent?.trim()) continue;
             const items = row.children;
             if (items.length > 0) {
               for (let ci = 0; ci < items.length; ci++) {
@@ -632,6 +636,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
               }
             } else {
               const rr = row.getBoundingClientRect();
+              if (rr.width < 1 || rr.height < 1) continue;
               eraseRects.push({
                 x: rr.left - canvasRect.left,
                 y: rr.top - canvasRect.top,

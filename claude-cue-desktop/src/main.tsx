@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import App from "./App";
 
 function applyTheme(theme: string) {
@@ -14,35 +15,35 @@ function applyTheme(theme: string) {
   }
 }
 
-function getSystemTheme(): string {
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+/** Get the system theme from the Rust backend (reads macOS defaults). */
+function fetchSystemTheme(): Promise<string> {
+  return invoke<string>("get_theme");
 }
 
 /** Resolve the effective theme from the saved preference. */
-function resolveTheme(pref: string): string {
+async function resolveTheme(pref: string): Promise<string> {
   if (pref === "light" || pref === "dark") return pref;
-  return getSystemTheme(); // "auto" or unknown → follow system
+  return fetchSystemTheme(); // "auto" or unknown → follow system
 }
 
 // Read saved theme preference and apply before React renders
 invoke<{ theme?: string }>("get_settings")
-  .then((s) => applyTheme(resolveTheme(s.theme ?? "auto")))
-  .catch(() => applyTheme(getSystemTheme()));
+  .then(async (s) => applyTheme(await resolveTheme(s.theme ?? "auto")))
+  .catch(async () => applyTheme(await fetchSystemTheme().catch(() => "dark")));
 
-// Listen for OS theme changes — only matters when preference is "auto"
-const mq = window.matchMedia("(prefers-color-scheme: dark)");
-mq.addEventListener("change", () => {
+// Listen for system theme changes from Rust backend — only matters when preference is "auto"
+listen<string>("system-theme-changed", (event) => {
   invoke<{ theme?: string }>("get_settings")
     .then((s) => {
       const pref = s.theme ?? "auto";
-      if (pref === "auto") applyTheme(getSystemTheme());
+      if (pref === "auto") applyTheme(event.payload);
     })
     .catch(() => {});
 });
 
 // Expose for SettingsView to call when theme changes
 (window as unknown as Record<string, unknown>).__applyTheme = (pref: string) => {
-  applyTheme(resolveTheme(pref));
+  resolveTheme(pref).then(applyTheme).catch(() => applyTheme("dark"));
 };
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
