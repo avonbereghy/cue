@@ -60,8 +60,6 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
   const STICKY_HOLD_MS = 3500;
   const [displayState, setDisplayState] = useState(info.state);
   const stickyUntilRef = useRef(0);
-  // Track when leaving a sticky state so the dot color snaps (no red→white fade)
-  const [leavingSticky, setLeavingSticky] = useState(false);
 
   useEffect(() => {
     const now = Date.now();
@@ -72,7 +70,6 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
     // Entering a sticky state — record hold deadline
     if (info.state === "error" || info.state === "waiting") {
       stickyUntilRef.current = now + STICKY_HOLD_MS;
-      setLeavingSticky(false);
       setDisplayState(info.state);
       return;
     }
@@ -80,21 +77,8 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
     // Leaving a sticky state — delay if hold hasn't expired
     if (isSticky && now < stickyUntilRef.current) {
       const remaining = stickyUntilRef.current - now;
-      const timer = setTimeout(() => {
-        setLeavingSticky(true);
-        setDisplayState(info.state);
-        // Re-enable transitions after one frame
-        requestAnimationFrame(() => requestAnimationFrame(() => setLeavingSticky(false)));
-      }, remaining);
+      const timer = setTimeout(() => setDisplayState(info.state), remaining);
       return () => clearTimeout(timer);
-    }
-
-    // Instant transition out of sticky — also snap
-    if (isSticky) {
-      setLeavingSticky(true);
-      setDisplayState(info.state);
-      requestAnimationFrame(() => requestAnimationFrame(() => setLeavingSticky(false)));
-      return;
     }
 
     setDisplayState(info.state);
@@ -299,7 +283,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
       <div ref={contentRef} className={`${compactMode ? "space-y-0" : "space-y-2.5"} ${slimMode && !compactMode ? "flex flex-col flex-1" : ""}`} style={{ position: "relative" }}>
           {/* Row 1: Status dot + title + state badge + git branch + duration */}
           <div className="relative flex items-center gap-2">
-            <span className={`inline-block w-2.5 h-2.5 rounded-full ${dotPulse} shrink-0`} style={{ backgroundColor: dotHex, transition: leavingSticky ? "none" : "background-color 600ms ease" }} aria-hidden="true" />
+            <span className={`inline-block w-2.5 h-2.5 rounded-full ${dotPulse} shrink-0`} style={{ backgroundColor: dotHex }} aria-hidden="true" />
             {(info.state === "working" || info.state === "subagent") && titleAnimation !== "none" ? (
               <span
                 ref={titleContainerRef}
