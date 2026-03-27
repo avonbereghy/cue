@@ -65,12 +65,12 @@ pub fn format_tool_summary(tool_name: &str, tool_input: &serde_json::Value) -> S
     }
 }
 
-/// Truncate a string to `max_len` characters, appending "..." if truncated.
-fn truncate(s: &str, max_len: usize) -> String {
+/// Truncate a string to `max_len` total characters (including "..." suffix).
+pub(crate) fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len])
+        format!("{}...", &s[..max_len.saturating_sub(3)])
     }
 }
 
@@ -184,7 +184,8 @@ mod tests {
 
     #[test]
     fn test_truncate_long_string() {
-        let result = truncate("hello world", 5);
+        // max_len=8 means 5 chars + "..." = 8 total
+        let result = truncate("hello world", 8);
         assert_eq!(result, "hello...");
     }
 

@@ -305,7 +305,7 @@ impl IconCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{SessionInfo, SessionMetrics};
+    use crate::models::{SessionInfo, SessionMetrics, SupplementalData};
 
     fn make_session(state: &str) -> EnrichedSession {
         let now = std::time::SystemTime::now()
@@ -324,7 +324,7 @@ mod tests {
             hook_model: String::new(),
             active_subagents: 0,
         };
-        EnrichedSession::from_info_and_metrics(info, SessionMetrics::default())
+        EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default())
     }
 
     fn verify_png(data: &[u8]) {

@@ -47,12 +47,14 @@ interface SessionCardProps {
   compactMode?: boolean;
   slimMode?: boolean;
   contextThreshold?: boolean;
+  /** Context display mode: "percent", "tokens", "remaining", "both" */
+  contextDisplay?: string;
   /** Per-card expand override: 0=compact, 1=slim (no details), 2=full details. undefined = use global mode. */
   expandOverride?: number;
   onExpandCycle?: () => void;
 }
 
-export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = false, expandOverride, onExpandCycle }: SessionCardProps) {
+export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = false, contextDisplay = "percent", expandOverride, onExpandCycle }: SessionCardProps) {
   // Effective display mode: expandOverride takes precedence over global compact/slim
   const effectiveCompact = expandOverride !== undefined ? expandOverride === 0 : compactMode;
   const effectiveSlim = expandOverride !== undefined ? expandOverride <= 1 : slimMode;
@@ -335,6 +337,12 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
             <span className="text-xs px-2 py-0.5 rounded-full text-center" style={{ backgroundColor: badgeHex.bg, color: badgeHex.text, transition: stateTransition, minWidth: "8.5em" }}>
               {displayStateName}
             </span>
+            {!effectiveCompact && session.runningToolName && (
+              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/50 truncate max-w-[200px] shrink-0" title={session.runningToolTarget || session.runningToolName}>
+                {session.runningToolName}
+                {session.runningToolTarget && <span className="text-white/30"> {session.runningToolTarget}</span>}
+              </span>
+            )}
             {!isNarrow && !effectiveCompact && (
               <span className="text-[0.625rem] text-white/50 truncate font-mono" title={info.workspace}>
                 {shortPath}
@@ -344,6 +352,9 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
               <span className="text-[0.625rem] text-white/40 truncate shrink-0 flex items-center gap-1">
                 <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" className="shrink-0 opacity-50"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5z" /></svg>
                 {metrics.gitBranch}
+                {session.gitStatus?.dirty && <span className="text-yellow-500">*</span>}
+                {(session.gitStatus?.ahead ?? 0) > 0 && <span className="text-green-500/60">{"\u2191"}{session.gitStatus!.ahead}</span>}
+                {(session.gitStatus?.behind ?? 0) > 0 && <span className="text-red-500/60">{"\u2193"}{session.gitStatus!.behind}</span>}
               </span>
             )}
             {!effectiveCompact && (
@@ -393,9 +404,20 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                 <span>{subagents.length} agents</span>
               </button>
             )}
+            {session.todoTotal > 0 && (
+              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap" title={session.todoCurrent || undefined}>
+                {"\u2610"} {session.todoCompleted}/{session.todoTotal}
+              </span>
+            )}
+            {session.outputTokensPerSec > 0 && (info.state === "working" || info.state === "subagent") && (
+              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
+                {session.outputTokensPerSec.toFixed(1)} tok/s
+              </span>
+            )}
             {!isNarrow && session.modelDisplayName !== "\u2014" && (
               <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
                 {session.modelDisplayName}
+                {session.provider && <span className="text-white/30"> ({session.provider})</span>}
               </span>
             )}
             {!isNarrow && session.sourceDisplay !== "\u2014" && (
@@ -457,11 +479,63 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                 />
               </div>
               <span className="text-[0.625rem] text-white/50 mono-nums shrink-0">
-                {Math.round(session.contextUsagePercent * 100)}%
+                {(() => {
+                  const pct = Math.round(session.contextUsagePercent * 100);
+                  const tok = `${formatTokens(metrics.lastInputTokens)} / ${formatTokens(session.contextLimit)}`;
+                  switch (contextDisplay) {
+                    case "tokens": return tok;
+                    case "remaining": return `${100 - pct}% free`;
+                    case "both": return `${pct}% (${tok})`;
+                    default: return `${pct}%`;
+                  }
+                })()}
               </span>
-              <span className="text-[0.625rem] text-white/30 mono-nums shrink-0">
-                {formatTokens(metrics.lastInputTokens)} / {formatTokens(session.contextLimit)}
-              </span>
+              {contextDisplay !== "tokens" && contextDisplay !== "both" && (
+                <span className="text-[0.625rem] text-white/30 mono-nums shrink-0">
+                  {formatTokens(metrics.lastInputTokens)} / {formatTokens(session.contextLimit)}
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Rate limits (from statusline bridge) */}
+          {!effectiveCompact && !effectiveSlim && session.rateLimits && (session.rateLimits.fiveHourPercent > 0 || session.rateLimits.sevenDayPercent > 0) && (
+            <div className="relative flex items-center gap-2 flex-wrap">
+              <span className="text-[0.625rem] text-white/40 shrink-0 w-6">5h</span>
+              <div className="flex-1 relative h-1 rounded-full bg-white/8 overflow-hidden min-w-[40px]">
+                <div className="absolute left-0 top-0 bottom-0 rounded-full transition-all duration-500" style={{
+                  width: `${Math.min(session.rateLimits.fiveHourPercent, 100)}%`,
+                  background: session.rateLimits.fiveHourPercent >= 90 ? "#ef4444" : session.rateLimits.fiveHourPercent >= 75 ? "#d946ef" : "#3b82f6",
+                  opacity: 0.4,
+                }} />
+              </div>
+              <span className="text-[0.625rem] text-white/40 mono-nums shrink-0">{Math.round(session.rateLimits.fiveHourPercent)}%</span>
+              {session.rateLimits.sevenDayPercent > 0 && (<>
+                <span className="text-[0.625rem] text-white/40 shrink-0 w-6">7d</span>
+                <div className="flex-1 relative h-1 rounded-full bg-white/8 overflow-hidden min-w-[40px]">
+                  <div className="absolute left-0 top-0 bottom-0 rounded-full transition-all duration-500" style={{
+                    width: `${Math.min(session.rateLimits.sevenDayPercent, 100)}%`,
+                    background: session.rateLimits.sevenDayPercent >= 90 ? "#ef4444" : session.rateLimits.sevenDayPercent >= 75 ? "#d946ef" : "#3b82f6",
+                    opacity: 0.4,
+                  }} />
+                </div>
+                <span className="text-[0.625rem] text-white/40 mono-nums shrink-0">{Math.round(session.rateLimits.sevenDayPercent)}%</span>
+              </>)}
+              {session.rateLimits.limitReached && (
+                <span className="text-[0.625rem] text-red-400 font-medium">Limit reached</span>
+              )}
+            </div>
+          )}
+
+          {/* Config counts */}
+          {!effectiveCompact && !effectiveSlim && session.configCounts && (
+            (session.configCounts.claudeMdCount + session.configCounts.rulesCount + session.configCounts.mcpServers + session.configCounts.hooksCount) > 0
+          ) && (
+            <div className="relative flex items-center gap-1.5 text-[0.625rem] text-white/30">
+              {session.configCounts.claudeMdCount > 0 && <span>{session.configCounts.claudeMdCount} CLAUDE.md</span>}
+              {session.configCounts.rulesCount > 0 && <span>{"\u00B7"} {session.configCounts.rulesCount} rules</span>}
+              {session.configCounts.mcpServers > 0 && <span>{"\u00B7"} {session.configCounts.mcpServers} MCP</span>}
+              {session.configCounts.hooksCount > 0 && <span>{"\u00B7"} {session.configCounts.hooksCount} hooks</span>}
             </div>
           )}
       </div>

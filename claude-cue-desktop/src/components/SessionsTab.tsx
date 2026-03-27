@@ -79,6 +79,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [compactMode, setCompactMode] = useState(false);
   const [slimMode, setSlimMode] = useState(false);
   const [contextThreshold, setContextThreshold] = useState(false);
+  const [contextDisplay, setContextDisplay] = useState("percent");
   const [keyPressSpeed, setKeyPressSpeed] = useState(0.35);
   const [keyReleaseSpeed, setKeyReleaseSpeed] = useState(0.4);
   const [stateOverrides, setStateOverrides] = useState<Record<string, string>>({});
@@ -302,6 +303,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     if (!(s.compactMode ?? false)) setExpandOverrides({});
     setSlimMode(s.slimMode ?? false);
     setContextThreshold(s.contextThreshold ?? false);
+    setContextDisplay(s.contextDisplay ?? "percent");
     // Apply theme CSS variables for UI surfaces
     const themeId = s.activeThemeId ?? "default";
     const theme = SIGNAL_THEMES.find(t => t.id === themeId) ?? SIGNAL_THEMES[0];
@@ -391,6 +393,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         gitBranch: ["main", "feat/sandbox", "fix/bug-123", "dev"][n % 4],
         toolCounts: { Read: Math.floor(Math.random() * 20), Edit: Math.floor(Math.random() * 12), Bash: Math.floor(Math.random() * 8), Grep: Math.floor(Math.random() * 6) },
         subagents: state === "subagent" ? [{ agentId: `sub_${n}_1`, description: "Research task", slug: "research", inputTokens: 12000, outputTokens: 3000, cacheCreationTokens: 0, cacheReadTokens: 5000, model, toolCounts: { Read: 3, Grep: 2 }, messageCount: 8, isActive: true }] : [],
+        todoItems: [],
       },
       workspaceName: `project-${n}`,
       displayTitle: `Sandbox Session ${n}`,
@@ -402,6 +405,12 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       modelDisplayName: modelDisplay,
       sourceDisplay,
       hasSubagents: state === "subagent",
+      provider: "",
+      outputTokensPerSec: 0,
+      todoItems: [],
+      todoCompleted: 0,
+      todoTotal: 0,
+      systemMemory: { totalMb: 0, usedMb: 0, usagePercent: 0 },
     };
   }, []);
 
@@ -910,7 +919,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
             return (
               <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="relative space-y-2" style={{ zIndex: idx + 1 }}>
-                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} expandOverride={compactMode ? expandOverrides[session.info.id] : undefined} onExpandCycle={compactMode ? () => {
+                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} expandOverride={compactMode ? expandOverrides[session.info.id] : undefined} onExpandCycle={compactMode ? () => {
                   setExpandOverrides((prev) => {
                     const current = prev[session.info.id] ?? 0;
                     const next = (current + 1) % 3;
