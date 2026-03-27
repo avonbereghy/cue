@@ -41,6 +41,72 @@ pub struct StatusData {
 }
 
 // ---------------------------------------------------------------------------
+// Supplemental data (git, config, rate limits, system info)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TodoItem {
+    pub content: String,
+    /// One of: "pending", "in_progress", "completed"
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RateLimitInfo {
+    pub five_hour_percent: f64,
+    pub seven_day_percent: f64,
+    pub five_hour_reset_at: Option<f64>,
+    pub seven_day_reset_at: Option<f64>,
+    pub limit_reached: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStatus {
+    pub dirty: bool,
+    pub ahead: i64,
+    pub behind: i64,
+    pub modified: i64,
+    pub added: i64,
+    pub deleted: i64,
+    pub untracked: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigCounts {
+    pub claude_md_count: i64,
+    pub rules_count: i64,
+    pub mcp_servers: i64,
+    pub hooks_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemMemory {
+    pub total_mb: u64,
+    pub used_mb: u64,
+    pub usage_percent: f64,
+}
+
+/// Supplemental data gathered outside of JSONL parsing (git, config, system info).
+/// Built by session_monitor and passed to EnrichedSession construction.
+#[derive(Debug, Clone, Default)]
+pub struct SupplementalData {
+    pub git_status: Option<GitStatus>,
+    pub config_counts: Option<ConfigCounts>,
+    pub rate_limits: Option<RateLimitInfo>,
+    pub system_memory: SystemMemory,
+    pub claude_version: Option<String>,
+    /// Previous output_tokens for this session (for speed calculation)
+    pub prev_output_tokens: i64,
+    /// Timestamp of previous measurement
+    pub prev_timestamp: f64,
+}
+
+// ---------------------------------------------------------------------------
 // Session Metrics (parsed from JSONL conversation logs)
 // ---------------------------------------------------------------------------
 
@@ -93,6 +159,15 @@ pub struct SessionMetrics {
     /// Used to infer "waiting" state from the JSONL when the hook doesn't fire.
     #[serde(default)]
     pub pending_tool_use: bool,
+    /// Name of the currently running tool (from last pending tool_use)
+    #[serde(default)]
+    pub running_tool_name: Option<String>,
+    /// Target of the running tool (file path, command, pattern)
+    #[serde(default)]
+    pub running_tool_target: Option<String>,
+    /// Todo/task items parsed from TodoWrite/TaskCreate tool uses
+    #[serde(default)]
+    pub todo_items: Vec<TodoItem>,
 }
 
 impl SessionMetrics {
@@ -142,10 +217,43 @@ pub struct EnrichedSession {
     pub source_display: String,
     /// Whether this session has active or completed subagents
     pub has_subagents: bool,
+    /// Git status for the workspace (dirty, ahead/behind, file stats)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_status: Option<GitStatus>,
+    /// Claude config file counts for this workspace
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_counts: Option<ConfigCounts>,
+    /// Rate limit information (from statusline bridge)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limits: Option<RateLimitInfo>,
+    /// Provider: "Bedrock", "Vertex", "API", or "" (default Anthropic)
+    pub provider: String,
+    /// Output tokens per second (computed from delta between polls)
+    pub output_tokens_per_sec: f64,
+    /// Currently running tool name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub running_tool_name: Option<String>,
+    /// Target of the running tool (file path, command, pattern)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub running_tool_target: Option<String>,
+    /// Todo items from the session
+    pub todo_items: Vec<TodoItem>,
+    /// Number of completed todo items
+    pub todo_completed: i64,
+    /// Total number of todo items
+    pub todo_total: i64,
+    /// Content of the current in-progress todo item (truncated)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub todo_current: Option<String>,
+    /// System memory information
+    pub system_memory: SystemMemory,
+    /// Claude Code version string
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claude_version: Option<String>,
 }
 
 impl EnrichedSession {
-    pub fn from_info_and_metrics(info: SessionInfo, metrics: SessionMetrics) -> Self {
+    pub fn from_info_and_metrics(info: SessionInfo, metrics: SessionMetrics, supplemental: &SupplementalData) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -232,8 +340,41 @@ impl EnrichedSession {
         let source_display = format_source_name(info.source.as_deref());
         let has_subagents = !metrics.subagents.is_empty();
 
+        let provider = detect_provider(&effective_model);
+
+        // Output speed: tokens/sec from delta between polls
+        let output_tokens_per_sec = if supplemental.prev_output_tokens > 0
+            && supplemental.prev_timestamp > 0.0
+        {
+            let delta_tokens = metrics.output_tokens - supplemental.prev_output_tokens;
+            let delta_secs = now - supplemental.prev_timestamp;
+            if delta_secs > 0.0 && delta_tokens > 0 {
+                delta_tokens as f64 / delta_secs
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+
+        // Todo aggregation
+        let todo_completed = metrics
+            .todo_items
+            .iter()
+            .filter(|t| t.status == "completed" || t.status == "done" || t.status == "complete")
+            .count() as i64;
+        let todo_total = metrics.todo_items.len() as i64;
+        let todo_current = metrics
+            .todo_items
+            .iter()
+            .find(|t| t.status == "in_progress" || t.status == "running")
+            .map(|t| truncate_string(&t.content, 60));
+
         Self {
             info,
+            running_tool_name: metrics.running_tool_name.clone(),
+            running_tool_target: metrics.running_tool_target.clone(),
+            todo_items: metrics.todo_items.clone(),
             metrics,
             workspace_name,
             display_title,
@@ -245,8 +386,35 @@ impl EnrichedSession {
             model_display_name,
             source_display,
             has_subagents,
+            git_status: supplemental.git_status.clone(),
+            config_counts: supplemental.config_counts.clone(),
+            rate_limits: supplemental.rate_limits.clone(),
+            provider,
+            output_tokens_per_sec,
+            todo_completed,
+            todo_total,
+            todo_current,
+            system_memory: supplemental.system_memory.clone(),
+            claude_version: supplemental.claude_version.clone(),
         }
     }
+}
+
+fn detect_provider(model: &str) -> String {
+    let m = model.to_lowercase();
+    if m.starts_with("bedrock-") || m.contains("bedrock") {
+        return "Bedrock".to_string();
+    }
+    if m.starts_with("vertex-") || m.contains("vertex") {
+        return "Vertex".to_string();
+    }
+    // Note: we don't check ANTHROPIC_API_KEY because the Tauri app's env
+    // may differ from the Claude CLI's env, leading to false positives.
+    String::new()
+}
+
+fn truncate_string(s: &str, max_len: usize) -> String {
+    crate::summary_formatter::truncate(s, max_len)
 }
 
 fn format_model_name(model: &str) -> String {
@@ -412,6 +580,9 @@ pub struct Settings {
     /// Only show context bar when usage >= 200k tokens
     #[serde(default)]
     pub context_threshold: bool,
+    /// Context display mode: "percent", "tokens", "remaining", or "both"
+    #[serde(default = "default_context_display")]
+    pub context_display: String,
 }
 
 fn default_theme() -> String {
@@ -478,6 +649,10 @@ fn default_font_scale() -> f64 {
     1.0
 }
 
+fn default_context_display() -> String {
+    "percent".to_string()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         // Default to Max Standard ($100/mo)
@@ -521,6 +696,7 @@ impl Default for Settings {
             compact_mode: false,
             slim_mode: true,
             context_threshold: false,
+            context_display: "percent".to_string(),
         }
     }
 }
@@ -657,7 +833,7 @@ mod tests {
     fn test_enriched_session_state_icons() {
         let make = |state: &str| {
             let info = make_test_info("test", "/tmp/test", state);
-            EnrichedSession::from_info_and_metrics(info, SessionMetrics::default())
+            EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default())
         };
         assert_eq!(make("working").state_icon, "\u{27F3}");
         assert_eq!(make("waiting").state_icon, "\u{23F8}");
@@ -675,31 +851,31 @@ mod tests {
         // Fresh working session (10s ago) — stays working
         let mut info = make_test_info("s1", "/tmp", "working");
         info.last_activity = now - 10.0;
-        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default());
+        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default());
         assert_eq!(es.info.state, "working");
 
         // Stale working session (120s ago) — downgraded to idle
         let mut info = make_test_info("s2", "/tmp", "working");
         info.last_activity = now - 120.0;
-        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default());
+        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default());
         assert_eq!(es.info.state, "idle");
 
         // Stale subagent (100s ago) — downgraded to idle
         let mut info = make_test_info("s3", "/tmp", "subagent");
         info.last_activity = now - 100.0;
-        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default());
+        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default());
         assert_eq!(es.info.state, "idle");
 
         // Idle session stays idle regardless of age
         let mut info = make_test_info("s4", "/tmp", "idle");
         info.last_activity = now - 500.0;
-        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default());
+        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default());
         assert_eq!(es.info.state, "idle");
 
         // Done session stays done regardless of age
         let mut info = make_test_info("s5", "/tmp", "done");
         info.last_activity = now - 500.0;
-        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default());
+        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default());
         assert_eq!(es.info.state, "done");
     }
 
@@ -711,7 +887,7 @@ mod tests {
             last_input_tokens: 500_000,
             ..Default::default()
         };
-        let es = EnrichedSession::from_info_and_metrics(info.clone(), metrics_opus);
+        let es = EnrichedSession::from_info_and_metrics(info.clone(), metrics_opus, &SupplementalData::default());
         assert_eq!(es.context_limit, 1_000_000);
         assert!((es.context_usage_percent - 0.5).abs() < 0.001);
 
@@ -720,7 +896,7 @@ mod tests {
             last_input_tokens: 500_000,
             ..Default::default()
         };
-        let es_syn = EnrichedSession::from_info_and_metrics(info.clone(), metrics_synthetic);
+        let es_syn = EnrichedSession::from_info_and_metrics(info.clone(), metrics_synthetic, &SupplementalData::default());
         assert_eq!(es_syn.context_limit, 1_000_000);
 
         let metrics_old = SessionMetrics {
@@ -728,7 +904,7 @@ mod tests {
             last_input_tokens: 100_000,
             ..Default::default()
         };
-        let es2 = EnrichedSession::from_info_and_metrics(info, metrics_old);
+        let es2 = EnrichedSession::from_info_and_metrics(info, metrics_old, &SupplementalData::default());
         assert_eq!(es2.context_limit, 200_000);
     }
 
@@ -781,5 +957,46 @@ mod tests {
         let parsed: PermissionLogEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.tool_name, "Read");
         assert_eq!(parsed.decision, "Allow");
+    }
+
+    #[test]
+    fn test_detect_provider() {
+        assert_eq!(detect_provider("bedrock-claude-sonnet-4-6"), "Bedrock");
+        assert_eq!(detect_provider("vertex-claude-opus-4-6"), "Vertex");
+        assert_eq!(detect_provider("claude-sonnet-4-6"), "");
+        assert_eq!(detect_provider("claude-opus-4-6"), "");
+        assert_eq!(detect_provider(""), "");
+    }
+
+    #[test]
+    fn test_todo_aggregation_in_enriched_session() {
+        let info = make_test_info("t", "/test", "working");
+        let metrics = SessionMetrics {
+            todo_items: vec![
+                TodoItem { content: "Task A".to_string(), status: "completed".to_string() },
+                TodoItem { content: "Task B".to_string(), status: "in_progress".to_string() },
+                TodoItem { content: "Task C".to_string(), status: "pending".to_string() },
+            ],
+            ..Default::default()
+        };
+        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        assert_eq!(es.todo_total, 3);
+        assert_eq!(es.todo_completed, 1);
+        assert_eq!(es.todo_current.as_deref(), Some("Task B"));
+    }
+
+    #[test]
+    fn test_supplemental_data_populates_enriched_session() {
+        let info = make_test_info("t", "/test", "working");
+        let supplemental = SupplementalData {
+            git_status: Some(GitStatus { dirty: true, ahead: 2, behind: 1, ..Default::default() }),
+            claude_version: Some("CC v2.1.6".to_string()),
+            ..Default::default()
+        };
+        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &supplemental);
+        assert!(es.git_status.is_some());
+        assert!(es.git_status.as_ref().unwrap().dirty);
+        assert_eq!(es.git_status.as_ref().unwrap().ahead, 2);
+        assert_eq!(es.claude_version.as_deref(), Some("CC v2.1.6"));
     }
 }

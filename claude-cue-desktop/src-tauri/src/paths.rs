@@ -48,6 +48,19 @@ pub fn presets_dir() -> PathBuf {
     }
 }
 
+/// Path to rate_limits.json — written by the statusline bridge script.
+/// Lives alongside sessions.json in the same data directory.
+pub fn rate_limits_path() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        home_dir()
+            .join("Library/Application Support/Claude Cue/rate_limits.json")
+    } else if cfg!(target_os = "windows") {
+        appdata_local().join("Claude Cue").join("rate_limits.json")
+    } else {
+        xdg_data_home().join("claude-cue").join("rate_limits.json")
+    }
+}
+
 /// Ensure all required directories exist.
 pub fn ensure_dirs() -> std::io::Result<()> {
     if let Some(parent) = sessions_json_path().parent() {

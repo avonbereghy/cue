@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useSessionMonitor } from "@/hooks/useSessionMonitor";
 import { SessionsTab } from "./SessionsTab";
 import { SettingsView } from "./SettingsView";
-import type { Settings } from "@/lib/types";
+import type { Settings, SystemMemory } from "@/lib/types";
 
 type Tab = "Sessions" | "Settings";
 
@@ -14,6 +14,8 @@ export function Dashboard() {
   const [compactMode, setCompactMode] = useState(false);
   const [slimMode, setSlimMode] = useState(false);
   const sessions = useSessionMonitor();
+  const [systemMemory, setSystemMemory] = useState<SystemMemory | null>(null);
+  const [claudeVersion, setClaudeVersion] = useState<string | null>(null);
 
   useEffect(() => {
     invoke<Settings>("get_settings").then((s) => {
@@ -32,6 +34,15 @@ export function Dashboard() {
     localStorage.setItem("selectedDashboardTab", tab);
   }, [tab]);
 
+  // Fetch system memory periodically and claude version once
+  useEffect(() => {
+    invoke<string | null>("get_claude_version").then(setClaudeVersion).catch(() => {});
+    const fetchMemory = () => invoke<SystemMemory>("get_system_memory").then(setSystemMemory).catch(() => {});
+    fetchMemory();
+    const interval = setInterval(fetchMemory, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <div className={`flex flex-col ${compactMode ? "" : "h-screen"}`}>
       {/* Tab bar */}
@@ -48,6 +59,21 @@ export function Dashboard() {
             &larr;
           </button>
         )}
+        {/* System info */}
+        {systemMemory && (
+          <span className="flex items-center gap-1.5 text-[0.6rem] text-white/30">
+            RAM
+            <span className="inline-block w-12 h-1 rounded-full bg-white/8 overflow-hidden relative">
+              <span className="absolute left-0 top-0 bottom-0 rounded-full" style={{
+                width: `${Math.min(systemMemory.usagePercent, 100)}%`,
+                background: systemMemory.usagePercent >= 90 ? "#ef4444" : systemMemory.usagePercent >= 75 ? "#f59e0b" : "#6b7280",
+                opacity: 0.5,
+              }} />
+            </span>
+            <span className="mono-nums">{Math.round(systemMemory.usagePercent)}%</span>
+          </span>
+        )}
+        {claudeVersion && <span className="text-[0.6rem] text-white/30 mono-nums">{claudeVersion}</span>}
         <div className="ml-auto flex items-center gap-0.5">
           <button
             onClick={() => {
@@ -141,6 +167,7 @@ export function Dashboard() {
           <SettingsView />
         </div>
       )}
+
     </div>
   );
 }

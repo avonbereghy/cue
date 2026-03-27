@@ -16,6 +16,9 @@ pub mod env_detect;
 pub mod permission_server;
 pub mod permission_log;
 pub mod summary_formatter;
+pub mod git_status;
+pub mod config_counter;
+pub mod system_info;
 
 use models::{EnrichedSession, Settings};
 use session_monitor::SessionMonitorState;
@@ -137,6 +140,16 @@ fn get_theme() -> String {
         Theme::Dark => "dark".to_string(),
         _ => "dark".to_string(),
     }
+}
+
+#[tauri::command]
+fn get_system_memory(state: State<'_, AppState>) -> models::SystemMemory {
+    state.monitor.system_memory.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn get_claude_version(state: State<'_, AppState>) -> Option<String> {
+    state.monitor.claude_version.lock().unwrap().clone()
 }
 
 #[tauri::command]
@@ -412,16 +425,27 @@ fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
         }
     });
 
-    // Refresh metrics every 5 seconds (session-level JSONL parsing)
+    // Refresh metrics + supplemental data every 5 seconds
+    let monitor_metrics = monitor.clone();
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
         loop {
             interval.tick().await;
-            let m = monitor.clone();
+            let m = monitor_metrics.clone();
             let _ = tokio::task::spawn_blocking(move || {
                 m.refresh_metrics();
+                m.refresh_supplemental();
             }).await;
         }
+    });
+
+    // Fetch claude --version once at startup (in background)
+    tauri::async_runtime::spawn(async move {
+        let m = monitor.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            let version = system_info::get_claude_version();
+            *m.claude_version.lock().unwrap() = version;
+        }).await;
     });
 }
 
@@ -483,6 +507,8 @@ pub fn run() {
             open_signal_settings,
             open_keyboard,
             open_theme_picker,
+            get_system_memory,
+            get_claude_version,
         ])
         .on_window_event(|window, event| {
             // Hide main window instead of quitting — app stays in tray.

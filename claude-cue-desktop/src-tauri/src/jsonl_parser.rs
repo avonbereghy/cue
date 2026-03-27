@@ -31,6 +31,17 @@ pub struct ParsedEntry {
     pub has_pending_tool_use: bool,
     /// True if this entry is a tool_result
     pub is_tool_result: bool,
+    /// Name of the last tool_use in this message (for running tool display)
+    pub running_tool_name: Option<String>,
+    /// Target of the running tool (file path, command, pattern)
+    pub running_tool_target: Option<String>,
+    /// Todo items parsed from TodoWrite/TaskCreate tool uses in this message
+    pub todo_items: Vec<crate::models::TodoItem>,
+    /// True if todo_items is a bulk replacement (TodoWrite), false for incremental (TaskCreate)
+    pub todo_is_bulk_replace: bool,
+    /// Pending task status updates: (taskId, new_status) from TaskUpdate tool uses.
+    /// Applied during aggregation against the accumulated todo list.
+    pub task_status_updates: Vec<(String, String)>,
 }
 
 /// Parse a JSONL file into a list of entries.
@@ -136,6 +147,19 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
                         if block_obj.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
                             if let Some(name) = block_obj.get("name").and_then(|v| v.as_str()) {
                                 *entry.tool_counts.entry(name.to_string()).or_insert(0) += 1;
+
+                                // Track the last tool_use as the running tool
+                                entry.running_tool_name = Some(name.to_string());
+                                entry.running_tool_target =
+                                    extract_tool_target(name, block_obj.get("input"));
+
+                                // Parse TodoWrite/TaskCreate for todo tracking
+                                if name == "TodoWrite" {
+                                    parse_todo_write(block_obj.get("input"), &mut entry.todo_items);
+                                    entry.todo_is_bulk_replace = true;
+                                } else if name == "TaskCreate" || name == "TaskUpdate" {
+                                    parse_task_tool(name, block_obj.get("input"), &mut entry);
+                                }
                             }
                         }
                     }
@@ -155,6 +179,107 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
     }
 
     Some(entry)
+}
+
+/// Extract the target of a tool_use for display (file path, command, pattern).
+fn extract_tool_target(tool_name: &str, input: Option<&Value>) -> Option<String> {
+    let obj = input?.as_object()?;
+    match tool_name {
+        "Read" | "Write" | "Edit" | "NotebookEdit" => obj
+            .get("file_path")
+            .or_else(|| obj.get("path"))
+            .and_then(|v| v.as_str())
+            .map(shorten_path),
+        "Bash" => obj
+            .get("command")
+            .and_then(|v| v.as_str())
+            .map(|s| truncate(s, 60)),
+        "Grep" | "Glob" => obj
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .map(|s| truncate(s, 40)),
+        "Agent" => obj
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(|s| truncate(s, 40)),
+        _ => None,
+    }
+}
+
+/// Shorten a file path to just filename (or last 2 components if deeply nested).
+fn shorten_path(path: &str) -> String {
+    let p = std::path::Path::new(path);
+    let components: Vec<_> = p.components().rev().take(2).collect();
+    if components.len() == 2 {
+        format!(
+            "{}/{}",
+            components[1].as_os_str().to_string_lossy(),
+            components[0].as_os_str().to_string_lossy()
+        )
+    } else {
+        p.file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string())
+    }
+}
+
+use crate::summary_formatter::truncate;
+
+/// Parse TodoWrite input to extract todo items (bulk replace format).
+fn parse_todo_write(input: Option<&Value>, items: &mut Vec<crate::models::TodoItem>) {
+    if let Some(obj) = input.and_then(|v| v.as_object()) {
+        if let Some(todos) = obj.get("todos").and_then(|v| v.as_array()) {
+            // TodoWrite replaces all items — clear previous
+            items.clear();
+            for todo in todos {
+                if let Some(todo_obj) = todo.as_object() {
+                    items.push(crate::models::TodoItem {
+                        content: todo_obj
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        status: todo_obj
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("pending")
+                            .to_string(),
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Parse TaskCreate/TaskUpdate input to incrementally update todo items.
+fn parse_task_tool(tool_name: &str, input: Option<&Value>, entry: &mut ParsedEntry) {
+    if let Some(obj) = input.and_then(|v| v.as_object()) {
+        if tool_name == "TaskCreate" {
+            let content = obj
+                .get("subject")
+                .or_else(|| obj.get("description"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("Task")
+                .to_string();
+            entry.todo_items.push(crate::models::TodoItem {
+                content,
+                status: "pending".to_string(),
+            });
+        } else if tool_name == "TaskUpdate" {
+            // Store the update for application during aggregation, when we
+            // have the full accumulated task list to index into.
+            if let Some(new_status) = obj.get("status").and_then(|v| v.as_str()) {
+                let normalized = match new_status {
+                    "in_progress" | "running" => "in_progress",
+                    "completed" | "complete" | "done" => "completed",
+                    other => other,
+                };
+                if let Some(task_id) = obj.get("taskId").and_then(|v| v.as_str()) {
+                    entry.task_status_updates.push((task_id.to_string(), normalized.to_string()));
+                }
+            }
+        }
+    }
 }
 
 /// Extract a Unix timestamp from a JSONL entry, trying multiple formats.
@@ -322,9 +447,35 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
         }
         if entry.has_pending_tool_use {
             m.pending_tool_use = true;
+            m.running_tool_name = entry.running_tool_name.clone();
+            m.running_tool_target = entry.running_tool_target.clone();
             break;
         }
         // Skip non-relevant entries (e.g., progress, thinking)
+    }
+
+    // Todo items: accumulate from all entries.
+    // TodoWrite (bulk_replace=true) replaces the entire list.
+    // TaskCreate (bulk_replace=false) appends incrementally.
+    // TaskUpdate status changes are applied after accumulation.
+    for entry in &entries {
+        if !entry.todo_items.is_empty() {
+            if entry.todo_is_bulk_replace {
+                m.todo_items = entry.todo_items.clone();
+            } else {
+                for item in &entry.todo_items {
+                    m.todo_items.push(item.clone());
+                }
+            }
+        }
+        // Apply TaskUpdate status changes against the accumulated list
+        for (task_id, new_status) in &entry.task_status_updates {
+            if let Ok(idx) = task_id.parse::<usize>() {
+                if idx > 0 && idx <= m.todo_items.len() {
+                    m.todo_items[idx - 1].status = new_status.clone();
+                }
+            }
+        }
     }
 
     // Discover subagents: {session_stem}/subagents/*.jsonl
@@ -481,5 +632,110 @@ mod tests {
             r#"{"type":"user","isoTimestamp":"2024-03-10T12:00:00Z"}"#,
         );
         assert!(e3[0].timestamp.is_some());
+    }
+
+    #[test]
+    fn test_running_tool_extraction() {
+        let line = r#"{"type":"assistant","timestamp":1710000000.0,"message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50},"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/Users/dev/src/main.rs"}}],"stop_reason":"tool_use"}}"#;
+        let entries = parse_jsonl_content(line);
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].has_pending_tool_use);
+        assert_eq!(entries[0].running_tool_name.as_deref(), Some("Read"));
+        assert_eq!(entries[0].running_tool_target.as_deref(), Some("src/main.rs"));
+    }
+
+    #[test]
+    fn test_running_tool_bash_target() {
+        let line = r#"{"type":"assistant","timestamp":1710000000.0,"message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50},"content":[{"type":"tool_use","name":"Bash","input":{"command":"npm run build"}}],"stop_reason":"tool_use"}}"#;
+        let entries = parse_jsonl_content(line);
+        assert_eq!(entries[0].running_tool_name.as_deref(), Some("Bash"));
+        assert_eq!(entries[0].running_tool_target.as_deref(), Some("npm run build"));
+    }
+
+    #[test]
+    fn test_todo_write_parsing() {
+        let line = r#"{"type":"assistant","timestamp":1710000000.0,"message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50},"content":[{"type":"tool_use","name":"TodoWrite","input":{"todos":[{"content":"Fix bug","status":"in_progress"},{"content":"Write tests","status":"pending"},{"content":"Deploy","status":"completed"}]}}]}}"#;
+        let entries = parse_jsonl_content(line);
+        assert_eq!(entries[0].todo_items.len(), 3);
+        assert!(entries[0].todo_is_bulk_replace);
+        assert_eq!(entries[0].todo_items[0].content, "Fix bug");
+        assert_eq!(entries[0].todo_items[0].status, "in_progress");
+        assert_eq!(entries[0].todo_items[2].status, "completed");
+    }
+
+    #[test]
+    fn test_task_create_parsing() {
+        let line = r#"{"type":"assistant","timestamp":1710000000.0,"message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50},"content":[{"type":"tool_use","name":"TaskCreate","input":{"subject":"Implement auth","description":"Add OAuth2 login"}}]}}"#;
+        let entries = parse_jsonl_content(line);
+        assert_eq!(entries[0].todo_items.len(), 1);
+        assert!(!entries[0].todo_is_bulk_replace);
+        assert_eq!(entries[0].todo_items[0].content, "Implement auth");
+        assert_eq!(entries[0].todo_items[0].status, "pending");
+    }
+
+    #[test]
+    fn test_task_update_stores_status_change() {
+        let line = r#"{"type":"assistant","timestamp":1710000000.0,"message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50},"content":[{"type":"tool_use","name":"TaskUpdate","input":{"taskId":"1","status":"completed"}}]}}"#;
+        let entries = parse_jsonl_content(line);
+        assert_eq!(entries[0].task_status_updates.len(), 1);
+        assert_eq!(entries[0].task_status_updates[0].0, "1");
+        assert_eq!(entries[0].task_status_updates[0].1, "completed");
+    }
+
+    #[test]
+    fn test_todo_aggregation_with_task_update() {
+        // TaskCreate, then TaskUpdate to mark it completed
+        let create_line = r#"{"type":"assistant","timestamp":1710000000.0,"message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50},"content":[{"type":"tool_use","name":"TaskCreate","input":{"subject":"Build feature"}}]}}"#;
+        let update_line = r#"{"type":"assistant","timestamp":1710000001.0,"message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50},"content":[{"type":"tool_use","name":"TaskUpdate","input":{"taskId":"1","status":"completed"}}]}}"#;
+
+        let dir = std::env::temp_dir().join("claude_cue_test_todo_agg");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.jsonl");
+        std::fs::write(&path, format!("{}\n{}", create_line, update_line)).unwrap();
+
+        let metrics = parse_jsonl_to_session_metrics(&path).unwrap();
+        assert_eq!(metrics.todo_items.len(), 1);
+        assert_eq!(metrics.todo_items[0].content, "Build feature");
+        assert_eq!(metrics.todo_items[0].status, "completed");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_extract_tool_target_grep() {
+        let input = serde_json::json!({"pattern": "fn main"});
+        let target = extract_tool_target("Grep", Some(&input));
+        assert_eq!(target.as_deref(), Some("fn main"));
+    }
+
+    #[test]
+    fn test_shorten_path_deep() {
+        let short = shorten_path("/Users/dev/src/components/Dashboard.tsx");
+        assert_eq!(short, "components/Dashboard.tsx");
+    }
+
+    #[test]
+    fn test_shorten_path_simple() {
+        let short = shorten_path("main.rs");
+        assert_eq!(short, "main.rs");
+    }
+
+    #[test]
+    fn test_pending_tool_use_with_running_tool() {
+        let assistant = r#"{"type":"assistant","timestamp":1710000000.0,"message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50},"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/src/lib.rs"}}],"stop_reason":"tool_use"}}"#;
+
+        let dir = std::env::temp_dir().join("claude_cue_test_pending_tool");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.jsonl");
+        std::fs::write(&path, assistant).unwrap();
+
+        let metrics = parse_jsonl_to_session_metrics(&path).unwrap();
+        assert!(metrics.pending_tool_use);
+        assert_eq!(metrics.running_tool_name.as_deref(), Some("Edit"));
+        assert!(metrics.running_tool_target.is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
