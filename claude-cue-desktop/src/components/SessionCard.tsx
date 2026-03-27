@@ -337,18 +337,18 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
             <span className="text-xs px-2 py-0.5 rounded-full text-center" style={{ backgroundColor: badgeHex.bg, color: badgeHex.text, transition: stateTransition, minWidth: "8.5em" }}>
               {displayStateName}
             </span>
-            {!effectiveCompact && session.runningToolName && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/50 truncate max-w-[200px] shrink-0" title={session.runningToolTarget || session.runningToolName}>
+            {!effectiveCompact && !effectiveSlim && session.runningToolName && (
+              <span className="inline-block text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/50 truncate w-[200px] shrink-0 overflow-hidden whitespace-nowrap" title={session.runningToolTarget || session.runningToolName}>
                 {session.runningToolName}
                 {session.runningToolTarget && <span className="text-white/30"> {session.runningToolTarget}</span>}
               </span>
             )}
-            {!isNarrow && !effectiveCompact && (
+            {!isNarrow && !effectiveCompact && !effectiveSlim && (
               <span className="text-[0.625rem] text-white/50 truncate font-mono" title={info.workspace}>
                 {shortPath}
               </span>
             )}
-            {!isNarrow && !effectiveCompact && metrics.gitBranch && (
+            {!isNarrow && !effectiveCompact && !effectiveSlim && metrics.gitBranch && (
               <span className="text-[0.625rem] text-white/40 truncate shrink-0 flex items-center gap-1">
                 <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" className="shrink-0 opacity-50"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5z" /></svg>
                 {metrics.gitBranch}
