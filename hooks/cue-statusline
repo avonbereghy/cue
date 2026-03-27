@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# cue-statusline — Claude Code statusline plugin for Claude Cue
+#
+# Captures rate limit data from Claude Code's statusline protocol
+# and writes it to a shared file that the Claude Cue desktop app reads.
+#
+# Installation:
+#   Add to ~/.claude/settings.json:
+#   {
+#     "statusLine": {
+#       "command": "/path/to/cue-statusline"
+#     }
+#   }
+#
+# Or run:  claude settings set statusLine.command /path/to/cue-statusline
+#
+# Claude Code pipes JSON via stdin on each render cycle containing:
+#   { model, context, rateLimits, transcriptPath, cwd, ... }
+#
+# This script extracts rateLimits and writes rate_limits.json for Claude Cue.
+
+set -euo pipefail
+
+# Determine output path (must match paths.rs rate_limits_path)
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    OUTPUT_DIR="$HOME/Library/Application Support/Claude Cue"
+elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+    OUTPUT_DIR="${LOCALAPPDATA:-$HOME/AppData/Local}/Claude Cue"
+else
+    OUTPUT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/claude-cue"
+fi
+
+mkdir -p "$OUTPUT_DIR"
+chmod 700 "$OUTPUT_DIR" 2>/dev/null || true
+OUTPUT_FILE="$OUTPUT_DIR/rate_limits.json"
+
+# Read JSON from stdin
+INPUT=$(cat)
+
+# Check if we have jq available
+if command -v jq &>/dev/null; then
+    # Extract rate limit data using jq
+    RATE_LIMITS=$(echo "$INPUT" | jq -c '{
+        fiveHourPercent: (if .rateLimits.fiveHour then (.rateLimits.fiveHour.used / .rateLimits.fiveHour.limit * 100) else 0 end),
+        sevenDayPercent: (if .rateLimits.sevenDay then (.rateLimits.sevenDay.used / .rateLimits.sevenDay.limit * 100) else 0 end),
+        fiveHourResetAt: (.rateLimits.fiveHour.resetAt // null),
+        sevenDayResetAt: (.rateLimits.sevenDay.resetAt // null),
+        limitReached: ((.rateLimits.fiveHour.limitReached // false) or (.rateLimits.sevenDay.limitReached // false))
+    }' 2>/dev/null || echo "")
+
+    if [[ -n "$RATE_LIMITS" ]]; then
+        # Atomic write: temp file → rename
+        TMPFILE=$(mktemp "$OUTPUT_DIR/.rate_limits.XXXXXX")
+        echo "$RATE_LIMITS" > "$TMPFILE"
+        mv -f "$TMPFILE" "$OUTPUT_FILE"
+    fi
+else
+    # Fallback: use Python if jq is not available
+    python3 -c "
+import json, sys, os, tempfile
+
+try:
+    data = json.loads(sys.stdin.read())
+    rl = data.get('rateLimits', {})
+
+    five = rl.get('fiveHour', {})
+    seven = rl.get('sevenDay', {})
+
+    result = {
+        'fiveHourPercent': (five.get('used', 0) / five['limit'] * 100) if five.get('limit') else 0,
+        'sevenDayPercent': (seven.get('used', 0) / seven['limit'] * 100) if seven.get('limit') else 0,
+        'fiveHourResetAt': five.get('resetAt'),
+        'sevenDayResetAt': seven.get('resetAt'),
+        'limitReached': five.get('limitReached', False) or seven.get('limitReached', False),
+    }
+
+    output_file = sys.argv[1]
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(output_file))
+    with os.fdopen(fd, 'w') as f:
+        json.dump(result, f)
+    os.rename(tmp, output_file)
+except Exception:
+    pass
+" "$OUTPUT_FILE" <<< "$INPUT"
+fi
+
+# Output minimal statusline (empty = no terminal display, Claude Cue handles display)
+echo ""

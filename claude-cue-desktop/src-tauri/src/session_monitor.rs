@@ -4,9 +4,13 @@
 //! logs for token metrics. Maintains enriched sessions and usage metrics.
 
 use crate::jsonl_parser;
-use crate::models::{EnrichedSession, SessionInfo, SessionMetrics, StatusData};
+use crate::models::{
+    ConfigCounts, EnrichedSession, GitStatus, RateLimitInfo, SessionInfo, SessionMetrics,
+    StatusData, SupplementalData, SystemMemory,
+};
 use crate::paths;
 use crate::security;
+use crate::{config_counter, git_status, system_info};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -41,11 +45,28 @@ pub fn filter_and_sort_active(sessions: impl IntoIterator<Item = SessionInfo>, n
 }
 
 /// Shared state for the session monitor.
+///
+/// **Lock ordering invariant:** `poll_status` acquires supplemental caches
+/// (metrics_cache, rate_limits, etc.) and drops them ALL before acquiring
+/// `enriched_sessions`. `refresh_metrics` acquires `enriched_sessions` first
+/// (read-only clone), then acquires `metrics_cache`. This is safe because
+/// `poll_status` never holds `metrics_cache` while writing `enriched_sessions`.
+/// Do not hold any cache lock while acquiring `enriched_sessions`.
 pub struct SessionMonitorState {
     pub enriched_sessions: Mutex<Vec<EnrichedSession>>,
     metrics_cache: Mutex<HashMap<String, SessionMetrics>>,
     file_mod_dates: Mutex<HashMap<String, SystemTime>>,
     resolved_paths: Mutex<HashMap<String, String>>,
+    // Supplemental data caches
+    rate_limits: Mutex<Option<RateLimitInfo>>,
+    pub system_memory: Mutex<SystemMemory>,
+    pub claude_version: Mutex<Option<String>>,
+    git_status_cache: Mutex<HashMap<String, (GitStatus, SystemTime)>>,
+    config_counts_cache: Mutex<HashMap<String, (ConfigCounts, SystemTime)>>,
+    /// Tracks previous output_tokens per session for speed calculation
+    output_speed_cache: Mutex<HashMap<String, (i64, f64)>>, // session_id → (prev_output_tokens, prev_timestamp)
+    /// Cached sysinfo::System instance to avoid re-allocation every poll
+    sysinfo_system: Mutex<sysinfo::System>,
 }
 
 impl Default for SessionMonitorState {
@@ -55,6 +76,13 @@ impl Default for SessionMonitorState {
             metrics_cache: Mutex::new(HashMap::new()),
             file_mod_dates: Mutex::new(HashMap::new()),
             resolved_paths: Mutex::new(HashMap::new()),
+            rate_limits: Mutex::new(None),
+            system_memory: Mutex::new(SystemMemory::default()),
+            claude_version: Mutex::new(None),
+            git_status_cache: Mutex::new(HashMap::new()),
+            config_counts_cache: Mutex::new(HashMap::new()),
+            output_speed_cache: Mutex::new(HashMap::new()),
+            sysinfo_system: Mutex::new(sysinfo::System::new()),
         }
     }
 }
@@ -99,14 +127,34 @@ impl SessionMonitorState {
 
         let enriched: Vec<_> = {
             let cache = self.metrics_cache.lock().unwrap();
+            let rate_limits = self.rate_limits.lock().unwrap().clone();
+            let system_memory = self.system_memory.lock().unwrap().clone();
+            let claude_version = self.claude_version.lock().unwrap().clone();
+            let git_cache = self.git_status_cache.lock().unwrap();
+            let config_cache = self.config_counts_cache.lock().unwrap();
+            let speed_cache = self.output_speed_cache.lock().unwrap();
+
             active
                 .into_iter()
                 .map(|session| {
                     let metrics = cache.get(&session.id).cloned().unwrap_or_default();
-                    EnrichedSession::from_info_and_metrics(session, metrics)
+                    let (prev_output, prev_ts) = speed_cache
+                        .get(&session.id)
+                        .cloned()
+                        .unwrap_or((0, 0.0));
+                    let supplemental = SupplementalData {
+                        git_status: git_cache.get(&session.workspace).map(|(s, _)| s.clone()),
+                        config_counts: config_cache.get(&session.workspace).map(|(c, _)| c.clone()),
+                        rate_limits: rate_limits.clone(),
+                        system_memory: system_memory.clone(),
+                        claude_version: claude_version.clone(),
+                        prev_output_tokens: prev_output,
+                        prev_timestamp: prev_ts,
+                    };
+                    EnrichedSession::from_info_and_metrics(session, metrics, &supplemental)
                 })
                 .collect()
-        }; // cache lock dropped before acquiring enriched_sessions lock
+        }; // all locks dropped before acquiring enriched_sessions lock
 
         *self.enriched_sessions.lock().unwrap() = enriched;
     }
@@ -179,13 +227,95 @@ impl SessionMonitorState {
             }
 
             if let Some(metrics) = jsonl_parser::parse_jsonl_to_session_metrics(Path::new(&path)) {
+                // Track output speed: snapshot previous output_tokens before overwriting
+                let now_ts = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs_f64();
+                {
+                    let mut speed_cache = self.output_speed_cache.lock().unwrap();
+                    // Store current output_tokens as "previous" for next poll
+                    speed_cache.insert(
+                        session.info.id.clone(),
+                        (metrics.output_tokens, now_ts),
+                    );
+                }
+
                 self.metrics_cache
                     .lock()
                     .unwrap()
                     .insert(session.info.id.clone(), metrics);
             }
         }
+    }
 
+    /// Refresh supplemental data: rate limits, system memory, git status, config counts.
+    /// Called on the 5s timer alongside refresh_metrics().
+    pub fn refresh_supplemental(&self) {
+        // Rate limits: read from bridge file
+        let rate_path = paths::rate_limits_path();
+        if let Ok(content) = std::fs::read_to_string(&rate_path) {
+            if let Ok(rl) = serde_json::from_str::<RateLimitInfo>(&content) {
+                *self.rate_limits.lock().unwrap() = Some(rl);
+            }
+        }
+
+        // System memory using cached System instance (avoids re-allocation)
+        {
+            let mut sys = self.sysinfo_system.lock().unwrap();
+            *self.system_memory.lock().unwrap() = system_info::get_system_memory_with(&mut sys);
+        }
+
+        // Git status and config counts per workspace (with staleness caching)
+        let sessions = self.enriched_sessions.lock().unwrap().clone();
+        let now = SystemTime::now();
+
+        // Collect unique workspaces
+        let mut workspaces: Vec<String> = sessions
+            .iter()
+            .map(|s| s.info.workspace.clone())
+            .collect();
+        workspaces.sort();
+        workspaces.dedup();
+
+        // Prune cache entries for workspaces no longer in active sessions
+        {
+            let mut cache = self.git_status_cache.lock().unwrap();
+            cache.retain(|ws, _| workspaces.contains(ws));
+        }
+        {
+            let mut cache = self.config_counts_cache.lock().unwrap();
+            cache.retain(|ws, _| workspaces.contains(ws));
+        }
+
+        for ws in &workspaces {
+            // Git status: refresh every 10s
+            {
+                let mut cache = self.git_status_cache.lock().unwrap();
+                let stale = cache
+                    .get(ws.as_str())
+                    .map(|(_, t)| t.elapsed().map(|e| e.as_secs() > 10).unwrap_or(true))
+                    .unwrap_or(true);
+                if stale {
+                    if let Some(status) = git_status::get_git_status(ws) {
+                        cache.insert(ws.clone(), (status, now));
+                    }
+                }
+            }
+
+            // Config counts: refresh every 30s
+            {
+                let mut cache = self.config_counts_cache.lock().unwrap();
+                let stale = cache
+                    .get(ws.as_str())
+                    .map(|(_, t)| t.elapsed().map(|e| e.as_secs() > 30).unwrap_or(true))
+                    .unwrap_or(true);
+                if stale {
+                    let counts = config_counter::count_config(ws);
+                    cache.insert(ws.clone(), (counts, now));
+                }
+            }
+        }
     }
 
     /// Find path to a session's JSONL log file.

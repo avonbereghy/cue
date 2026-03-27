@@ -28,6 +28,43 @@ export interface SubagentMetrics {
   isActive: boolean;
 }
 
+export interface TodoItem {
+  content: string;
+  /** One of: "pending", "in_progress", "completed" */
+  status: string;
+}
+
+export interface RateLimitInfo {
+  fiveHourPercent: number;
+  sevenDayPercent: number;
+  fiveHourResetAt: number | null;
+  sevenDayResetAt: number | null;
+  limitReached: boolean;
+}
+
+export interface GitStatusInfo {
+  dirty: boolean;
+  ahead: number;
+  behind: number;
+  modified: number;
+  added: number;
+  deleted: number;
+  untracked: number;
+}
+
+export interface ConfigCounts {
+  claudeMdCount: number;
+  rulesCount: number;
+  mcpServers: number;
+  hooksCount: number;
+}
+
+export interface SystemMemory {
+  totalMb: number;
+  usedMb: number;
+  usagePercent: number;
+}
+
 export interface SessionMetrics {
   messageCount: number;
   userMessageCount: number;
@@ -41,6 +78,9 @@ export interface SessionMetrics {
   gitBranch: string | null;
   toolCounts: Record<string, number>;
   subagents: SubagentMetrics[];
+  runningToolName?: string;
+  runningToolTarget?: string;
+  todoItems: TodoItem[];
 }
 
 /** Pre-computed by Rust backend (EnrichedSession includes derived fields) */
@@ -59,6 +99,32 @@ export interface EnrichedSession {
   sourceDisplay: string;
   /** Whether this session has active or completed subagents */
   hasSubagents: boolean;
+  /** Git status for the workspace */
+  gitStatus?: GitStatusInfo;
+  /** Claude config file counts */
+  configCounts?: ConfigCounts;
+  /** Rate limit information from statusline bridge */
+  rateLimits?: RateLimitInfo;
+  /** Provider: "Bedrock", "Vertex", "API", or "" */
+  provider: string;
+  /** Output tokens per second */
+  outputTokensPerSec: number;
+  /** Currently running tool name */
+  runningToolName?: string;
+  /** Target of the running tool */
+  runningToolTarget?: string;
+  /** Todo items from the session */
+  todoItems: TodoItem[];
+  /** Number of completed todos */
+  todoCompleted: number;
+  /** Total number of todos */
+  todoTotal: number;
+  /** Current in-progress todo content (truncated) */
+  todoCurrent?: string;
+  /** System memory information */
+  systemMemory: SystemMemory;
+  /** Claude Code version */
+  claudeVersion?: string;
 }
 
 export interface Settings {
@@ -99,6 +165,8 @@ export interface Settings {
   compactMode: boolean;
   slimMode: boolean;
   contextThreshold: boolean;
+  /** Context display mode: "percent", "tokens", "remaining", or "both" */
+  contextDisplay: string;
 }
 
 export interface SignalPreset {

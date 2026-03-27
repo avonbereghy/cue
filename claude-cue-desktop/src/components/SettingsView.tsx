@@ -475,6 +475,7 @@ export function SettingsView() {
       compactMode: false,
       slimMode: false,
       contextThreshold: false,
+      contextDisplay: "percent",
     };
     setSettings(defaults);
     // Apply theme immediately
@@ -564,6 +565,14 @@ export function SettingsView() {
         </SettingRow>
         <SettingRow label="Context After 200k" description="Only show the context bar when token usage reaches 200k+" onReset={settings.contextThreshold ? () => setSettings({ ...settings, contextThreshold: false }) : undefined}>
           <Toggle checked={settings.contextThreshold ?? false} onChange={() => setSettings({ ...settings, contextThreshold: !(settings.contextThreshold ?? false) })} label="Context threshold" />
+        </SettingRow>
+        <SettingRow label="Context Display" description="How to show context usage values" onReset={(settings.contextDisplay ?? "percent") !== "percent" ? () => setSettings({ ...settings, contextDisplay: "percent" }) : undefined}>
+          <Select value={settings.contextDisplay ?? "percent"} options={[
+            { id: "percent", label: "Percent" },
+            { id: "tokens", label: "Tokens" },
+            { id: "remaining", label: "Remaining" },
+            { id: "both", label: "Both" },
+          ]} onChange={(v) => setSettings({ ...settings, contextDisplay: v })} />
         </SettingRow>
       </section>
 

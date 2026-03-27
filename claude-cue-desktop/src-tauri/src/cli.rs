@@ -9,7 +9,7 @@
 //! ANSI colors are auto-detected: enabled when stdout is a TTY, disabled when piped.
 
 use crate::jsonl_parser;
-use crate::models::{EnrichedSession, SessionMetrics, StatusData};
+use crate::models::{EnrichedSession, SessionMetrics, StatusData, SupplementalData};
 use crate::paths;
 use crate::security;
 use crate::session_monitor::{encode_workspace_path, filter_and_sort_active};
@@ -127,7 +127,7 @@ fn load_sessions() -> Vec<EnrichedSession> {
         .into_iter()
         .map(|info| {
             let metrics = resolve_jsonl_metrics(&info.id, &info.workspace, &projects_path);
-            EnrichedSession::from_info_and_metrics(info, metrics)
+            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default())
         })
         .collect();
 
@@ -655,7 +655,7 @@ mod tests {
     fn test_workspace_display_hides_path_by_default() {
         let info = make_test_info("t", "/Users/dev/Projects/WebApp", "working");
         let enriched =
-            EnrichedSession::from_info_and_metrics(info, SessionMetrics::default());
+            EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default());
         assert_eq!(workspace_display(&enriched, false), "WebApp");
     }
 
@@ -663,7 +663,7 @@ mod tests {
     fn test_workspace_display_shows_path_when_flag_set() {
         let info = make_test_info("t", "/Users/dev/Projects/WebApp", "working");
         let enriched =
-            EnrichedSession::from_info_and_metrics(info, SessionMetrics::default());
+            EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default());
         assert_eq!(
             workspace_display(&enriched, true),
             "/Users/dev/Projects/WebApp"
@@ -825,7 +825,7 @@ mod tests {
             let mut info = make_test_info(id, "/tmp/test", state);
             info.last_activity = 1000.0;
             info.started_at = started;
-            EnrichedSession::from_info_and_metrics(info, SessionMetrics::default())
+            EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default())
         };
 
         let mut sessions = vec![
@@ -887,6 +887,7 @@ mod tests {
         let sessions = vec![EnrichedSession::from_info_and_metrics(
             info,
             SessionMetrics::default(),
+            &SupplementalData::default(),
         )];
 
         assert_eq!(sessions[0].workspace_name, "my-project");
