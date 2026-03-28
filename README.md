@@ -33,14 +33,23 @@ Multiple sessions show as a grid of dots — see all your sessions at once.
 - **Session dashboard** — detailed view with workspace, duration, model, git branch, tool usage, context usage bar
 - **Token metrics** — incremental JSONL parsing for input/output/cache token counts per session, aggregated across parent and all subagents
 - **Context usage bar** — color-coded progress bar (green → amber → red) showing token usage relative to model context limit (auto-detected: 1M for Opus/Sonnet 4.6, 200K for older models)
+- **Running tool display** — fixed-width pill showing the currently executing tool and its target (file path, command, pattern) in real-time
+- **Output speed** — tokens/sec badge calculated from output token deltas between poll intervals
+- **Todo/task progress** — tracks TodoWrite and TaskCreate/TaskUpdate tools, shows completed/total counter with checkbox icon
+- **Git status** — dirty indicator (`*`), ahead (`↑N`), behind (`↓N`) counts next to branch name, per-workspace with 10s cache
+- **Config counts** — CLAUDE.md files, .mdc rules, MCP servers, and hooks counts shown in detail view, per-workspace with 30s cache
+- **Rate limits** — 5-hour and 7-day usage progress bars with color coding (blue < 75%, purple 75–90%, red > 90%) and limit-reached warning
+- **Provider detection** — shows "(Bedrock)" or "(Vertex)" next to model name when using non-API providers
+- **System info** — RAM usage bar and Claude Code version displayed in the top bar
 - **Agent team tracking** — expandable subagent view showing active and completed agents with token/tool breakdowns
 - **Session revive** — ended sessions move to a revive section with elapsed timer and 3-click confirmation to resume
 
 ### Display Modes
-- **Regular mode** — full metrics, tool chips, context bar, and signal string animations
-- **Slim mode** (default) — hides metrics and tool chips, keeps title, status, timer, context bar, and animations
+- **Regular mode** — full metrics, tool chips, context bar, running tool, workspace path, git info, and signal string animations
+- **Slim mode** (default) — hides metrics, tool chips, running tool, workspace path, and git info; keeps title, status, timer, context bar, and animations
 - **Compact mode** — minimal cards with title and status only, auto-resizes window to fit content
 - **(i) button** — toggle details on/off; highlighted when details are visible, grayed out in compact mode
+- **Context display** — configurable context bar format: percent, token count, remaining, or both
 
 ### Permissions
 - **Permission approval** — approve/deny Claude Code permissions directly from the dashboard via HTTP hook
@@ -61,6 +70,7 @@ Multiple sessions show as a grid of dots — see all your sessions at once.
 ### Other
 - **Auto theme detection** — follows system light/dark mode via Rust-side polling (works correctly in Tauri webviews where `matchMedia` doesn't)
 - **CLI with full stats** — `--status --pretty` for SSH/tiling WM users, `--compact` for dense output, ANSI colors auto-detected
+- **Native feel** — text selection disabled, fixed-width UI elements prevent layout jitter
 - **Privacy-first** — shows only leaf directory names, full paths on hover only
 - **Security-first** — no outbound network calls, atomic file writes, 0600 permissions, path sanitization
 - **Session persistence** — sessions only close via SessionEnd hook, never by timeout (except error state after 10 min)
@@ -116,6 +126,16 @@ SessionEnd         → remove
 
 The app reads `sessions.json` and renders the dot grid. Metrics are parsed incrementally from Claude's `.jsonl` conversation logs — only new bytes are read on each cycle, keeping CPU near 0%.
 
+### Rate limits (optional statusline bridge)
+
+Rate limit data is only available through Claude Code's statusline plugin protocol. To enable the rate limit bars, configure the `cue-statusline` bridge:
+
+```bash
+claude settings set statusLine.command /path/to/hooks/cue-statusline
+```
+
+The bridge reads JSON from Claude Code's stdin on each render cycle, extracts rate limit percentages, and writes `rate_limits.json` to the app data directory. Requires `jq` (falls back to Python if unavailable).
+
 ### Subagent state protection
 
 The hook tracks an `activeSubagents` counter per session. While subagents are running (`activeSubagents > 0`), the parent session is locked to the "subagent" state:
@@ -168,7 +188,7 @@ The CLI displays the same data as the GUI dashboard: session ID, messages, input
 rm -rf ~/Applications/Claude\ Cue.app
 ```
 
-Then remove the hook entries from `~/.claude/settings.json` (search for `cue-hook`).
+Then remove the hook entries from `~/.claude/settings.json` (search for `cue-hook`) and the statusline setting (search for `statusLine`).
 
 ## Architecture
 
@@ -177,9 +197,12 @@ claude-cue-desktop/               # Cross-platform app (Tauri v2)
 ├── src-tauri/src/                # Rust backend
 │   ├── lib.rs                    # Tauri commands, timers, tray + permission server
 │   ├── session_monitor.rs        # Session polling + JSONL path resolution
-│   ├── jsonl_parser.rs           # Line-by-line JSONL parsing
+│   ├── jsonl_parser.rs           # Line-by-line JSONL parsing (tools, todos, tasks)
 │   ├── tray.rs                   # Dot grid icon rendering (tiny-skia)
 │   ├── cli.rs                    # CLI --status/--pretty/--compact with full JSONL enrichment
+│   ├── git_status.rs             # Per-workspace git dirty/ahead/behind detection
+│   ├── config_counter.rs         # CLAUDE.md, rules, MCP server, hooks counting
+│   ├── system_info.rs            # RAM usage (sysinfo) + Claude Code version detection
 │   ├── permission_server.rs      # Pending request channels + HTTP response formatting
 │   ├── permission_log.rs         # JSONL audit log for permission decisions
 │   ├── summary_formatter.rs      # Tool input → human-readable summaries
@@ -196,7 +219,8 @@ claude-cue-desktop/               # Cross-platform app (Tauri v2)
 └── src-tauri/tauri.conf.json     # Tauri config (minimal capabilities, no network)
 
 hooks/
-└── cue-hook                      # Python hook script (cross-platform)
+├── cue-hook                      # Python hook script (cross-platform)
+└── cue-statusline                # Statusline bridge — captures rate limits from Claude Code
 ```
 
 ## Security
