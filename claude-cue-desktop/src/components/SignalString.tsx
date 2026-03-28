@@ -228,7 +228,8 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         signalBass, signalMids, signalTreble,
         signalColorDark, signalColorLight, signalOffset,
         particleEnabled, particleSpeed, particleRate, particleSparks } = cfg;
-      const isDark = document.documentElement.getAttribute("data-theme") !== "light";
+      const isGlass = document.documentElement.hasAttribute("data-glass");
+      const isDark = isGlass || document.documentElement.getAttribute("data-theme") !== "light";
       const defaultColor = isDark ? hexToRgb(signalColorDark) : hexToRgb(signalColorLight);
       const a = signalAlpha;
 

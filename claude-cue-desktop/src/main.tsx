@@ -7,15 +7,18 @@ import type { Settings } from "@/lib/types";
 import App from "./App";
 
 function applyTheme(theme: string) {
-  document.documentElement.setAttribute("data-theme", theme);
-  // Body stays transparent for frameless rounded corners — app container handles bg
-  document.body.style.color = theme === "light" ? "#1a1a1a" : "#fff";
-  // Re-apply signal theme CSS vars so card/surface colors match the new light/dark mode
+  // Glass theme always forces dark mode
   invoke<Settings>("get_settings").then((s) => {
     const themeId = s.activeThemeId ?? "default";
+    const effectiveTheme = themeId === "glass" ? "dark" : theme;
+    document.documentElement.setAttribute("data-theme", effectiveTheme);
+    document.body.style.color = effectiveTheme === "light" ? "#1a1a1a" : "#fff";
     const signalTheme = SIGNAL_THEMES.find(t => t.id === themeId) ?? SIGNAL_THEMES[0];
     applyThemeCssVars(signalTheme);
-  }).catch(() => {});
+  }).catch(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    document.body.style.color = theme === "light" ? "#1a1a1a" : "#fff";
+  });
 }
 
 /** Get the system theme from the Rust backend (reads macOS defaults). */
