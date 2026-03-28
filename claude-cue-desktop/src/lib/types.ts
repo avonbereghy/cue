@@ -366,7 +366,7 @@ export function applyThemeCssVars(theme: SignalTheme) {
   const s = document.documentElement.style;
   const isLight = document.documentElement.getAttribute("data-theme") === "light";
 
-  if (isLight) {
+  if (isLight && theme.id !== "glass") {
     // Derive light-mode colors from the theme accent
     const [r, g, b] = hexToRgb(theme.accent);
     // Tinted white background (very subtle accent wash)
@@ -468,7 +468,7 @@ export const STATE_HEX: Record<string, string> = {
   waiting: "#facc15",
   error: "#ef4444",
   subagent: "#60a5fa",
-  idle: "#a5b4fc",
+  idle: "#d4a574",
   done: "#22c55e",
   ended: "#f87171",
 };
@@ -478,7 +478,7 @@ export const STATE_HEX_LIGHT: Record<string, string> = {
   waiting: "#a16207",
   error: "#dc2626",
   subagent: "#2563eb",
-  idle: "#4f46e5",
+  idle: "#8b6914",
   done: "#16a34a",
   ended: "#dc2626",
 };
@@ -488,7 +488,7 @@ export const STATE_DOT_HEX: Record<string, string> = {
   waiting: "#facc15",
   error: "#ef4444",
   subagent: "#60a5fa",
-  idle: "#a5b4fc",
+  idle: "#d4a574",
   done: "#22c55e",
   ended: "#f87171",
 };
@@ -498,7 +498,7 @@ export const STATE_DOT_HEX_LIGHT: Record<string, string> = {
   waiting: "#ca8a04",
   error: "#dc2626",
   subagent: "#2563eb",
-  idle: "#4f46e5",
+  idle: "#8b6914",
   done: "#16a34a",
   ended: "#dc2626",
 };
@@ -508,7 +508,7 @@ export const STATE_BADGE_HEX: Record<string, { bg: string; text: string }> = {
   waiting: { bg: "rgba(250,204,21,0.2)", text: "#facc15" },
   error: { bg: "rgba(239,68,68,0.2)", text: "#ef4444" },
   subagent: { bg: "rgba(96,165,250,0.2)", text: "#60a5fa" },
-  idle: { bg: "rgba(165,180,252,0.15)", text: "#a5b4fc" },
+  idle: { bg: "rgba(212,165,116,0.15)", text: "#d4a574" },
   done: { bg: "rgba(34,197,94,0.2)", text: "#22c55e" },
   ended: { bg: "rgba(248,113,113,0.2)", text: "#f87171" },
 };
@@ -518,7 +518,7 @@ export const STATE_BADGE_HEX_LIGHT: Record<string, { bg: string; text: string }>
   waiting: { bg: "rgba(202,138,4,0.15)", text: "#a16207" },
   error: { bg: "rgba(220,38,38,0.12)", text: "#dc2626" },
   subagent: { bg: "rgba(37,99,235,0.12)", text: "#2563eb" },
-  idle: { bg: "rgba(79,70,229,0.12)", text: "#4f46e5" },
+  idle: { bg: "rgba(139,105,20,0.12)", text: "#8b6914" },
   done: { bg: "rgba(22,163,74,0.12)", text: "#16a34a" },
   ended: { bg: "rgba(220,38,38,0.12)", text: "#dc2626" },
 };

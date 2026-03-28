@@ -62,7 +62,7 @@ body {
 .dot-pulse {
   animation: dot-pulse var(--anim-speed, 2s) ease-in-out infinite;
 }
-html[data-theme="light"] .dot-pulse {
+html[data-theme="light"]:not([data-glass]) .dot-pulse {
   animation-name: dot-pulse-light;
 }
 
@@ -103,7 +103,7 @@ html[data-theme="light"] .dot-pulse {
 .anim-shine .title-char {
   animation: anim-shine var(--anim-speed, 1.2s) ease-in-out infinite;
 }
-html[data-theme="light"] .anim-shine .title-char {
+html[data-theme="light"]:not([data-glass]) .anim-shine .title-char {
   animation-name: anim-shine-light;
 }
 
@@ -202,10 +202,10 @@ html[data-theme="light"] .anim-shine .title-char {
 .session-card--compact.session-card--pressed {
   box-shadow: inset 0 1px 4px rgba(0,0,0,0.12);
 }
-html[data-theme="light"] .session-card--compact.session-card--floating {
+html[data-theme="light"]:not([data-glass]) .session-card--compact.session-card--floating {
   box-shadow: 0 1px 4px rgba(0,0,0,0.10);
 }
-html[data-theme="light"] .session-card--compact.session-card--pressed {
+html[data-theme="light"]:not([data-glass]) .session-card--compact.session-card--pressed {
   box-shadow: inset 0 1px 4px rgba(0,0,0,0.08);
 }
 
@@ -257,7 +257,7 @@ html[data-theme="light"] .session-card--compact.session-card--pressed {
 }
 
 /* Light mode — shadows use lighter values; bg/border use CSS vars (theme-aware) */
-html[data-theme="light"] .session-card--floating {
+html[data-theme="light"]:not([data-glass]) .session-card--floating {
   background-color: var(--card-float-bg);
   border-color: var(--card-float-border);
   box-shadow:
@@ -265,7 +265,7 @@ html[data-theme="light"] .session-card--floating {
     0 4px 12px rgba(0,0,0,0.10),
     0 8px 20px rgba(0,0,0,0.06);
 }
-html[data-theme="light"] .session-card--pressed {
+html[data-theme="light"]:not([data-glass]) .session-card--pressed {
   background-color: var(--card-press-bg);
   border-color: var(--card-press-border);
   box-shadow:
@@ -330,7 +330,7 @@ html[data-theme="light"] .session-card--pressed {
 }
 
 /* Light mode variants */
-html[data-theme="light"] .session-card--waiting {
+html[data-theme="light"]:not([data-glass]) .session-card--waiting {
   background-color: rgba(255, 204, 0, 0.08) !important;
   box-shadow:
     0 2px 4px rgba(0,0,0,0.1),
@@ -341,8 +341,8 @@ html[data-theme="light"] .session-card--waiting {
   border-color: rgba(200, 160, 0, 0.4) !important;
   transform: translateY(-2px);
 }
-html[data-theme="light"] .session-card--waiting::before,
-html[data-theme="light"] .session-card--waiting::after {
+html[data-theme="light"]:not([data-glass]) .session-card--waiting::before,
+html[data-theme="light"]:not([data-glass]) .session-card--waiting::after {
   background: repeating-linear-gradient(
     -45deg,
     rgba(255, 204, 0, 0.6),
@@ -351,7 +351,7 @@ html[data-theme="light"] .session-card--waiting::after {
     rgba(0, 0, 0, 0.15) 12px
   );
 }
-html[data-theme="light"] .session-card--error {
+html[data-theme="light"]:not([data-glass]) .session-card--error {
   background-color: rgba(255, 69, 58, 0.06) !important;
   box-shadow:
     0 2px 4px rgba(0,0,0,0.1),
@@ -361,8 +361,8 @@ html[data-theme="light"] .session-card--error {
   border-color: rgba(220, 50, 40, 0.3) !important;
   transform: translateY(-2px);
 }
-html[data-theme="light"] .session-card--error::before,
-html[data-theme="light"] .session-card--error::after {
+html[data-theme="light"]:not([data-glass]) .session-card--error::before,
+html[data-theme="light"]:not([data-glass]) .session-card--error::after {
   background: rgba(220, 50, 40, 0.45);
 }
 
@@ -385,21 +385,21 @@ html[data-theme="light"] .session-card--error::after {
 .keyboard-key:hover { background: rgba(255,255,255,0.12); }
 .keyboard-key--active { background: rgba(255,255,255,0.2); box-shadow: inset 0 1px 4px rgba(0,0,0,0.3); }
 
-html[data-theme="light"] .keyboard-panel {
+html[data-theme="light"]:not([data-glass]) .keyboard-panel {
   background: rgba(255,255,255,0.95);
   border-color: rgba(0,0,0,0.12);
   box-shadow: 0 8px 32px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.08);
 }
-html[data-theme="light"] .keyboard-panel-border { border-color: rgba(0,0,0,0.08); }
-html[data-theme="light"] .keyboard-panel-dim { color: rgba(0,0,0,0.4); }
-html[data-theme="light"] .keyboard-panel-close { color: rgba(0,0,0,0.3); }
-html[data-theme="light"] .keyboard-panel-close:hover { color: rgba(0,0,0,0.7); background: rgba(0,0,0,0.06); }
-html[data-theme="light"] .keyboard-key {
+html[data-theme="light"]:not([data-glass]) .keyboard-panel-border { border-color: rgba(0,0,0,0.08); }
+html[data-theme="light"]:not([data-glass]) .keyboard-panel-dim { color: rgba(0,0,0,0.4); }
+html[data-theme="light"]:not([data-glass]) .keyboard-panel-close { color: rgba(0,0,0,0.3); }
+html[data-theme="light"]:not([data-glass]) .keyboard-panel-close:hover { color: rgba(0,0,0,0.7); background: rgba(0,0,0,0.06); }
+html[data-theme="light"]:not([data-glass]) .keyboard-key {
   background: rgba(0,0,0,0.04);
   color: rgba(0,0,0,0.7);
 }
-html[data-theme="light"] .keyboard-key:hover { background: rgba(0,0,0,0.08); }
-html[data-theme="light"] .keyboard-key--active { background: rgba(0,0,0,0.14); box-shadow: inset 0 1px 4px rgba(0,0,0,0.1); }
+html[data-theme="light"]:not([data-glass]) .keyboard-key:hover { background: rgba(0,0,0,0.08); }
+html[data-theme="light"]:not([data-glass]) .keyboard-key--active { background: rgba(0,0,0,0.14); box-shadow: inset 0 1px 4px rgba(0,0,0,0.1); }
 
 /* Reduced Motion */
 @media (prefers-reduced-motion: reduce) {
@@ -431,7 +431,7 @@ html[data-theme="light"] .keyboard-key--active { background: rgba(0,0,0,0.14); b
    setting always wins over the system preference.
    --------------------------------------------------------------------------- */
 
-html[data-theme="light"] {
+html[data-theme="light"]:not([data-glass]) {
   --color-white: #000000;
   --app-bg: #f5f5f5;
   --app-text: #1a1a1a;
@@ -444,13 +444,13 @@ html[data-theme="light"] {
   --text-boost: 1.6;
 }
 /* Boost muted text classes that are too faint in light mode */
-html[data-theme="light"] [class*="text-white/30"] { color: rgba(0,0,0,0.5) !important; }
-html[data-theme="light"] [class*="text-white/40"] { color: rgba(0,0,0,0.6) !important; }
-html[data-theme="light"] [class*="text-white/50"] { color: rgba(0,0,0,0.7) !important; }
-html[data-theme="light"] [class*="text-white/60"] { color: rgba(0,0,0,0.75) !important; }
-html[data-theme="light"] [class*="text-white/70"] { color: rgba(0,0,0,0.82) !important; }
-html[data-theme="light"] [class*="text-white/80"] { color: rgba(0,0,0,0.88) !important; }
-html[data-theme="light"] [class*="text-white/90"] { color: rgba(0,0,0,0.95) !important; }
+html[data-theme="light"]:not([data-glass]) [class*="text-white/30"] { color: rgba(0,0,0,0.5) !important; }
+html[data-theme="light"]:not([data-glass]) [class*="text-white/40"] { color: rgba(0,0,0,0.6) !important; }
+html[data-theme="light"]:not([data-glass]) [class*="text-white/50"] { color: rgba(0,0,0,0.7) !important; }
+html[data-theme="light"]:not([data-glass]) [class*="text-white/60"] { color: rgba(0,0,0,0.75) !important; }
+html[data-theme="light"]:not([data-glass]) [class*="text-white/70"] { color: rgba(0,0,0,0.82) !important; }
+html[data-theme="light"]:not([data-glass]) [class*="text-white/80"] { color: rgba(0,0,0,0.88) !important; }
+html[data-theme="light"]:not([data-glass]) [class*="text-white/90"] { color: rgba(0,0,0,0.95) !important; }
 
 /* Boost muted text in dark mode — default white/N% is too dim */
 html:not([data-theme="light"]) [class*="text-white/25"] { color: rgba(255,255,255,0.50) !important; }
@@ -502,6 +502,11 @@ html[data-glass] .session-card .font-semibold,
 html[data-glass] .session-card .text-xs,
 html[data-glass] .session-card .text-sm {
   text-shadow: 0 1px 3px rgba(0,0,0,0.4);
+}
+
+/* Toolbar: force light icons + text shadow on glass */
+html[data-glass] button svg {
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.3));
 }
 
 /* Status badges: frosted glass pills */
