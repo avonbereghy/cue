@@ -476,6 +476,7 @@ export function SettingsView() {
       slimMode: false,
       contextThreshold: false,
       contextDisplay: "percent",
+      lowPower: false,
     };
     setSettings(defaults);
     // Apply theme immediately
@@ -525,6 +526,18 @@ export function SettingsView() {
               }
             }}
           />
+        </SettingRow>
+      </section>
+
+      {/* Low Power */}
+      <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
+        <SettingRow label="Low Power Mode" description="Disable animations, signal strings, particles, and blur effects">
+          <Toggle checked={settings.lowPower ?? false} onChange={() => {
+            const next = !(settings.lowPower ?? false);
+            setSettings({ ...settings, lowPower: next });
+            if (next) document.documentElement.setAttribute("data-low-power", "");
+            else document.documentElement.removeAttribute("data-low-power");
+          }} label="Low power mode" />
         </SettingRow>
       </section>
 

@@ -167,6 +167,8 @@ export interface Settings {
   contextThreshold: boolean;
   /** Context display mode: "percent", "tokens", "remaining", or "both" */
   contextDisplay: string;
+  /** Low power mode: disables animations, signal strings, particles, backdrop-filter */
+  lowPower: boolean;
 }
 
 export interface SignalPreset {

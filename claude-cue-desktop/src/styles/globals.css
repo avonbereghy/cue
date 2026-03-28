@@ -410,6 +410,17 @@ html[data-theme="light"]:not([data-glass]) .keyboard-key--active { background: r
   }
 }
 
+/* Low Power Mode — kill all GPU-heavy effects */
+html[data-low-power] *, html[data-low-power] *::before, html[data-low-power] *::after {
+  animation: none !important;
+  transition: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+html[data-low-power] canvas {
+  display: none !important;
+}
+
 /* Screen-reader only utility */
 .sr-only {
   position: absolute;
