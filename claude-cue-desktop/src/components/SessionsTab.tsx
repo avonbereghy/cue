@@ -70,7 +70,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [particleRate, setParticleRate] = useState(1.0);
   const [particleSparks, setParticleSparks] = useState(3);
   const [particleAlpha, setParticleAlpha] = useState(1.0);
-  const [cordRetractDelay, setCordRetractDelay] = useState(2.0);
+  const [cordRetractDelay, setCordRetractDelay] = useState(0.5);
   const [cordDeployForce, setCordDeployForce] = useState(1.0);
   const [cordRetractForce, setCordRetractForce] = useState(1.0);
   const [activePresetId, setActivePresetId] = useState("");
@@ -289,7 +289,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setParticleRate(s.particleRate ?? 1.0);
     setParticleSparks(s.particleSparks ?? 3);
     setParticleAlpha(s.particleAlpha ?? 1.0);
-    setCordRetractDelay(s.cordRetractDelay ?? 2.0);
+    setCordRetractDelay(s.cordRetractDelay ?? 0.5);
     setCordDeployForce(s.cordDeployForce ?? 1.0);
     setCordRetractForce(s.cordRetractForce ?? 1.0);
     setGateEngine(s.signalGate ?? 0.05);
@@ -981,7 +981,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           })}
 
           {/* Revived (ended) sessions — collapsible, collapsed by default */}
-          {!compactMode && revivedSessions.length > 0 && (
+          {!compactMode && !slimMode && revivedSessions.length > 0 && (
             <details className="pt-4 group/revive">
               <summary className="flex items-center gap-3 pb-1 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden rounded-lg px-3 py-2 -mx-3 hover:bg-red-500/8 transition-colors">
                 <div className="flex-1 border-t border-red-500/20" />

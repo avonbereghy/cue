@@ -339,6 +339,17 @@ export const SIGNAL_THEMES: SignalTheme[] = [
     cardPressShadow: "inset 0 2px 8px rgba(0,0,0,0.7), inset 0 0 12px rgba(179,229,252,0.03)",
     surfaceBg: "rgba(179,229,252,0.03)", surfaceBorder: "rgba(179,229,252,0.08)",
     accentColor: "#b3e5fc", accentBg: "rgba(179,229,252,0.12)" },
+  // --- Special ---
+  { id: "glass",    label: "Glass",    accent: "#c0c0c0",
+    colorDark: "#ffffff", colorLight: "#333333", alpha: 0.35, amplitude: 0.18, echo: 1.2,
+    particleEnabled: false, particleSpeed: 0.4, particleRate: 0.5, particleSparks: 1, particleAlpha: 0.25,
+    appBg: "transparent", appText: "rgba(255,255,255,0.95)",
+    cardFloatBg: "rgba(255,255,255,0.08)", cardFloatBorder: "rgba(255,255,255,0.25)",
+    cardFloatShadow: "none",
+    cardPressBg: "rgba(255,255,255,0.04)", cardPressBorder: "rgba(255,255,255,0.15)",
+    cardPressShadow: "none",
+    surfaceBg: "rgba(255,255,255,0.06)", surfaceBorder: "rgba(255,255,255,0.12)",
+    accentColor: "#ffffff", accentBg: "rgba(255,255,255,0.12)" },
 ];
 
 /** Parse a hex color like "#ff4081" into [r, g, b]. */
@@ -379,6 +390,18 @@ export function applyThemeCssVars(theme: SignalTheme) {
   }
   s.setProperty("--accent", theme.accentColor);
   s.setProperty("--accent-bg", theme.accentBg);
+
+  // Toggle glass mode attribute for CSS-only frosted effects
+  if (theme.id === "glass") {
+    document.documentElement.setAttribute("data-glass", "");
+  } else {
+    document.documentElement.removeAttribute("data-glass");
+  }
+
+  // Toggle native macOS vibrancy for the Glass theme
+  import("@tauri-apps/api/core").then(({ invoke }) => {
+    invoke("set_vibrancy", { enabled: theme.id === "glass" }).catch(() => {});
+  }).catch(() => {});
 }
 
 export const TITLE_ANIMATIONS = [
@@ -414,7 +437,7 @@ export const STATE_COLORS: Record<string, string> = {
   waiting: "text-yellow-400",
   error: "text-red-500",
   subagent: "text-blue-400",
-  idle: "text-gray-500",
+  idle: "text-indigo-300",
   done: "text-green-500",
   ended: "text-red-400",
 };
@@ -424,7 +447,7 @@ export const STATE_DOT_COLORS: Record<string, string> = {
   waiting: "bg-yellow-400",
   error: "bg-red-500",
   subagent: "bg-blue-400",
-  idle: "bg-gray-500",
+  idle: "bg-indigo-300",
   done: "bg-green-500",
   ended: "bg-red-400",
 };
@@ -434,7 +457,7 @@ export const STATE_BADGE_BG: Record<string, string> = {
   waiting: "bg-yellow-400/20 text-yellow-400",
   error: "bg-red-500/20 text-red-500",
   subagent: "bg-blue-400/20 text-blue-400",
-  idle: "bg-gray-500/20 text-gray-500",
+  idle: "bg-indigo-300/20 text-indigo-300",
   done: "bg-green-500/20 text-green-500",
   ended: "bg-red-400/20 text-red-400",
 };
@@ -445,7 +468,7 @@ export const STATE_HEX: Record<string, string> = {
   waiting: "#facc15",
   error: "#ef4444",
   subagent: "#60a5fa",
-  idle: "#6b7280",
+  idle: "#a5b4fc",
   done: "#22c55e",
   ended: "#f87171",
 };
@@ -455,7 +478,7 @@ export const STATE_HEX_LIGHT: Record<string, string> = {
   waiting: "#a16207",
   error: "#dc2626",
   subagent: "#2563eb",
-  idle: "#4b5563",
+  idle: "#4f46e5",
   done: "#16a34a",
   ended: "#dc2626",
 };
@@ -465,7 +488,7 @@ export const STATE_DOT_HEX: Record<string, string> = {
   waiting: "#facc15",
   error: "#ef4444",
   subagent: "#60a5fa",
-  idle: "#6b7280",
+  idle: "#a5b4fc",
   done: "#22c55e",
   ended: "#f87171",
 };
@@ -475,7 +498,7 @@ export const STATE_DOT_HEX_LIGHT: Record<string, string> = {
   waiting: "#ca8a04",
   error: "#dc2626",
   subagent: "#2563eb",
-  idle: "#6b7280",
+  idle: "#4f46e5",
   done: "#16a34a",
   ended: "#dc2626",
 };
@@ -485,7 +508,7 @@ export const STATE_BADGE_HEX: Record<string, { bg: string; text: string }> = {
   waiting: { bg: "rgba(250,204,21,0.2)", text: "#facc15" },
   error: { bg: "rgba(239,68,68,0.2)", text: "#ef4444" },
   subagent: { bg: "rgba(96,165,250,0.2)", text: "#60a5fa" },
-  idle: { bg: "rgba(107,114,128,0.2)", text: "#6b7280" },
+  idle: { bg: "rgba(165,180,252,0.15)", text: "#a5b4fc" },
   done: { bg: "rgba(34,197,94,0.2)", text: "#22c55e" },
   ended: { bg: "rgba(248,113,113,0.2)", text: "#f87171" },
 };
@@ -495,7 +518,7 @@ export const STATE_BADGE_HEX_LIGHT: Record<string, { bg: string; text: string }>
   waiting: { bg: "rgba(202,138,4,0.15)", text: "#a16207" },
   error: { bg: "rgba(220,38,38,0.12)", text: "#dc2626" },
   subagent: { bg: "rgba(37,99,235,0.12)", text: "#2563eb" },
-  idle: { bg: "rgba(75,85,99,0.12)", text: "#4b5563" },
+  idle: { bg: "rgba(79,70,229,0.12)", text: "#4f46e5" },
   done: { bg: "rgba(22,163,74,0.12)", text: "#16a34a" },
   ended: { bg: "rgba(220,38,38,0.12)", text: "#dc2626" },
 };

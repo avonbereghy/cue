@@ -128,6 +128,16 @@ fn get_settings() -> Settings {
 
 #[tauri::command]
 fn update_settings(app: tauri::AppHandle, new_settings: Settings) -> Result<(), String> {
+    // Toggle native vibrancy when theme changes to/from "glass"
+    // Debug: write to temp file to verify this code path runs
+    let _ = std::fs::write("/tmp/claude-cue-vibrancy.log",
+        format!("update_settings called, active_theme_id={}\n", new_settings.active_theme_id));
+    if let Some(window) = app.get_webview_window("main") {
+        toggle_vibrancy(&window, new_settings.active_theme_id == "glass");
+    } else {
+        let _ = std::fs::write("/tmp/claude-cue-vibrancy.log", "ERROR: no main window\n");
+    }
+
     settings::save_settings(&new_settings)?;
     let _ = app.emit("settings-changed", &new_settings);
     Ok(())
@@ -150,6 +160,147 @@ fn get_system_memory(state: State<'_, AppState>) -> models::SystemMemory {
 #[tauri::command]
 fn get_claude_version(state: State<'_, AppState>) -> Option<String> {
     state.monitor.claude_version.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_frameless(window: tauri::Window, frameless: bool) {
+    let _ = window.set_decorations(!frameless);
+}
+
+#[tauri::command]
+fn set_vibrancy(window: tauri::WebviewWindow, enabled: bool) {
+    toggle_vibrancy(&window, enabled);
+}
+
+fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
+    use std::io::Write;
+
+    let mut f = std::fs::OpenOptions::new().create(true).append(true)
+        .open("/tmp/claude-cue-vibrancy.log").unwrap();
+    let _ = writeln!(f, "toggle_vibrancy called, enabled={}", enabled);
+
+    #[cfg(target_os = "macos")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        if let Ok(handle) = window.window_handle() {
+            if let RawWindowHandle::AppKit(h) = handle.as_raw() {
+                unsafe {
+                    let ns_view: &objc2::runtime::AnyObject = &*(h.ns_view.as_ptr() as *const objc2::runtime::AnyObject);
+                    let ns_window: *const objc2::runtime::AnyObject = objc2::msg_send![ns_view, window];
+                    let ns_window: &objc2::runtime::AnyObject = &*ns_window;
+
+                    if enabled {
+                        // Make window non-opaque with clear background
+                        let _: () = objc2::msg_send![ns_window, setOpaque: objc2::runtime::Bool::NO];
+                        let nscolor_class = objc2::runtime::AnyClass::get(c"NSColor").unwrap();
+                        let clear_color: *const objc2::runtime::AnyObject = objc2::msg_send![nscolor_class, clearColor];
+                        let _: () = objc2::msg_send![ns_window, setBackgroundColor: clear_color];
+
+                        // Get the current contentView (contains the webview)
+                        let old_content: *mut objc2::runtime::AnyObject = objc2::msg_send![ns_window, contentView];
+
+                        // Check if contentView is already an NSVisualEffectView (re-entry guard)
+                        let ve_class = objc2::runtime::AnyClass::get(c"NSVisualEffectView").unwrap();
+                        let already: objc2::runtime::Bool = objc2::msg_send![&*old_content, isKindOfClass: ve_class];
+                        if already.as_bool() {
+                            let _ = writeln!(f, "Already wrapped in NSVisualEffectView, skipping");
+                            return;
+                        }
+
+                        // Create NSVisualEffectView with the same frame
+                        let frame: objc2_foundation::NSRect = objc2::msg_send![&*old_content, frame];
+                        let ve_view: *mut objc2::runtime::AnyObject = objc2::msg_send![ve_class, alloc];
+                        let ve_view: *mut objc2::runtime::AnyObject = objc2::msg_send![ve_view, initWithFrame: frame];
+
+                        // Material: HudWindow (13) — dark frosted glass
+                        let _: () = objc2::msg_send![&*ve_view, setMaterial: 13_isize];
+                        // Blending: behindWindow (0) — blurs desktop behind the window
+                        let _: () = objc2::msg_send![&*ve_view, setBlendingMode: 0_isize];
+                        // State: active (1) — always show vibrancy even when unfocused
+                        let _: () = objc2::msg_send![&*ve_view, setState: 1_isize];
+                        // Auto-resize with window
+                        let _: () = objc2::msg_send![&*ve_view, setAutoresizingMask: 18_usize];
+
+                        // Move the old contentView (webview) into the NSVisualEffectView
+                        // First, make the old content resize with its parent
+                        let _: () = objc2::msg_send![&*old_content, setAutoresizingMask: 18_usize];
+                        let _: () = objc2::msg_send![&*ve_view, addSubview: &*old_content];
+
+                        // Set the NSVisualEffectView as the new contentView
+                        let _: () = objc2::msg_send![ns_window, setContentView: &*ve_view];
+
+                        let _ = writeln!(f, "Wrapped contentView in NSVisualEffectView OK");
+
+                        // Now make the WKWebView layer AND its HTML content transparent
+                        let f2 = f.try_clone().unwrap();
+                        let w = window.clone();
+                        tauri::async_runtime::spawn(async move {
+                            use std::io::Write;
+                            let mut f = f2;
+                            for delay_ms in [50, 200, 500, 1000, 2000, 4000] {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                                // Make WKWebView layer transparent
+                                let _ = w.with_webview(|wv| {
+                                    unsafe {
+                                        let wkwebview: *mut std::ffi::c_void = wv.inner().cast();
+                                        let obj: &objc2::runtime::AnyObject = &*(wkwebview as *const objc2::runtime::AnyObject);
+                                        let sel = objc2::sel!(_setDrawsBackground:);
+                                        let _: () = objc2::runtime::MessageReceiver::send_message(obj, sel, (objc2::runtime::Bool::NO,));
+                                    }
+                                });
+                                // Force CSS backgrounds transparent via JS injection
+                                let _ = w.eval(
+                                    "document.documentElement.style.setProperty('--app-bg','transparent');\
+                                     document.documentElement.style.background='transparent';\
+                                     document.body.style.background='transparent';"
+                                );
+                                let _ = writeln!(f, "  applied transparency at {}ms", delay_ms);
+                            }
+                        });
+                    } else {
+                        // Unwrap: if contentView is NSVisualEffectView, extract the webview
+                        let content: *mut objc2::runtime::AnyObject = objc2::msg_send![ns_window, contentView];
+                        let ve_class = objc2::runtime::AnyClass::get(c"NSVisualEffectView").unwrap();
+                        let is_ve: objc2::runtime::Bool = objc2::msg_send![&*content, isKindOfClass: ve_class];
+                        if is_ve.as_bool() {
+                            // Get the first subview (the original contentView/webview)
+                            let subviews: *const objc2::runtime::AnyObject = objc2::msg_send![&*content, subviews];
+                            let count: usize = objc2::msg_send![subviews, count];
+                            if count > 0 {
+                                let original: *mut objc2::runtime::AnyObject = objc2::msg_send![subviews, objectAtIndex: 0_usize];
+                                let _: () = objc2::msg_send![&*original, removeFromSuperview];
+                                let _: () = objc2::msg_send![ns_window, setContentView: &*original];
+                            }
+                        }
+                        // Restore opaque window
+                        let _: () = objc2::msg_send![ns_window, setOpaque: objc2::runtime::Bool::YES];
+                        let nscolor_class = objc2::runtime::AnyClass::get(c"NSColor").unwrap();
+                        let dark_color: *const objc2::runtime::AnyObject = objc2::msg_send![nscolor_class, windowBackgroundColor];
+                        let _: () = objc2::msg_send![ns_window, setBackgroundColor: dark_color];
+
+                        // Re-enable WKWebView background drawing
+                        let _ = window.with_webview(|wv| {
+                            unsafe {
+                                let wkwebview: *mut std::ffi::c_void = wv.inner().cast();
+                                let obj: &objc2::runtime::AnyObject = &*(wkwebview as *const objc2::runtime::AnyObject);
+                                let sel = objc2::sel!(_setDrawsBackground:);
+                                let _: () = objc2::runtime::MessageReceiver::send_message(obj, sel, (objc2::runtime::Bool::YES,));
+                            }
+                        });
+
+                        let _ = writeln!(f, "Vibrancy cleared, contentView restored");
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = enabled;
+        let _ = writeln!(f, "Vibrancy not supported on this platform");
+    }
 }
 
 #[tauri::command]
@@ -509,15 +660,30 @@ pub fn run() {
             open_theme_picker,
             get_system_memory,
             get_claude_version,
+            set_frameless,
+            set_vibrancy,
         ])
         .on_window_event(|window, event| {
-            // Hide main window instead of quitting — app stays in tray.
-            // Let secondary windows (signal-settings, etc.) close normally.
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
-                    let _ = window.hide();
-                    api.prevent_close();
+            match event {
+                // Hide main window instead of quitting — app stays in tray.
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    if window.label() == "main" {
+                        let _ = window.hide();
+                        api.prevent_close();
+                    }
                 }
+                // Emit fresh sessions immediately when window regains focus.
+                // macOS throttles WKWebView JS when unfocused, so events/timers
+                // stall and the UI appears frozen until this catch-up emit.
+                tauri::WindowEvent::Focused(true) => {
+                    if window.label() == "main" {
+                        if let Some(state) = window.try_state::<AppState>() {
+                            let sessions = state.monitor.enriched_sessions.lock().unwrap().clone();
+                            let _ = window.emit("sessions-updated", &sessions);
+                        }
+                    }
+                }
+                _ => {}
             }
         })
         .setup(move |app| {
@@ -528,6 +694,12 @@ pub fn run() {
             let system_theme = detect_system_theme();
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_theme(Some(system_theme));
+
+                // Apply native vibrancy if the saved theme is "glass"
+                {
+                    let s = settings::load_settings();
+                    toggle_vibrancy(&window, s.active_theme_id == "glass");
+                }
             }
 
             // --- Theme change polling (for "auto" mode) ---
@@ -903,6 +1075,14 @@ fn setup_tray(
                         let _ = app.emit("navigate-settings", ());
                     }
                 }
+                "show-title-bar" => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.set_decorations(true);
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                        let _ = app.emit("frameless-changed", false);
+                    }
+                }
                 "quit" => {
                     app.exit(0);
                 }
@@ -953,6 +1133,7 @@ fn build_tray_menu(
 
     builder = builder.separator();
     builder = builder.text("dashboard", "Dashboard...");
+    builder = builder.text("show-title-bar", "Show Title Bar");
     builder = builder.text("settings", "Settings...");
     builder = builder.separator();
     builder = builder.text("quit", "Quit");
