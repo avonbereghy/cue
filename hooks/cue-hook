@@ -361,9 +361,17 @@ def main():
                     # Session turn truly ended — reset subagent counter
                     active_subs = 0
 
+                # When subagents are active, keep the parent's workspace so the
+                # card title doesn't flip between agent worktree paths.
+                effective_workspace = (
+                    existing.get("workspace", workspace)
+                    if active_subs > 0 and existing.get("workspace")
+                    else workspace
+                )
+
                 entry = {
                     "id": session_id,
-                    "workspace": workspace,
+                    "workspace": effective_workspace,
                     "state": action,
                     "lastActivity": now,
                     "startedAt": existing.get("startedAt", now),
