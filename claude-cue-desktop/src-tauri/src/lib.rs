@@ -36,8 +36,35 @@ pub struct AppState {
 }
 
 // ---------------------------------------------------------------------------
-// System theme detection
+// System theme detection + native appearance
 // ---------------------------------------------------------------------------
+
+/// Force the NSWindow's appearance via NSAppearance API.
+/// This is needed because Tauri's `set_theme` doesn't override the title bar
+/// when `transparent: true` is set in the window config.
+#[cfg(target_os = "macos")]
+fn set_native_appearance(window: &tauri::WebviewWindow, dark: bool) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    if let Ok(handle) = window.window_handle() {
+        if let RawWindowHandle::AppKit(h) = handle.as_raw() {
+            unsafe {
+                let ns_view: &objc2::runtime::AnyObject = &*(h.ns_view.as_ptr() as *const objc2::runtime::AnyObject);
+                let ns_window: *const objc2::runtime::AnyObject = objc2::msg_send![ns_view, window];
+                let appearance_name = if dark {
+                    objc2_foundation::NSString::from_str("NSAppearanceNameDarkAqua")
+                } else {
+                    objc2_foundation::NSString::from_str("NSAppearanceNameAqua")
+                };
+                let ns_appearance_class = objc2::runtime::AnyClass::get(c"NSAppearance").unwrap();
+                let appearance: *const objc2::runtime::AnyObject = objc2::msg_send![ns_appearance_class, appearanceNamed: &*appearance_name];
+                let _: () = objc2::msg_send![ns_window, setAppearance: appearance];
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_native_appearance(_window: &tauri::WebviewWindow, _dark: bool) {}
 
 /// Detect the macOS system appearance by checking UserDefaults.
 /// Returns Theme::Dark if AppleInterfaceStyle is "Dark", otherwise Theme::Light.
@@ -193,6 +220,7 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                     if enabled {
                         // Glass always uses dark appearance
                         let _ = window.set_theme(Some(Theme::Dark));
+                        set_native_appearance(window, true);
 
                         // Make window non-opaque with clear background
                         let _: () = objc2::msg_send![ns_window, setOpaque: objc2::runtime::Bool::NO];
@@ -295,6 +323,7 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                         // Re-apply system theme to fix title bar appearance
                         let sys_theme = detect_system_theme();
                         let _ = window.set_theme(Some(sys_theme));
+                        set_native_appearance(window, sys_theme == Theme::Dark);
 
                         let _ = writeln!(f, "Vibrancy cleared, contentView restored");
                     }
@@ -700,13 +729,15 @@ pub fn run() {
             // --- Apply system theme to window ---
             let system_theme = detect_system_theme();
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_theme(Some(system_theme));
-
                 // Apply native vibrancy if the saved theme is "glass"
-                {
-                    let s = settings::load_settings();
-                    toggle_vibrancy(&window, s.active_theme_id == "glass");
-                }
+                let s = settings::load_settings();
+                let is_glass = s.active_theme_id == "glass";
+                toggle_vibrancy(&window, is_glass);
+
+                // Set theme AFTER vibrancy — glass forces dark, others follow system
+                let effective_dark = if is_glass { true } else { system_theme == Theme::Dark };
+                let _ = window.set_theme(Some(if effective_dark { Theme::Dark } else { Theme::Light }));
+                set_native_appearance(&window, effective_dark);
             }
 
             // --- Theme change polling (for "auto" mode) ---
@@ -736,6 +767,7 @@ pub fn run() {
                             // Also update the webview window theme so CSS media queries work
                             if let Some(w) = theme_handle.get_webview_window("main") {
                                 let _ = w.set_theme(Some(current));
+                                set_native_appearance(&w, current == Theme::Dark);
                             }
                         }
                     }
