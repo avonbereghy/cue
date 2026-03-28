@@ -191,6 +191,9 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                     let ns_window: &objc2::runtime::AnyObject = &*ns_window;
 
                     if enabled {
+                        // Glass always uses dark appearance
+                        let _ = window.set_theme(Some(Theme::Dark));
+
                         // Make window non-opaque with clear background
                         let _: () = objc2::msg_send![ns_window, setOpaque: objc2::runtime::Bool::NO];
                         let nscolor_class = objc2::runtime::AnyClass::get(c"NSColor").unwrap();
@@ -288,6 +291,10 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                                 let _: () = objc2::runtime::MessageReceiver::send_message(obj, sel, (objc2::runtime::Bool::YES,));
                             }
                         });
+
+                        // Re-apply system theme to fix title bar appearance
+                        let sys_theme = detect_system_theme();
+                        let _ = window.set_theme(Some(sys_theme));
 
                         let _ = writeln!(f, "Vibrancy cleared, contentView restored");
                     }
@@ -713,6 +720,13 @@ pub fn run() {
                         let current = detect_system_theme();
                         if current != last_theme {
                             last_theme = current;
+
+                            // Glass theme always stays dark — skip theme switching
+                            let s = settings::load_settings();
+                            if s.active_theme_id == "glass" {
+                                continue;
+                            }
+
                             let theme_str = match current {
                                 Theme::Light => "light",
                                 Theme::Dark => "dark",

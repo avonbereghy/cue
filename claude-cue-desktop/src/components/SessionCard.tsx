@@ -206,7 +206,8 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
   const isWaiting = displayState === "waiting";
   const isError = displayState === "error";
 
-  const isDark = typeof document !== "undefined" ? document.documentElement.getAttribute("data-theme") !== "light" : true;
+  const isGlass = typeof document !== "undefined" && document.documentElement.hasAttribute("data-glass");
+  const isDark = isGlass || (typeof document !== "undefined" ? document.documentElement.getAttribute("data-theme") !== "light" : true);
 
   const STATE_DISPLAY_NAME: Record<string, string> = {
     working: "Working", waiting: "Waiting", error: "Error",
