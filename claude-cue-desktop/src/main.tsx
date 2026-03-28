@@ -2,17 +2,20 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { SIGNAL_THEMES, applyThemeCssVars } from "@/lib/types";
+import type { Settings } from "@/lib/types";
 import App from "./App";
 
 function applyTheme(theme: string) {
   document.documentElement.setAttribute("data-theme", theme);
-  if (theme === "light") {
-    document.body.style.backgroundColor = "#f5f5f5";
-    document.body.style.color = "#1a1a1a";
-  } else {
-    document.body.style.backgroundColor = "#1a1a1a";
-    document.body.style.color = "#fff";
-  }
+  // Body stays transparent for frameless rounded corners — app container handles bg
+  document.body.style.color = theme === "light" ? "#1a1a1a" : "#fff";
+  // Re-apply signal theme CSS vars so card/surface colors match the new light/dark mode
+  invoke<Settings>("get_settings").then((s) => {
+    const themeId = s.activeThemeId ?? "default";
+    const signalTheme = SIGNAL_THEMES.find(t => t.id === themeId) ?? SIGNAL_THEMES[0];
+    applyThemeCssVars(signalTheme);
+  }).catch(() => {});
 }
 
 /** Get the system theme from the Rust backend (reads macOS defaults). */

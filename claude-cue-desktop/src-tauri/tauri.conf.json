@@ -10,13 +10,15 @@
     "beforeBuildCommand": "npm run build"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "Claude Cue",
         "width": 1200,
         "height": 900,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "transparent": true
       }
     ],
     "security": {
