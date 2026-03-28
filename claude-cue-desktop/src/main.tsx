@@ -15,6 +15,9 @@ function applyTheme(theme: string) {
     document.body.style.color = effectiveTheme === "light" ? "#1a1a1a" : "#fff";
     const signalTheme = SIGNAL_THEMES.find(t => t.id === themeId) ?? SIGNAL_THEMES[0];
     applyThemeCssVars(signalTheme);
+    // Apply low power mode attribute
+    if (s.lowPower) document.documentElement.setAttribute("data-low-power", "");
+    else document.documentElement.removeAttribute("data-low-power");
   }).catch(() => {
     document.documentElement.setAttribute("data-theme", theme);
     document.body.style.color = theme === "light" ? "#1a1a1a" : "#fff";

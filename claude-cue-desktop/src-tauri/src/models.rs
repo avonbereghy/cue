@@ -583,6 +583,9 @@ pub struct Settings {
     /// Context display mode: "percent", "tokens", "remaining", or "both"
     #[serde(default = "default_context_display")]
     pub context_display: String,
+    /// Low power mode: disables animations, signal strings, particles, backdrop-filter
+    #[serde(default)]
+    pub low_power: bool,
 }
 
 fn default_theme() -> String {
@@ -697,6 +700,7 @@ impl Default for Settings {
             slim_mode: true,
             context_threshold: false,
             context_display: "percent".to_string(),
+            low_power: false,
         }
     }
 }
