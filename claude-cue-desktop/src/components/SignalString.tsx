@@ -75,7 +75,7 @@ interface SignalStringProps {
   keyReleaseSpeed?: number;
 }
 
-export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.0, cordRetractForce = 1.0, sessionId = "", contentRef, keyReleaseSpeed: _keyReleaseSpeed = 0.4 }: SignalStringProps) {
+export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 0.5, cordDeployForce = 1.0, cordRetractForce = 1.0, sessionId = "", contentRef, keyReleaseSpeed: _keyReleaseSpeed = 0.4 }: SignalStringProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const pageVisible = usePageVisible();
@@ -231,6 +231,12 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       const isDark = document.documentElement.getAttribute("data-theme") !== "light";
       const defaultColor = isDark ? hexToRgb(signalColorDark) : hexToRgb(signalColorLight);
       const a = signalAlpha;
+
+      // Skip all computation when alpha is zero (e.g. glass theme)
+      if (a <= 0 && !particleEnabled) {
+        animRef.current = requestAnimationFrame(draw);
+        return;
+      }
 
       // State-aware target color: waiting=yellow, error=red, default=configured color
       const targetColor = state === "waiting"

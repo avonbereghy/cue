@@ -1,22 +1,34 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { EnrichedSession } from "@/lib/types";
 
 export function useSessionMonitor(): EnrichedSession[] {
   const [sessions, setSessions] = useState<EnrichedSession[]>([]);
+  const lastUpdateRef = useRef(Date.now());
 
   useEffect(() => {
     // Initial fetch
     invoke<EnrichedSession[]>("get_sessions").then(setSessions).catch(console.error);
 
-    // Subscribe to live updates
+    // Subscribe to live updates via events
     const unlisten = listen<EnrichedSession[]>("sessions-updated", (event) => {
       setSessions(event.payload);
+      lastUpdateRef.current = Date.now();
     });
+
+    // Polling fallback: macOS may throttle webview JS events when
+    // the window is unfocused, causing event-only updates to stall.
+    // Poll every 2s if no event was received in the last 3s.
+    const pollTimer = setInterval(() => {
+      if (Date.now() - lastUpdateRef.current > 3000) {
+        invoke<EnrichedSession[]>("get_sessions").then(setSessions).catch(() => {});
+      }
+    }, 2000);
 
     return () => {
       unlisten.then((fn) => fn());
+      clearInterval(pollTimer);
     };
   }, []);
 

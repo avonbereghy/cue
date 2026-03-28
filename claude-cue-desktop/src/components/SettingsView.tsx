@@ -38,7 +38,7 @@ function Select({ value, options, onChange }: { value: string | number; options:
 function SettingRow({ label, description, children, onReset }: { label: string; description?: string; children: React.ReactNode; onReset?: () => void }) {
   return (
     <div className="flex items-center justify-between gap-4 py-2">
-      <div className="min-w-0 shrink-0 flex items-center gap-1.5">
+      <div className="min-w-0 flex items-center gap-1.5">
         <div>
           <div className="text-xs text-white/90">{label}</div>
           {description && <div className="text-[0.625rem] text-white/50 mt-0.5">{description}</div>}
@@ -464,7 +464,7 @@ export function SettingsView() {
       particleRate: 1.0,
       particleSparks: 3,
       particleAlpha: 1.0,
-      cordRetractDelay: 2.0,
+      cordRetractDelay: 0.5,
       cordDeployForce: 1.0,
       cordRetractForce: 1.0,
       keyPressSpeed: 0.35,
@@ -605,7 +605,7 @@ export function SettingsView() {
               <Slider value={settings.signalEcho ?? 1.0} min={0} max={2.0} step={0.01} defaultValue={1.0} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalEcho: v })} />
             </SettingRow>
 
-            <SettingRow label="Offset" description="Randomize audio position and speed per session — each thread plays from a different point">
+            <SettingRow label="Offset" description="Randomize playback position per session">
               <Slider value={settings.signalOffset ?? 0.5} min={0} max={1.0} step={0.01} defaultValue={0.5} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalOffset: v })} />
             </SettingRow>
 
@@ -692,7 +692,7 @@ export function SettingsView() {
 
             {/* Cord Animation */}
             <SettingRow label="Retract Delay" description="Seconds before strings retract after session stops">
-              <Slider value={settings.cordRetractDelay ?? 2.0} min={0.2} max={6.0} step={0.1} defaultValue={2.0} format={(v) => `${v.toFixed(1)}s`} onChange={(v) => setSettings({ ...settings, cordRetractDelay: v })} />
+              <Slider value={settings.cordRetractDelay ?? 0.5} min={0} max={2.0} step={0.1} defaultValue={0.5} format={(v) => `${v.toFixed(1)}s`} onChange={(v) => setSettings({ ...settings, cordRetractDelay: v })} />
             </SettingRow>
             <SettingRow label="Deploy Force" description="How forcefully strings launch when session starts working">
               <Slider value={settings.cordDeployForce ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, cordDeployForce: v })} />
