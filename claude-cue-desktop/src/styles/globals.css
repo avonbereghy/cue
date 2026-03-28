@@ -410,16 +410,19 @@ html[data-theme="light"]:not([data-glass]) .keyboard-key--active { background: r
   }
 }
 
-/* Low Power Mode — kill all GPU-heavy effects */
-html[data-low-power] *, html[data-low-power] *::before, html[data-low-power] *::after {
+/* Low Power Mode — kill GPU-heavy effects but keep title animations */
+html[data-low-power] *::before, html[data-low-power] *::after {
   animation: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+html[data-low-power] * {
   transition: none !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
-html[data-low-power] canvas {
-  display: none !important;
-}
+html[data-low-power] .dot-pulse { animation: none !important; }
+html[data-low-power] canvas { display: none !important; }
 
 /* Screen-reader only utility */
 .sr-only {

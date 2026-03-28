@@ -531,12 +531,28 @@ export function SettingsView() {
 
       {/* Low Power */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
-        <SettingRow label="Low Power Mode" description="Disable animations, signal strings, particles, and blur effects">
+        <SettingRow label="Low Power Mode" description="Force default theme, disable signal strings, particles, and blur effects">
           <Toggle checked={settings.lowPower ?? false} onChange={() => {
             const next = !(settings.lowPower ?? false);
-            setSettings({ ...settings, lowPower: next });
-            if (next) document.documentElement.setAttribute("data-low-power", "");
-            else document.documentElement.removeAttribute("data-low-power");
+            if (next) {
+              // Force default theme
+              const defaultTheme = SIGNAL_THEMES[0];
+              applyThemeCssVars(defaultTheme);
+              setSettings({
+                ...settings,
+                lowPower: true,
+                activeThemeId: "default",
+                signalColorDark: defaultTheme.colorDark,
+                signalColorLight: defaultTheme.colorLight,
+                signalAlpha: defaultTheme.alpha,
+                signalAmplitude: defaultTheme.amplitude,
+                signalEcho: defaultTheme.echo,
+              });
+              document.documentElement.setAttribute("data-low-power", "");
+            } else {
+              setSettings({ ...settings, lowPower: false });
+              document.documentElement.removeAttribute("data-low-power");
+            }
           }} label="Low power mode" />
         </SettingRow>
       </section>
@@ -648,10 +664,13 @@ export function SettingsView() {
               <div className="flex flex-wrap gap-1.5">
                 {SIGNAL_THEMES.map((theme) => {
                   const isActive = (settings.activeThemeId ?? "default") === theme.id;
+                  const isDisabled = (settings.lowPower ?? false) && theme.id !== "default";
                   return (
                     <button
                       key={theme.id}
+                      disabled={isDisabled}
                       onClick={() => {
+                        if (isDisabled) return;
                         applyThemeCssVars(theme);
                         setSettings({
                           ...settings,
@@ -668,12 +687,14 @@ export function SettingsView() {
                         });
                       }}
                       className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[0.625rem] transition-colors ${
-                        isActive
-                          ? "bg-white/15 text-white/90 ring-1 ring-white/30"
-                          : "bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/70"
+                        isDisabled
+                          ? "bg-white/3 text-white/20 cursor-not-allowed"
+                          : isActive
+                            ? "bg-white/15 text-white/90 ring-1 ring-white/30"
+                            : "bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/70"
                       }`}
                     >
-                      <span className="w-2.5 h-2.5 rounded-full border border-white/20" style={{ backgroundColor: theme.accent }} />
+                      <span className="w-2.5 h-2.5 rounded-full border border-white/20" style={{ backgroundColor: theme.accent, opacity: isDisabled ? 0.3 : 1 }} />
                       {theme.label}
                     </button>
                   );
