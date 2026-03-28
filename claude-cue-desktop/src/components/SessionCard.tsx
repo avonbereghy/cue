@@ -499,6 +499,22 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
             </div>
           )}
 
+          {/* Token breakdown — detail mode only, when context >= 85% */}
+          {!effectiveCompact && !effectiveSlim && session.contextUsagePercent >= 0.85 && (
+            metrics.cacheReadTokens > 0 || metrics.cacheCreationTokens > 0
+          ) && (
+            <div className="relative flex items-center gap-1.5 text-[0.625rem] text-white/30 mono-nums">
+              <span className="text-white/40 shrink-0">Tokens</span>
+              <span>{formatTokens(metrics.inputTokens - metrics.cacheReadTokens - metrics.cacheCreationTokens)} input</span>
+              {metrics.cacheReadTokens > 0 && (
+                <span>{"\u00B7"} <span className="text-blue-400/60">{formatTokens(metrics.cacheReadTokens)}</span> cache read</span>
+              )}
+              {metrics.cacheCreationTokens > 0 && (
+                <span>{"\u00B7"} <span className="text-purple-400/60">{formatTokens(metrics.cacheCreationTokens)}</span> cache write</span>
+              )}
+            </div>
+          )}
+
           {/* Rate limits (from statusline bridge) */}
           {!effectiveCompact && !effectiveSlim && session.rateLimits && (session.rateLimits.fiveHourPercent > 0 || session.rateLimits.sevenDayPercent > 0) && (
             <div className="relative flex items-center gap-2 flex-wrap">
