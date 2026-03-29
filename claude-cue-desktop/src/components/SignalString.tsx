@@ -1008,7 +1008,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     <canvas
       ref={canvasRef}
       className="w-full h-full pointer-events-none"
-      style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}
+      style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 0 }}
       aria-hidden="true"
     />
   );
