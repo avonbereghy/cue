@@ -459,11 +459,15 @@ export function SettingsView() {
       signalColorLight: "#000000",
       activeThemeId: "default",
       signalOffset: 0.5,
-      particleEnabled: false,
-      particleSpeed: 1.0,
-      particleRate: 1.0,
-      particleSparks: 3,
-      particleAlpha: 1.0,
+      signalEffect: "string",
+      sandEnabled: false,
+      sandIntensity: 3.0,
+      sandDirection: 0,
+      sandDensity: 4.0,
+      sandSpeed: 3.0,
+      sandGrainSize: 0.5,
+      sandTurbulence: 0.6,
+      sandAlpha: 0.75,
       cordRetractDelay: 0.5,
       cordDeployForce: 1.0,
       cordRetractForce: 1.0,
@@ -531,7 +535,7 @@ export function SettingsView() {
 
       {/* Low Power */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
-        <SettingRow label="Low Power Mode" description="Force default theme, disable signal strings, particles, and blur effects">
+        <SettingRow label="Low Power Mode" description="Force default theme, disable signal strings, sand, and blur effects">
           <Toggle checked={settings.lowPower ?? false} onChange={() => {
             const next = !(settings.lowPower ?? false);
             if (next) {
@@ -606,277 +610,253 @@ export function SettingsView() {
       </section>
 
 
-      {/* Signal String */}
+      {/* Special Effects */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
-        <SettingRow label="Signal String" description="Animated separator reflecting session activity" onReset={!settings.signalString ? () => setSettings({ ...settings, signalString: true }) : undefined}>
-          <Toggle checked={settings.signalString} onChange={() => setSettings({ ...settings, signalString: !settings.signalString })} label="Signal string" />
+        <SettingRow label="Special Effects" description="String vibrations or sandstorm animated in session cards" onReset={!settings.signalString ? () => setSettings({ ...settings, signalString: true }) : undefined}>
+          <Toggle checked={settings.signalString} onChange={() => setSettings({ ...settings, signalString: !settings.signalString })} label="Special effects" />
         </SettingRow>
 
         {settings.signalString && (
           <>
-            <SettingRow label="Mode" onReset={signalMode !== "preset" ? () => setSettings({ ...settings, signalMode: "preset" }) : undefined}>
-              <Select
-                value={signalMode}
-                options={[{ id: "simulated", label: "Simulated" }, { id: "preset", label: "Preset" }]}
-                onChange={(v) => setSettings({ ...settings, signalMode: v })}
-              />
+            {/* Effect selector — controls which mode is active (mutually exclusive) */}
+            <SettingRow label="Effect" description="String vibrations or sand storm — only one active at a time">
+              <Select value={settings.signalEffect ?? "string"} onChange={(v) => {
+                const isSand = v === "sand";
+                setSettings({ ...settings, signalEffect: v, sandEnabled: isSand });
+              }} options={[{ id: "string", label: "String" }, { id: "sand", label: "Sand" }]} />
             </SettingRow>
 
-            <SettingRow label="Opacity" description="String transparency">
-              <Slider value={settings.signalAlpha ?? 0.25} min={0.05} max={1.0} step={0.01} defaultValue={0.75} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalAlpha: v })} />
-            </SettingRow>
-
-            <SettingRow label="Amplitude" description="String displacement intensity">
-              <Slider value={settings.signalAmplitude ?? 0.25} min={0.01} max={1.0} step={0.01} defaultValue={0.75} format={formatMul} onChange={(v) => setSettings({ ...settings, signalAmplitude: v })} />
-            </SettingRow>
-
-            <SettingRow label="Echo" description="Trailing reverb lines behind the main string">
-              <Slider value={settings.signalEcho ?? 1.0} min={0} max={2.0} step={0.01} defaultValue={1.0} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalEcho: v })} />
-            </SettingRow>
-
-            <SettingRow label="Offset" description="Randomize playback position per session">
-              <Slider value={settings.signalOffset ?? 0.5} min={0} max={1.0} step={0.01} defaultValue={0.5} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalOffset: v })} />
-            </SettingRow>
-
-            <SettingRow label="Gate" description="Noise floor threshold — clips quiet ambient noise">
-              <Slider value={settings.signalGate ?? 0.05} min={0} max={0.5} step={0.01} defaultValue={0.05} format={formatPct} isPct onChange={(v) => { setSettings({ ...settings, signalGate: v }); setGateEngine(v); }} />
-            </SettingRow>
-
-            <SettingRow label="Bands" description="Toggle bass, mids, and treble strings" onReset={(!settings.signalBass || !settings.signalMids || !settings.signalTreble) ? () => setSettings({ ...settings, signalBass: true, signalMids: true, signalTreble: true }) : undefined}>
-              <div className="flex items-center gap-3">
-                {([["Bass", "signalBass"], ["Mids", "signalMids"], ["Treble", "signalTreble"]] as const).map(([label, key]) => (
-                  <label key={key} className="flex items-center gap-1 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={settings[key] ?? true}
-                      onChange={() => setSettings({ ...settings, [key]: !settings[key] })}
-                      className="w-3 h-3 rounded accent-blue-500 cursor-pointer"
-                    />
-                    <span className="text-xs text-white/60">{label}</span>
-                  </label>
-                ))}
-              </div>
-            </SettingRow>
-
-            {/* Signal Themes — unified color + behavior presets */}
-            <div className="py-2 space-y-2">
-              <div className="text-[0.625rem] text-white/40 uppercase tracking-wider">Theme</div>
-              <div className="flex flex-wrap gap-1.5">
-                {SIGNAL_THEMES.map((theme) => {
-                  const isActive = (settings.activeThemeId ?? "default") === theme.id;
-                  const isDisabled = (settings.lowPower ?? false) && theme.id !== "default";
-                  return (
-                    <button
-                      key={theme.id}
-                      disabled={isDisabled}
-                      onClick={() => {
-                        if (isDisabled) return;
-                        applyThemeCssVars(theme);
-                        setSettings({
-                          ...settings,
-                          activeThemeId: theme.id,
-                          signalColorDark: theme.colorDark,
-                          signalColorLight: theme.colorLight,
-                          signalAlpha: theme.alpha,
-                          signalAmplitude: theme.amplitude,
-                          signalEcho: theme.echo,
-                          particleSpeed: theme.particleSpeed,
-                          particleRate: theme.particleRate,
-                          particleSparks: theme.particleSparks,
-                          particleAlpha: theme.particleAlpha,
-                        });
-                      }}
-                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[0.625rem] transition-colors ${
-                        isDisabled
-                          ? "bg-white/3 text-white/20 cursor-not-allowed"
-                          : isActive
-                            ? "bg-white/15 text-white/90 ring-1 ring-white/30"
-                            : "bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/70"
-                      }`}
-                    >
-                      <span className="w-2.5 h-2.5 rounded-full border border-white/20" style={{ backgroundColor: theme.accent, opacity: isDisabled ? 0.3 : 1 }} />
-                      {theme.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Particles */}
-            <SettingRow label="Particles" description="Pulse blobs that travel along the strings" onReset={(settings.particleEnabled ?? false) ? () => setSettings({ ...settings, particleEnabled: false }) : undefined}>
-              <Toggle checked={settings.particleEnabled ?? false} onChange={() => setSettings({ ...settings, particleEnabled: !(settings.particleEnabled ?? false) })} label="Particles" />
-            </SettingRow>
-
-            {(settings.particleEnabled ?? false) && (
+            {/* ── String settings — only shown when effect = "string" ── */}
+            {(settings.signalEffect ?? "string") === "string" && (
               <>
-                <SettingRow label="Speed" description="How fast particles travel across the card">
-                  <Slider value={settings.particleSpeed ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, particleSpeed: v })} />
+                <SettingRow label="Opacity" description="String transparency">
+                  <Slider value={settings.signalAlpha ?? 0.25} min={0.05} max={1.0} step={0.01} defaultValue={0.75} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalAlpha: v })} />
                 </SettingRow>
-                <SettingRow label="Rate" description="How often new particles spawn">
-                  <Slider value={settings.particleRate ?? 1.0} min={0.1} max={4.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, particleRate: v })} />
+
+                <SettingRow label="Amplitude" description="String displacement intensity">
+                  <Slider value={settings.signalAmplitude ?? 0.25} min={0.01} max={1.0} step={0.01} defaultValue={0.75} format={formatMul} onChange={(v) => setSettings({ ...settings, signalAmplitude: v })} />
                 </SettingRow>
-                <SettingRow label="Sparks" description="Trailing spark dots behind each particle">
-                  <Slider value={settings.particleSparks ?? 3} min={0} max={6} step={1} defaultValue={3} format={(v) => `${v}`} onChange={(v) => setSettings({ ...settings, particleSparks: v })} />
+
+                <SettingRow label="Echo" description="Trailing reverb lines behind the main string">
+                  <Slider value={settings.signalEcho ?? 1.0} min={0} max={2.0} step={0.01} defaultValue={1.0} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalEcho: v })} />
                 </SettingRow>
-                <SettingRow label="Particle Opacity" description="Brightness of particles, independent of string opacity">
-                  <Slider value={settings.particleAlpha ?? 1.0} min={0.05} max={1.0} step={0.01} defaultValue={1.0} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, particleAlpha: v })} />
+
+                {/* Cord Animation */}
+                <SettingRow label="Retract Delay" description="Seconds before strings retract after session stops">
+                  <Slider value={settings.cordRetractDelay ?? 0.5} min={0} max={2.0} step={0.1} defaultValue={0.5} format={(v) => `${v.toFixed(1)}s`} onChange={(v) => setSettings({ ...settings, cordRetractDelay: v })} />
+                </SettingRow>
+                <SettingRow label="Deploy Force" description="How forcefully strings launch when session starts working">
+                  <Slider value={settings.cordDeployForce ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, cordDeployForce: v })} />
+                </SettingRow>
+                <SettingRow label="Retract Force" description="How hard the vacuum pulls the strings back">
+                  <Slider value={settings.cordRetractForce ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, cordRetractForce: v })} />
                 </SettingRow>
               </>
             )}
 
-            {/* Cord Animation */}
-            <SettingRow label="Retract Delay" description="Seconds before strings retract after session stops">
-              <Slider value={settings.cordRetractDelay ?? 0.5} min={0} max={2.0} step={0.1} defaultValue={0.5} format={(v) => `${v.toFixed(1)}s`} onChange={(v) => setSettings({ ...settings, cordRetractDelay: v })} />
-            </SettingRow>
-            <SettingRow label="Deploy Force" description="How forcefully strings launch when session starts working">
-              <Slider value={settings.cordDeployForce ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, cordDeployForce: v })} />
-            </SettingRow>
-            <SettingRow label="Retract Force" description="How hard the vacuum pulls the strings back">
-              <Slider value={settings.cordRetractForce ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, cordRetractForce: v })} />
-            </SettingRow>
-
-
-            {!isPresetMode && (
-              <SettingRow label="Frequency">
-                <Slider value={settings.signalFrequency ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, signalFrequency: v })} />
-              </SettingRow>
-            )}
-
-            {isPresetMode && (
-              <div className="py-2 space-y-2">
-                {/* Upload */}
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="audio/wav,audio/mpeg,audio/mp3,audio/ogg,audio/opus,.wav,.mp3,.opus,.ogg"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) handleUploadAndExtract(file);
-                    e.target.value = "";
-                  }}
-                />
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={extracting}
-                    className="px-2 py-1 rounded text-[0.625rem] font-medium bg-white/10 hover:bg-white/20 text-white/60 hover:text-white transition-colors disabled:opacity-50"
-                  >
-                    {extracting ? "Extracting..." : "Upload Song"}
-                  </button>
-                  {extractProgress && (
-                    <span className="text-[0.625rem] text-white/40">{extractProgress}</span>
-                  )}
-                  {!extractProgress && !extracting && (
-                    <span className="text-[0.625rem] text-white/30">Upload to create a new preset</span>
-                  )}
-                </div>
-
-                {/* Preset Library */}
-                {presets.length > 0 && (
-                  <div className="space-y-1 pt-1">
-                    <div className="text-[0.625rem] text-white/40 uppercase tracking-wider">Presets</div>
-                    {presets.map((p) => {
-                      const isActive = settings.activePresetId === p.id;
-                      const isEditing = editingPresetId === p.id;
-
-                      return (
-                        <div
-                          key={p.id}
-                          className={`flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
-                            isActive
-                              ? "bg-blue-500/15 border border-blue-500/20"
-                              : "bg-white/5 border border-transparent hover:bg-white/10"
-                          }`}
-                        >
-                          {/* Active indicator */}
-                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? "bg-blue-400" : "bg-transparent"}`} />
-
-                          {/* Name (editable) */}
-                          {isEditing ? (
-                            <input
-                              ref={renameInputRef}
-                              value={editingName}
-                              onChange={(e) => setEditingName(e.target.value)}
-                              onBlur={handleFinishRename}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") handleFinishRename();
-                                if (e.key === "Escape") setEditingPresetId(null);
-                              }}
-                              className="flex-1 min-w-0 bg-transparent border-b border-blue-400/50 text-white/80 text-xs outline-none px-0 py-0"
-                            />
-                          ) : (
-                            <button
-                              onClick={() => handleStartRename(p)}
-                              className="flex-1 min-w-0 text-left truncate text-white/70 hover:text-white/90 transition-colors"
-                              title="Click to rename"
-                            >
-                              {p.name}
-                            </button>
-                          )}
-
-                          {/* Duration */}
-                          <span className="text-[0.625rem] text-white/30 font-mono tabular-nums shrink-0">
-                            {formatDuration(p.durationSecs)}
-                          </span>
-
-                          {/* Date */}
-                          <span className="text-[0.625rem] text-white/20 shrink-0">
-                            {formatDate(p.createdAt)}
-                          </span>
-
-                          {/* Activate button */}
-                          {!isActive && (
-                            <button
-                              onClick={() => handleActivatePreset(p.id)}
-                              className="text-[0.625rem] text-blue-400/60 hover:text-blue-400 transition-colors shrink-0"
-                              title="Activate"
-                            >
-                              Use
-                            </button>
-                          )}
-
-                          {/* Delete button */}
-                          <button
-                            onClick={() => handleDeletePreset(p.id)}
-                            className="text-[0.625rem] text-red-400/40 hover:text-red-400 transition-colors shrink-0"
-                            title="Delete preset"
-                          >
-                            &times;
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {presets.length === 0 && !extracting && (
-                  <div className="text-[0.625rem] text-white/25 py-1">
-                    No presets yet — upload a song to create one
-                  </div>
-                )}
-
-                {/* Band envelope visualization */}
-                {settings.activePresetId && (
-                  <div className="pt-2 space-y-1">
-                    <div className="flex items-center justify-between">
-                      <div className="text-[0.625rem] text-white/40 uppercase tracking-wider">Band Envelopes</div>
-                      <button
-                        onClick={() => invoke("open_signal_settings")}
-                        className="text-[0.625rem] text-white/30 hover:text-white/60 transition-colors"
-                        title="Open in separate window"
-                      >
-                        ↗ Expand
-                      </button>
-                    </div>
-                    <BandWaveform presetId={settings.activePresetId} signalBass={settings.signalBass ?? true} signalMids={settings.signalMids ?? true} signalTreble={settings.signalTreble ?? true} signalGate={settings.signalGate ?? 0.05} />
-                  </div>
-                )}
-              </div>
+            {/* ── Sand settings — only shown when effect = "sand" ── */}
+            {(settings.signalEffect === "sand") && (
+              <>
+                <SettingRow label="Intensity" description="How strongly audio energy drives the sandstorm">
+                  <Slider value={settings.sandIntensity ?? 3.0} min={0.1} max={6.0} step={0.01} defaultValue={3.0} format={formatMul} onChange={(v) => setSettings({ ...settings, sandIntensity: v })} />
+                </SettingRow>
+                <SettingRow label="Direction" description="Wind direction in degrees (0 = left, 90 = up, 180 = right)">
+                  <Slider value={settings.sandDirection ?? 0} min={-180} max={180} step={1} defaultValue={0} format={(v) => `${v}°`} onChange={(v) => setSettings({ ...settings, sandDirection: v })} />
+                </SettingRow>
+                <SettingRow label="Density" description="How many sand grains spawn per frame">
+                  <Slider value={settings.sandDensity ?? 4.0} min={0.1} max={8.0} step={0.01} defaultValue={4.0} format={formatMul} onChange={(v) => setSettings({ ...settings, sandDensity: v })} />
+                </SettingRow>
+                <SettingRow label="Speed" description="How fast grains travel across the card">
+                  <Slider value={settings.sandSpeed ?? 3.0} min={0.1} max={6.0} step={0.01} defaultValue={3.0} format={formatMul} onChange={(v) => setSettings({ ...settings, sandSpeed: v })} />
+                </SettingRow>
+                <SettingRow label="Grain Size" description="Size of individual sand grains">
+                  <Slider value={settings.sandGrainSize ?? 0.5} min={0.05} max={0.95} step={0.01} defaultValue={0.5} format={formatMul} onChange={(v) => setSettings({ ...settings, sandGrainSize: v })} />
+                </SettingRow>
+                <SettingRow label="Turbulence" description="How chaotic the grain paths are (0 = straight, 1.2 = swirling)">
+                  <Slider value={settings.sandTurbulence ?? 0.6} min={0} max={1.2} step={0.01} defaultValue={0.6} format={formatMul} onChange={(v) => setSettings({ ...settings, sandTurbulence: v })} />
+                </SettingRow>
+                <SettingRow label="Opacity" description="Brightness of sand grains">
+                  <Slider value={settings.sandAlpha ?? 0.75} min={0.05} max={1.0} step={0.01} defaultValue={0.75} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, sandAlpha: v })} />
+                </SettingRow>
+              </>
             )}
           </>
         )}
       </section>
+
+      {/* Audio Input */}
+      {settings.signalString && (
+      <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
+        <div className="py-2">
+          <div className="text-[0.625rem] text-white/40 uppercase tracking-wider">Audio Input</div>
+        </div>
+
+        <SettingRow label="Mode" onReset={signalMode !== "preset" ? () => setSettings({ ...settings, signalMode: "preset" }) : undefined}>
+                <Select
+                  value={signalMode}
+                  options={[{ id: "simulated", label: "Simulated" }, { id: "preset", label: "Preset" }]}
+                  onChange={(v) => setSettings({ ...settings, signalMode: v })}
+                />
+              </SettingRow>
+
+              <SettingRow label="Bands" description="Frequency bands used to drive the effect" onReset={(!settings.signalBass || !settings.signalMids || !settings.signalTreble) ? () => setSettings({ ...settings, signalBass: true, signalMids: true, signalTreble: true }) : undefined}>
+                <div className="flex items-center gap-3">
+                  {([["Bass", "signalBass"], ["Mids", "signalMids"], ["Treble", "signalTreble"]] as const).map(([label, key]) => (
+                    <label key={key} className="flex items-center gap-1 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={settings[key] ?? true}
+                        onChange={() => setSettings({ ...settings, [key]: !settings[key] })}
+                        className="w-3 h-3 rounded accent-blue-500 cursor-pointer"
+                      />
+                      <span className="text-xs text-white/60">{label}</span>
+                    </label>
+                  ))}
+                </div>
+              </SettingRow>
+
+              <SettingRow label="Offset" description="Randomize playback position per session">
+                <Slider value={settings.signalOffset ?? 0.5} min={0} max={1.0} step={0.01} defaultValue={0.5} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalOffset: v })} />
+              </SettingRow>
+
+              <SettingRow label="Gate" description="Noise floor threshold — clips quiet ambient noise">
+                <Slider value={settings.signalGate ?? 0.05} min={0} max={0.5} step={0.01} defaultValue={0.05} format={formatPct} isPct onChange={(v) => { setSettings({ ...settings, signalGate: v }); setGateEngine(v); }} />
+              </SettingRow>
+
+              {!isPresetMode && (
+                <SettingRow label="Frequency" description="Simulated string vibration speed">
+                  <Slider value={settings.signalFrequency ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, signalFrequency: v })} />
+                </SettingRow>
+              )}
+
+              {isPresetMode && (
+                <div className="space-y-2 pt-1">
+                  {/* Upload */}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="audio/wav,audio/mpeg,audio/mp3,audio/ogg,audio/opus,.wav,.mp3,.opus,.ogg"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleUploadAndExtract(file);
+                      e.target.value = "";
+                    }}
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={extracting}
+                      className="px-2 py-1 rounded text-[0.625rem] font-medium bg-white/10 hover:bg-white/20 text-white/60 hover:text-white transition-colors disabled:opacity-50"
+                    >
+                      {extracting ? "Extracting..." : "Upload Song"}
+                    </button>
+                    {extractProgress && (
+                      <span className="text-[0.625rem] text-white/40">{extractProgress}</span>
+                    )}
+                    {!extractProgress && !extracting && (
+                      <span className="text-[0.625rem] text-white/30">Upload to create a new preset</span>
+                    )}
+                  </div>
+
+                  {/* Preset Library */}
+                  {presets.length > 0 && (
+                    <div className="space-y-1 pt-1">
+                      <div className="text-[0.625rem] text-white/40 uppercase tracking-wider">Presets</div>
+                      {presets.map((p) => {
+                        const isActive = settings.activePresetId === p.id;
+                        const isEditing = editingPresetId === p.id;
+
+                        return (
+                          <div
+                            key={p.id}
+                            className={`flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
+                              isActive
+                                ? "bg-blue-500/15 border border-blue-500/20"
+                                : "bg-white/5 border border-transparent hover:bg-white/10"
+                            }`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? "bg-blue-400" : "bg-transparent"}`} />
+
+                            {isEditing ? (
+                              <input
+                                ref={renameInputRef}
+                                value={editingName}
+                                onChange={(e) => setEditingName(e.target.value)}
+                                onBlur={handleFinishRename}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") handleFinishRename();
+                                  if (e.key === "Escape") setEditingPresetId(null);
+                                }}
+                                className="flex-1 min-w-0 bg-transparent border-b border-blue-400/50 text-white/80 text-xs outline-none px-0 py-0"
+                              />
+                            ) : (
+                              <button
+                                onClick={() => handleStartRename(p)}
+                                className="flex-1 min-w-0 text-left truncate text-white/70 hover:text-white/90 transition-colors"
+                                title="Click to rename"
+                              >
+                                {p.name}
+                              </button>
+                            )}
+
+                            <span className="text-[0.625rem] text-white/30 font-mono tabular-nums shrink-0">
+                              {formatDuration(p.durationSecs)}
+                            </span>
+
+                            <span className="text-[0.625rem] text-white/20 shrink-0">
+                              {formatDate(p.createdAt)}
+                            </span>
+
+                            {!isActive && (
+                              <button
+                                onClick={() => handleActivatePreset(p.id)}
+                                className="text-[0.625rem] text-blue-400/60 hover:text-blue-400 transition-colors shrink-0"
+                                title="Activate"
+                              >
+                                Use
+                              </button>
+                            )}
+
+                            <button
+                              onClick={() => handleDeletePreset(p.id)}
+                              className="text-[0.625rem] text-red-400/40 hover:text-red-400 transition-colors shrink-0"
+                              title="Delete preset"
+                            >
+                              &times;
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {presets.length === 0 && !extracting && (
+                    <div className="text-[0.625rem] text-white/25 py-1">
+                      No presets yet — upload a song to create one
+                    </div>
+                  )}
+
+                  {/* Band envelope visualization */}
+                  {settings.activePresetId && (
+                    <div className="pt-2 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <div className="text-[0.625rem] text-white/40 uppercase tracking-wider">Band Envelopes</div>
+                        <button
+                          onClick={() => invoke("open_signal_settings")}
+                          className="text-[0.625rem] text-white/30 hover:text-white/60 transition-colors"
+                          title="Open in separate window"
+                        >
+                          ↗ Expand
+                        </button>
+                      </div>
+                      <BandWaveform presetId={settings.activePresetId} signalBass={settings.signalBass ?? true} signalMids={settings.signalMids ?? true} signalTreble={settings.signalTreble ?? true} signalGate={settings.signalGate ?? 0.05} />
+                    </div>
+                  )}
+                </div>
+              )}
+      </section>
+      )}
 
       {/* Beta Features */}
       <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Beta Features</h3>

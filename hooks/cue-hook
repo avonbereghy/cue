@@ -195,6 +195,26 @@ def _detect_source():
     return "unknown"
 
 
+def _should_ignore_session(hook_data):
+    """Return True for non-interactive sessions that should not appear in Cue.
+
+    Detects `claude -p` (print mode) and other non-interactive sessions:
+    1. Claude Code's own session_type field (print, pipe, headless)
+    2. CORTEX_SUBPROCESS=1 set by Claude Cortex hooks
+    3. CUE_SKIP=1 — generic opt-out for any caller
+    """
+    # Claude Code includes session_type in hook data for non-interactive modes
+    session_type = hook_data.get("session_type", "")
+    if session_type and session_type != "interactive":
+        return True
+    # Env var guards for programmatic callers
+    if os.environ.get("CORTEX_SUBPROCESS") == "1":
+        return True
+    if os.environ.get("CUE_SKIP") == "1":
+        return True
+    return False
+
+
 def _read_last_tokens(transcript_path):
     """Read the last assistant usage entry from the JSONL transcript.
     Returns a dict with input_tokens, cache_creation, cache_read, output_tokens, model — or {}."""
@@ -258,6 +278,8 @@ def main():
     workspace = hook_data.get("cwd", os.getcwd())
     source = _detect_source()
 
+    ignored_session = _should_ignore_session(hook_data)
+
     # Read latest token usage directly from the JSONL transcript
     transcript_path = hook_data.get("transcript_path", "")
     last_tokens = _read_last_tokens(transcript_path)
@@ -290,6 +312,28 @@ def main():
 
             # Task 4: Schema validation
             status = _validate_sessions(status)
+
+            if ignored_session:
+                # Best-effort cleanup for already-recorded subprocess ghosts.
+                if status["sessions"].pop(session_id, None) is None:
+                    return
+
+                fd, tmp = tempfile.mkstemp(dir=STATUS_DIR, suffix=".json.tmp")
+                try:
+                    with os.fdopen(fd, "w") as f:
+                        json.dump(status, f, indent=2)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(tmp, STATUS_FILE)
+                    if sys.platform != "win32":
+                        os.chmod(STATUS_FILE, 0o600)
+                except Exception:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
+                    raise
+                return
 
             now = time.time()
 

@@ -538,21 +538,33 @@ pub struct Settings {
     /// Audio offset: randomizes position/speed per session (0 = sync, 1 = full random)
     #[serde(default = "default_signal_offset")]
     pub signal_offset: f64,
-    /// Whether pulse particles are enabled
-    #[serde(default = "default_true")]
-    pub particle_enabled: bool,
-    /// Particle speed multiplier (1.0 = default 150-350 px/s)
+    /// Visual effect mode: "string" (waveform lines) or "sand" (blown grains)
+    #[serde(default = "default_signal_effect")]
+    pub signal_effect: String,
+    /// Whether sand effect is enabled (only active when signal_effect = "sand")
+    #[serde(default)]
+    pub sand_enabled: bool,
+    /// Sand intensity multiplier (0.1 = subtle, 1.0 = normal, 3.0 = intense)
     #[serde(default = "default_one")]
-    pub particle_speed: f64,
-    /// Particle spawn rate multiplier (1.0 = default ~2/sec/band)
+    pub sand_intensity: f64,
+    /// Sand wind direction in degrees (0 = right, 90 = down, 180 = left, -90 = up)
+    #[serde(default)]
+    pub sand_direction: f64,
+    /// Sand grain spawn density multiplier
     #[serde(default = "default_one")]
-    pub particle_rate: f64,
-    /// Number of spark trails per particle (0-6)
-    #[serde(default = "default_sparks")]
-    pub particle_sparks: f64,
-    /// Particle opacity (independent of string opacity)
+    pub sand_density: f64,
+    /// Sand grain travel speed multiplier
     #[serde(default = "default_one")]
-    pub particle_alpha: f64,
+    pub sand_speed: f64,
+    /// Sand grain size multiplier (0.5 = fine, 1.0 = normal, 3.0 = coarse)
+    #[serde(default = "default_one")]
+    pub sand_grain_size: f64,
+    /// Sand turbulence / scatter intensity (0 = straight, 2.0 = chaotic)
+    #[serde(default = "default_sand_turbulence")]
+    pub sand_turbulence: f64,
+    /// Sand grain opacity (0.05 = faint, 1.0 = solid)
+    #[serde(default = "default_sand_alpha")]
+    pub sand_alpha: f64,
     /// Piano key press-down speed in seconds
     #[serde(default = "default_key_press_speed")]
     pub key_press_speed: f64,
@@ -583,7 +595,7 @@ pub struct Settings {
     /// Context display mode: "percent", "tokens", "remaining", or "both"
     #[serde(default = "default_context_display")]
     pub context_display: String,
-    /// Low power mode: disables animations, signal strings, particles, backdrop-filter
+    /// Low power mode: disables animations, signal strings, sand, backdrop-filter
     #[serde(default)]
     pub low_power: bool,
 }
@@ -632,8 +644,16 @@ fn default_signal_offset() -> f64 {
     0.5
 }
 
-fn default_sparks() -> f64 {
-    3.0
+fn default_signal_effect() -> String {
+    "string".to_string()
+}
+
+fn default_sand_turbulence() -> f64 {
+    0.6
+}
+
+fn default_sand_alpha() -> f64 {
+    0.75
 }
 
 fn default_key_press_speed() -> f64 {
@@ -685,11 +705,15 @@ impl Default for Settings {
             signal_color_light: "#000000".to_string(),
             active_theme_id: String::new(),
             signal_offset: 0.5,
-            particle_enabled: true,
-            particle_speed: 1.0,
-            particle_rate: 1.0,
-            particle_sparks: 3.0,
-            particle_alpha: 1.0,
+            signal_effect: "string".to_string(),
+            sand_enabled: false,
+            sand_intensity: 3.0,
+            sand_direction: 0.0,
+            sand_density: 4.0,
+            sand_speed: 3.0,
+            sand_grain_size: 0.5,
+            sand_turbulence: 0.6,
+            sand_alpha: 0.75,
             key_press_speed: 0.35,
             key_release_speed: 0.4,
             auto_reorder: false,
