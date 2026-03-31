@@ -125,6 +125,36 @@ impl SessionMonitorState {
             now,
         );
 
+        // For sessions claiming "working"/"subagent" whose hook hasn't fired in 90s,
+        // check if the JSONL conversation log is still being written (thinking/streaming).
+        // If so, bump lastActivity so the stale-working check doesn't downgrade them.
+        let projects_path = paths::claude_projects_path();
+        let active: Vec<_> = active
+            .into_iter()
+            .map(|mut session| {
+                if (session.state == "working" || session.state == "subagent")
+                    && (now - session.last_activity) > 90.0
+                    && session.active_subagents <= 0
+                {
+                    let jpath = self.jsonl_path(&session.id, &session.workspace, &projects_path);
+                    if let Ok(meta) = std::fs::metadata(&jpath) {
+                        if let Ok(mtime) = meta.modified() {
+                            let mtime_secs = mtime
+                                .duration_since(SystemTime::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs_f64();
+                            // JSONL modified in the last 30s → session is actively
+                            // thinking/streaming even though the hook hasn't fired
+                            if (now - mtime_secs) < 30.0 {
+                                session.last_activity = mtime_secs;
+                            }
+                        }
+                    }
+                }
+                session
+            })
+            .collect();
+
         let enriched: Vec<_> = {
             let cache = self.metrics_cache.lock().unwrap();
             let rate_limits = self.rate_limits.lock().unwrap().clone();
