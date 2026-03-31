@@ -767,7 +767,14 @@ pub fn run() {
                             // Also update the webview window theme so CSS media queries work
                             if let Some(w) = theme_handle.get_webview_window("main") {
                                 let _ = w.set_theme(Some(current));
-                                set_native_appearance(&w, current == Theme::Dark);
+                                let is_dark = current == Theme::Dark;
+                                let handle_clone = theme_handle.clone();
+                                let _ = w.run_on_main_thread(move || {
+                                    // NSAppearance must be set on the main thread
+                                    if let Some(w2) = handle_clone.get_webview_window("main") {
+                                        set_native_appearance(&w2, is_dark);
+                                    }
+                                });
                             }
                         }
                     }

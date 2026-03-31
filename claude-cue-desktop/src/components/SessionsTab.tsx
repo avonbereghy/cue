@@ -65,11 +65,15 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [signalColorDark, setSignalColorDark] = useState("#ffffff");
   const [signalColorLight, setSignalColorLight] = useState("#000000");
   const [signalOffset, setSignalOffset] = useState(0.5);
-  const [particleEnabled, setParticleEnabled] = useState(false);
-  const [particleSpeed, setParticleSpeed] = useState(1.0);
-  const [particleRate, setParticleRate] = useState(1.0);
-  const [particleSparks, setParticleSparks] = useState(3);
-  const [particleAlpha, setParticleAlpha] = useState(1.0);
+  const [signalEffect, setSignalEffect] = useState("string");
+  const [sandEnabled, setSandEnabled] = useState(false);
+  const [sandIntensity, setSandIntensity] = useState(3.0);
+  const [sandDirection, setSandDirection] = useState(0);
+  const [sandDensity, setSandDensity] = useState(4.0);
+  const [sandSpeed, setSandSpeed] = useState(3.0);
+  const [sandGrainSize, setSandGrainSize] = useState(0.5);
+  const [sandTurbulence, setSandTurbulence] = useState(0.6);
+  const [sandAlpha, setSandAlpha] = useState(0.75);
   const [cordRetractDelay, setCordRetractDelay] = useState(0.5);
   const [cordDeployForce, setCordDeployForce] = useState(1.0);
   const [cordRetractForce, setCordRetractForce] = useState(1.0);
@@ -285,11 +289,15 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setSignalColorDark(s.signalColorDark ?? "#ffffff");
     setSignalColorLight(s.signalColorLight ?? "#000000");
     setSignalOffset(s.signalOffset ?? 0.5);
-    setParticleEnabled(s.particleEnabled ?? true);
-    setParticleSpeed(s.particleSpeed ?? 1.0);
-    setParticleRate(s.particleRate ?? 1.0);
-    setParticleSparks(s.particleSparks ?? 3);
-    setParticleAlpha(s.particleAlpha ?? 1.0);
+    setSignalEffect(s.signalEffect ?? "string");
+    setSandEnabled(s.sandEnabled ?? false);
+    setSandIntensity(s.sandIntensity ?? 3.0);
+    setSandDirection(s.sandDirection ?? 0);
+    setSandDensity(s.sandDensity ?? 4.0);
+    setSandSpeed(s.sandSpeed ?? 3.0);
+    setSandGrainSize(s.sandGrainSize ?? 0.5);
+    setSandTurbulence(s.sandTurbulence ?? 0.6);
+    setSandAlpha(s.sandAlpha ?? 0.75);
     setCordRetractDelay(s.cordRetractDelay ?? 0.5);
     setCordDeployForce(s.cordDeployForce ?? 1.0);
     setCordRetractForce(s.cordRetractForce ?? 1.0);
@@ -842,7 +850,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
               return (
                 <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="space-y-0">
-                  <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={lowPower ? false : particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} />
+                  <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} />
 
                   {/* State transition controls */}
                   <div className="flex items-center gap-1 px-2 py-1.5 rounded-b-lg bg-white/3 border border-t-0 border-white/5 -mt-px">
@@ -923,7 +931,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
             return (
               <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="relative space-y-2" style={{ zIndex: idx + 1 }}>
-                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={lowPower ? false : particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} expandOverride={compactMode ? expandOverrides[session.info.id] : undefined} onExpandCycle={compactMode ? () => {
+                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} expandOverride={compactMode ? expandOverrides[session.info.id] : undefined} onExpandCycle={compactMode ? () => {
                   setExpandOverrides((prev) => {
                     const current = prev[session.info.id] ?? 0;
                     const next = (current + 1) % 3;
@@ -1015,7 +1023,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                   return (
                     <div key={revived.session.info.id} className={`revived-card-wrapper relative ${pulseClass}`}>
                       <div key={clicks} className="revived-overlay" />
-                      <SessionCard session={revived.session} titleAnimation="none" signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} particleEnabled={particleEnabled} particleSpeed={particleSpeed} particleRate={particleRate} particleSparks={particleSparks} particleAlpha={particleAlpha} revived />
+                      <SessionCard session={revived.session} titleAnimation="none" signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={signalEffect} sandEnabled={sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} revived />
                       {/* Full blur overlay */}
                       <div className="absolute inset-0 z-8 rounded-lg overflow-hidden" style={{ backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }} />
                       {/* Title re-rendered on top of blur in original position */}
