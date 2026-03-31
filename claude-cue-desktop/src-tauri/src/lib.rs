@@ -160,7 +160,7 @@ fn update_settings(app: tauri::AppHandle, new_settings: Settings) -> Result<(), 
     let _ = std::fs::write("/tmp/claude-cue-vibrancy.log",
         format!("update_settings called, active_theme_id={}\n", new_settings.active_theme_id));
     if let Some(window) = app.get_webview_window("main") {
-        toggle_vibrancy(&window, new_settings.active_theme_id == "glass");
+        toggle_vibrancy(&window, new_settings.active_theme_id == "glass" || new_settings.active_theme_id == "glass-sand");
     } else {
         let _ = std::fs::write("/tmp/claude-cue-vibrancy.log", "ERROR: no main window\n");
     }
@@ -222,11 +222,16 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                         let _ = window.set_theme(Some(Theme::Dark));
                         set_native_appearance(window, true);
 
-                        // Make window non-opaque with clear background
+                        // Make window non-opaque so vibrancy can blur the desktop
                         let _: () = objc2::msg_send![ns_window, setOpaque: objc2::runtime::Bool::NO];
+                        // Dark warm fallback instead of clearColor — during Stage Manager
+                        // transitions the vibrancy hasn't composited yet; this color
+                        // prevents a pure black flash. Matched to typical warm wallpaper tones.
                         let nscolor_class = objc2::runtime::AnyClass::get(c"NSColor").unwrap();
-                        let clear_color: *const objc2::runtime::AnyObject = objc2::msg_send![nscolor_class, clearColor];
-                        let _: () = objc2::msg_send![ns_window, setBackgroundColor: clear_color];
+                        let bg: *const objc2::runtime::AnyObject = objc2::msg_send![
+                            nscolor_class, colorWithRed: 0.22_f64 green: 0.18_f64 blue: 0.14_f64 alpha: 1.0_f64
+                        ];
+                        let _: () = objc2::msg_send![ns_window, setBackgroundColor: bg];
 
                         // Get the current contentView (contains the webview)
                         let old_content: *mut objc2::runtime::AnyObject = objc2::msg_send![ns_window, contentView];
@@ -731,7 +736,7 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 // Apply native vibrancy if the saved theme is "glass"
                 let s = settings::load_settings();
-                let is_glass = s.active_theme_id == "glass";
+                let is_glass = s.active_theme_id == "glass" || s.active_theme_id == "glass-sand";
                 toggle_vibrancy(&window, is_glass);
 
                 // Set theme AFTER vibrancy — glass forces dark, others follow system
@@ -754,7 +759,7 @@ pub fn run() {
 
                             // Glass theme always stays dark — skip theme switching
                             let s = settings::load_settings();
-                            if s.active_theme_id == "glass" {
+                            if s.active_theme_id == "glass" || s.active_theme_id == "glass-sand" {
                                 continue;
                             }
 
