@@ -149,11 +149,16 @@ export interface Settings {
   signalColorLight: string;
   activeThemeId: string;
   signalOffset: number;
-  particleEnabled: boolean;
-  particleSpeed: number;
-  particleRate: number;
-  particleSparks: number;
-  particleAlpha: number;
+  /** Visual effect mode: "string" (waveform lines) or "sand" (blown grains) */
+  signalEffect: string;
+  sandEnabled: boolean;
+  sandIntensity: number;
+  sandDirection: number;
+  sandDensity: number;
+  sandSpeed: number;
+  sandGrainSize: number;
+  sandTurbulence: number;
+  sandAlpha: number;
   cordRetractDelay: number;
   cordDeployForce: number;
   cordRetractForce: number;
@@ -167,7 +172,7 @@ export interface Settings {
   contextThreshold: boolean;
   /** Context display mode: "percent", "tokens", "remaining", or "both" */
   contextDisplay: string;
-  /** Low power mode: disables animations, signal strings, particles, backdrop-filter */
+  /** Low power mode: disables animations, signal strings, sand, backdrop-filter */
   lowPower: boolean;
 }
 
@@ -205,11 +210,16 @@ export interface SignalTheme {
   alpha: number;
   amplitude: number;
   echo: number;
-  particleEnabled: boolean;
-  particleSpeed: number;
-  particleRate: number;
-  particleSparks: number;
-  particleAlpha: number;
+  /** Default visual effect for this theme: "string" or "sand" */
+  signalEffect: string;
+  sandEnabled: boolean;
+  sandIntensity: number;
+  sandDirection: number;
+  sandDensity: number;
+  sandSpeed: number;
+  sandGrainSize: number;
+  sandTurbulence: number;
+  sandAlpha: number;
   // --- UI surfaces ---
   appBg: string;
   appText: string;
@@ -239,20 +249,24 @@ const DARK_SURFACES = {
   surfaceBorder: "rgba(255,255,255,0.10)",
 };
 
+// Sand defaults per-theme: effect, enabled, intensity, direction, density, speed, grainSize, turbulence, alpha
+const SAND_OFF = { signalEffect: "string" as const, sandEnabled: false, sandIntensity: 3.0, sandDirection: 0, sandDensity: 4.0, sandSpeed: 3.0, sandGrainSize: 0.5, sandTurbulence: 0.6, sandAlpha: 0.75 };
+const SAND_ON  = (overrides: Partial<typeof SAND_OFF> = {}) => ({ ...SAND_OFF, signalEffect: "string" as const, sandEnabled: true, ...overrides });
+
 export const SIGNAL_THEMES: SignalTheme[] = [
   // --- Essentials ---
   { id: "default",  label: "Default",  accent: "#ffffff",
     colorDark: "#ffffff", colorLight: "#000000", alpha: 0.75, amplitude: 0.25, echo: 1.0,
-    particleEnabled: false,  particleSpeed: 1.0, particleRate: 1.0, particleSparks: 3, particleAlpha: 1.0,
+    ...SAND_OFF,
     ...DARK_SURFACES, accentColor: "#3b82f6", accentBg: "rgba(59,130,246,0.15)" },
   { id: "minimal",  label: "Minimal",  accent: "#888888",
     colorDark: "#ffffff", colorLight: "#000000", alpha: 0.5, amplitude: 0.15, echo: 0.3,
-    particleEnabled: false, particleSpeed: 1.0, particleRate: 0.3, particleSparks: 0, particleAlpha: 0.5,
+    ...SAND_OFF,
     ...DARK_SURFACES, accentColor: "#9ca3af", accentBg: "rgba(156,163,175,0.12)" },
   // --- Vivid ---
   { id: "neon",     label: "Neon",     accent: "#00e5ff",
     colorDark: "#00e5ff", colorLight: "#0097a7", alpha: 0.75, amplitude: 0.4, echo: 1.8,
-    particleEnabled: true,  particleSpeed: 1.5, particleRate: 2.0, particleSparks: 5, particleAlpha: 0.9,
+    ...SAND_ON({ sandIntensity: 1.5, sandSpeed: 1.5, sandDensity: 2.0, sandAlpha: 0.9 }),
     appBg: "#060d10", appText: "#e0f7fa",
     cardFloatBg: "rgba(0,229,255,0.06)", cardFloatBorder: "rgba(0,229,255,0.15)",
     cardFloatShadow: "0 2px 8px rgba(0,0,0,0.4), 0 8px 24px rgba(0,229,255,0.08), 0 0 0 0.5px rgba(0,229,255,0.12)",
@@ -262,7 +276,7 @@ export const SIGNAL_THEMES: SignalTheme[] = [
     accentColor: "#00e5ff", accentBg: "rgba(0,229,255,0.15)" },
   { id: "ember",    label: "Ember",    accent: "#ffab00",
     colorDark: "#ffab00", colorLight: "#e65100", alpha: 0.75, amplitude: 0.3, echo: 1.2,
-    particleEnabled: true,  particleSpeed: 0.7, particleRate: 3.0, particleSparks: 4, particleAlpha: 0.8,
+    ...SAND_ON({ sandIntensity: 1.2, sandSpeed: 0.7, sandDensity: 3.0, sandDirection: 30, sandAlpha: 0.8 }),
     appBg: "#100a04", appText: "#fff3e0",
     cardFloatBg: "rgba(255,171,0,0.05)", cardFloatBorder: "rgba(255,171,0,0.12)",
     cardFloatShadow: "0 2px 6px rgba(0,0,0,0.4), 0 6px 20px rgba(255,171,0,0.06), 0 0 0 0.5px rgba(255,171,0,0.10)",
@@ -272,7 +286,7 @@ export const SIGNAL_THEMES: SignalTheme[] = [
     accentColor: "#ffab00", accentBg: "rgba(255,171,0,0.15)" },
   { id: "pulse",    label: "Pulse",    accent: "#ff4081",
     colorDark: "#ff4081", colorLight: "#c2185b", alpha: 0.75, amplitude: 0.6, echo: 0.6,
-    particleEnabled: true,  particleSpeed: 2.5, particleRate: 1.5, particleSparks: 6, particleAlpha: 1.0,
+    ...SAND_ON({ sandIntensity: 2.0, sandSpeed: 2.5, sandDensity: 1.5, sandTurbulence: 1.2, sandAlpha: 1.0 }),
     appBg: "#0e060a", appText: "#fce4ec",
     cardFloatBg: "rgba(255,64,129,0.05)", cardFloatBorder: "rgba(255,64,129,0.14)",
     cardFloatShadow: "0 2px 6px rgba(0,0,0,0.4), 0 6px 20px rgba(255,64,129,0.06), 0 0 0 0.5px rgba(255,64,129,0.10)",
@@ -282,7 +296,7 @@ export const SIGNAL_THEMES: SignalTheme[] = [
     accentColor: "#ff4081", accentBg: "rgba(255,64,129,0.15)" },
   { id: "aurora",   label: "Aurora",   accent: "#00e676",
     colorDark: "#00e676", colorLight: "#2e7d32", alpha: 0.75, amplitude: 0.35, echo: 2.0,
-    particleEnabled: true,  particleSpeed: 0.8, particleRate: 1.2, particleSparks: 2, particleAlpha: 0.7,
+    ...SAND_ON({ sandIntensity: 0.8, sandSpeed: 0.8, sandDensity: 1.2, sandTurbulence: 0.8, sandAlpha: 0.7 }),
     appBg: "#040e08", appText: "#e8f5e9",
     cardFloatBg: "rgba(0,230,118,0.05)", cardFloatBorder: "rgba(0,230,118,0.12)",
     cardFloatShadow: "0 2px 6px rgba(0,0,0,0.4), 0 6px 20px rgba(0,230,118,0.06), 0 0 0 0.5px rgba(0,230,118,0.10)",
@@ -293,7 +307,7 @@ export const SIGNAL_THEMES: SignalTheme[] = [
   // --- Mood ---
   { id: "ghost",    label: "Ghost",    accent: "#b388ff",
     colorDark: "#b388ff", colorLight: "#7b1fa2", alpha: 0.65, amplitude: 0.5, echo: 2.5,
-    particleEnabled: true,  particleSpeed: 0.5, particleRate: 0.5, particleSparks: 0, particleAlpha: 0.4,
+    ...SAND_ON({ sandIntensity: 0.6, sandSpeed: 0.5, sandDensity: 0.5, sandTurbulence: 1.5, sandGrainSize: 0.7, sandAlpha: 0.4 }),
     appBg: "#0a060e", appText: "#ede7f6",
     cardFloatBg: "rgba(179,136,255,0.04)", cardFloatBorder: "rgba(179,136,255,0.10)",
     cardFloatShadow: "0 2px 6px rgba(0,0,0,0.4), 0 6px 20px rgba(179,136,255,0.05), 0 0 0 0.5px rgba(179,136,255,0.08)",
@@ -303,7 +317,7 @@ export const SIGNAL_THEMES: SignalTheme[] = [
     accentColor: "#b388ff", accentBg: "rgba(179,136,255,0.15)" },
   { id: "midnight", label: "Midnight", accent: "#448aff",
     colorDark: "#448aff", colorLight: "#1a237e", alpha: 0.75, amplitude: 0.3, echo: 1.8,
-    particleEnabled: true,  particleSpeed: 0.6, particleRate: 0.8, particleSparks: 2, particleAlpha: 0.6,
+    ...SAND_ON({ sandIntensity: 0.8, sandSpeed: 0.6, sandDensity: 0.8, sandDirection: -15, sandAlpha: 0.6 }),
     appBg: "#060810", appText: "#e8eaf6",
     cardFloatBg: "rgba(68,138,255,0.05)", cardFloatBorder: "rgba(68,138,255,0.12)",
     cardFloatShadow: "0 2px 6px rgba(0,0,0,0.4), 0 6px 20px rgba(68,138,255,0.06), 0 0 0 0.5px rgba(68,138,255,0.10)",
@@ -313,7 +327,7 @@ export const SIGNAL_THEMES: SignalTheme[] = [
     accentColor: "#448aff", accentBg: "rgba(68,138,255,0.15)" },
   { id: "crimson",  label: "Crimson",  accent: "#ff1744",
     colorDark: "#ff1744", colorLight: "#b71c1c", alpha: 0.75, amplitude: 0.45, echo: 0.8,
-    particleEnabled: true,  particleSpeed: 1.8, particleRate: 2.5, particleSparks: 4, particleAlpha: 0.9,
+    ...SAND_ON({ sandIntensity: 1.8, sandSpeed: 1.8, sandDensity: 2.5, sandDirection: 10, sandAlpha: 0.9 }),
     appBg: "#0e0406", appText: "#ffebee",
     cardFloatBg: "rgba(255,23,68,0.05)", cardFloatBorder: "rgba(255,23,68,0.14)",
     cardFloatShadow: "0 2px 6px rgba(0,0,0,0.4), 0 6px 20px rgba(255,23,68,0.06), 0 0 0 0.5px rgba(255,23,68,0.10)",
@@ -323,7 +337,7 @@ export const SIGNAL_THEMES: SignalTheme[] = [
     accentColor: "#ff1744", accentBg: "rgba(255,23,68,0.15)" },
   { id: "solar",    label: "Solar",    accent: "#ffd740",
     colorDark: "#ffd740", colorLight: "#f57f17", alpha: 0.75, amplitude: 0.35, echo: 1.4,
-    particleEnabled: true,  particleSpeed: 1.2, particleRate: 1.8, particleSparks: 3, particleAlpha: 0.85,
+    ...SAND_ON({ sandIntensity: 1.2, sandSpeed: 1.2, sandDensity: 1.8, sandDirection: 20, sandAlpha: 0.85 }),
     appBg: "#0e0c04", appText: "#fffde7",
     cardFloatBg: "rgba(255,215,64,0.04)", cardFloatBorder: "rgba(255,215,64,0.12)",
     cardFloatShadow: "0 2px 6px rgba(0,0,0,0.4), 0 6px 20px rgba(255,215,64,0.06), 0 0 0 0.5px rgba(255,215,64,0.10)",
@@ -333,7 +347,7 @@ export const SIGNAL_THEMES: SignalTheme[] = [
     accentColor: "#ffd740", accentBg: "rgba(255,215,64,0.15)" },
   { id: "arctic",   label: "Arctic",   accent: "#b3e5fc",
     colorDark: "#b3e5fc", colorLight: "#01579b", alpha: 0.65, amplitude: 0.2, echo: 1.8,
-    particleEnabled: true,  particleSpeed: 0.4, particleRate: 0.6, particleSparks: 1, particleAlpha: 0.5,
+    ...SAND_ON({ sandIntensity: 0.5, sandSpeed: 0.4, sandDensity: 0.6, sandTurbulence: 1.0, sandGrainSize: 0.6, sandAlpha: 0.5 }),
     appBg: "#060a0e", appText: "#e1f5fe",
     cardFloatBg: "rgba(179,229,252,0.04)", cardFloatBorder: "rgba(179,229,252,0.10)",
     cardFloatShadow: "0 2px 6px rgba(0,0,0,0.4), 0 6px 20px rgba(179,229,252,0.05), 0 0 0 0.5px rgba(179,229,252,0.08)",
@@ -342,9 +356,19 @@ export const SIGNAL_THEMES: SignalTheme[] = [
     surfaceBg: "rgba(179,229,252,0.03)", surfaceBorder: "rgba(179,229,252,0.08)",
     accentColor: "#b3e5fc", accentBg: "rgba(179,229,252,0.12)" },
   // --- Special ---
-  { id: "glass",    label: "Glass",    accent: "#c0c0c0",
+  { id: "glass",    label: "Glass (String)", accent: "#c0c0c0",
     colorDark: "#ffffff", colorLight: "#333333", alpha: 0.35, amplitude: 0.18, echo: 1.2,
-    particleEnabled: false, particleSpeed: 0.4, particleRate: 0.5, particleSparks: 1, particleAlpha: 0.25,
+    ...SAND_OFF,
+    appBg: "transparent", appText: "rgba(255,255,255,0.95)",
+    cardFloatBg: "rgba(255,255,255,0.08)", cardFloatBorder: "rgba(255,255,255,0.25)",
+    cardFloatShadow: "none",
+    cardPressBg: "rgba(255,255,255,0.04)", cardPressBorder: "rgba(255,255,255,0.15)",
+    cardPressShadow: "none",
+    surfaceBg: "rgba(255,255,255,0.06)", surfaceBorder: "rgba(255,255,255,0.12)",
+    accentColor: "#ffffff", accentBg: "rgba(255,255,255,0.12)" },
+  { id: "glass-sand", label: "Glass (Sand)", accent: "#d4a574",
+    colorDark: "#ffffff", colorLight: "#333333", alpha: 0.35, amplitude: 0.18, echo: 1.2,
+    signalEffect: "sand", sandEnabled: true, sandIntensity: 0.8, sandDirection: 15, sandDensity: 1.2, sandSpeed: 0.6, sandGrainSize: 0.8, sandTurbulence: 0.6, sandAlpha: 0.35,
     appBg: "transparent", appText: "rgba(255,255,255,0.95)",
     cardFloatBg: "rgba(255,255,255,0.08)", cardFloatBorder: "rgba(255,255,255,0.25)",
     cardFloatShadow: "none",
@@ -394,15 +418,16 @@ export function applyThemeCssVars(theme: SignalTheme) {
   s.setProperty("--accent-bg", theme.accentBg);
 
   // Toggle glass mode attribute for CSS-only frosted effects
-  if (theme.id === "glass") {
+  const isGlass = theme.id === "glass" || theme.id === "glass-sand";
+  if (isGlass) {
     document.documentElement.setAttribute("data-glass", "");
   } else {
     document.documentElement.removeAttribute("data-glass");
   }
 
-  // Toggle native macOS vibrancy for the Glass theme
+  // Toggle native macOS vibrancy for the Glass themes
   import("@tauri-apps/api/core").then(({ invoke }) => {
-    invoke("set_vibrancy", { enabled: theme.id === "glass" }).catch(() => {});
+    invoke("set_vibrancy", { enabled: isGlass }).catch(() => {});
   }).catch(() => {});
 }
 

@@ -74,6 +74,7 @@ Multiple sessions show as a grid of dots — see all your sessions at once.
 - **Privacy-first** — shows only leaf directory names, full paths on hover only
 - **Security-first** — no outbound network calls, atomic file writes, 0600 permissions, path sanitization
 - **Session persistence** — sessions only close via SessionEnd hook, never by timeout (except error state after 10 min)
+- **Non-interactive session filtering** — ignores `claude -p`, piped, and headless sessions via Claude Code's `session_type` field, `CORTEX_SUBPROCESS=1`, or `CUE_SKIP=1` env var
 - **File locking** — concurrent hooks don't clobber each other's updates
 - **Accessibility** — ARIA labels, keyboard navigation, high contrast, reduced motion support
 

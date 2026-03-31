@@ -51,16 +51,24 @@ interface SignalStringProps {
   signalColorLight?: string;
   /** Audio offset randomness (0 = all sessions synced, 1 = full random offset) */
   signalOffset?: number;
-  /** Whether pulse particles are enabled */
-  particleEnabled?: boolean;
-  /** Particle speed multiplier */
-  particleSpeed?: number;
-  /** Particle spawn rate multiplier */
-  particleRate?: number;
-  /** Number of spark trails per particle */
-  particleSparks?: number;
-  /** Particle opacity (independent of string opacity) */
-  particleAlpha?: number;
+  /** Visual effect mode: "string" (waveform lines) or "sand" (blown grains) */
+  signalEffect?: string;
+  /** Whether sand effect is enabled */
+  sandEnabled?: boolean;
+  /** Sand intensity multiplier */
+  sandIntensity?: number;
+  /** Sand wind direction in degrees */
+  sandDirection?: number;
+  /** Sand grain spawn density multiplier */
+  sandDensity?: number;
+  /** Sand grain travel speed multiplier */
+  sandSpeed?: number;
+  /** Sand grain size multiplier */
+  sandGrainSize?: number;
+  /** Sand turbulence / scatter intensity */
+  sandTurbulence?: number;
+  /** Sand grain opacity */
+  sandAlpha?: number;
   /** Delay before cord retracts after stopping (seconds) */
   cordRetractDelay?: number;
   /** Deploy force multiplier (how fast strings launch out) */
@@ -69,13 +77,13 @@ interface SignalStringProps {
   cordRetractForce?: number;
   /** Session ID used as seed for per-session random offset */
   sessionId?: string;
-  /** Ref to content wrapper — used to clip particles behind content rows */
+  /** Ref to content wrapper — used to clip sand/strings behind content rows */
   contentRef?: React.RefObject<HTMLDivElement | null>;
   /** Key release animation duration (seconds) — strings stay active until key finishes rising */
   keyReleaseSpeed?: number;
 }
 
-export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, particleEnabled = true, particleSpeed = 1.0, particleRate = 1.0, particleSparks = 3, particleAlpha = 1.0, cordRetractDelay = 0.5, cordDeployForce = 1.0, cordRetractForce = 1.0, sessionId = "", contentRef, keyReleaseSpeed: _keyReleaseSpeed = 0.4 }: SignalStringProps) {
+export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 0.5, cordDeployForce = 1.0, cordRetractForce = 1.0, sessionId = "", contentRef, keyReleaseSpeed: _keyReleaseSpeed = 0.4 }: SignalStringProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const pageVisible = usePageVisible();
@@ -119,8 +127,10 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   const lastFrameRef = useRef<number>(0);
   // Onset impulse accumulators per band (decays each frame)
   const onsetRef = useRef<Float64Array>(new Float64Array(3));
-  // Pulse particles traveling along strings
-  const particlesRef = useRef<{ x: number; speed: number; band: number; birth: number }[]>([]);
+  // Sand grains: blown across the card, driven by audio energy
+  const sandGrainsRef = useRef<{ x: number; y: number; vx: number; vy: number; size: number; band: number; birth: number; life: number }[]>([]);
+  // Tracks when the session went inactive — drives wind ramp-down and gravity transition
+  const sandDeactivatedAtRef = useRef<number | null>(null);
   // Vacuum cord retract/deploy per band: 0 = fully retracted (left), 1 = fully deployed (right)
   // [bass, mids, treble] — each travels at a slightly different rate
   const clipFractionsRef = useRef(isActive ? new Float64Array([1, 1, 1]) : new Float64Array(3));
@@ -138,14 +148,14 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     signalAlpha, signalAmplitude, signalEcho, frequency,
     signalBass, signalMids, signalTreble,
     signalColorDark, signalColorLight, signalOffset,
-    particleEnabled, particleSpeed, particleRate, particleSparks, particleAlpha,
+    signalEffect, sandEnabled, sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize, sandTurbulence, sandAlpha,
     cordRetractDelay, cordDeployForce, cordRetractForce,
   });
   configRef.current = {
     signalAlpha, signalAmplitude, signalEcho, frequency,
     signalBass, signalMids, signalTreble,
     signalColorDark, signalColorLight, signalOffset,
-    particleEnabled, particleSpeed, particleRate, particleSparks, particleAlpha,
+    signalEffect, sandEnabled, sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize, sandTurbulence, sandAlpha,
     cordRetractDelay, cordDeployForce, cordRetractForce,
   };
 
@@ -227,14 +237,17 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       const { signalAlpha, signalAmplitude, signalEcho, frequency,
         signalBass, signalMids, signalTreble,
         signalColorDark, signalColorLight, signalOffset,
-        particleEnabled, particleSpeed, particleRate, particleSparks } = cfg;
+        signalEffect: cfgEffect, sandEnabled: cfgSandEnabled, sandIntensity: cfgSandIntensity,
+        sandDirection: cfgSandDirection, sandDensity: cfgSandDensity, sandSpeed: cfgSandSpeed,
+        sandGrainSize: cfgSandGrainSize, sandTurbulence: cfgSandTurbulence, sandAlpha: cfgSandAlpha } = cfg;
+      const isSand = cfgEffect === "sand" && cfgSandEnabled;
       const isGlass = document.documentElement.hasAttribute("data-glass");
       const isDark = isGlass || document.documentElement.getAttribute("data-theme") !== "light";
       const defaultColor = isDark ? hexToRgb(signalColorDark) : hexToRgb(signalColorLight);
       const a = signalAlpha;
 
-      // Skip all computation when alpha is zero (e.g. glass theme)
-      if (a <= 0 && !particleEnabled) {
+      // Skip all computation when nothing to draw
+      if (a <= 0 && !isSand) {
         animRef.current = requestAnimationFrame(draw);
         return;
       }
@@ -307,21 +320,25 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         }
 
         // Fully retracted — nothing to draw, just keep the loop alive
+        // In sand mode, don't exit early while grains are still falling
         const maxClip = Math.max(fracs[0], fracs[1], fracs[2]);
-        if (maxClip < 0.001 && !isActiveRef.current) {
+        if (maxClip < 0.001 && !isActiveRef.current && (!isSand || sandGrainsRef.current.length === 0)) {
           animRef.current = requestAnimationFrame(draw);
           return;
         }
 
-        // Apply global clip at the widest band (particles/erase rects need it)
-        const clipX = maxClip * w;
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(0, 0, clipX, h);
-        ctx.clip();
+        // Apply global clip at the widest band — sand grains fall freely, skip clip
+        if (!isSand) {
+          const clipX = maxClip * w;
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(0, 0, clipX, h);
+          ctx.clip();
+        }
       }
 
-      let clipped = !revived;
+      // clipped tracks whether ctx.save() was called (for ctx.restore() at end)
+      let clipped = !revived && !isSand;
 
       // ── Revived mode: randomized lightning strikes ──
       if (revived) {
@@ -740,102 +757,152 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             // Save trail-0 path for particles
             if (trail === 0) bandPaths.push(points);
 
-            // Draw glow layer (wider, semi-transparent) — trail 0 only
-            if (trail === 0) {
+            // Draw glow + core lines — skipped in sand mode (paths are still computed above for energy)
+            if (!isSand) {
+              if (trail === 0) {
+                ctx.beginPath();
+                for (let i = 0; i < points.length; i++) {
+                  const x = i * 2;
+                  if (i === 0) ctx.moveTo(x, points[i]);
+                  else ctx.lineTo(x, points[i]);
+                }
+                const glowOp = op * 0.25;
+                ctx.strokeStyle = `rgba(${sc.r},${sc.g},${sc.b},${glowOp})`;
+                ctx.lineWidth = band.lw * 4;
+                ctx.stroke();
+              }
+
               ctx.beginPath();
               for (let i = 0; i < points.length; i++) {
                 const x = i * 2;
                 if (i === 0) ctx.moveTo(x, points[i]);
                 else ctx.lineTo(x, points[i]);
               }
-              const glowOp = op * 0.25;
-              ctx.strokeStyle = `rgba(${sc.r},${sc.g},${sc.b},${glowOp})`;
-              ctx.lineWidth = band.lw * 4;
+              const c = `rgba(${sc.r},${sc.g},${sc.b},${op})`;
+              ctx.strokeStyle = c;
+              ctx.lineWidth = trail === 0 ? band.lw : band.lw * 0.6;
               ctx.stroke();
             }
-
-            // Draw core line
-            ctx.beginPath();
-            for (let i = 0; i < points.length; i++) {
-              const x = i * 2;
-              if (i === 0) ctx.moveTo(x, points[i]);
-              else ctx.lineTo(x, points[i]);
-            }
-            const c = `rgba(${sc.r},${sc.g},${sc.b},${op})`;
-            ctx.strokeStyle = c;
-            ctx.lineWidth = trail === 0 ? band.lw : band.lw * 0.6;
-            ctx.stroke();
           }
 
           // Restore per-band clip
           if (!revived) ctx.restore();
         }
 
-        // ── Pulse particles: blobs that ride along the strings ──
-        if (isActiveRef.current && bands.length > 0 && particleEnabled) {
-          const particles = particlesRef.current;
-          const baseSpeed = 150 * particleSpeed;
-          const speedRange = 200 * particleSpeed;
-          const spawnChance = 0.035 * particleRate;
-          const sparks = Math.round(particleSparks);
+        // ── Sand effect: 3 layers (bass/mids/treble) driven independently ──
+        // Grains continue falling under gravity after the session stops.
+        if (isSand && (isActiveRef.current || sandGrainsRef.current.length > 0)) {
+          const grains = sandGrainsRef.current;
+          const dirRad = ((cfgSandDirection + 180) * Math.PI) / 180;
+          const windX = Math.cos(dirRad) * 120 * cfgSandSpeed;
+          const windY = Math.sin(dirRad) * 120 * cfgSandSpeed;
 
-          if (Math.random() < spawnChance * bands.length) {
-            const bandIdx = Math.floor(Math.random() * bands.length);
-            particles.push({
-              x: 0,
-              speed: baseSpeed + Math.random() * speedRange,
-              band: bandIdx,
-              birth: now,
-            });
+          // Track deactivation for wind ramp-down
+          if (isActiveRef.current) {
+            sandDeactivatedAtRef.current = null;
+          } else if (sandDeactivatedAtRef.current === null) {
+            sandDeactivatedAtRef.current = now;
+          }
+          const deactSecs = sandDeactivatedAtRef.current !== null
+            ? (now - sandDeactivatedAtRef.current) / 1000 : 0;
+          const windRamp = isActiveRef.current ? 1.0 : Math.max(0, Math.exp(-deactSecs * 2.2));
+          const GRAVITY = 90; // px/s²
+
+          const layerSizeScale  = [1.6,  1.0,  0.55];
+          const layerSpeedScale = [0.65, 1.0,  1.45];
+          const layerTurbScale  = [0.6,  1.0,  1.5 ];
+          const layerMaxGrains  = [100,  120,  130 ];
+
+          const bandCounts = [0, 0, 0];
+          for (let gi = 0; gi < grains.length; gi++) {
+            const b = grains[gi].band;
+            if (b >= 0 && b < 3) bandCounts[b]++;
           }
 
-          for (let i = particles.length - 1; i >= 0; i--) {
-            const p = particles[i];
-            const age = (now - p.birth) / 1000;
-            p.x += p.speed * dt;
+          const activeBands = Math.min(bands.length, 3);
+          for (let bi = 0; bi < 3; bi++) {
+            const path = bi < activeBands ? bandPaths[bi] : null;
+            let bandEnergy = 0;
+            if (path && path.length > 0) {
+              let sum = 0;
+              for (let pi = 0; pi < path.length; pi += 8) sum += Math.abs(path[pi] - midY);
+              bandEnergy = sum / (path.length / 8) / h;
+            }
+            const spd = layerSpeedScale[bi];
+            const bwX = windX * spd * windRamp;
+            const bwY = windY * spd * windRamp;
+            const energyMod = (0.5 + bandEnergy * cfgSandIntensity * 15) * windRamp;
 
-            if (p.x > w + 10) { particles.splice(i, 1); continue; }
-
-            const path = bandPaths[p.band];
-            if (!path || path.length === 0) continue;
-            const pathIdx = p.x / 2;
-            const pi0 = Math.floor(pathIdx);
-            const pi1 = Math.min(pi0 + 1, path.length - 1);
-            const frac = pathIdx - pi0;
-            const py = pi0 < path.length ? path[pi0] * (1 - frac) + path[pi1] * frac : midY;
-
-            const fadeIn = Math.min(age / 0.1, 1);
-            const alpha = fadeIn * particleAlpha;
-
-            const band = bands[p.band];
-            const radius = band.lw * 2;
-
-            // Sparks
-            for (let si = 0; si < sparks; si++) {
-              const sparkSeed = ((p.birth + si * 7919) * 2654435761) >>> 0;
-              const sx = p.x - (si + 1) * (3 + ((sparkSeed & 0xFF) / 255) * 5);
-              const sy = py + (((sparkSeed >> 8) & 0xFF) / 255 - 0.5) * 6;
-              const sparkAlpha = alpha * (0.5 - si * 0.08);
-              if (sx > 0 && sx < w) {
-                ctx.beginPath();
-                ctx.arc(sx, sy, 0.8, 0, Math.PI * 2);
-                ctx.fillStyle = `rgba(${sc.r},${sc.g},${sc.b},${sparkAlpha})`;
-                ctx.fill();
+            // Spawn only while active
+            if (isActiveRef.current && bi < activeBands) {
+              const rawEnergy = 0.5 + bandEnergy * cfgSandIntensity * 15;
+              const spawnRate = 0.06 * cfgSandDensity * rawEnergy * spd;
+              if (Math.random() < spawnRate && bandCounts[bi] < layerMaxGrains[bi]) {
+                const baseSize = (0.4 + Math.random() * 1.2) * cfgSandGrainSize * layerSizeScale[bi];
+                const life = 4.0 + Math.random() * 5.0;
+                let sx: number, sy: number;
+                if (Math.abs(Math.cos(dirRad)) > Math.abs(Math.sin(dirRad))) {
+                  sx = windX > 0 ? -5 : w + 5;
+                  sy = Math.random() * h;
+                } else {
+                  sx = Math.random() * w;
+                  sy = windY > 0 ? -5 : h + 5;
+                }
+                grains.push({
+                  x: sx, y: sy,
+                  vx: windX * spd * (0.6 + Math.random() * 0.8),
+                  vy: windY * spd * (0.6 + Math.random() * 0.8),
+                  size: baseSize, band: bi, birth: now, life,
+                });
+                bandCounts[bi]++;
               }
             }
 
-            ctx.beginPath();
-            ctx.arc(p.x, py, radius, 0, Math.PI * 2);
-            ctx.fillStyle = `rgba(${sc.r},${sc.g},${sc.b},${alpha})`;
-            ctx.fill();
-
-            ctx.beginPath();
-            ctx.arc(p.x, py, radius * 0.4, 0, Math.PI * 2);
-            ctx.fillStyle = `rgba(255,255,255,${alpha * 0.5})`;
-            ctx.fill();
+            // Update and render — always runs while grains exist
+            const turb = cfgSandTurbulence * energyMod * layerTurbScale[bi];
+            for (let i = grains.length - 1; i >= 0; i--) {
+              const g = grains[i];
+              if (g.band !== bi) continue;
+              const age = (now - g.birth) / 1000;
+              // Bottom exit is primary when falling; other edges also cull
+              if (g.y > h + 5 || g.x < -20 || g.x > w + 20 || g.y < -20) {
+                grains.splice(i, 1); continue;
+              }
+              if (isActiveRef.current && age > g.life) {
+                grains.splice(i, 1); continue;
+              }
+              // Gravity ramps in as wind dies
+              g.vy += GRAVITY * (1 - windRamp) * dt;
+              const phase = g.birth * 0.001 + age * 3;
+              const tx = Math.sin(phase * 1.7 + bi * 2.1) * turb * 40;
+              const ty = Math.cos(phase * 2.3 + bi * 1.4) * turb * 40;
+              g.vx += (bwX - g.vx) * 0.02 + tx * dt;
+              g.vy += (bwY - g.vy) * 0.02 + ty * dt;
+              g.x += g.vx * dt;
+              g.y += g.vy * dt;
+              let alpha: number;
+              if (isActiveRef.current) {
+                const fadeIn = Math.min(age / 0.15, 1);
+                const fadeOut = Math.max(1 - (age - (g.life - 0.3)) / 0.3, 0);
+                alpha = fadeIn * (age > g.life - 0.3 ? fadeOut : 1) * cfgSandAlpha;
+              } else {
+                alpha = Math.min(age / 0.15, 1) * cfgSandAlpha * Math.max(0.15, windRamp);
+              }
+              if (alpha <= 0) continue;
+              const r = g.size * (0.8 + 0.2 * Math.sin(age * 5 + g.birth));
+              ctx.beginPath();
+              ctx.arc(g.x, g.y, r, 0, Math.PI * 2);
+              ctx.fillStyle = `rgba(${sc.r},${sc.g},${sc.b},${alpha * 0.8})`;
+              ctx.fill();
+              if (r > 0.6) {
+                ctx.beginPath();
+                ctx.arc(g.x, g.y, r * 0.35, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(255,255,255,${alpha * 0.3})`;
+                ctx.fill();
+              }
+            }
           }
-
-          if (particles.length > 40) particles.splice(0, particles.length - 40);
+          if (grains.length > 350) grains.splice(0, grains.length - 350);
         }
 
         // Soft-erase: two-pass rounded-rect erase behind each content element
@@ -877,9 +944,9 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       // Inactive with no pulses to drain — draw resting string and keep animating
       // (no abrupt snap — the cord retract handles the visual fade-out)
       if (!isActiveRef.current && !hasPulses) {
-        // Only draw the resting line if the cord is still visible
+        // Only draw the resting line if the cord is still visible (not in sand mode)
         const maxClipSim = Math.max(clipFractionsRef.current[0], clipFractionsRef.current[1], clipFractionsRef.current[2]);
-        if (maxClipSim > 0.001) {
+        if (!isSand && maxClipSim > 0.001) {
           ctx.beginPath();
           ctx.moveTo(0, midY);
           ctx.lineTo(w, midY);
@@ -887,9 +954,12 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           ctx.lineWidth = 1;
           ctx.stroke();
         }
-        if (clipped) ctx.restore();
-        animRef.current = requestAnimationFrame(draw);
-        return;
+        // In sand mode, fall through so grains can continue to fall under gravity
+        if (!isSand || sandGrainsRef.current.length === 0) {
+          if (clipped) ctx.restore();
+          animRef.current = requestAnimationFrame(draw);
+          return;
+        }
       }
 
       // Physics parameters scaled by frequency
@@ -898,7 +968,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       const omega = f * 20;
       const physDecay = 1.2 + f * 0.4;
 
-      ctx.beginPath();
+      if (!isSand) ctx.beginPath();
 
       const simPoints: number[] = [];
       for (let x = 0; x <= w; x += 2) {
@@ -919,73 +989,133 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         const y = Math.tanh(sum * 0.2) * halfH;
         simPoints.push(midY + y);
 
-        if (x === 0) {
-          ctx.moveTo(x, midY + y);
-        } else {
-          ctx.lineTo(x, midY + y);
+        if (!isSand) {
+          if (x === 0) {
+            ctx.moveTo(x, midY + y);
+          } else {
+            ctx.lineTo(x, midY + y);
+          }
         }
       }
 
-      ctx.strokeStyle = strokeColor;
-      ctx.lineWidth = 1;
-      ctx.stroke();
+      if (!isSand) {
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
 
-      // ── Pulse particles for simulated mode ──
-      if (isActiveRef.current && hasPulses && particleEnabled) {
-        const particles = particlesRef.current;
-        const baseSpeed = 150 * particleSpeed;
-        const speedRange = 200 * particleSpeed;
-        const sparks = Math.round(particleSparks);
+      // ── Sand effect for simulated mode: 3 layers (bass/mids/treble) ──
+      // Grains continue falling under gravity after the session stops.
+      if (isSand && (isActiveRef.current || sandGrainsRef.current.length > 0)) {
+        const grains = sandGrainsRef.current;
+        const dirRad = (cfgSandDirection * Math.PI) / 180;
+        const windX = Math.cos(dirRad) * 120 * cfgSandSpeed;
+        const windY = Math.sin(dirRad) * 120 * cfgSandSpeed;
 
-        if (Math.random() < 0.04 * particleRate) {
-          particles.push({
-            x: 0,
-            speed: baseSpeed + Math.random() * speedRange,
-            band: 0,
-            birth: now,
-          });
+        // Track deactivation for wind ramp-down
+        if (isActiveRef.current) {
+          sandDeactivatedAtRef.current = null;
+        } else if (sandDeactivatedAtRef.current === null) {
+          sandDeactivatedAtRef.current = now;
+        }
+        const deactSecs = sandDeactivatedAtRef.current !== null
+          ? (now - sandDeactivatedAtRef.current) / 1000 : 0;
+        const windRamp = isActiveRef.current ? 1.0 : Math.max(0, Math.exp(-deactSecs * 2.2));
+        const GRAVITY = 90;
+        const simDt = 1 / 60;
+
+        // Energy from waveform — zero when no pulses (pure gravity fall)
+        let simEnergy = 0;
+        if (simPoints.length > 0) {
+          for (let pi = 0; pi < simPoints.length; pi += 8) simEnergy += Math.abs(simPoints[pi] - midY);
+          simEnergy = simEnergy / (simPoints.length / 8) / h;
         }
 
-        for (let i = particles.length - 1; i >= 0; i--) {
-          const p = particles[i];
-          const age = (now - p.birth) / 1000;
-          p.x += p.speed * (1 / 60);
+        const layerSizeScale  = [1.6,  1.0,  0.55];
+        const layerSpeedScale = [0.65, 1.0,  1.45];
+        const layerTurbScale  = [0.6,  1.0,  1.5 ];
+        const layerMaxGrains  = [65,   80,   85  ];
+        const layerEnergyBias = [1.2,  1.0,  0.85];
 
-          if (p.x > w + 10) { particles.splice(i, 1); continue; }
+        const bandCounts = [0, 0, 0];
+        for (let gi = 0; gi < grains.length; gi++) {
+          const b = grains[gi].band;
+          if (b >= 0 && b < 3) bandCounts[b]++;
+        }
 
-          const pi0 = Math.floor(p.x / 2);
-          const pi1 = Math.min(pi0 + 1, simPoints.length - 1);
-          const frac = (p.x / 2) - pi0;
-          const py = pi0 < simPoints.length ? simPoints[pi0] * (1 - frac) + simPoints[pi1] * frac : midY;
+        for (let bi = 0; bi < 3; bi++) {
+          const spd = layerSpeedScale[bi];
+          const bwX = windX * spd * windRamp;
+          const bwY = windY * spd * windRamp;
+          const energyMod = (0.5 + simEnergy * cfgSandIntensity * 15 * layerEnergyBias[bi]) * windRamp;
 
-          const fadeIn = Math.min(age / 0.1, 1);
-          const pAlpha = fadeIn * particleAlpha;
-
-          for (let si = 0; si < sparks; si++) {
-            const sparkSeed = ((p.birth + si * 7919) * 2654435761) >>> 0;
-            const sx = p.x - (si + 1) * (3 + ((sparkSeed & 0xFF) / 255) * 4);
-            const sy = py + (((sparkSeed >> 8) & 0xFF) / 255 - 0.5) * 5;
-            const sparkAlpha = pAlpha * (0.5 - si * 0.08);
-            if (sx > 0 && sx < w) {
-              ctx.beginPath();
-              ctx.arc(sx, sy, 0.7, 0, Math.PI * 2);
-              ctx.fillStyle = `rgba(${sc.r},${sc.g},${sc.b},${sparkAlpha})`;
-              ctx.fill();
+          // Spawn only while active with pulses
+          if (isActiveRef.current && hasPulses) {
+            const rawEnergy = 0.5 + simEnergy * cfgSandIntensity * 15 * layerEnergyBias[bi];
+            const spawnRate = 0.04 * cfgSandDensity * rawEnergy * spd;
+            if (Math.random() < spawnRate && bandCounts[bi] < layerMaxGrains[bi]) {
+              const baseSize = (0.3 + Math.random() * 1.0) * cfgSandGrainSize * layerSizeScale[bi];
+              const life = 4.0 + Math.random() * 4.5;
+              let sx: number, sy: number;
+              if (Math.abs(Math.cos(dirRad)) > Math.abs(Math.sin(dirRad))) {
+                sx = windX > 0 ? -5 : w + 5;
+                sy = Math.random() * h;
+              } else {
+                sx = Math.random() * w;
+                sy = windY > 0 ? -5 : h + 5;
+              }
+              grains.push({
+                x: sx, y: sy,
+                vx: windX * spd * (0.6 + Math.random() * 0.8),
+                vy: windY * spd * (0.6 + Math.random() * 0.8),
+                size: baseSize, band: bi, birth: now, life,
+              });
+              bandCounts[bi]++;
             }
           }
 
-          ctx.beginPath();
-          ctx.arc(p.x, py, 1.8, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(${sc.r},${sc.g},${sc.b},${pAlpha})`;
-          ctx.fill();
-
-          ctx.beginPath();
-          ctx.arc(p.x, py, 0.6, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(255,255,255,${pAlpha * 0.5})`;
-          ctx.fill();
+          const turb = cfgSandTurbulence * energyMod * layerTurbScale[bi];
+          for (let i = grains.length - 1; i >= 0; i--) {
+            const g = grains[i];
+            if (g.band !== bi) continue;
+            const age = (now - g.birth) / 1000;
+            if (g.y > h + 5 || g.x < -20 || g.x > w + 20 || g.y < -20) {
+              grains.splice(i, 1); continue;
+            }
+            if (isActiveRef.current && age > g.life) {
+              grains.splice(i, 1); continue;
+            }
+            g.vy += GRAVITY * (1 - windRamp) * simDt;
+            const phase = g.birth * 0.001 + age * 3;
+            const tx = Math.sin(phase * 1.7 + bi * 2.1) * turb * 40;
+            const ty = Math.cos(phase * 2.3 + bi * 1.4) * turb * 40;
+            g.vx += (bwX - g.vx) * 0.02 + tx * simDt;
+            g.vy += (bwY - g.vy) * 0.02 + ty * simDt;
+            g.x += g.vx * simDt;
+            g.y += g.vy * simDt;
+            let alpha: number;
+            if (isActiveRef.current) {
+              const fadeIn = Math.min(age / 0.15, 1);
+              const fadeOut = Math.max(1 - (age - (g.life - 0.3)) / 0.3, 0);
+              alpha = fadeIn * (age > g.life - 0.3 ? fadeOut : 1) * cfgSandAlpha;
+            } else {
+              alpha = Math.min(age / 0.15, 1) * cfgSandAlpha * Math.max(0.15, windRamp);
+            }
+            if (alpha <= 0) continue;
+            const r = g.size * (0.8 + 0.2 * Math.sin(age * 5 + g.birth));
+            ctx.beginPath();
+            ctx.arc(g.x, g.y, r, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(${sc.r},${sc.g},${sc.b},${alpha * 0.8})`;
+            ctx.fill();
+            if (r > 0.6) {
+              ctx.beginPath();
+              ctx.arc(g.x, g.y, r * 0.35, 0, Math.PI * 2);
+              ctx.fillStyle = `rgba(255,255,255,${alpha * 0.3})`;
+              ctx.fill();
+            }
+          }
         }
-
-        if (particles.length > 30) particles.splice(0, particles.length - 30);
+        if (grains.length > 230) grains.splice(0, grains.length - 230);
       }
 
       if (clipped) ctx.restore();
