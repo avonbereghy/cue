@@ -85,6 +85,9 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [contextThreshold, setContextThreshold] = useState(false);
   const [contextDisplay, setContextDisplay] = useState("percent");
   const [lowPower, setLowPower] = useState(false);
+  const [showToolPills, setShowToolPills] = useState(false);
+  const [showCurrentTool, setShowCurrentTool] = useState(false);
+  const [showConfigCounts, setShowConfigCounts] = useState(false);
   const [keyPressSpeed, setKeyPressSpeed] = useState(0.35);
   const [keyReleaseSpeed, setKeyReleaseSpeed] = useState(0.4);
   const [stateOverrides, setStateOverrides] = useState<Record<string, string>>({});
@@ -314,6 +317,9 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setContextThreshold(s.contextThreshold ?? false);
     setContextDisplay(s.contextDisplay ?? "percent");
     setLowPower(s.lowPower ?? false);
+    setShowToolPills(s.showToolPills ?? false);
+    setShowCurrentTool(s.showCurrentTool ?? false);
+    setShowConfigCounts(s.showConfigCounts ?? false);
     if (s.lowPower) document.documentElement.setAttribute("data-low-power", "");
     else document.documentElement.removeAttribute("data-low-power");
     // Apply theme CSS variables for UI surfaces
@@ -850,7 +856,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
               return (
                 <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="space-y-0">
-                  <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} />
+                  <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} />
 
                   {/* State transition controls */}
                   <div className="flex items-center gap-1 px-2 py-1.5 rounded-b-lg bg-white/3 border border-t-0 border-white/5 -mt-px">

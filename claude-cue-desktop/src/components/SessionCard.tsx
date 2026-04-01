@@ -53,12 +53,18 @@ interface SessionCardProps {
   contextThreshold?: boolean;
   /** Context display mode: "percent", "tokens", "remaining", "both" */
   contextDisplay?: string;
+  /** Beta: show per-tool usage pills */
+  showToolPills?: boolean;
+  /** Beta: show current running tool in header */
+  showCurrentTool?: boolean;
+  /** Beta: show config counts row */
+  showConfigCounts?: boolean;
   /** Per-card expand override: 0=compact, 1=slim (no details), 2=full details. undefined = use global mode. */
   expandOverride?: number;
   onExpandCycle?: () => void;
 }
 
-export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = false, contextDisplay = "percent", expandOverride, onExpandCycle }: SessionCardProps) {
+export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = false, contextDisplay = "percent", showToolPills = false, showCurrentTool = false, showConfigCounts = false, expandOverride, onExpandCycle }: SessionCardProps) {
   // Effective display mode: expandOverride takes precedence over global compact/slim
   const effectiveCompact = expandOverride !== undefined ? expandOverride === 0 : compactMode;
   const effectiveSlim = expandOverride !== undefined ? expandOverride <= 1 : slimMode;
@@ -342,7 +348,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
             <span className="text-xs px-2 py-0.5 rounded-full text-center" style={{ backgroundColor: badgeHex.bg, color: badgeHex.text, transition: stateTransition, minWidth: "8.5em" }}>
               {displayStateName}
             </span>
-            {!effectiveCompact && !effectiveSlim && session.runningToolName && (
+            {showCurrentTool && !effectiveCompact && !effectiveSlim && session.runningToolName && (
               <span className="inline-block text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/50 truncate w-[200px] shrink-0 overflow-hidden whitespace-nowrap" title={session.runningToolTarget || session.runningToolName}>
                 {session.runningToolName}
                 {session.runningToolTarget && <span className="text-white/30"> {session.runningToolTarget}</span>}
@@ -432,8 +438,8 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
             )}
           </div>
 
-          {/* Row 3: Tool chips + cache hit rate */}
-          {topTools.length > 0 && (
+          {/* Row 3: Tool chips (beta) */}
+          {showToolPills && topTools.length > 0 && (
             <div className="relative flex items-center gap-1.5 flex-wrap">
               {topTools.map(([name, count]) => (
                 <span
@@ -548,8 +554,8 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
             </div>
           )}
 
-          {/* Config counts */}
-          {!effectiveCompact && !effectiveSlim && session.configCounts && (
+          {/* Config counts (beta) */}
+          {showConfigCounts && !effectiveCompact && !effectiveSlim && session.configCounts && (
             (session.configCounts.claudeMdCount + session.configCounts.rulesCount + session.configCounts.mcpServers + session.configCounts.hooksCount) > 0
           ) && (
             <div className="relative flex items-center gap-1.5 text-[0.625rem] text-white/30">

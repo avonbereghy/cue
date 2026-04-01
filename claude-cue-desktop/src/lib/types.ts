@@ -174,6 +174,12 @@ export interface Settings {
   contextDisplay: string;
   /** Low power mode: disables animations, signal strings, sand, backdrop-filter */
   lowPower: boolean;
+  /** Beta: show per-tool usage pills in detail mode */
+  showToolPills: boolean;
+  /** Beta: show current running tool name in header */
+  showCurrentTool: boolean;
+  /** Beta: show config counts (CLAUDE.md, hooks, MCP) in detail mode */
+  showConfigCounts: boolean;
 }
 
 export interface SignalPreset {
