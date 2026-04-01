@@ -427,9 +427,11 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
             m.cache_creation_tokens += entry.cache_creation_tokens;
             m.cache_read_tokens += entry.cache_read_tokens;
 
-            // Context usage = all input tokens for the last message
+            // Context usage = input tokens + output tokens for the last message
+            // (output tokens become part of conversation history for the next turn)
             m.last_input_tokens =
-                entry.input_tokens + entry.cache_creation_tokens + entry.cache_read_tokens;
+                entry.input_tokens + entry.cache_creation_tokens + entry.cache_read_tokens
+                + entry.output_tokens;
 
             for (tool, count) in &entry.tool_counts {
                 *m.tool_counts.entry(tool.clone()).or_insert(0) += count;
