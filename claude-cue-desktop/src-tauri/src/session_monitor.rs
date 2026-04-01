@@ -125,29 +125,45 @@ impl SessionMonitorState {
             now,
         );
 
-        // For sessions claiming "working"/"subagent" whose hook hasn't fired in 90s,
-        // check if the JSONL conversation log is still being written (thinking/streaming).
-        // If so, bump lastActivity so the stale-working check doesn't downgrade them.
+        // JSONL mtime reconciliation for sessions claiming "working"/"subagent".
+        //
+        // Two checks, both using JSONL mtime as ground truth:
+        //
+        // 1. Quick stale detection (10s): if both the hook AND JSONL have been
+        //    silent for 15s, the session stopped (interrupted, completed without
+        //    Stop hook, etc.). Downgrade to "done" immediately instead of waiting
+        //    90s. This catches Ctrl+C interrupts within ~15s.
+        //
+        // 2. Keep-alive (90s): if the hook hasn't fired in 90s but JSONL is still
+        //    being written (long thinking/streaming), bump lastActivity to prevent
+        //    the models.rs stale-working check from downgrading to "idle".
         let projects_path = paths::claude_projects_path();
         let active: Vec<_> = active
             .into_iter()
             .map(|mut session| {
                 if (session.state == "working" || session.state == "subagent")
-                    && (now - session.last_activity) > 90.0
+                    && (now - session.last_activity) > 15.0
                 {
                     let jpath = self.jsonl_path(&session.id, &session.workspace, &projects_path);
-                    if let Ok(meta) = std::fs::metadata(&jpath) {
-                        if let Ok(mtime) = meta.modified() {
-                            let mtime_secs = mtime
+                    let jsonl_age = std::fs::metadata(&jpath)
+                        .and_then(|m| m.modified())
+                        .map(|mtime| {
+                            now - mtime
                                 .duration_since(SystemTime::UNIX_EPOCH)
                                 .unwrap_or_default()
-                                .as_secs_f64();
-                            // JSONL modified in the last 30s → session is actively
-                            // thinking/streaming even though the hook hasn't fired
-                            if (now - mtime_secs) < 30.0 {
-                                session.last_activity = mtime_secs;
-                            }
-                        }
+                                .as_secs_f64()
+                        })
+                        .unwrap_or(f64::MAX);
+
+                    if jsonl_age > 15.0 {
+                        // Both hook and JSONL silent for 10s — session stopped.
+                        // Use "done" (not "idle") since the session is still alive
+                        // at the prompt, just finished its turn.
+                        session.state = "done".to_string();
+                    } else if (now - session.last_activity) > 90.0 {
+                        // Hook stale but JSONL still active — bump lastActivity
+                        // to prevent models.rs from downgrading to "idle".
+                        session.last_activity = now - jsonl_age;
                     }
                 }
                 session
