@@ -362,96 +362,160 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   };
 
   // ---------------------------------------------------------------------------
-  // Sandbox mode — independent simulated sessions with state transition buttons
+  // Sandbox mode — full keyboard-driven session designer for screenshots
   // ---------------------------------------------------------------------------
   const SANDBOX_STATES = ["working", "waiting", "error", "subagent", "idle", "done", "ended"] as const;
-  const SANDBOX_STATE_META: Record<string, { icon: string; display: string }> = {
-    working: { icon: "\u27F3", display: "Working" },
-    waiting: { icon: "\u23F8", display: "Waiting" },
-    error: { icon: "\u2717", display: "Error" },
-    subagent: { icon: "\u2934", display: "Subagent" },
-    idle: { icon: "\u25CB", display: "Idle" },
-    done: { icon: "\u2713", display: "Done" },
-    ended: { icon: "\u2715", display: "Ended" },
+  const SANDBOX_STATE_META: Record<string, { icon: string; display: string; key: string }> = {
+    working:  { icon: "\u27F3", display: "Working",  key: "W" },
+    waiting:  { icon: "\u23F8", display: "Waiting",  key: "P" },
+    error:    { icon: "\u2717", display: "Error",    key: "E" },
+    subagent: { icon: "\u2934", display: "Subagent", key: "A" },
+    idle:     { icon: "\u25CB", display: "Idle",     key: "I" },
+    done:     { icon: "\u2713", display: "Done",     key: "D" },
+    ended:    { icon: "\u2715", display: "Ended",    key: "X" },
   };
   const SANDBOX_MODELS = ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"] as const;
   const SANDBOX_SOURCES = ["terminal", "vscode", "cursor", "iterm"] as const;
+  const SANDBOX_BRANCHES = ["main", "feat/auth", "fix/bug-123", "dev", "feat/dashboard", "release/v2.0", "hotfix/crash"];
+  const SANDBOX_WORKSPACES = ["my-app", "api-server", "claude-cue", "web-client", "ml-pipeline", "infra", "docs", "mobile"];
+  const SANDBOX_TOOLS_ACTIVE: Array<[string, string]> = [
+    ["Write", "src/components/Button.tsx"],
+    ["Edit", "src/lib/utils.ts"],
+    ["Bash", "npm run test"],
+    ["Read", "package.json"],
+    ["Grep", "useState"],
+    ["Agent", "test-runner"],
+    ["Write", "src/hooks/useAuth.ts"],
+    ["Bash", "cargo build --release"],
+  ];
+  const SANDBOX_TITLES = [
+    "Implementing auth flow",
+    "Fixing race condition",
+    "Adding unit tests",
+    "Refactoring API layer",
+    "Building dashboard UI",
+    "Optimizing queries",
+    "Writing documentation",
+    "Debugging memory leak",
+  ];
 
   const sandboxCounterRef = useRef(0);
   const [sandboxSessions, setSandboxSessions] = useState<EnrichedSession[]>([]);
+  const [sandboxSelectedIdx, setSandboxSelectedIdx] = useState(-1);
+  const [sandboxShowHelp, setSandboxShowHelp] = useState(false);
+  const [sandboxEditingTitle, setSandboxEditingTitle] = useState(false);
+  const sandboxTitleInputRef = useRef<HTMLInputElement>(null);
 
-  const makeSandboxSession = useCallback((state: string = "idle"): EnrichedSession => {
+  const makeSandboxSession = useCallback((state: string = "idle", overrides?: Partial<{ title: string; workspace: string; model: string; source: string; branch: string; contextPct: number; tool: [string, string] | null; todoCompleted: number; todoTotal: number; subagentCount: number; tokPerSec: number; durationSecs: number }>): EnrichedSession => {
     const n = ++sandboxCounterRef.current;
-    const model = SANDBOX_MODELS[n % SANDBOX_MODELS.length];
-    const source = SANDBOX_SOURCES[n % SANDBOX_SOURCES.length];
+    const model = overrides?.model ?? SANDBOX_MODELS[n % SANDBOX_MODELS.length];
+    const source = overrides?.source ?? SANDBOX_SOURCES[n % SANDBOX_SOURCES.length];
     const meta = SANDBOX_STATE_META[state] ?? SANDBOX_STATE_META.idle;
-    const contextPct = Math.random() * 0.6 + 0.05;
+    const contextPct = overrides?.contextPct ?? (Math.random() * 0.6 + 0.05);
     const contextLimit = model.includes("haiku") ? 200_000 : 1_000_000;
     const modelDisplay = model.includes("opus") ? "Opus 4.6" : model.includes("haiku") ? "Haiku 4.5" : "Sonnet 4.6";
     const sourceDisplay = source === "vscode" ? "VSCode" : source === "cursor" ? "Cursor" : source === "iterm" ? "iTerm" : "Terminal";
+    const branch = overrides?.branch ?? SANDBOX_BRANCHES[n % SANDBOX_BRANCHES.length];
+    const workspace = overrides?.workspace ?? SANDBOX_WORKSPACES[n % SANDBOX_WORKSPACES.length];
+    const title = overrides?.title ?? SANDBOX_TITLES[n % SANDBOX_TITLES.length];
+    const tool = overrides?.tool ?? (state === "working" ? SANDBOX_TOOLS_ACTIVE[n % SANDBOX_TOOLS_ACTIVE.length] : null);
+    const subagentCount = overrides?.subagentCount ?? (state === "subagent" ? Math.floor(Math.random() * 3) + 1 : 0);
+    const todoTotal = overrides?.todoTotal ?? Math.floor(Math.random() * 12 + 3);
+    const todoCompleted = overrides?.todoCompleted ?? Math.floor(Math.random() * todoTotal);
+    const subagents = Array.from({ length: subagentCount }, (_, i) => ({
+      agentId: `sub_${n}_${i}`,
+      description: ["Research task", "Code review", "Test runner", "Build validator"][i % 4],
+      slug: ["research", "code-reviewer", "test-runner", "build-validator"][i % 4],
+      inputTokens: Math.floor(Math.random() * 30000 + 5000),
+      outputTokens: Math.floor(Math.random() * 8000 + 1000),
+      cacheCreationTokens: 0,
+      cacheReadTokens: Math.floor(Math.random() * 10000),
+      model,
+      toolCounts: { Read: Math.floor(Math.random() * 8 + 1), Grep: Math.floor(Math.random() * 4), Edit: Math.floor(Math.random() * 3) },
+      messageCount: Math.floor(Math.random() * 15 + 3),
+      isActive: true,
+    }));
+
     return {
       info: {
         id: `__sandbox_${n}__`,
-        workspace: `/sandbox/project-${n}`,
+        workspace: `/Users/dev/Projects/${workspace}`,
         state,
         lastActivity: Date.now() / 1000,
-        startedAt: Date.now() / 1000 - Math.floor(Math.random() * 600 + 30),
+        startedAt: Date.now() / 1000 - (overrides?.durationSecs ?? Math.floor(Math.random() * 1800 + 60)),
         source,
       },
       metrics: {
-        messageCount: Math.floor(Math.random() * 80 + 5),
+        messageCount: Math.floor(Math.random() * 80 + 10),
         userMessageCount: Math.floor(Math.random() * 20 + 2),
         inputTokens: Math.floor(contextPct * contextLimit * 0.8),
-        outputTokens: Math.floor(Math.random() * 40000 + 2000),
-        cacheCreationTokens: Math.floor(Math.random() * 15000),
-        cacheReadTokens: Math.floor(Math.random() * 80000),
+        outputTokens: Math.floor(Math.random() * 60000 + 5000),
+        cacheCreationTokens: Math.floor(Math.random() * 20000),
+        cacheReadTokens: Math.floor(Math.random() * 100000),
         model,
         lastInputTokens: Math.floor(contextPct * contextLimit * 0.8),
-        customTitle: null,
-        gitBranch: ["main", "feat/sandbox", "fix/bug-123", "dev"][n % 4],
-        toolCounts: { Read: Math.floor(Math.random() * 20), Edit: Math.floor(Math.random() * 12), Bash: Math.floor(Math.random() * 8), Grep: Math.floor(Math.random() * 6) },
-        subagents: state === "subagent" ? [{ agentId: `sub_${n}_1`, description: "Research task", slug: "research", inputTokens: 12000, outputTokens: 3000, cacheCreationTokens: 0, cacheReadTokens: 5000, model, toolCounts: { Read: 3, Grep: 2 }, messageCount: 8, isActive: true }] : [],
+        customTitle: title,
+        gitBranch: branch,
+        toolCounts: { Read: Math.floor(Math.random() * 25 + 2), Edit: Math.floor(Math.random() * 15 + 1), Bash: Math.floor(Math.random() * 10), Grep: Math.floor(Math.random() * 8), Write: Math.floor(Math.random() * 6), Agent: subagentCount > 0 ? subagentCount : 0 },
+        subagents,
         todoItems: [],
       },
-      workspaceName: `project-${n}`,
-      displayTitle: `Sandbox Session ${n}`,
+      workspaceName: workspace,
+      displayTitle: title,
       stateIcon: meta.icon,
       stateDisplayName: meta.display,
-      durationSecs: Math.floor(Math.random() * 600 + 30),
+      durationSecs: overrides?.durationSecs ?? Math.floor(Math.random() * 1800 + 60),
       contextLimit,
       contextUsagePercent: contextPct,
       modelDisplayName: modelDisplay,
       sourceDisplay,
-      hasSubagents: state === "subagent",
+      hasSubagents: subagentCount > 0,
       provider: "",
-      outputTokensPerSec: 0,
+      outputTokensPerSec: overrides?.tokPerSec ?? (state === "working" || state === "subagent" ? Math.random() * 25 + 5 : 0),
+      runningToolName: tool ? tool[0] : undefined,
+      runningToolTarget: tool ? tool[1] : undefined,
       todoItems: [],
-      todoCompleted: 0,
-      todoTotal: 0,
-      systemMemory: { totalMb: 0, usedMb: 0, usagePercent: 0 },
+      todoCompleted,
+      todoTotal,
+      systemMemory: { totalMb: 32768, usedMb: Math.floor(Math.random() * 16000 + 8000), usagePercent: Math.random() * 50 + 25 },
+      claudeVersion: "1.0.33",
     };
   }, []);
 
   const addSandboxSession = useCallback((state?: string) => {
-    setSandboxSessions((prev) => [...prev, makeSandboxSession(state)]);
+    setSandboxSessions((prev) => {
+      const next = [...prev, makeSandboxSession(state)];
+      setSandboxSelectedIdx(next.length - 1);
+      return next;
+    });
   }, [makeSandboxSession]);
 
   const removeSandboxSession = useCallback((id: string) => {
-    setSandboxSessions((prev) => prev.filter((s) => s.info.id !== id));
+    setSandboxSessions((prev) => {
+      const next = prev.filter((s) => s.info.id !== id);
+      setSandboxSelectedIdx((idx) => Math.min(idx, next.length - 1));
+      return next;
+    });
   }, []);
 
   const setSandboxState = useCallback((id: string, state: string) => {
     const meta = SANDBOX_STATE_META[state] ?? SANDBOX_STATE_META.idle;
+    const tool = state === "working" ? SANDBOX_TOOLS_ACTIVE[Math.floor(Math.random() * SANDBOX_TOOLS_ACTIVE.length)] : null;
     setSandboxSessions((prev) => prev.map((s) =>
       s.info.id === id ? {
         ...s,
         info: { ...s.info, state, lastActivity: Date.now() / 1000 },
         stateIcon: meta.icon,
         stateDisplayName: meta.display,
-        hasSubagents: state === "subagent",
+        hasSubagents: state === "subagent" ? true : (state === "working" ? false : s.hasSubagents),
+        outputTokensPerSec: (state === "working" || state === "subagent") ? Math.random() * 25 + 5 : 0,
+        runningToolName: tool ? tool[0] : (state === "working" ? s.runningToolName : undefined),
+        runningToolTarget: tool ? tool[1] : (state === "working" ? s.runningToolTarget : undefined),
         metrics: {
           ...s.metrics,
-          subagents: state === "subagent" ? [{ agentId: `sub_auto`, description: "Research task", slug: "research", inputTokens: 12000, outputTokens: 3000, cacheCreationTokens: 0, cacheReadTokens: 5000, model: s.metrics.model, toolCounts: { Read: 3, Grep: 2 }, messageCount: 8, isActive: true }] : [],
+          subagents: state === "subagent" ? (s.metrics.subagents.length > 0 ? s.metrics.subagents : [
+            { agentId: `sub_auto_1`, description: "Research task", slug: "research", inputTokens: 12000, outputTokens: 3000, cacheCreationTokens: 0, cacheReadTokens: 5000, model: s.metrics.model, toolCounts: { Read: 3, Grep: 2 }, messageCount: 8, isActive: true },
+          ]) : (state === "working" ? [] : s.metrics.subagents),
         },
       } : s,
     ));
@@ -460,12 +524,16 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const setAllSandboxState = useCallback((state: string) => {
     setSandboxSessions((prev) => prev.map((s) => {
       const meta = SANDBOX_STATE_META[state] ?? SANDBOX_STATE_META.idle;
+      const tool = state === "working" ? SANDBOX_TOOLS_ACTIVE[Math.floor(Math.random() * SANDBOX_TOOLS_ACTIVE.length)] : null;
       return {
         ...s,
         info: { ...s.info, state, lastActivity: Date.now() / 1000 },
         stateIcon: meta.icon,
         stateDisplayName: meta.display,
         hasSubagents: state === "subagent",
+        outputTokensPerSec: (state === "working" || state === "subagent") ? Math.random() * 25 + 5 : 0,
+        runningToolName: tool ? tool[0] : undefined,
+        runningToolTarget: tool ? tool[1] : undefined,
         metrics: {
           ...s.metrics,
           subagents: state === "subagent" ? [{ agentId: `sub_auto`, description: "Research task", slug: "research", inputTokens: 12000, outputTokens: 3000, cacheCreationTokens: 0, cacheReadTokens: 5000, model: s.metrics.model, toolCounts: { Read: 3, Grep: 2 }, messageCount: 8, isActive: true }] : [],
@@ -473,6 +541,348 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       };
     }));
   }, []);
+
+  // Mutate a specific field on the selected sandbox session
+  const mutateSandboxSelected = useCallback((fn: (s: EnrichedSession) => EnrichedSession) => {
+    setSandboxSessions((prev) => {
+      const idx = sandboxSelectedIdx;
+      if (idx < 0 || idx >= prev.length) return prev;
+      return prev.map((s, i) => i === idx ? fn(s) : s);
+    });
+  }, [sandboxSelectedIdx]);
+
+  // Cycle model on selected session
+  const cycleSandboxModel = useCallback(() => {
+    mutateSandboxSelected((s) => {
+      const currentIdx = SANDBOX_MODELS.indexOf(s.metrics.model as typeof SANDBOX_MODELS[number]);
+      const nextModel = SANDBOX_MODELS[(currentIdx + 1) % SANDBOX_MODELS.length];
+      const modelDisplay = nextModel.includes("opus") ? "Opus 4.6" : nextModel.includes("haiku") ? "Haiku 4.5" : "Sonnet 4.6";
+      const contextLimit = nextModel.includes("haiku") ? 200_000 : 1_000_000;
+      return { ...s, metrics: { ...s.metrics, model: nextModel }, modelDisplayName: modelDisplay, contextLimit, contextUsagePercent: s.metrics.inputTokens / contextLimit };
+    });
+  }, [mutateSandboxSelected]);
+
+  // Cycle source on selected session
+  const cycleSandboxSource = useCallback(() => {
+    mutateSandboxSelected((s) => {
+      const currentIdx = SANDBOX_SOURCES.indexOf(s.info.source as typeof SANDBOX_SOURCES[number]);
+      const nextSource = SANDBOX_SOURCES[(currentIdx + 1) % SANDBOX_SOURCES.length];
+      const sourceDisplay = nextSource === "vscode" ? "VSCode" : nextSource === "cursor" ? "Cursor" : nextSource === "iterm" ? "iTerm" : "Terminal";
+      return { ...s, info: { ...s.info, source: nextSource }, sourceDisplay };
+    });
+  }, [mutateSandboxSelected]);
+
+  // Cycle git branch on selected session
+  const cycleSandboxBranch = useCallback(() => {
+    mutateSandboxSelected((s) => {
+      const currentIdx = SANDBOX_BRANCHES.indexOf(s.metrics.gitBranch ?? "");
+      const nextBranch = SANDBOX_BRANCHES[(currentIdx + 1) % SANDBOX_BRANCHES.length];
+      return { ...s, metrics: { ...s.metrics, gitBranch: nextBranch } };
+    });
+  }, [mutateSandboxSelected]);
+
+  // Adjust context usage: [ = -10%, ] = +10%
+  const adjustSandboxContext = useCallback((delta: number) => {
+    mutateSandboxSelected((s) => {
+      const newPct = Math.max(0.01, Math.min(0.99, s.contextUsagePercent + delta));
+      const newInput = Math.floor(newPct * s.contextLimit * 0.8);
+      return { ...s, contextUsagePercent: newPct, metrics: { ...s.metrics, inputTokens: newInput, lastInputTokens: newInput } };
+    });
+  }, [mutateSandboxSelected]);
+
+  // Toggle subagent count on selected
+  const cycleSandboxSubagents = useCallback(() => {
+    mutateSandboxSelected((s) => {
+      const currentCount = s.metrics.subagents.length;
+      const nextCount = (currentCount + 1) % 5; // 0, 1, 2, 3, 4
+      const subagents = Array.from({ length: nextCount }, (_, i) => ({
+        agentId: `sub_cycle_${i}`,
+        description: ["Research task", "Code review", "Test runner", "Build validator"][i % 4],
+        slug: ["research", "code-reviewer", "test-runner", "build-validator"][i % 4],
+        inputTokens: Math.floor(Math.random() * 30000 + 5000),
+        outputTokens: Math.floor(Math.random() * 8000 + 1000),
+        cacheCreationTokens: 0,
+        cacheReadTokens: Math.floor(Math.random() * 10000),
+        model: s.metrics.model,
+        toolCounts: { Read: Math.floor(Math.random() * 8 + 1), Grep: Math.floor(Math.random() * 4) },
+        messageCount: Math.floor(Math.random() * 15 + 3),
+        isActive: true,
+      }));
+      return { ...s, hasSubagents: nextCount > 0, metrics: { ...s.metrics, subagents } };
+    });
+  }, [mutateSandboxSelected]);
+
+  // Cycle running tool on selected
+  const cycleSandboxTool = useCallback(() => {
+    mutateSandboxSelected((s) => {
+      const allTools: Array<[string | undefined, string | undefined]> = [
+        [undefined, undefined], // no tool
+        ...SANDBOX_TOOLS_ACTIVE,
+      ];
+      const currentIdx = allTools.findIndex(([name, target]) =>
+        (name ?? "") === (s.runningToolName ?? "") && (target ?? "") === (s.runningToolTarget ?? "")
+      );
+      const [nextName, nextTarget] = allTools[(currentIdx + 1) % allTools.length];
+      return { ...s, runningToolName: nextName, runningToolTarget: nextTarget };
+    });
+  }, [mutateSandboxSelected]);
+
+  // Randomize token metrics on selected
+  const randomizeSandboxTokens = useCallback(() => {
+    mutateSandboxSelected((s) => {
+      const inputTokens = Math.floor(Math.random() * 800000 + 10000);
+      const outputTokens = Math.floor(Math.random() * 80000 + 2000);
+      return {
+        ...s,
+        metrics: { ...s.metrics, inputTokens, outputTokens, lastInputTokens: inputTokens, cacheReadTokens: Math.floor(Math.random() * 200000), cacheCreationTokens: Math.floor(Math.random() * 30000), messageCount: Math.floor(Math.random() * 100 + 5) },
+        outputTokensPerSec: Math.random() * 30 + 3,
+        contextUsagePercent: inputTokens / s.contextLimit,
+      };
+    });
+  }, [mutateSandboxSelected]);
+
+  // Cycle todo progress on selected
+  const cycleSandboxTodos = useCallback(() => {
+    mutateSandboxSelected((s) => {
+      if (s.todoTotal === 0) return { ...s, todoTotal: 7, todoCompleted: 3 };
+      if (s.todoCompleted < s.todoTotal) return { ...s, todoCompleted: s.todoCompleted + 1 };
+      return { ...s, todoTotal: 0, todoCompleted: 0 };
+    });
+  }, [mutateSandboxSelected]);
+
+  // Adjust duration on selected: + / - 5 minutes
+  const adjustSandboxDuration = useCallback((delta: number) => {
+    mutateSandboxSelected((s) => {
+      const newDuration = Math.max(10, s.durationSecs + delta);
+      return { ...s, durationSecs: newDuration, info: { ...s.info, startedAt: Date.now() / 1000 - newDuration } };
+    });
+  }, [mutateSandboxSelected]);
+
+  // Toggle provider on selected
+  const cycleSandboxProvider = useCallback(() => {
+    mutateSandboxSelected((s) => {
+      const providers = ["", "Bedrock", "Vertex"];
+      const idx = providers.indexOf(s.provider);
+      return { ...s, provider: providers[(idx + 1) % providers.length] };
+    });
+  }, [mutateSandboxSelected]);
+
+  // Sandbox presets — pre-built scenes for common screenshot needs
+  const SANDBOX_PRESETS: Array<{ key: string; label: string; description: string; build: () => EnrichedSession[] }> = [
+    {
+      key: "F1", label: "Full House", description: "8 sessions, all states",
+      build: () => {
+        sandboxCounterRef.current = 0;
+        return SANDBOX_STATES.filter(s => s !== "ended").map((state, i) => {
+          const extra = i === 0 ? makeSandboxSession("working", { title: "Building dashboard UI", workspace: "claude-cue", branch: "main", contextPct: 0.61, durationSecs: 272, tokPerSec: 12.4, tool: ["Write", "src/components/Dashboard.tsx"] }) : null;
+          return extra ?? makeSandboxSession(state);
+        }).concat([makeSandboxSession("working", { title: "Running test suite", workspace: "api-server", branch: "feat/auth", contextPct: 0.29, tool: ["Bash", "pytest -x"] })]);
+      },
+    },
+    {
+      key: "F2", label: "All Working", description: "4 active sessions",
+      build: () => {
+        sandboxCounterRef.current = 0;
+        return [
+          makeSandboxSession("working", { title: "Implementing auth flow", workspace: "api-server", branch: "feat/auth", contextPct: 0.45, tool: ["Write", "src/auth/oauth.ts"] }),
+          makeSandboxSession("working", { title: "Building UI components", workspace: "web-client", branch: "feat/dashboard", contextPct: 0.32, tool: ["Edit", "src/components/Card.tsx"] }),
+          makeSandboxSession("subagent", { title: "Refactoring database layer", workspace: "ml-pipeline", branch: "dev", contextPct: 0.58, subagentCount: 2 }),
+          makeSandboxSession("working", { title: "Writing documentation", workspace: "docs", branch: "main", contextPct: 0.15, tool: ["Write", "README.md"] }),
+        ];
+      },
+    },
+    {
+      key: "F3", label: "Permission", description: "3 sessions, one waiting",
+      build: () => {
+        sandboxCounterRef.current = 0;
+        return [
+          makeSandboxSession("working", { title: "Fixing race condition", workspace: "claude-cue", branch: "fix/bug-123", contextPct: 0.52, tool: ["Edit", "src-tauri/src/lib.rs"] }),
+          makeSandboxSession("waiting", { title: "Installing dependencies", workspace: "web-client", branch: "main", contextPct: 0.22, tool: ["Bash", "npm install express"] }),
+          makeSandboxSession("done", { title: "Unit tests passing", workspace: "api-server", branch: "feat/auth", contextPct: 0.67, tokPerSec: 0 }),
+        ];
+      },
+    },
+    {
+      key: "F4", label: "Error", description: "Mixed with error state",
+      build: () => {
+        sandboxCounterRef.current = 0;
+        return [
+          makeSandboxSession("working", { title: "Building dashboard UI", workspace: "claude-cue", branch: "main", contextPct: 0.38, tool: ["Write", "src/components/SessionCard.tsx"] }),
+          makeSandboxSession("error", { title: "Type check failed", workspace: "web-client", branch: "feat/types", contextPct: 0.71 }),
+          makeSandboxSession("subagent", { title: "Optimizing queries", workspace: "api-server", branch: "perf/db", contextPct: 0.44, subagentCount: 3 }),
+          makeSandboxSession("idle", { title: "Waiting for input", workspace: "docs", branch: "main", contextPct: 0.12 }),
+        ];
+      },
+    },
+    {
+      key: "F5", label: "Screenshot", description: "Picture-perfect hero shot",
+      build: () => {
+        sandboxCounterRef.current = 0;
+        return [
+          makeSandboxSession("working", { title: "Building auth middleware", workspace: "api-server", model: "claude-opus-4-6", branch: "feat/auth", contextPct: 0.61, durationSecs: 272, tokPerSec: 14.2, tool: ["Write", "src/middleware/auth.ts"], todoTotal: 7, todoCompleted: 3 }),
+          makeSandboxSession("subagent", { title: "Running test suite", workspace: "claude-cue", model: "claude-sonnet-4-6", branch: "main", contextPct: 0.29, durationSecs: 728, subagentCount: 2, todoTotal: 15, todoCompleted: 11 }),
+          makeSandboxSession("waiting", { title: "Database migration", workspace: "ml-pipeline", model: "claude-sonnet-4-6", branch: "dev", contextPct: 0.45, durationSecs: 156, tool: ["Bash", "prisma migrate deploy"] }),
+          makeSandboxSession("done", { title: "Documentation complete", workspace: "docs", model: "claude-haiku-4-5-20251001", branch: "main", contextPct: 0.82, durationSecs: 540, tokPerSec: 0, todoTotal: 5, todoCompleted: 5 }),
+          makeSandboxSession("working", { title: "Optimizing bundle size", workspace: "web-client", model: "claude-opus-4-6", branch: "perf/bundle", contextPct: 0.37, durationSecs: 95, tokPerSec: 18.7, tool: ["Edit", "vite.config.ts"] }),
+          makeSandboxSession("idle", { title: "Awaiting review", workspace: "infra", model: "claude-sonnet-4-6", branch: "feat/deploy", contextPct: 0.19, durationSecs: 1200 }),
+        ];
+      },
+    },
+  ];
+
+  // Load a sandbox preset
+  const loadSandboxPreset = useCallback((preset: typeof SANDBOX_PRESETS[number]) => {
+    const sessions = preset.build();
+    setSandboxSessions(sessions);
+    setSandboxSelectedIdx(0);
+  }, []);
+
+  // Keyboard handler for sandbox mode
+  useEffect(() => {
+    if (!testMode) return;
+
+    const handleKey = (e: KeyboardEvent) => {
+      // Don't intercept when editing title
+      if (sandboxEditingTitle) return;
+      // Don't intercept when typing in an input/textarea
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      const key = e.key;
+      const shift = e.shiftKey;
+
+      // Number keys 1-8: add session or set state on slot
+      if (key >= "1" && key <= "8") {
+        const slotIdx = parseInt(key) - 1;
+        if (shift) {
+          // Shift+N: remove session at slot
+          setSandboxSessions((prev) => {
+            if (slotIdx >= prev.length) return prev;
+            const next = prev.filter((_, i) => i !== slotIdx);
+            setSandboxSelectedIdx((idx) => Math.min(idx, next.length - 1));
+            return next;
+          });
+        } else {
+          // N: if slot doesn't exist, add new session. If exists, select it.
+          setSandboxSessions((prev) => {
+            if (slotIdx >= prev.length) {
+              const newSession = makeSandboxSession("idle");
+              setSandboxSelectedIdx(prev.length);
+              return [...prev, newSession];
+            }
+            setSandboxSelectedIdx(slotIdx);
+            return prev;
+          });
+        }
+        e.preventDefault();
+        return;
+      }
+
+      // 0: clear all
+      if (key === "0") {
+        setSandboxSessions([]);
+        setSandboxSelectedIdx(-1);
+        e.preventDefault();
+        return;
+      }
+
+      // Tab / Shift+Tab: cycle selection
+      if (key === "Tab") {
+        e.preventDefault();
+        setSandboxSessions((prev) => {
+          if (prev.length === 0) return prev;
+          setSandboxSelectedIdx((idx) => {
+            if (shift) return idx <= 0 ? prev.length - 1 : idx - 1;
+            return (idx + 1) % prev.length;
+          });
+          return prev;
+        });
+        return;
+      }
+
+      // State keys (operate on selected, or all with Shift)
+      const stateKey = Object.entries(SANDBOX_STATE_META).find(([, m]) => m.key.toLowerCase() === key.toLowerCase());
+      if (stateKey) {
+        const [state] = stateKey;
+        e.preventDefault();
+        if (shift) {
+          setAllSandboxState(state);
+        } else if (sandboxSelectedIdx >= 0) {
+          setSandboxSessions((prev) => {
+            if (sandboxSelectedIdx >= prev.length) return prev;
+            const id = prev[sandboxSelectedIdx].info.id;
+            const meta = SANDBOX_STATE_META[state] ?? SANDBOX_STATE_META.idle;
+            const tool = state === "working" ? SANDBOX_TOOLS_ACTIVE[Math.floor(Math.random() * SANDBOX_TOOLS_ACTIVE.length)] : null;
+            return prev.map((s) =>
+              s.info.id === id ? {
+                ...s,
+                info: { ...s.info, state, lastActivity: Date.now() / 1000 },
+                stateIcon: meta.icon,
+                stateDisplayName: meta.display,
+                hasSubagents: state === "subagent" ? true : (state === "working" ? false : s.hasSubagents),
+                outputTokensPerSec: (state === "working" || state === "subagent") ? Math.random() * 25 + 5 : 0,
+                runningToolName: tool ? tool[0] : (state === "working" ? s.runningToolName : undefined),
+                runningToolTarget: tool ? tool[1] : (state === "working" ? s.runningToolTarget : undefined),
+                metrics: {
+                  ...s.metrics,
+                  subagents: state === "subagent" ? (s.metrics.subagents.length > 0 ? s.metrics.subagents : [{ agentId: `sub_auto_1`, description: "Research task", slug: "research", inputTokens: 12000, outputTokens: 3000, cacheCreationTokens: 0, cacheReadTokens: 5000, model: s.metrics.model, toolCounts: { Read: 3, Grep: 2 }, messageCount: 8, isActive: true }]) : (state === "working" ? [] : s.metrics.subagents),
+                },
+              } : s,
+            );
+          });
+        }
+        return;
+      }
+
+      // Property keys (selected session)
+      if (sandboxSelectedIdx >= 0) {
+        switch (key.toLowerCase()) {
+          case "m": cycleSandboxModel(); e.preventDefault(); return;
+          case "s": cycleSandboxSource(); e.preventDefault(); return;
+          case "b": cycleSandboxBranch(); e.preventDefault(); return;
+          case "t": randomizeSandboxTokens(); e.preventDefault(); return;
+          case "r": cycleSandboxSubagents(); e.preventDefault(); return;
+          case "o": cycleSandboxTodos(); e.preventDefault(); return;
+          case "l": cycleSandboxTool(); e.preventDefault(); return;
+          case "v": cycleSandboxProvider(); e.preventDefault(); return;
+          case "[": adjustSandboxContext(-0.1); e.preventDefault(); return;
+          case "]": adjustSandboxContext(0.1); e.preventDefault(); return;
+          case "-": adjustSandboxDuration(-300); e.preventDefault(); return;
+          case "=": adjustSandboxDuration(300); e.preventDefault(); return;
+          case "n":
+            setSandboxEditingTitle(true);
+            e.preventDefault();
+            setTimeout(() => sandboxTitleInputRef.current?.focus(), 50);
+            return;
+        }
+      }
+
+      // F-key presets
+      const presetMatch = SANDBOX_PRESETS.find((p) => p.key === key);
+      if (presetMatch) {
+        loadSandboxPreset(presetMatch);
+        e.preventDefault();
+        return;
+      }
+
+      // ? or / — toggle help
+      if (key === "?" || key === "/") {
+        setSandboxShowHelp((v) => !v);
+        e.preventDefault();
+        return;
+      }
+
+      // Escape — close help or deselect
+      if (key === "Escape") {
+        if (sandboxShowHelp) setSandboxShowHelp(false);
+        else setSandboxSelectedIdx(-1);
+        e.preventDefault();
+        return;
+      }
+    };
+
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [testMode, sandboxSelectedIdx, sandboxEditingTitle, makeSandboxSession, setAllSandboxState, cycleSandboxModel, cycleSandboxSource, cycleSandboxBranch, randomizeSandboxTokens, cycleSandboxSubagents, cycleSandboxTodos, cycleSandboxTool, cycleSandboxProvider, adjustSandboxContext, adjustSandboxDuration, loadSandboxPreset]);
 
   // Sort sessions: autoReorder moves working/waiting/error to top.
   // Without autoReorder: arrival order (oldest first).
@@ -786,44 +1196,171 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       return all.sort((a, b) => a.info.startedAt - b.info.startedAt);
     })();
 
+    // Map sorted sessions back to their original indices for selection highlighting
+    const selectedId = sandboxSelectedIdx >= 0 && sandboxSelectedIdx < sandboxSessions.length
+      ? sandboxSessions[sandboxSelectedIdx].info.id
+      : null;
+
     return (
       <div className="flex flex-col flex-1 min-h-0">
         {/* Sandbox header */}
-        <div className="flex items-center gap-3 px-4 py-2.5 bg-amber-500/8 border-b border-amber-500/20">
+        <div className="flex items-center gap-3 px-4 py-2 bg-amber-500/8 border-b border-amber-500/20">
           <span className="text-xs font-semibold text-amber-400/90 uppercase tracking-wider">Sandbox</span>
           <span className="text-xs text-white/30">|</span>
           <span className="text-xs text-white/40">{sandboxSessions.length} session{sandboxSessions.length !== 1 ? "s" : ""}</span>
-          <div className="ml-auto flex items-center gap-2">
+          {selectedId && (
+            <>
+              <span className="text-xs text-white/30">|</span>
+              <span className="text-xs text-amber-400/70">
+                #{sandboxSelectedIdx + 1} selected
+              </span>
+            </>
+          )}
+          <div className="ml-auto flex items-center gap-1.5">
+            {/* Preset buttons */}
+            {SANDBOX_PRESETS.map((preset) => (
+              <button
+                key={preset.key}
+                onClick={() => loadSandboxPreset(preset)}
+                title={`${preset.label}: ${preset.description}`}
+                className="px-2 py-0.5 rounded text-[0.6rem] font-medium bg-amber-500/15 text-amber-400/70 hover:bg-amber-500/25 hover:text-amber-400 transition-colors"
+              >
+                {preset.key}
+              </button>
+            ))}
+            <span className="text-white/10 mx-0.5">|</span>
             <button
               onClick={() => addSandboxSession("idle")}
-              className="px-2.5 py-1 rounded text-xs font-medium bg-white/10 text-white/70 hover:bg-white/20 hover:text-white transition-colors"
+              className="px-2 py-0.5 rounded text-[0.6rem] font-medium bg-white/10 text-white/70 hover:bg-white/20 hover:text-white transition-colors"
             >
-              + Add Session
+              +
             </button>
             {sandboxSessions.length > 0 && (
               <button
-                onClick={() => setSandboxSessions([])}
-                className="px-2.5 py-1 rounded text-xs font-medium bg-red-500/15 text-red-400/70 hover:bg-red-500/25 hover:text-red-400 transition-colors"
+                onClick={() => { setSandboxSessions([]); setSandboxSelectedIdx(-1); }}
+                className="px-2 py-0.5 rounded text-[0.6rem] font-medium bg-red-500/15 text-red-400/50 hover:bg-red-500/25 hover:text-red-400 transition-colors"
               >
-                Clear All
+                Clear
               </button>
             )}
+            <button
+              onClick={() => setSandboxShowHelp((v) => !v)}
+              className={`px-2 py-0.5 rounded text-[0.6rem] font-medium transition-colors ${sandboxShowHelp ? "bg-amber-500/30 text-amber-300" : "bg-white/10 text-white/50 hover:text-white/70"}`}
+            >
+              ?
+            </button>
           </div>
         </div>
 
+        {/* Inline title editor */}
+        {sandboxEditingTitle && sandboxSelectedIdx >= 0 && sandboxSelectedIdx < sandboxSessions.length && (
+          <div className="flex items-center gap-2 px-4 py-1.5 bg-amber-500/10 border-b border-amber-500/15">
+            <span className="text-[0.6rem] text-amber-400/60 uppercase tracking-wider">Title:</span>
+            <input
+              ref={sandboxTitleInputRef}
+              type="text"
+              defaultValue={sandboxSessions[sandboxSelectedIdx].displayTitle}
+              className="flex-1 bg-transparent text-xs text-white/90 outline-none border-b border-amber-400/30 focus:border-amber-400/60 py-0.5"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const val = (e.target as HTMLInputElement).value;
+                  mutateSandboxSelected((s) => ({ ...s, displayTitle: val, metrics: { ...s.metrics, customTitle: val } }));
+                  setSandboxEditingTitle(false);
+                } else if (e.key === "Escape") {
+                  setSandboxEditingTitle(false);
+                }
+              }}
+              onBlur={(e) => {
+                const val = e.target.value;
+                mutateSandboxSelected((s) => ({ ...s, displayTitle: val, metrics: { ...s.metrics, customTitle: val } }));
+                setSandboxEditingTitle(false);
+              }}
+            />
+          </div>
+        )}
+
         {/* Batch state controls */}
         {sandboxSessions.length > 0 && (
-          <div className="flex items-center gap-1.5 px-4 py-2 bg-white/3 border-b border-white/5">
-            <span className="text-[0.625rem] text-white/30 mr-1 uppercase tracking-wider">All:</span>
+          <div className="flex items-center gap-1 px-4 py-1.5 bg-white/3 border-b border-white/5">
+            <span className="text-[0.55rem] text-white/25 mr-1 uppercase tracking-wider shrink-0">All:</span>
             {SANDBOX_STATES.map((st) => (
               <button
                 key={st}
                 onClick={() => setAllSandboxState(st)}
-                className={`px-2 py-0.5 rounded text-[0.625rem] font-medium transition-colors ${SANDBOX_STATE_COLORS[st]}`}
+                className={`px-1.5 py-0.5 rounded text-[0.55rem] font-medium transition-colors ${SANDBOX_STATE_COLORS[st]}`}
               >
                 {SANDBOX_STATE_META[st].display}
               </button>
             ))}
+          </div>
+        )}
+
+        {/* Help overlay */}
+        {sandboxShowHelp && (
+          <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm overflow-y-auto p-6" onClick={() => setSandboxShowHelp(false)}>
+            <div className="max-w-lg mx-auto" onClick={(e) => e.stopPropagation()}>
+              <div className="text-sm font-semibold text-amber-400 mb-4 uppercase tracking-wider">Sandbox Keyboard Controls</div>
+
+              <div className="space-y-4 text-[0.7rem]">
+                <div>
+                  <div className="text-white/50 uppercase tracking-wider text-[0.6rem] mb-1.5">Sessions</div>
+                  <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                    <kbd className="text-amber-400/90 font-mono">1-8</kbd><span className="text-white/60">Select / add session at slot</span>
+                    <kbd className="text-amber-400/90 font-mono">Shift+1-8</kbd><span className="text-white/60">Remove session at slot</span>
+                    <kbd className="text-amber-400/90 font-mono">Tab</kbd><span className="text-white/60">Cycle selection forward</span>
+                    <kbd className="text-amber-400/90 font-mono">Shift+Tab</kbd><span className="text-white/60">Cycle selection backward</span>
+                    <kbd className="text-amber-400/90 font-mono">0</kbd><span className="text-white/60">Clear all sessions</span>
+                    <kbd className="text-amber-400/90 font-mono">Esc</kbd><span className="text-white/60">Deselect / close help</span>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-white/50 uppercase tracking-wider text-[0.6rem] mb-1.5">State (selected, or Shift = all)</div>
+                  <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                    {SANDBOX_STATES.map((st) => (
+                      <div key={st} className="contents"><kbd className="text-amber-400/90 font-mono">{SANDBOX_STATE_META[st].key}</kbd><span className="text-white/60">{SANDBOX_STATE_META[st].display}</span></div>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-white/50 uppercase tracking-wider text-[0.6rem] mb-1.5">Properties (selected session)</div>
+                  <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                    <kbd className="text-amber-400/90 font-mono">N</kbd><span className="text-white/60">Edit title</span>
+                    <kbd className="text-amber-400/90 font-mono">M</kbd><span className="text-white/60">Cycle model (Opus / Sonnet / Haiku)</span>
+                    <kbd className="text-amber-400/90 font-mono">S</kbd><span className="text-white/60">Cycle source (Terminal / VSCode / Cursor / iTerm)</span>
+                    <kbd className="text-amber-400/90 font-mono">B</kbd><span className="text-white/60">Cycle git branch</span>
+                    <kbd className="text-amber-400/90 font-mono">L</kbd><span className="text-white/60">Cycle running tool</span>
+                    <kbd className="text-amber-400/90 font-mono">T</kbd><span className="text-white/60">Randomize token metrics</span>
+                    <kbd className="text-amber-400/90 font-mono">R</kbd><span className="text-white/60">Cycle subagent count (0-4)</span>
+                    <kbd className="text-amber-400/90 font-mono">O</kbd><span className="text-white/60">Cycle todo progress</span>
+                    <kbd className="text-amber-400/90 font-mono">V</kbd><span className="text-white/60">Cycle provider (API / Bedrock / Vertex)</span>
+                    <kbd className="text-amber-400/90 font-mono">[ / ]</kbd><span className="text-white/60">Context usage -10% / +10%</span>
+                    <kbd className="text-amber-400/90 font-mono">- / =</kbd><span className="text-white/60">Duration -5m / +5m</span>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-white/50 uppercase tracking-wider text-[0.6rem] mb-1.5">Presets</div>
+                  <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                    {SANDBOX_PRESETS.map((preset) => (
+                      <div key={preset.key} className="contents"><kbd className="text-amber-400/90 font-mono">{preset.key}</kbd><span className="text-white/60">{preset.label} — {preset.description}</span></div>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-white/50 uppercase tracking-wider text-[0.6rem] mb-1.5">Help</div>
+                  <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                    <kbd className="text-amber-400/90 font-mono">?</kbd><span className="text-white/60">Toggle this help panel</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-6 pt-4 border-t border-white/10 text-[0.6rem] text-white/30">
+                Press any key to close, or click outside. All keyboard controls only active in sandbox mode.
+              </div>
+            </div>
           </div>
         )}
 
@@ -832,8 +1369,21 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           <div className="flex-1 flex flex-col items-center justify-center text-white/40 gap-3">
             <span className="text-4xl">&#9881;</span>
             <span className="text-lg font-medium">Sandbox Mode</span>
-            <span className="text-sm text-white/30">Add sessions and use the controls to trigger state transitions</span>
-            <div className="flex gap-2 mt-2">
+            <span className="text-xs text-white/25 max-w-xs text-center leading-relaxed">
+              Press <kbd className="text-amber-400/70 font-mono bg-white/5 px-1 rounded">1-8</kbd> to add sessions, <kbd className="text-amber-400/70 font-mono bg-white/5 px-1 rounded">F1-F5</kbd> for presets, <kbd className="text-amber-400/70 font-mono bg-white/5 px-1 rounded">?</kbd> for all controls
+            </span>
+            <div className="flex gap-2 mt-3">
+              {SANDBOX_PRESETS.map((preset) => (
+                <button
+                  key={preset.key}
+                  onClick={() => loadSandboxPreset(preset)}
+                  className="px-3 py-1.5 rounded text-xs font-medium bg-amber-500/15 text-amber-400/70 hover:bg-amber-500/25 hover:text-amber-400 transition-colors"
+                >
+                  {preset.key} {preset.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-2 mt-1">
               {(["idle", "working", "waiting", "error"] as const).map((st) => (
                 <button
                   key={st}
@@ -853,39 +1403,55 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
               const effectiveSession = overrideState
                 ? { ...session, info: { ...session.info, state: overrideState } }
                 : session;
+              const isSelected = session.info.id === selectedId;
+              // Original (unsorted) index for display
+              const originalIdx = sandboxSessions.findIndex((s) => s.info.id === session.info.id);
 
               return (
                 <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="space-y-0">
-                  <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} />
-
-                  {/* State transition controls */}
-                  <div className="flex items-center gap-1 px-2 py-1.5 rounded-b-lg bg-white/3 border border-t-0 border-white/5 -mt-px">
-                    {SANDBOX_STATES.map((st) => {
-                      const isCurrent = session.info.state === st;
-                      return (
-                        <button
-                          key={st}
-                          onClick={() => setSandboxState(session.info.id, st)}
-                          disabled={isCurrent}
-                          className={`px-1.5 py-0.5 rounded text-[0.6rem] font-medium transition-colors ${
-                            isCurrent
-                              ? "bg-white/20 text-white/90 ring-1 ring-white/30"
-                              : SANDBOX_STATE_COLORS[st]
-                          }`}
-                        >
-                          {SANDBOX_STATE_META[st].display}
-                        </button>
-                      );
-                    })}
-                    <div className="ml-auto">
-                      <button
-                        onClick={() => removeSandboxSession(session.info.id)}
-                        className="px-1.5 py-0.5 rounded text-[0.6rem] text-red-400/50 hover:text-red-400 hover:bg-red-500/15 transition-colors"
-                      >
-                        Remove
-                      </button>
+                  {/* Selection indicator + slot number */}
+                  <div
+                    className={`relative ${isSelected ? "ring-1 ring-amber-400/40 rounded-lg" : ""}`}
+                    onClick={() => setSandboxSelectedIdx(originalIdx)}
+                  >
+                    {/* Slot number badge */}
+                    <div className={`absolute -left-0.5 top-1 z-10 w-4 h-4 rounded-full flex items-center justify-center text-[0.5rem] font-bold ${isSelected ? "bg-amber-400 text-black" : "bg-white/10 text-white/30"}`}>
+                      {originalIdx + 1}
                     </div>
+                    <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} />
                   </div>
+
+                  {/* Per-session state controls (only when selected) */}
+                  {isSelected && (
+                    <div className="flex items-center gap-1 px-2 py-1 rounded-b-lg bg-amber-500/5 border border-t-0 border-amber-500/15 -mt-px">
+                      {SANDBOX_STATES.map((st) => {
+                        const isCurrent = session.info.state === st;
+                        return (
+                          <button
+                            key={st}
+                            onClick={() => setSandboxState(session.info.id, st)}
+                            disabled={isCurrent}
+                            className={`px-1.5 py-0.5 rounded text-[0.55rem] font-medium transition-colors ${
+                              isCurrent
+                                ? "bg-amber-400/20 text-amber-300/90 ring-1 ring-amber-400/30"
+                                : SANDBOX_STATE_COLORS[st]
+                            }`}
+                          >
+                            <span className="opacity-50 mr-0.5">{SANDBOX_STATE_META[st].key}</span>
+                            {SANDBOX_STATE_META[st].display}
+                          </button>
+                        );
+                      })}
+                      <div className="ml-auto">
+                        <button
+                          onClick={() => removeSandboxSession(session.info.id)}
+                          className="px-1.5 py-0.5 rounded text-[0.55rem] text-red-400/40 hover:text-red-400 hover:bg-red-500/15 transition-colors"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
