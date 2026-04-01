@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Cue — Real-Time Session Monitor for Claude Code</title>
+  <meta name="description" content="See what Claude Code is doing in real time. Claude Cue tracks working, waiting, error, and done states across up to 8 sessions. Free, open source, no telemetry.">
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Claude Cue — Real-Time Session Monitor for Claude Code">
+  <meta property="og:description" content="Know what Claude Code is doing right now. Track up to 8 sessions with live status dots, token metrics, permission controls, and subagent awareness. Free, MIT licensed.">
+  <meta property="og:site_name" content="Claude Cue">
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Claude Cue — Real-Time Session Monitor for Claude Code">
+  <meta name="twitter:description" content="Real-time status dots, token metrics, permission controls, and multi-session tracking for Claude Code. Free, open source.">
+
+  <!-- Favicon -->
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+
+  <!-- Fonts (async) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="preload" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+    <style>.reveal { opacity: 1 !important; transform: none !important; }</style>
+  </noscript>
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="style.css">
+
+  <!-- JSON-LD -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Claude Cue",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "macOS, Windows, Linux",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "license": "https://opensource.org/licenses/MIT",
+    "url": "https://github.com/avonbereghy/claude-cue",
+    "description": "A real-time session monitor for Claude Code. Tracks session states across up to 8 concurrent sessions with live token metrics, permission controls, and subagent awareness.",
+    "author": {
+      "@type": "Person",
+      "name": "Andrew von Bereghy"
+    }
+  }
+  </script>
+</head>
+<body>
+
+  <a href="#main" class="skip-link">Skip to main content</a>
+
+  <!-- ==================== NAVIGATION ==================== -->
+  <nav class="nav" aria-label="Main navigation">
+    <div class="container">
+      <a href="#" class="nav-brand" aria-label="Claude Cue home">
+        <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect width="32" height="32" rx="8" fill="#F0F4F8"/>
+          <circle cx="10" cy="11" r="3.5" fill="#5BB5D5"/>
+          <circle cx="22" cy="11" r="3.5" fill="#88D9A8"/>
+          <circle cx="10" cy="21" r="3.5" fill="#E8D47A"/>
+          <circle cx="22" cy="21" r="3.5" fill="#F0A8B0"/>
+        </svg>
+        Claude Cue
+      </a>
+
+      <button class="nav-hamburger" id="nav-toggle" aria-label="Toggle menu" aria-expanded="false" aria-controls="nav-links-list">
+        <span></span><span></span><span></span>
+      </button>
+
+      <ul class="nav-links nav-links-list" id="nav-links-list">
+        <li><a href="#features">Features</a></li>
+        <li><a href="#demo">Demo</a></li>
+        <li><a href="#install">Install</a></li>
+        <li><a href="#faq">FAQ</a></li>
+        <li>
+          <a href="https://github.com/avonbereghy/claude-cue" target="_blank" rel="noopener noreferrer" class="nav-cta">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+            GitHub
+          </a>
+        </li>
+      </ul>
+    </div>
+  </nav>
+
+  <main id="main">
+
+    <!-- ==================== HERO ==================== -->
+    <section class="hero" id="hero">
+      <canvas class="signal-strings-canvas" aria-hidden="true" data-strings="6" data-context="hero"></canvas>
+      <div class="container">
+        <div class="hero-content reveal">
+          <div class="hero-badge">Open Source &middot; MIT &middot; Free</div>
+          <h1>Know what Claude Code is doing. Right now.</h1>
+          <p class="hero-sub">Claude Cue is a real-time session monitor for Claude Code. See at a glance if it's working, waiting on you, hit an error, or finished &mdash; across up to 8 concurrent sessions.</p>
+          <div class="hero-ctas">
+            <a href="https://github.com/avonbereghy/claude-cue" target="_blank" rel="noopener noreferrer" class="btn btn-primary">
+              <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+              Get Claude Cue
+            </a>
+            <a href="#demo" class="btn btn-secondary">See how it works</a>
+          </div>
+        </div>
+
+        <div class="hero-mockup reveal">
+          <div class="mockup-dots" aria-label="Session dot grid showing 8 sessions in various states">
+            <div class="grid-dot working" title="Session 1: Working"></div>
+            <div class="grid-dot subagent" title="Session 2: Subagent"></div>
+            <div class="grid-dot done" title="Session 3: Done"></div>
+            <div class="grid-dot idle" title="Session 4: Idle"></div>
+            <div class="grid-dot waiting" title="Session 5: Waiting"></div>
+            <div class="grid-dot working" title="Session 6: Working"></div>
+            <div class="grid-dot error" title="Session 7: Error"></div>
+            <div class="grid-dot empty" title="No session"></div>
+          </div>
+          <div class="mockup-card" aria-label="Example session dashboard card">
+            <div class="mockup-header">
+              <div class="mockup-status">
+                <div class="mockup-dot working"></div>
+                Working
+              </div>
+              <span class="mockup-model">claude-opus-4-5</span>
+            </div>
+            <div class="mockup-row">
+              <span class="label">~/Projects/my-app</span>
+              <span class="value">main &check; &nbsp; 4m 32s</span>
+            </div>
+            <div class="mockup-tool">Write &rarr; src/components/Button.tsx</div>
+            <div class="mockup-row">
+              <span class="label">Context</span>
+              <span class="value">61k / 100k</span>
+            </div>
+            <div class="mockup-bar"><div class="mockup-bar-fill green" style="width: 61%"></div></div>
+            <div class="mockup-row">
+              <span class="label">Rate (5h)</span>
+              <span class="value">18%</span>
+            </div>
+            <div class="mockup-bar"><div class="mockup-bar-fill blue" style="width: 18%"></div></div>
+            <div class="mockup-row">
+              <span class="label">Tokens in / out</span>
+              <span class="value">142,831 / 28,440 &nbsp; 12.4 tok/s</span>
+            </div>
+            <div class="mockup-row">
+              <span class="label">Subagents(2)</span>
+              <span class="value">Todos: 3 / 7</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== TRUST BAR ==================== -->
+    <div class="trust-bar">
+      <div class="container">
+        <div class="trust-item">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M10 2l-7 4v5c0 4.4 3 7.5 7 9 4-1.5 7-4.6 7-9V6l-7-4z"/></svg>
+          No telemetry
+        </div>
+        <div class="trust-item">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="5" width="14" height="11" rx="2"/><path d="M7 5V3a3 3 0 016 0v2"/></svg>
+          Runs on your machine
+        </div>
+        <div class="trust-item">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2" y="3" width="16" height="12" rx="2"/><path d="M6 18h8M10 15v3"/></svg>
+          macOS &middot; Windows &middot; Linux
+        </div>
+        <div class="trust-item">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 7l4 4-4 4M10 15h6"/></svg>
+          MIT License &mdash; read the code
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== PROBLEM ==================== -->
+    <section class="problem" id="problem">
+      <div class="container reveal">
+        <div class="overline">Why this exists</div>
+        <h2 class="section-headline">Claude Code runs in your terminal.<br>That's great &mdash; until it doesn't.</h2>
+        <p>You kick off a long task and switch windows. Five minutes later you glance back: has it finished? Is it waiting for you to approve something? Did it error out silently?</p>
+        <p>Claude Code is powerful. But it gives you no ambient signal. No visual heartbeat. No quick way to track multiple sessions without keeping a wall of terminals open.</p>
+        <div class="problem-highlight">Claude Cue is that ambient signal.</div>
+      </div>
+    </section>
+
+    <!-- Signal strings divider -->
+    <div class="signal-strings-divider" aria-hidden="true">
+      <canvas class="signal-strings-canvas" data-strings="3" data-context="divider"></canvas>
+    </div>
+
+    <!-- ==================== DEMO ==================== -->
+    <section class="demo" id="demo">
+      <div class="container">
+        <div class="reveal">
+          <div class="overline">What you actually see</div>
+          <h2 class="section-headline">The full session dashboard</h2>
+          <p style="color: var(--text-secondary); margin-bottom: var(--s-4);">Click a dot in the grid, get everything about that session.</p>
+        </div>
+
+        <div class="demo-card reveal">
+          <div class="mockup-card">
+            <div class="mockup-header">
+              <div class="mockup-status">
+                <div class="mockup-dot subagent"></div>
+                Subagent
+              </div>
+              <span class="mockup-model">claude-sonnet-4-5</span>
+            </div>
+            <div class="mockup-row">
+              <span class="label">~/Projects/api-server</span>
+              <span class="value">feat/auth * &nbsp; 12m 08s</span>
+            </div>
+            <div class="mockup-tool">Agent: test-runner &rarr; Running pytest suite</div>
+            <div class="mockup-row">
+              <span class="label">Context</span>
+              <span class="value">287k / 1M</span>
+            </div>
+            <div class="mockup-bar"><div class="mockup-bar-fill green" style="width: 29%"></div></div>
+            <div class="mockup-row">
+              <span class="label">Rate (5h)</span>
+              <span class="value">42%</span>
+            </div>
+            <div class="mockup-bar"><div class="mockup-bar-fill blue" style="width: 42%"></div></div>
+            <div class="mockup-row">
+              <span class="label">Tokens in / out</span>
+              <span class="value">892,140 / 156,300 &nbsp; 18.7 tok/s</span>
+            </div>
+            <div class="mockup-row">
+              <span class="label">Subagents(3)</span>
+              <span class="value">Todos: 11 / 15</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="demo-caption reveal">
+          <div class="demo-caption-item">
+            <strong>Status &amp; Model</strong>
+            Live state dot + model name + duration
+          </div>
+          <div class="demo-caption-item">
+            <strong>Token Metrics</strong>
+            Input, output, cache, speed, context bar
+          </div>
+          <div class="demo-caption-item">
+            <strong>Active Tool</strong>
+            Currently running tool with target shown in real time
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Signal strings divider -->
+    <div class="signal-strings-divider" aria-hidden="true">
+      <canvas class="signal-strings-canvas" data-strings="3" data-context="divider"></canvas>
+    </div>
+
+    <!-- ==================== FEATURES ==================== -->
+    <section class="features" id="features">
+      <div class="container">
+        <div class="reveal">
+          <div class="overline">What's inside</div>
+          <h2 class="section-headline">Everything you need to know about a session.<br>Nothing you don't.</h2>
+        </div>
+
+        <div class="features-grid reveal-stagger">
+          <div class="feature-card reveal" style="--i: 0">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+            </div>
+            <h3>Status at a Glance</h3>
+            <p>Five dot states tell the full story: blinking white (working), cyan (subagent), yellow (waiting for approval), red (error), green (done). You know the moment something needs you.</p>
+          </div>
+
+          <div class="feature-card reveal" style="--i: 1">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+            </div>
+            <h3>Multi-Session Grid</h3>
+            <p>Track up to 8 Claude Code sessions simultaneously in a compact dot grid. Each dot is a live session &mdash; click one to open its dashboard. No more juggling terminal windows.</p>
+          </div>
+
+          <div class="feature-card reveal" style="--i: 2">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10M6 20V4M18 20v-4"/></svg>
+            </div>
+            <h3>Token Metrics</h3>
+            <p>Input, output, and cache token counts update in real time. Tokens-per-second shows generation speed. The context bar shows exactly how close you are to the limit.</p>
+          </div>
+
+          <div class="feature-card reveal" style="--i: 3">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>
+            </div>
+            <h3>Permission Controls</h3>
+            <p>When Claude Code pauses to ask permission, Claude Cue surfaces the request with Approve and Deny buttons. You don't need to find the right terminal &mdash; it comes to you.</p>
+          </div>
+
+          <div class="feature-card reveal" style="--i: 4">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="18" r="3"/><path d="M12 12v3M8.5 16l-1 0M15.5 16l1 0"/></svg>
+            </div>
+            <h3>Subagent Awareness</h3>
+            <p>When Claude Code spawns subagents, Claude Cue shows the active count and individual status dots. You can see the whole tree of parallel work happening across agents.</p>
+          </div>
+
+          <div class="feature-card reveal" style="--i: 5">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+            </div>
+            <h3>Privacy by Design</h3>
+            <p>Zero outbound network calls. It reads Claude Code's local session files &mdash; no data leaves your machine. No analytics, no telemetry, no account required. Fully auditable source.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== INSTALL ==================== -->
+    <section class="install" id="install">
+      <div class="container">
+        <div class="reveal">
+          <div class="overline">Get started</div>
+          <h2 class="section-headline">Build from source in about two minutes</h2>
+          <p style="color: var(--text-secondary);">Clone the repo, run two commands, you're done.</p>
+        </div>
+
+        <div class="install-cards">
+          <div class="install-card reveal">
+            <h3>Build from source</h3>
+            <div class="terminal">
+              <div class="terminal-header">
+                <div class="terminal-dot"></div>
+                <div class="terminal-dot"></div>
+                <div class="terminal-dot"></div>
+              </div>
+              <div class="terminal-body">
+                <button class="copy-btn" data-copy="git clone https://github.com/avonbereghy/claude-cue&#10;cd claude-cue/claude-cue-desktop&#10;npm install&#10;npm run tauri build" aria-label="Copy install commands">Copy</button>
+                <div><span class="prompt">$</span> <span class="cmd">git clone https://github.com/avonbereghy/claude-cue</span></div>
+                <div><span class="prompt">$</span> <span class="cmd">cd</span> claude-cue/claude-cue-desktop</div>
+                <div><span class="prompt">$</span> <span class="cmd">npm install</span></div>
+                <div><span class="prompt">$</span> <span class="cmd">npm run tauri build</span></div>
+              </div>
+            </div>
+            <p class="install-note">Requires <a href="https://nodejs.org" target="_blank" rel="noopener noreferrer">Node.js</a> and the <a href="https://rustup.rs" target="_blank" rel="noopener noreferrer">Rust toolchain</a>. Build time is 2&ndash;4 minutes on first run.</p>
+          </div>
+
+          <div class="install-card github-card reveal">
+            <svg viewBox="0 0 48 48" width="48" height="48" fill="var(--text-muted)" aria-hidden="true"><path d="M24 0C10.745 0 0 10.745 0 24c0 10.617 6.885 19.615 16.425 22.793 1.2.225 1.65-.525 1.65-1.155 0-.57-.03-2.46-.03-4.47-6.03 1.11-7.59-1.47-8.07-2.82-.27-.69-1.44-2.82-2.46-3.39-.84-.45-2.04-1.56-.03-1.59 1.89-.03 3.24 1.74 3.69 2.46 2.16 3.63 5.61 2.61 6.99 1.98.21-1.56.84-2.61 1.53-3.21-5.34-.6-10.92-2.67-10.92-11.85 0-2.61.93-4.77 2.46-6.45-.24-.6-1.08-3.06.24-6.36 0 0 2.01-.63 6.6 2.46 1.92-.54 3.96-.81 6-.81 2.04 0 4.08.27 6 .81 4.59-3.12 6.6-2.46 6.6-2.46 1.32 3.3.48 5.76.24 6.36 1.53 1.68 2.46 3.81 2.46 6.45 0 9.21-5.61 11.25-10.95 11.85.87.75 1.62 2.19 1.62 4.44 0 3.21-.03 5.79-.03 6.6 0 .63.45 1.41 1.65 1.155C41.145 43.615 48 34.587 48 24 48 10.745 37.255 0 24 0z"/></svg>
+            <h3>View on GitHub</h3>
+            <p>Free. MIT licensed. PRs welcome.</p>
+            <a href="https://github.com/avonbereghy/claude-cue" target="_blank" rel="noopener noreferrer" class="btn btn-primary">
+              View source
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== FAQ ==================== -->
+    <section class="faq" id="faq">
+      <div class="container">
+        <div class="reveal">
+          <h2 class="section-headline">Common questions</h2>
+        </div>
+
+        <div class="faq-list reveal">
+          <details>
+            <summary>
+              How does Claude Cue know what Claude Code is doing?
+              <svg class="faq-chevron" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 7l5 5 5-5"/></svg>
+            </summary>
+            <div class="faq-answer">
+              <p>Claude Code has a native event system called hooks that fires on every lifecycle event &mdash; session start, tool calls, permission requests, completions. Claude Cue registers a lightweight hook that writes session state to a local JSON file on each event.</p>
+              <p>The desktop app reads that file and parses Claude Code's JSONL conversation logs incrementally (only new bytes each cycle) to extract token counts, tool usage, and context metrics. No API keys needed, no network involved.</p>
+            </div>
+          </details>
+
+          <details>
+            <summary>
+              Does it work with multiple sessions at once?
+              <svg class="faq-chevron" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 7l5 5 5-5"/></svg>
+            </summary>
+            <div class="faq-answer">
+              <p>Yes. Claude Cue tracks up to 8 concurrent Claude Code sessions simultaneously. Each appears as a dot in the grid. Sessions are detected automatically when Claude Code starts writing to a new session file. You can click any dot to expand the full session dashboard.</p>
+            </div>
+          </details>
+
+          <details>
+            <summary>
+              macOS says the app is from an unidentified developer
+              <svg class="faq-chevron" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 7l5 5 5-5"/></svg>
+            </summary>
+            <div class="faq-answer">
+              <p>Because Claude Cue is built from source and not notarized with Apple, macOS Gatekeeper will block it on first launch.</p>
+              <p><strong>Option A (GUI):</strong> Right-click the .app in Finder, select Open, then click Open in the dialog. You only need to do this once.</p>
+              <p><strong>Option B (Terminal):</strong> Run <code>xattr -cr ~/Applications/Claude\ Cue.app</code> then launch normally. This removes the quarantine attribute without disabling Gatekeeper globally.</p>
+            </div>
+          </details>
+
+          <details>
+            <summary>
+              Does it send any data anywhere?
+              <svg class="faq-chevron" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 7l5 5 5-5"/></svg>
+            </summary>
+            <div class="faq-answer">
+              <p>No. Claude Cue makes zero outbound network connections. It only reads local files that Claude Code writes to your machine. There is no telemetry, no analytics, no crash reporting, no update check. The source code is fully auditable on GitHub.</p>
+            </div>
+          </details>
+
+          <details>
+            <summary>
+              Which Claude Code versions and models does it support?
+              <svg class="faq-chevron" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 7l5 5 5-5"/></svg>
+            </summary>
+            <div class="faq-answer">
+              <p>Claude Cue reads the session files Claude Code generates, so it works with whatever version of Claude Code you have installed. The model name displayed (e.g. <code>claude-opus-4-5</code>) is read directly from the session data &mdash; no hardcoded model list. Context limits are auto-detected: 1M for Opus/Sonnet 4.6, 200K for older models.</p>
+            </div>
+          </details>
+
+          <details>
+            <summary>
+              Is a Homebrew formula or binary release planned?
+              <svg class="faq-chevron" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 7l5 5 5-5"/></svg>
+            </summary>
+            <div class="faq-answer">
+              <p>Not yet. Right now the only install path is building from source. I wanted to get the tool out and useful before spending time on distribution infrastructure. If there's demand, a Homebrew cask and pre-built binaries are the natural next step. Open an issue on GitHub if this matters to you &mdash; that's the best signal.</p>
+            </div>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== FINAL CTA ==================== -->
+    <section class="cta-final" id="cta">
+      <canvas class="signal-strings-canvas" aria-hidden="true" data-strings="5" data-context="cta"></canvas>
+      <div class="container reveal">
+        <h2>Stop squinting at terminals.<br>Know what Claude is doing.</h2>
+        <p>Free. Open source. Runs entirely on your machine. Takes two minutes to build.</p>
+        <a href="https://github.com/avonbereghy/claude-cue" target="_blank" rel="noopener noreferrer" class="btn btn-primary">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          Get Claude Cue on GitHub
+        </a>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ==================== FOOTER ==================== -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-brand">
+        Claude Cue
+        <span>A real-time session monitor for Claude Code</span>
+      </div>
+      <ul class="footer-links">
+        <li><a href="https://github.com/avonbereghy/claude-cue" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#install">Install</a></li>
+        <li><a href="#faq">FAQ</a></li>
+      </ul>
+      <div class="footer-meta">
+        MIT License<br>Built by Andrew von Bereghy
+      </div>
+      <div class="footer-disclaimer">
+        Claude Cue is not affiliated with or endorsed by Anthropic. Claude Code is a product of Anthropic, PBC.
+      </div>
+    </div>
+  </footer>
+
+  <script src="main.js"></script>
+</body>
+</html>
