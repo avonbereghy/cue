@@ -263,14 +263,25 @@ impl EnrichedSession {
         // lastActivity is older than 90s, the hook stopped firing (session ended
         // without a Stop event). Downgrade to "idle" so the UI doesn't show
         // animated working state for dead sessions.
-        // Exception: sessions with active subagents — the parent is legitimately
-        // idle while waiting for long-running subagents to complete.
+        // Note: session_monitor.rs bumps lastActivity from JSONL mtime for
+        // sessions that are still actively streaming, so this won't fire prematurely.
         let mut info = info;
         if (info.state == "working" || info.state == "subagent")
             && (now - info.last_activity) > 90.0
-            && info.active_subagents <= 0
         {
             info.state = "idle".to_string();
+        }
+
+        // JSONL-based subagent recovery: if the hook's counter says 0 but
+        // JSONL files show active subagents, trust the files (missed events).
+        // If counter says >0 but files say inactive, trust the counter (it's
+        // more responsive than the 60s file mtime threshold).
+        let file_active_subs = metrics.subagents.iter().filter(|s| s.is_active).count() as i64;
+        if file_active_subs > 0 && info.active_subagents == 0
+            && (info.state == "working" || info.state == "done" || info.state == "idle")
+        {
+            info.state = "subagent".to_string();
+            info.active_subagents = file_active_subs;
         }
 
         let workspace_name = std::path::Path::new(&info.workspace)

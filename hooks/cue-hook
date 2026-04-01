@@ -377,39 +377,31 @@ def main():
                     if now - error_at < 3.0:
                         return
 
-                # Subagent tracking: maintain a count of active subagents.
-                # "subagent" increments, "subagent_stop" decrements.
-                # While count > 0, state stays "subagent" even if
-                # PreToolUse/PostToolUse fire "working" from the parent.
+                # Subagent counter: increment on start, decrement on stop.
+                # While count > 0, keep state as "subagent" so the UI shows
+                # the blue dot. The Rust backend uses JSONL file scan as
+                # fallback recovery if this counter gets stuck.
                 active_subs = existing.get("activeSubagents", 0)
                 if action == "subagent":
                     active_subs += 1
                 elif action == "subagent_stop":
                     active_subs = max(0, active_subs - 1)
                     action = "subagent" if active_subs > 0 else "working"
-                elif action == "working" and active_subs > 0:
-                    # Parent is doing work but subagents are still running
+
+                # Override state to "subagent" while subagents are active.
+                # This prevents working/done/idle from hiding that subagents
+                # are still running. Waiting and error are NOT overridden —
+                # those need user attention.
+                if active_subs > 0 and action in ("working", "done", "idle"):
                     action = "subagent"
-                elif action == "waiting" and active_subs > 0:
-                    # Subagent permission requests auto-resolve — don't flash
-                    # the parent card to "waiting" (yellow) for something that
-                    # doesn't need human attention.
-                    action = "subagent"
-                elif action == "error" and active_subs > 0:
-                    # Subagent tool failures shouldn't flash the parent card
-                    # red — keep showing subagent state.
-                    action = "subagent"
-                elif action in ("done", "idle") and active_subs > 0:
-                    # Parent emitted done/idle but subagents are still running —
-                    # keep showing subagent state, don't reset the counter.
-                    action = "subagent"
-                elif action in ("done", "idle"):
-                    # Session turn truly ended — reset subagent counter
+
+                # Reset counter when session truly finishes with no subagents
+                if action in ("done", "idle") and active_subs <= 0:
                     active_subs = 0
 
-                # When subagents are active, keep the parent's workspace so the
-                # card title doesn't flip between agent worktree paths.
-                effective_workspace = (
+                # Keep the original workspace once set — prevents card title
+                # from flipping when subagents run in worktree paths.
+                stable_workspace = (
                     existing.get("workspace", workspace)
                     if active_subs > 0 and existing.get("workspace")
                     else workspace
@@ -417,7 +409,7 @@ def main():
 
                 entry = {
                     "id": session_id,
-                    "workspace": effective_workspace,
+                    "workspace": stable_workspace,
                     "state": action,
                     "lastActivity": now,
                     "startedAt": existing.get("startedAt", now),

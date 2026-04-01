@@ -134,7 +134,6 @@ impl SessionMonitorState {
             .map(|mut session| {
                 if (session.state == "working" || session.state == "subagent")
                     && (now - session.last_activity) > 90.0
-                    && session.active_subagents <= 0
                 {
                     let jpath = self.jsonl_path(&session.id, &session.workspace, &projects_path);
                     if let Ok(meta) = std::fs::metadata(&jpath) {
