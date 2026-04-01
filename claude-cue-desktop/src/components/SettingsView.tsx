@@ -481,6 +481,9 @@ export function SettingsView() {
       contextThreshold: false,
       contextDisplay: "percent",
       lowPower: false,
+      showToolPills: false,
+      showCurrentTool: false,
+      showConfigCounts: false,
     };
     setSettings(defaults);
     // Apply theme immediately
@@ -880,6 +883,27 @@ export function SettingsView() {
             checked={settings.testMode ?? false}
             onChange={() => setSettings({ ...settings, testMode: !settings.testMode })}
             label="Sandbox mode"
+          />
+        </SettingRow>
+        <SettingRow label="Tool Breakdown" description="Show per-tool usage pills in detail mode (Read 121, Bash 85, etc.)" onReset={(settings.showToolPills ?? false) ? () => setSettings({ ...settings, showToolPills: false }) : undefined}>
+          <Toggle
+            checked={settings.showToolPills ?? false}
+            onChange={() => setSettings({ ...settings, showToolPills: !(settings.showToolPills ?? false) })}
+            label="Tool breakdown"
+          />
+        </SettingRow>
+        <SettingRow label="Current Tool" description="Show the running tool name in the session header" onReset={(settings.showCurrentTool ?? false) ? () => setSettings({ ...settings, showCurrentTool: false }) : undefined}>
+          <Toggle
+            checked={settings.showCurrentTool ?? false}
+            onChange={() => setSettings({ ...settings, showCurrentTool: !(settings.showCurrentTool ?? false) })}
+            label="Current tool"
+          />
+        </SettingRow>
+        <SettingRow label="Config Counts" description="Show CLAUDE.md, rules, MCP server, and hooks counts per session" onReset={(settings.showConfigCounts ?? false) ? () => setSettings({ ...settings, showConfigCounts: false }) : undefined}>
+          <Toggle
+            checked={settings.showConfigCounts ?? false}
+            onChange={() => setSettings({ ...settings, showConfigCounts: !(settings.showConfigCounts ?? false) })}
+            label="Config counts"
           />
         </SettingRow>
       </section>
