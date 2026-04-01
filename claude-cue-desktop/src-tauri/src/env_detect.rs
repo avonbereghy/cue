@@ -170,7 +170,7 @@ const HOOK_EVENTS: &[(&str, &str)] = &[
     ("PermissionRequest", "waiting"),
     ("PostToolUseFailure", "error"),
     ("SubagentStart", "subagent"),
-    ("SubagentStop", "working"),
+    ("SubagentStop", "subagent_stop"),
     ("Stop", "done"),
     ("TaskCompleted", "done"),
     ("Notification", "done"),
@@ -438,7 +438,7 @@ mod tests {
         assert_eq!(events["PermissionRequest"], "waiting");
         assert_eq!(events["PostToolUseFailure"], "error");
         assert_eq!(events["SubagentStart"], "subagent");
-        assert_eq!(events["SubagentStop"], "working");
+        assert_eq!(events["SubagentStop"], "subagent_stop");
         assert_eq!(events["Stop"], "done");
         assert_eq!(events["TaskCompleted"], "done");
         assert_eq!(events["Notification"], "done");
