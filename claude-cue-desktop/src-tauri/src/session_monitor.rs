@@ -125,18 +125,19 @@ impl SessionMonitorState {
             now,
         );
 
-        // JSONL mtime reconciliation for sessions claiming "working"/"subagent".
+        // JSONL-based reconciliation for sessions claiming "working"/"subagent".
         //
-        // Two checks, both using JSONL mtime as ground truth:
+        // When both the hook AND JSONL have been silent, we check the JSONL
+        // content to distinguish between:
+        //   - Still thinking/streaming: last entry is `user` or `tool_result`
+        //     → Claude hasn't responded yet, keep as "working"
+        //   - Turn finished: last entry is `assistant` with end_turn
+        //     → downgrade to "done" (Stop hook was missed)
+        //   - Interrupted: last entry is `user` but silent for >5 min
+        //     → downgrade to "done" (session was Ctrl+C'd mid-think)
         //
-        // 1. Quick stale detection (10s): if both the hook AND JSONL have been
-        //    silent for 15s, the session stopped (interrupted, completed without
-        //    Stop hook, etc.). Downgrade to "done" immediately instead of waiting
-        //    90s. This catches Ctrl+C interrupts within ~15s.
-        //
-        // 2. Keep-alive (90s): if the hook hasn't fired in 90s but JSONL is still
-        //    being written (long thinking/streaming), bump lastActivity to prevent
-        //    the models.rs stale-working check from downgrading to "idle".
+        // Also bumps lastActivity from JSONL mtime when the hook is stale
+        // but JSONL is still being written (long streaming).
         let projects_path = paths::claude_projects_path();
         let active: Vec<_> = active
             .into_iter()
@@ -156,10 +157,40 @@ impl SessionMonitorState {
                         .unwrap_or(f64::MAX);
 
                     if jsonl_age > 15.0 {
-                        // Both hook and JSONL silent for 10s — session stopped.
-                        // Use "done" (not "idle") since the session is still alive
-                        // at the prompt, just finished its turn.
-                        session.state = "done".to_string();
+                        // Both hook and JSONL silent for 15s — check what
+                        // the JSONL content says before deciding.
+                        let jpath_ref = Path::new(&jpath);
+                        let verdict = jsonl_parser::check_last_entry_verdict(jpath_ref);
+                        match verdict {
+                            jsonl_parser::LastEntryVerdict::StillWorking => {
+                                // Claude is thinking/generating — keep as working.
+                                // Bump lastActivity so models.rs doesn't downgrade
+                                // to "idle" at the 90s mark.
+                                session.last_activity = now;
+                                // Failsafe: if the JSONL hasn't been touched in 5 min
+                                // while the last entry is still "user", the session was
+                                // likely interrupted (Ctrl+C during thinking).
+                                if jsonl_age > 300.0 {
+                                    session.state = "done".to_string();
+                                }
+                            }
+                            jsonl_parser::LastEntryVerdict::TurnFinished => {
+                                // Turn completed but Stop hook was missed.
+                                session.state = "done".to_string();
+                            }
+                            jsonl_parser::LastEntryVerdict::PendingToolUse => {
+                                // Tool use pending but no result yet — keep working.
+                                // The tool may be executing (Bash with long timeout).
+                                session.last_activity = now;
+                                if jsonl_age > 300.0 {
+                                    session.state = "done".to_string();
+                                }
+                            }
+                            jsonl_parser::LastEntryVerdict::Unknown => {
+                                // Can't read JSONL — fall back to original behavior.
+                                session.state = "done".to_string();
+                            }
+                        }
                     } else if (now - session.last_activity) > 90.0 {
                         // Hook stale but JSONL still active — bump lastActivity
                         // to prevent models.rs from downgrading to "idle".
