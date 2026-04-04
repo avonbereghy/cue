@@ -145,7 +145,12 @@ fn open_signal_settings(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn get_sessions(state: State<'_, AppState>) -> Vec<EnrichedSession> {
-    state.monitor.enriched_sessions.lock().unwrap().clone()
+    let sessions = state.monitor.enriched_sessions.lock().unwrap().clone();
+    for s in &sessions {
+        log::info!("get_sessions: id={} state={} active_subagents={} has_subagents={}",
+            &s.info.id[..8], &s.info.state, s.info.active_subagents, s.has_subagents);
+    }
+    sessions
 }
 
 #[tauri::command]
@@ -414,6 +419,86 @@ fn deny_permission(
 fn get_permission_history(session_id: String) -> Vec<models::PermissionLogEntry> {
     log::debug!("Getting permission history for session={}", session_id);
     permission_log::read_permission_log(&session_id)
+}
+
+/// Minimal session payload written by sandbox mode into sessions.json.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SandboxSessionPayload {
+    id: String,
+    workspace: String,
+    state: String,
+    last_activity: f64,
+    started_at: f64,
+    active_subagents: Option<i64>,
+    source: Option<String>,
+}
+
+/// Write sandbox sessions into sessions.json alongside real sessions.
+/// Sandbox IDs must start with "sandbox-" to be distinguishable.
+/// Called by the frontend whenever the sandbox session list changes.
+#[tauri::command]
+fn write_sandbox_sessions(sessions: Vec<SandboxSessionPayload>) -> Result<(), String> {
+    let path = paths::sessions_json_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    // Validate all IDs start with "sandbox-"
+    for s in &sessions {
+        if !s.id.starts_with("sandbox-") {
+            return Err(format!("Sandbox session ID must start with 'sandbox-': {}", s.id));
+        }
+    }
+
+    // Read existing sessions.json, strip old sandbox entries, merge new ones
+    let mut status: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|c| serde_json::from_str(&c).ok())
+        .unwrap_or_else(|| serde_json::json!({ "sessions": {} }));
+
+    let map = status["sessions"].as_object_mut().ok_or("Invalid sessions.json")?;
+
+    // Remove stale sandbox entries
+    map.retain(|k, _| !k.starts_with("sandbox-"));
+
+    // Insert new sandbox entries
+    for s in sessions {
+        let entry = serde_json::json!({
+            "id": s.id,
+            "workspace": s.workspace,
+            "state": s.state,
+            "lastActivity": s.last_activity,
+            "startedAt": s.started_at,
+            "activeSubagents": s.active_subagents.unwrap_or(0),
+            "source": s.source.unwrap_or_else(|| "sandbox".to_string()),
+        });
+        map.insert(s.id.clone(), entry);
+    }
+
+    security::atomic_write(&path, serde_json::to_string_pretty(&status)
+        .map_err(|e| e.to_string())?.as_bytes())
+        .map_err(|e| e.to_string())
+}
+
+/// Remove all sandbox sessions from sessions.json. Called on sandbox exit.
+#[tauri::command]
+fn clear_sandbox_sessions() -> Result<(), String> {
+    let path = paths::sessions_json_path();
+    if !path.exists() { return Ok(()); }
+
+    let mut status: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|c| serde_json::from_str(&c).ok())
+        .unwrap_or_else(|| serde_json::json!({ "sessions": {} }));
+
+    if let Some(map) = status["sessions"].as_object_mut() {
+        map.retain(|k, _| !k.starts_with("sandbox-"));
+    }
+
+    security::atomic_write(&path, serde_json::to_string_pretty(&status)
+        .map_err(|e| e.to_string())?.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -703,6 +788,8 @@ pub fn run() {
             get_claude_version,
             set_frameless,
             set_vibrancy,
+            write_sandbox_sessions,
+            clear_sandbox_sessions,
         ])
         .on_window_event(|window, event| {
             match event {

@@ -11,6 +11,8 @@ export interface SessionInfo {
   source?: string;
   /** Number of currently active subagents (from hook). */
   activeSubagents?: number;
+  /** Subprocess label if spawned by a known caller (e.g. "retenir"). */
+  subprocess?: string;
 }
 
 export interface SubagentMetrics {
@@ -467,30 +469,33 @@ export interface EnvironmentInfo {
 /** State colors matching macOS app */
 export const STATE_COLORS: Record<string, string> = {
   working: "text-white/80",
+  thinking: "text-orange-400",
   waiting: "text-yellow-400",
   error: "text-red-500",
   subagent: "text-blue-400",
-  idle: "text-indigo-300",
+  idle: "text-amber-300",
   done: "text-green-500",
   ended: "text-red-400",
 };
 
 export const STATE_DOT_COLORS: Record<string, string> = {
   working: "bg-white/80",
+  thinking: "bg-orange-400",
   waiting: "bg-yellow-400",
   error: "bg-red-500",
   subagent: "bg-blue-400",
-  idle: "bg-indigo-300",
+  idle: "bg-amber-300",
   done: "bg-green-500",
   ended: "bg-red-400",
 };
 
 export const STATE_BADGE_BG: Record<string, string> = {
   working: "bg-white/10 text-white/80",
+  thinking: "bg-orange-400/20 text-orange-400",
   waiting: "bg-yellow-400/20 text-yellow-400",
   error: "bg-red-500/20 text-red-500",
   subagent: "bg-blue-400/20 text-blue-400",
-  idle: "bg-indigo-300/20 text-indigo-300",
+  idle: "bg-amber-300/20 text-amber-300",
   done: "bg-green-500/20 text-green-500",
   ended: "bg-red-400/20 text-red-400",
 };
@@ -498,6 +503,7 @@ export const STATE_BADGE_BG: Record<string, string> = {
 /** Raw hex/rgba colors for inline styles (enables CSS transitions between states) */
 export const STATE_HEX: Record<string, string> = {
   working: "rgba(255,255,255,0.8)",
+  thinking: "#f6a560",
   waiting: "#facc15",
   error: "#ef4444",
   subagent: "#60a5fa",
@@ -507,17 +513,19 @@ export const STATE_HEX: Record<string, string> = {
 };
 
 export const STATE_HEX_LIGHT: Record<string, string> = {
-  working: "rgba(0,0,0,0.85)",
-  waiting: "#a16207",
-  error: "#dc2626",
-  subagent: "#2563eb",
-  idle: "#8b6914",
-  done: "#16a34a",
-  ended: "#dc2626",
+  working: "#374151",
+  thinking: "#c2410c",
+  waiting: "#b45309",
+  error: "#b91c1c",
+  subagent: "#1d4ed8",
+  idle: "#78716c",
+  done: "#15803d",
+  ended: "#b91c1c",
 };
 
 export const STATE_DOT_HEX: Record<string, string> = {
   working: "#e0e0e0",
+  thinking: "#f6a560",
   waiting: "#facc15",
   error: "#ef4444",
   subagent: "#60a5fa",
@@ -527,17 +535,19 @@ export const STATE_DOT_HEX: Record<string, string> = {
 };
 
 export const STATE_DOT_HEX_LIGHT: Record<string, string> = {
-  working: "#1a1a1a",
-  waiting: "#ca8a04",
+  working: "#374151",
+  thinking: "#ea580c",
+  waiting: "#b45309",
   error: "#dc2626",
   subagent: "#2563eb",
-  idle: "#8b6914",
+  idle: "#a8a29e",
   done: "#16a34a",
   ended: "#dc2626",
 };
 
 export const STATE_BADGE_HEX: Record<string, { bg: string; text: string }> = {
   working: { bg: "rgba(255,255,255,0.1)", text: "rgba(255,255,255,0.8)" },
+  thinking: { bg: "rgba(246,165,96,0.18)", text: "#f6a560" },
   waiting: { bg: "rgba(250,204,21,0.2)", text: "#facc15" },
   error: { bg: "rgba(239,68,68,0.2)", text: "#ef4444" },
   subagent: { bg: "rgba(96,165,250,0.2)", text: "#60a5fa" },
@@ -547,13 +557,14 @@ export const STATE_BADGE_HEX: Record<string, { bg: string; text: string }> = {
 };
 
 export const STATE_BADGE_HEX_LIGHT: Record<string, { bg: string; text: string }> = {
-  working: { bg: "rgba(0,0,0,0.08)", text: "rgba(0,0,0,0.85)" },
-  waiting: { bg: "rgba(202,138,4,0.15)", text: "#a16207" },
-  error: { bg: "rgba(220,38,38,0.12)", text: "#dc2626" },
-  subagent: { bg: "rgba(37,99,235,0.12)", text: "#2563eb" },
-  idle: { bg: "rgba(139,105,20,0.12)", text: "#8b6914" },
-  done: { bg: "rgba(22,163,74,0.12)", text: "#16a34a" },
-  ended: { bg: "rgba(220,38,38,0.12)", text: "#dc2626" },
+  working: { bg: "rgba(55,65,81,0.12)", text: "#374151" },
+  thinking: { bg: "rgba(194,65,12,0.14)", text: "#c2410c" },
+  waiting: { bg: "rgba(180,83,9,0.14)", text: "#b45309" },
+  error: { bg: "rgba(185,28,28,0.12)", text: "#b91c1c" },
+  subagent: { bg: "rgba(29,78,216,0.12)", text: "#1d4ed8" },
+  idle: { bg: "rgba(120,113,108,0.12)", text: "#78716c" },
+  done: { bg: "rgba(21,128,61,0.12)", text: "#15803d" },
+  ended: { bg: "rgba(185,28,28,0.12)", text: "#b91c1c" },
 };
 
 // ---------------------------------------------------------------------------

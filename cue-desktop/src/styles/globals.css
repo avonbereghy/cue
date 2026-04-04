@@ -66,6 +66,79 @@ html[data-theme="light"]:not([data-glass]) .dot-pulse {
   animation-name: dot-pulse-light;
 }
 
+/* ---------------------------------------------------------------------------
+   Status dot shape animations
+   --------------------------------------------------------------------------- */
+
+/* idle — hollow ring breathes slowly */
+.status-idle {
+  animation: status-idle-breathe 3.2s ease-in-out infinite;
+}
+@keyframes status-idle-breathe {
+  0%, 100% { opacity: 0.4; }
+  50%       { opacity: 1; }
+}
+
+/* thinking — three-dot wave (ember ellipsis) */
+.think-1, .think-2, .think-3 {
+  animation: think-wave 1.4s ease-in-out infinite;
+}
+.think-2 { animation-delay: 0.18s; }
+.think-3 { animation-delay: 0.36s; }
+@keyframes think-wave {
+  0%, 60%, 100% { transform: translateY(0);    opacity: 1; }
+  30%            { transform: translateY(-2.5px); opacity: 0.85; }
+}
+
+/* working — spinning arc */
+.status-working {
+  animation: status-spin 0.85s linear infinite;
+  transform-origin: 6px 6px;
+  transform-box: fill-box;
+}
+@keyframes status-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* subagent — orbiting constellation */
+.orbit-ring {
+  animation: status-orbit 2.2s linear infinite;
+  transform-box: fill-box;
+}
+@keyframes status-orbit {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* waiting — urgent strobe flash */
+.status-waiting {
+  animation: status-waiting-flash 0.75s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+@keyframes status-waiting-flash {
+  0%, 49% { opacity: 1;   transform: scale(1); }
+  50%      { opacity: 0.15; transform: scale(0.78); }
+  100%     { opacity: 1;   transform: scale(1); }
+}
+
+/* error — horizontal shake with slight rotation */
+.status-error {
+  animation: status-error-shake 2.2s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+@keyframes status-error-shake {
+  0%, 55%, 100% { transform: translateX(0)      rotate(0deg); }
+  60%            { transform: translateX(-1.8px)  rotate(-8deg); }
+  65%            { transform: translateX(1.8px)   rotate(8deg); }
+  70%            { transform: translateX(-1.2px)  rotate(-4deg); }
+  75%            { transform: translateX(1px)     rotate(3deg); }
+  80%            { transform: translateX(-0.5px)  rotate(-1deg); }
+  85%            { transform: translateX(0)       rotate(0deg); }
+}
+
 /* Working title animations — per-character */
 
 /* Rotate Flip (split-flap board) */
@@ -80,8 +153,8 @@ html[data-theme="light"]:not([data-glass]) .dot-pulse {
 
 /* Ripple (fade + lift) */
 @keyframes anim-ripple {
-  0%, 100% { color: #fff; transform: translateY(0); }
-  50% { color: #2a2a2a; transform: translateY(-1.5px); }
+  0%, 100% { opacity: 1; transform: translateY(0); }
+  50% { opacity: 0.2; transform: translateY(-1.5px); }
 }
 .anim-ripple .title-char {
   animation: anim-ripple var(--anim-speed, 1.2s) ease-in-out infinite;
@@ -89,16 +162,16 @@ html[data-theme="light"]:not([data-glass]) .dot-pulse {
 
 /* Shine (ripple color without movement, tighter radius) */
 @keyframes anim-shine {
-  0%, 100% { color: #fff; }
-  40% { color: #fff; }
-  50% { color: rgba(255,255,255,0.35); }
-  60% { color: #fff; }
+  0%, 100% { opacity: 1; }
+  40% { opacity: 1; }
+  50% { opacity: 0.35; }
+  60% { opacity: 1; }
 }
 @keyframes anim-shine-light {
-  0%, 100% { color: #000; }
-  40% { color: #000; }
-  50% { color: #aaa; }
-  60% { color: #000; }
+  0%, 100% { opacity: 1; }
+  40% { opacity: 1; }
+  50% { opacity: 0.45; }
+  60% { opacity: 1; }
 }
 .anim-shine .title-char {
   animation: anim-shine var(--anim-speed, 1.2s) ease-in-out infinite;
@@ -109,8 +182,8 @@ html[data-theme="light"]:not([data-glass]) .anim-shine .title-char {
 
 /* Pulse Glow (cyan highlight) */
 @keyframes anim-glow {
-  0%, 100% { color: #fff; text-shadow: none; }
-  50% { color: #4fd1ff; text-shadow: 0 0 6px rgba(79, 209, 255, 0.5); }
+  0%, 100% { opacity: 1; text-shadow: none; }
+  50% { opacity: 0.7; text-shadow: 0 0 8px currentColor; }
 }
 .anim-glow .title-char {
   animation: anim-glow var(--anim-speed, 1.2s) ease-in-out infinite;
@@ -203,10 +276,10 @@ html[data-theme="light"]:not([data-glass]) .anim-shine .title-char {
   box-shadow: inset 0 1px 4px rgba(0,0,0,0.12);
 }
 html[data-theme="light"]:not([data-glass]) .session-card--compact.session-card--floating {
-  box-shadow: 0 1px 3px rgba(0,0,0,0.14);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.18), 0 3px 8px rgba(0,0,0,0.10);
 }
 html[data-theme="light"]:not([data-glass]) .session-card--compact.session-card--pressed {
-  box-shadow: inset 0 1px 4px rgba(0,0,0,0.08);
+  box-shadow: inset 0 2px 6px rgba(0,0,0,0.16);
 }
 
 /* Floating — subtle drop shadow with faint light rim */
@@ -261,16 +334,16 @@ html[data-theme="light"]:not([data-glass]) .session-card--floating {
   background-color: var(--card-float-bg);
   border-color: var(--card-float-border);
   box-shadow:
-    0 1px 2px rgba(0,0,0,0.12),
-    0 2px 6px rgba(0,0,0,0.10),
-    0 4px 10px rgba(0,0,0,0.06);
+    0 1px 3px rgba(0,0,0,0.18),
+    0 4px 12px rgba(0,0,0,0.16),
+    0 10px 28px rgba(0,0,0,0.12);
 }
 html[data-theme="light"]:not([data-glass]) .session-card--pressed {
   background-color: var(--card-press-bg);
   border-color: var(--card-press-border);
   box-shadow:
-    inset 0 2px 8px rgba(0,0,0,0.14),
-    inset 0 1px 3px rgba(0,0,0,0.08);
+    inset 0 3px 12px rgba(0,0,0,0.22),
+    inset 0 1px 4px rgba(0,0,0,0.14);
 }
 
 /* Waiting state — yellow highlight + construction tape stripes + elevated */
@@ -311,6 +384,24 @@ html[data-theme="light"]:not([data-glass]) .session-card--pressed {
     rgba(0, 0, 0, 0.35) 6px,
     rgba(0, 0, 0, 0.35) 12px
   );
+}
+
+/* Thinking state — warm ember glow border */
+.session-card--thinking {
+  border-color: rgba(246, 165, 96, 0.35) !important;
+  box-shadow:
+    0 2px 6px rgba(246, 165, 96, 0.06),
+    0 6px 20px rgba(246, 165, 96, 0.04),
+    inset 0 0 30px rgba(246, 165, 96, 0.06) !important;
+}
+html[data-theme="light"]:not([data-glass]) .session-card--thinking {
+  background-color: rgba(234, 88, 12, 0.06) !important;
+  border-color: rgba(194, 65, 12, 0.30) !important;
+  box-shadow:
+    0 2px 4px rgba(0,0,0,0.10),
+    0 6px 16px rgba(0,0,0,0.12),
+    0 14px 36px rgba(0,0,0,0.14),
+    inset 0 0 40px rgba(234, 88, 12, 0.10) !important;
 }
 
 /* Error state — red highlight + solid red bars + elevated */
@@ -481,28 +572,28 @@ html:not([data-theme="light"]) [class*="text-white/70"] { color: rgba(255,255,25
 
 /* Cards: frosted glass panes with individual blur */
 html[data-glass] .session-card--floating {
-  backdrop-filter: blur(12px) saturate(1.4);
-  -webkit-backdrop-filter: blur(12px) saturate(1.4);
-  background: rgba(255,255,255,0.08) !important;
-  border-color: rgba(255,255,255,0.25) !important;
-  border-top-color: rgba(255,255,255,0.4) !important;
+  backdrop-filter: blur(16px) saturate(1.5);
+  -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  background: rgba(0,0,0,0.33) !important;
+  border-color: rgba(255,255,255,0.20) !important;
+  border-top-color: rgba(255,255,255,0.35) !important;
   box-shadow:
-    0 2px 16px rgba(0,0,0,0.2),
-    0 8px 32px rgba(0,0,0,0.12),
-    inset 0 1px 0 rgba(255,255,255,0.15),
-    inset 0 -1px 0 rgba(255,255,255,0.05) !important;
+    0 2px 16px rgba(0,0,0,0.25),
+    0 8px 32px rgba(0,0,0,0.18),
+    inset 0 1px 0 rgba(255,255,255,0.12),
+    inset 0 -1px 0 rgba(255,255,255,0.04) !important;
 }
 
 html[data-glass] .session-card--pressed {
-  backdrop-filter: blur(16px) saturate(1.6);
-  -webkit-backdrop-filter: blur(16px) saturate(1.6);
-  background: rgba(0,0,0,0.12) !important;
-  border-color: rgba(255,255,255,0.18) !important;
-  border-top-color: rgba(255,255,255,0.25) !important;
+  backdrop-filter: blur(20px) saturate(1.7);
+  -webkit-backdrop-filter: blur(20px) saturate(1.7);
+  background: rgba(0,0,0,0.40) !important;
+  border-color: rgba(255,255,255,0.15) !important;
+  border-top-color: rgba(255,255,255,0.22) !important;
   box-shadow:
-    inset 0 2px 12px rgba(0,0,0,0.25),
-    inset 0 1px 0 rgba(255,255,255,0.08),
-    0 1px 4px rgba(0,0,0,0.15) !important;
+    inset 0 2px 12px rgba(0,0,0,0.30),
+    inset 0 1px 0 rgba(255,255,255,0.06),
+    0 1px 4px rgba(0,0,0,0.20) !important;
 }
 
 /* Toolbar: frosted glass bar — warm fallback bg prevents dark flash

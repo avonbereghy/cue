@@ -210,6 +210,23 @@ def _should_ignore_session(hook_data):
     return False
 
 
+# Known env vars that indicate a subprocess caller.
+# Maps env var name → display label for the Cue pill.
+_SUBPROCESS_ENV_MARKERS = {
+    "RETENIR_SUBPROCESS": "retenir",
+    "SYMPHONY_SUBPROCESS": "symphony",
+    "CONDUCTOR_SUBPROCESS": "conductor",
+}
+
+
+def _detect_subprocess():
+    """Return a subprocess label if this session is a known subprocess, else None."""
+    for env_var, label in _SUBPROCESS_ENV_MARKERS.items():
+        if os.environ.get(env_var):
+            return label
+    return None
+
+
 def _read_last_tokens(transcript_path):
     """Read the last assistant usage entry from the JSONL transcript.
     Returns a dict with input_tokens, cache_creation, cache_read, output_tokens, model — or {}."""
@@ -257,7 +274,7 @@ def main():
         return
 
     action = sys.argv[1]
-    valid_actions = {"idle", "working", "waiting", "done", "remove", "error", "subagent", "subagent_stop"}
+    valid_actions = {"idle", "working", "thinking", "waiting", "done", "remove", "error", "subagent", "subagent_stop"}
     if action not in valid_actions:
         return  # Silently ignore unknown actions
 
@@ -274,6 +291,7 @@ def main():
     session_id = hook_data.get("session_id", f"pid-{os.getppid()}")
     workspace = hook_data.get("cwd", os.getcwd())
     source = _detect_source()
+    subprocess_label = _detect_subprocess()
 
     ignored_session = _should_ignore_session(hook_data)
 
@@ -364,9 +382,9 @@ def main():
                     active_subs = max(0, active_subs - 1)
                     action = "subagent" if active_subs > 0 else "working"
 
-                # While subagents are active, override "working" to show
+                # While subagents are active, override "working"/"thinking" to show
                 # subagent state. Waiting and error are NOT overridden.
-                if active_subs > 0 and action == "working":
+                if active_subs > 0 and action in ("working", "thinking"):
                     action = "subagent"
 
                 # Keep the original workspace from SessionStart — prevents
@@ -382,6 +400,10 @@ def main():
                     "source": existing.get("source", source),
                     "activeSubagents": active_subs,
                 }
+                # Propagate subprocess label if detected (stable across events)
+                sub = existing.get("subprocess") or subprocess_label
+                if sub:
+                    entry["subprocess"] = sub
                 if last_tokens:
                     entry["inputTokens"] = last_tokens["inputTokens"]
                     entry["outputTokens"] = last_tokens["outputTokens"]
