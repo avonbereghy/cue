@@ -330,6 +330,15 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                             }
                         });
 
+                        // Clear the inline styles that glass mode injected — without this,
+                        // `background: transparent` stays on html/body and --app-bg stays
+                        // transparent, making the white WKWebView background show through.
+                        let _ = window.eval(
+                            "document.documentElement.style.removeProperty('background');\
+                             document.documentElement.style.removeProperty('--app-bg');\
+                             document.body.style.removeProperty('background');"
+                        );
+
                         // Re-apply system theme to fix title bar appearance
                         let sys_theme = detect_system_theme();
                         let _ = window.set_theme(Some(sys_theme));
