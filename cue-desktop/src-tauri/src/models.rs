@@ -33,6 +33,9 @@ pub struct SessionInfo {
     /// Number of currently active subagents (written by hook).
     #[serde(default)]
     pub active_subagents: i64,
+    /// Subprocess label if this session was spawned by a known caller (e.g. "retenir").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subprocess: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -272,6 +275,7 @@ impl EnrichedSession {
 
         let state_icon = match info.state.as_str() {
             "working" => "\u{27F3}",   // ⟳
+            "thinking" => "\u{1F4AD}", // 💭
             "waiting" => "\u{23F8}",   // ⏸
             "error" => "\u{2717}",     // ✗
             "subagent" => "\u{2934}",  // ⤴
@@ -282,6 +286,7 @@ impl EnrichedSession {
 
         let state_display_name = match info.state.as_str() {
             "working" => "Working",
+            "thinking" => "Thinking",
             "waiting" => "Waiting",
             "error" => "Error",
             "subagent" => "Subagent",
@@ -841,6 +846,7 @@ mod tests {
             hook_output_tokens: 0,
             hook_model: String::new(),
             active_subagents: 0,
+            subprocess: None,
         }
     }
 

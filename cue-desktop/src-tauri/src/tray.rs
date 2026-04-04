@@ -34,6 +34,10 @@ fn color_for_state(state: &str, blink_on: bool) -> Rgba {
             let a = if blink_on { 255 } else { 38 }; // 0.15 * 255 ≈ 38
             Rgba { r: 255, g: 255, b: 255, a } // white (flashing)
         }
+        "thinking" => {
+            let a = if blink_on { 255 } else { 38 };
+            Rgba { r: 232, g: 123, b: 53, a } // ember orange (flashing)
+        }
         "waiting" => Rgba { r: 255, g: 204, b: 0, a: 255 }, // yellow (255,204,0)
         "error" => Rgba { r: 255, g: 69, b: 58, a: 255 },   // red (255,69,58)
         "subagent" => {
@@ -323,6 +327,7 @@ mod tests {
             hook_output_tokens: 0,
             hook_model: String::new(),
             active_subagents: 0,
+            subprocess: None,
         };
         EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default())
     }

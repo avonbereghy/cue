@@ -15,6 +15,7 @@ import { STATE_HEX, STATE_HEX_LIGHT, STATE_DOT_HEX, STATE_DOT_HEX_LIGHT, STATE_B
 import { formatTokens, formatDuration } from "@/lib/format";
 import { SignalString } from "./SignalString";
 import type { StrikePulse } from "./SignalString";
+import { StatusDot } from "./StatusDot";
 
 interface SessionCardProps {
   session: EnrichedSession;
@@ -121,7 +122,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
     return () => obs.disconnect();
   }, []);
 
-  const isAnimating = (info.state === "working" || info.state === "subagent") && titleAnimation !== "none";
+  const isAnimating = (info.state === "working" || info.state === "thinking" || info.state === "subagent") && titleAnimation !== "none";
 
   // Mathematical strike detection — computes each character's animation phase
   // and fires a pulse when it crosses the "peak displacement" threshold
@@ -220,15 +221,15 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
   const isDark = isGlass || (typeof document !== "undefined" ? document.documentElement.getAttribute("data-theme") !== "light" : true);
 
   const STATE_DISPLAY_NAME: Record<string, string> = {
-    working: "Working", waiting: "Waiting", error: "Error",
+    working: "Working", thinking: "Thinking", waiting: "Waiting", error: "Error",
     subagent: "Subagent", idle: "Idle", done: "Done", ended: "Ended",
   };
 
   // Dot color follows displayState so it transitions smoothly with the badge
-  const dotHex = (isDark ? STATE_DOT_HEX : STATE_DOT_HEX_LIGHT)[displayState] ?? "#e0e0e0";
-  const dotPulse = info.state === "working" || info.state === "waiting" || info.state === "subagent" ? "dot-pulse" : "";
-  const badgeHex = (isDark ? STATE_BADGE_HEX : STATE_BADGE_HEX_LIGHT)[displayState] ?? { bg: "rgba(34,197,94,0.2)", text: "#22c55e" };
-  const titleHex = (isDark ? STATE_HEX : STATE_HEX_LIGHT)[displayState] ?? "#22c55e";
+  const dotHex = (isDark ? STATE_DOT_HEX : STATE_DOT_HEX_LIGHT)[displayState] ?? (isDark ? "#a8a29e" : "#78716c");
+
+  const badgeHex = (isDark ? STATE_BADGE_HEX : STATE_BADGE_HEX_LIGHT)[displayState] ?? { bg: isDark ? "rgba(168,162,158,0.15)" : "rgba(120,113,108,0.12)", text: isDark ? "#a8a29e" : "#78716c" };
+  const titleHex = (isDark ? STATE_HEX : STATE_HEX_LIGHT)[displayState] ?? (isDark ? "#a8a29e" : "#78716c");
   const activeSubs = info.activeSubagents ?? 0;
   const displayStateName = displayState === "subagent" && activeSubs > 0
     ? `Subagents(${activeSubs})`
@@ -276,7 +277,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
       } ${
         isWorking ? "session-card--pressed" : "session-card--floating"
       } ${
-        isWaiting ? "session-card--waiting" : isError ? "session-card--error" : ""
+        isWaiting ? "session-card--waiting" : isError ? "session-card--error" : displayState === "thinking" ? "session-card--thinking" : ""
       } ${
         effectiveCompact ? "px-2.5 py-1.5 space-y-0"
         : signalString && (signalMode === "preset" || signalMode === "audio") ? "px-4 py-5 space-y-5" : "p-3 space-y-2.5"
@@ -303,8 +304,8 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
       <div ref={contentRef} className={`${effectiveCompact ? "space-y-0" : "space-y-2.5"} ${effectiveSlim && !effectiveCompact ? "flex flex-col flex-1" : ""}`} style={{ position: "relative", zIndex: 10 }}>
           {/* Row 1: Status dot + title + state badge + git branch + duration */}
           <div className="relative flex items-center gap-2">
-            <span className={`inline-block w-2.5 h-2.5 rounded-full ${dotPulse} shrink-0`} style={{ backgroundColor: dotHex }} aria-hidden="true" />
-            {(info.state === "working" || info.state === "subagent") && titleAnimation !== "none" ? (
+            <StatusDot state={displayState} color={dotHex} />
+            {(info.state === "working" || info.state === "thinking" || info.state === "subagent") && titleAnimation !== "none" ? (
               <span
                 ref={titleContainerRef}
                 className={`font-semibold anim-${titleAnimation} whitespace-nowrap overflow-hidden`}
@@ -420,7 +421,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                 {"\u2610"} {session.todoCompleted}/{session.todoTotal}
               </span>
             )}
-            {session.outputTokensPerSec > 0 && (info.state === "working" || info.state === "subagent") && (
+            {session.outputTokensPerSec > 0 && (info.state === "working" || info.state === "thinking" || info.state === "subagent") && (
               <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
                 {session.outputTokensPerSec.toFixed(1)} tok/s
               </span>
@@ -434,6 +435,11 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
             {!isNarrow && session.sourceDisplay !== "\u2014" && (
               <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
                 {session.sourceDisplay}
+              </span>
+            )}
+            {info.subprocess && (
+              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300 whitespace-nowrap">
+                {info.subprocess}
               </span>
             )}
           </div>
