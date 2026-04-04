@@ -434,10 +434,10 @@ export function applyThemeCssVars(theme: SignalTheme) {
     document.documentElement.removeAttribute("data-glass");
   }
 
-  // Toggle native macOS vibrancy for the Glass themes
-  import("@tauri-apps/api/core").then(({ invoke }) => {
-    invoke("set_vibrancy", { enabled: isGlass }).catch(() => {});
-  }).catch(() => {});
+  // Note: native macOS vibrancy is toggled by the Rust update_settings
+  // command when activeThemeId changes. Do NOT call set_vibrancy here —
+  // it runs toggle_vibrancy on every settings save, which resets the
+  // window theme and causes light/dark mode flicker.
 }
 
 export const TITLE_ANIMATIONS = [
