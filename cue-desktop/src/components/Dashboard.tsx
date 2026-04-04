@@ -190,7 +190,7 @@ export function Dashboard() {
 
       {/* Tab content */}
       {tab === "Sessions" && (
-        <div role="tabpanel" id="panel-sessions" aria-labelledby="tab-Sessions">
+        <div role="tabpanel" id="panel-sessions" aria-labelledby="tab-Sessions" className="flex flex-col flex-1 min-h-0">
           <SessionsTab sessions={sessions} />
         </div>
       )}

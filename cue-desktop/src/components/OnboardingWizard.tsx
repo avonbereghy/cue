@@ -105,7 +105,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   }, [step]);
 
   return (
-    <div className="flex flex-col h-screen" ref={wizardRef} role="dialog" aria-label="Setup wizard">
+    <div className="flex flex-col h-screen text-white" style={{ backgroundColor: "var(--app-bg, #1a1a1a)" }} ref={wizardRef} role="dialog" aria-label="Setup wizard">
       {/* Progress Dots */}
       <div
         className="flex items-center justify-center gap-2 py-4 bg-white/5 border-b border-white/10"

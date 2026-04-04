@@ -48,6 +48,11 @@ interface SessionsTabProps {
   sessions: EnrichedSession[];
 }
 
+// Persist sandbox sessions across tab switches (component unmounts when Settings tab is open).
+// Module-level so it survives React unmount/remount cycles.
+let _sandboxSessionsCache: EnrichedSession[] = [];
+let _sandboxSelectedIdxCache = -1;
+
 export function SessionsTab({ sessions }: SessionsTabProps) {
   const [permissionsEnabled, setPermissionsEnabled] = useState(false);
   const [titleAnimation, setTitleAnimation] = useState("ripple");
@@ -82,7 +87,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [testMode, setTestMode] = useState(false);
   const [compactMode, setCompactMode] = useState(false);
   const [slimMode, setSlimMode] = useState(false);
-  const [contextThreshold, setContextThreshold] = useState(false);
+  const [contextThreshold, setContextThreshold] = useState("always");
   const [contextDisplay, setContextDisplay] = useState("percent");
   const [lowPower, setLowPower] = useState(false);
   const [showToolPills, setShowToolPills] = useState(false);
@@ -314,7 +319,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setCompactMode(s.compactMode ?? false);
     if (!(s.compactMode ?? false)) setExpandOverrides({});
     setSlimMode(s.slimMode ?? false);
-    setContextThreshold(s.contextThreshold ?? false);
+    setContextThreshold(s.contextThreshold ?? "always");
     setContextDisplay(s.contextDisplay ?? "percent");
     setLowPower(s.lowPower ?? false);
     setShowToolPills(s.showToolPills ?? false);
@@ -401,11 +406,17 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   ];
 
   const sandboxCounterRef = useRef(0);
-  const [sandboxSessions, setSandboxSessions] = useState<EnrichedSession[]>([]);
-  const [sandboxSelectedIdx, setSandboxSelectedIdx] = useState(-1);
+  const [sandboxSessions, setSandboxSessions] = useState<EnrichedSession[]>(() => _sandboxSessionsCache);
+  const [sandboxSelectedIdx, setSandboxSelectedIdx] = useState<number>(() => _sandboxSelectedIdxCache);
   const [sandboxShowHelp, setSandboxShowHelp] = useState(false);
   const [sandboxEditingTitle, setSandboxEditingTitle] = useState(false);
+  const [screenshotMode, setScreenshotMode] = useState(false);
+  const [screenshotSaved, setScreenshotSaved] = useState<string | null>(null);
   const sandboxTitleInputRef = useRef<HTMLInputElement>(null);
+
+  // Keep module-level cache in sync so state survives tab switches
+  useEffect(() => { _sandboxSessionsCache = sandboxSessions; }, [sandboxSessions]);
+  useEffect(() => { _sandboxSelectedIdxCache = sandboxSelectedIdx; }, [sandboxSelectedIdx]);
 
   // Clean up sandbox sessions when the component unmounts
   useEffect(() => {
@@ -757,11 +768,28 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     },
   ];
 
-  // Load a sandbox preset
+  // Load a sandbox preset. F5 (Screenshot) hides chrome, captures, then restores.
   const loadSandboxPreset = useCallback((preset: typeof SANDBOX_PRESETS[number]) => {
     const sessions = preset.build();
     setSandboxSessions(sessions);
     setSandboxSelectedIdx(0);
+
+    if (preset.key === "F5") {
+      // Wait 2 frames for sessions to render, then capture
+      setScreenshotMode(true);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        invoke<string>("take_window_screenshot")
+          .then((path) => {
+            setScreenshotSaved(path.replace(/.*\//, "")); // show filename only
+            setTimeout(() => setScreenshotSaved(null), 3000);
+          })
+          .catch((err) => {
+            setScreenshotSaved(`Error: ${err}`);
+            setTimeout(() => setScreenshotSaved(null), 3000);
+          })
+          .finally(() => setScreenshotMode(false));
+      }));
+    }
   }, []);
 
   // Keyboard handler for sandbox mode
@@ -1230,9 +1258,15 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       : null;
 
     return (
-      <div className="flex flex-col flex-1 min-h-0">
-        {/* Sandbox header */}
-        <div className="flex items-center gap-3 px-4 py-2 bg-amber-500/8 border-b border-amber-500/20">
+      <div className="flex flex-col flex-1 min-h-0 relative">
+        {/* Screenshot saved toast */}
+        {screenshotSaved && (
+          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 rounded-lg bg-black/80 text-white/80 text-xs font-mono backdrop-blur-sm pointer-events-none">
+            📸 {screenshotSaved}
+          </div>
+        )}
+        {/* Sandbox header — hidden in screenshot mode */}
+        <div className={`flex items-center gap-3 px-4 py-2 bg-amber-500/8 border-b border-amber-500/20 ${screenshotMode ? "hidden" : ""}`}>
           <span className="text-xs font-semibold text-amber-400/90 uppercase tracking-wider">Sandbox</span>
           <span className="text-xs text-white/30">|</span>
           <span className="text-xs text-white/40">{sandboxSessions.length} session{sandboxSessions.length !== 1 ? "s" : ""}</span>
@@ -1307,8 +1341,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           </div>
         )}
 
-        {/* Batch state controls */}
-        {sandboxSessions.length > 0 && (
+        {/* Batch state controls — hidden in screenshot mode */}
+        {sandboxSessions.length > 0 && !screenshotMode && (
           <div className="flex items-center gap-1 px-4 py-1.5 bg-white/3 border-b border-white/5">
             <span className="text-[0.55rem] text-white/25 mr-1 uppercase tracking-wider shrink-0">All:</span>
             {SANDBOX_STATES.map((st) => (
@@ -1442,15 +1476,17 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                     className="relative"
                     onClick={() => setSandboxSelectedIdx(originalIdx)}
                   >
-                    {/* Slot number badge */}
-                    <div className={`absolute -left-0.5 top-1 z-10 w-4 h-4 rounded-full flex items-center justify-center text-[0.5rem] font-bold ${isSelected ? "bg-amber-400 text-black" : "bg-white/10 text-white/30"}`}>
-                      {originalIdx + 1}
-                    </div>
-                    <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} />
+                    {/* Slot number badge — hidden in screenshot mode */}
+                    {!screenshotMode && (
+                      <div className={`absolute -left-0.5 top-1 z-10 w-4 h-4 rounded-full flex items-center justify-center text-[0.5rem] font-bold ${isSelected ? "bg-amber-400 text-black" : "bg-white/10 text-white/30"}`}>
+                        {originalIdx + 1}
+                      </div>
+                    )}
+                    <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} />
                   </div>
 
-                  {/* Per-session state controls (only when selected) */}
-                  {isSelected && (
+                  {/* Per-session state controls — hidden in screenshot mode */}
+                  {isSelected && !screenshotMode && (
                     <div className="flex items-center gap-1 px-2 py-1 rounded-b-lg bg-amber-500/5 border border-t-0 border-amber-500/15 -mt-px">
                       {SANDBOX_STATES.map((st) => {
                         const isCurrent = session.info.state === st;
