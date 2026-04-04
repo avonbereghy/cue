@@ -501,6 +501,54 @@ fn clear_sandbox_sessions() -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Capture the main window to ~/Desktop/Cue-<timestamp>.png using screencapture.
+/// Returns the saved file path on success.
+/// Uses logical coordinates (points) as required by screencapture -R.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn take_window_screenshot(app: AppHandle) -> Result<String, String> {
+    let window = app.get_webview_window("main").ok_or("No main window")?;
+    let pos = window.outer_position().map_err(|e| e.to_string())?;
+    let size = window.outer_size().map_err(|e| e.to_string())?;
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+
+    let lx = (pos.x as f64 / scale).round() as i32;
+    let ly = (pos.y as f64 / scale).round() as i32;
+    let lw = (size.width as f64 / scale).round() as u32;
+    let lh = (size.height as f64 / scale).round() as u32;
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let dest = format!(
+        "{}/Desktop/Cue-{}.png",
+        dirs::home_dir().ok_or("No home dir")?.to_string_lossy(),
+        ts
+    );
+
+    let status = std::process::Command::new("screencapture")
+        .args([
+            "-x",                                              // no shutter sound
+            &format!("-R{},{},{},{}", lx, ly, lw, lh),        // region (logical coords)
+            &dest,
+        ])
+        .status()
+        .map_err(|e| e.to_string())?;
+
+    if status.success() {
+        Ok(dest)
+    } else {
+        Err("screencapture failed".to_string())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+fn take_window_screenshot(_app: AppHandle) -> Result<String, String> {
+    Err("Screenshots only supported on macOS".to_string())
+}
+
 #[tauri::command]
 fn revive_session(session_id: String, workspace: String) -> Result<(), String> {
     // Validate session_id is a plausible UUID (alphanumeric + hyphens only)
@@ -790,6 +838,7 @@ pub fn run() {
             set_vibrancy,
             write_sandbox_sessions,
             clear_sandbox_sessions,
+            take_window_screenshot,
         ])
         .on_window_event(|window, event| {
             match event {

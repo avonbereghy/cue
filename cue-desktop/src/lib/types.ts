@@ -171,7 +171,8 @@ export interface Settings {
   testMode: boolean;
   compactMode: boolean;
   slimMode: boolean;
-  contextThreshold: boolean;
+  /** Context bar visibility: "always", "never", or "after200k" */
+  contextThreshold: string;
   /** Context display mode: "percent", "tokens", "remaining", or "both" */
   contextDisplay: string;
   /** Low power mode: disables animations, signal strings, sand, backdrop-filter */

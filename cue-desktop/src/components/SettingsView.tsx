@@ -322,7 +322,6 @@ export function SettingsView() {
   const loadSettings = useCallback(async () => {
     try {
       const s = await invoke<Settings>("get_settings");
-      // Backward compat
       if (s.signalMode === "audio") s.signalMode = "preset";
       initialLoadRef.current = true;
       setSettings(s);
@@ -478,7 +477,7 @@ export function SettingsView() {
       testMode: false,
       compactMode: false,
       slimMode: false,
-      contextThreshold: false,
+      contextThreshold: "always",
       contextDisplay: "percent",
       lowPower: false,
       showToolPills: false,
@@ -599,8 +598,12 @@ export function SettingsView() {
         <SettingRow label="Compact Mode" description="Mini cards with just title, status, and animation" onReset={settings.compactMode ? () => setSettings({ ...settings, compactMode: false }) : undefined}>
           <Toggle checked={settings.compactMode ?? false} onChange={() => setSettings({ ...settings, compactMode: !(settings.compactMode ?? false) })} label="Compact mode" />
         </SettingRow>
-        <SettingRow label="Context After 200k" description="Only show the context bar when token usage reaches 200k+" onReset={settings.contextThreshold ? () => setSettings({ ...settings, contextThreshold: false }) : undefined}>
-          <Toggle checked={settings.contextThreshold ?? false} onChange={() => setSettings({ ...settings, contextThreshold: !(settings.contextThreshold ?? false) })} label="Context threshold" />
+        <SettingRow label="Context Bar" description="When to show the context usage bar" onReset={(settings.contextThreshold ?? "always") !== "always" ? () => setSettings({ ...settings, contextThreshold: "always" }) : undefined}>
+          <Select value={settings.contextThreshold ?? "always"} options={[
+            { id: "always", label: "Always Show" },
+            { id: "never", label: "Never Show" },
+            { id: "after200k", label: "After 200k" },
+          ]} onChange={(v) => setSettings({ ...settings, contextThreshold: v })} />
         </SettingRow>
         <SettingRow label="Context Display" description="How to show context usage values" onReset={(settings.contextDisplay ?? "percent") !== "percent" ? () => setSettings({ ...settings, contextDisplay: "percent" }) : undefined}>
           <Select value={settings.contextDisplay ?? "percent"} options={[
