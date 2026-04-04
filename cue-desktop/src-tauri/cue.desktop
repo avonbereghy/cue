@@ -1,8 +1,8 @@
 [Desktop Entry]
-Name=Claude Cue
+Name=Cue
 Comment=Cross-platform Claude Code session monitor
 Categories=Development;Utility;
-StartupWMClass=claude-cue
+StartupWMClass=cue
 Type=Application
-Icon=claude-cue
+Icon=cue
 Terminal=false

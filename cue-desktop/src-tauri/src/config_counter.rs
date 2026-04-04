@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn test_count_md_files_empty_dir() {
-        let dir = std::env::temp_dir().join("claude_cue_test_config_empty");
+        let dir = std::env::temp_dir().join("cue_test_config_empty");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(count_md_files_recursive(&dir), 0);
@@ -128,7 +128,7 @@ mod tests {
 
     #[test]
     fn test_count_md_files_with_files() {
-        let dir = std::env::temp_dir().join("claude_cue_test_config_md");
+        let dir = std::env::temp_dir().join("cue_test_config_md");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("rule1.md"), "test").unwrap();
@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn test_count_md_files_recursive_subdirs() {
-        let dir = std::env::temp_dir().join("claude_cue_test_config_recursive");
+        let dir = std::env::temp_dir().join("cue_test_config_recursive");
         let _ = std::fs::remove_dir_all(&dir);
         let sub = dir.join("subdir");
         std::fs::create_dir_all(&sub).unwrap();

@@ -12,7 +12,7 @@ import { PermissionPrompt } from "./PermissionPrompt";
 import { PermissionHistory } from "./PermissionHistory";
 import { usePermissions } from "@/hooks/usePermissions";
 
-const REVIVED_STORAGE_KEY = "claude-cue-revived-sessions";
+const REVIVED_STORAGE_KEY = "cue-revived-sessions";
 
 /** Snapshot stored for revived (ended) sessions */
 interface RevivedSession {
@@ -377,7 +377,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const SANDBOX_MODELS = ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"] as const;
   const SANDBOX_SOURCES = ["terminal", "vscode", "cursor", "iterm"] as const;
   const SANDBOX_BRANCHES = ["main", "feat/auth", "fix/bug-123", "dev", "feat/dashboard", "release/v2.0", "hotfix/crash"];
-  const SANDBOX_WORKSPACES = ["my-app", "api-server", "claude-cue", "web-client", "ml-pipeline", "infra", "docs", "mobile"];
+  const SANDBOX_WORKSPACES = ["my-app", "api-server", "cue", "web-client", "ml-pipeline", "infra", "docs", "mobile"];
   const SANDBOX_TOOLS_ACTIVE: Array<[string, string]> = [
     ["Write", "src/components/Button.tsx"],
     ["Edit", "src/lib/utils.ts"],
@@ -674,7 +674,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       build: () => {
         sandboxCounterRef.current = 0;
         return SANDBOX_STATES.filter(s => s !== "ended").map((state, i) => {
-          const extra = i === 0 ? makeSandboxSession("working", { title: "Building dashboard UI", workspace: "claude-cue", branch: "main", contextPct: 0.61, durationSecs: 272, tokPerSec: 12.4, tool: ["Write", "src/components/Dashboard.tsx"] }) : null;
+          const extra = i === 0 ? makeSandboxSession("working", { title: "Building dashboard UI", workspace: "cue", branch: "main", contextPct: 0.61, durationSecs: 272, tokPerSec: 12.4, tool: ["Write", "src/components/Dashboard.tsx"] }) : null;
           return extra ?? makeSandboxSession(state);
         }).concat([makeSandboxSession("working", { title: "Running test suite", workspace: "api-server", branch: "feat/auth", contextPct: 0.29, tool: ["Bash", "pytest -x"] })]);
       },
@@ -696,7 +696,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       build: () => {
         sandboxCounterRef.current = 0;
         return [
-          makeSandboxSession("working", { title: "Fixing race condition", workspace: "claude-cue", branch: "fix/bug-123", contextPct: 0.52, tool: ["Edit", "src-tauri/src/lib.rs"] }),
+          makeSandboxSession("working", { title: "Fixing race condition", workspace: "cue", branch: "fix/bug-123", contextPct: 0.52, tool: ["Edit", "src-tauri/src/lib.rs"] }),
           makeSandboxSession("waiting", { title: "Installing dependencies", workspace: "web-client", branch: "main", contextPct: 0.22, tool: ["Bash", "npm install express"] }),
           makeSandboxSession("done", { title: "Unit tests passing", workspace: "api-server", branch: "feat/auth", contextPct: 0.67, tokPerSec: 0 }),
         ];
@@ -707,7 +707,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       build: () => {
         sandboxCounterRef.current = 0;
         return [
-          makeSandboxSession("working", { title: "Building dashboard UI", workspace: "claude-cue", branch: "main", contextPct: 0.38, tool: ["Write", "src/components/SessionCard.tsx"] }),
+          makeSandboxSession("working", { title: "Building dashboard UI", workspace: "cue", branch: "main", contextPct: 0.38, tool: ["Write", "src/components/SessionCard.tsx"] }),
           makeSandboxSession("error", { title: "Type check failed", workspace: "web-client", branch: "feat/types", contextPct: 0.71 }),
           makeSandboxSession("subagent", { title: "Optimizing queries", workspace: "api-server", branch: "perf/db", contextPct: 0.44, subagentCount: 3 }),
           makeSandboxSession("idle", { title: "Waiting for input", workspace: "docs", branch: "main", contextPct: 0.12 }),
@@ -720,7 +720,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         sandboxCounterRef.current = 0;
         return [
           makeSandboxSession("working", { title: "Building auth middleware", workspace: "api-server", model: "claude-opus-4-6", branch: "feat/auth", contextPct: 0.61, durationSecs: 272, tokPerSec: 14.2, tool: ["Write", "src/middleware/auth.ts"], todoTotal: 7, todoCompleted: 3 }),
-          makeSandboxSession("subagent", { title: "Running test suite", workspace: "claude-cue", model: "claude-sonnet-4-6", branch: "main", contextPct: 0.29, durationSecs: 728, subagentCount: 2, todoTotal: 15, todoCompleted: 11 }),
+          makeSandboxSession("subagent", { title: "Running test suite", workspace: "cue", model: "claude-sonnet-4-6", branch: "main", contextPct: 0.29, durationSecs: 728, subagentCount: 2, todoTotal: 15, todoCompleted: 11 }),
           makeSandboxSession("waiting", { title: "Database migration", workspace: "ml-pipeline", model: "claude-sonnet-4-6", branch: "dev", contextPct: 0.45, durationSecs: 156, tool: ["Bash", "prisma migrate deploy"] }),
           makeSandboxSession("done", { title: "Documentation complete", workspace: "docs", model: "claude-haiku-4-5-20251001", branch: "main", contextPct: 0.82, durationSecs: 540, tokPerSec: 0, todoTotal: 5, todoCompleted: 5 }),
           makeSandboxSession("working", { title: "Optimizing bundle size", workspace: "web-client", model: "claude-opus-4-6", branch: "perf/bundle", contextPct: 0.37, durationSecs: 95, tokPerSec: 18.7, tool: ["Edit", "vite.config.ts"] }),

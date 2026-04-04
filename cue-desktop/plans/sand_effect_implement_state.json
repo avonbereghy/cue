@@ -1,0 +1,15 @@
+{
+  "feature": "sand_effect",
+  "description": "Replace particle system with Sand effect using string vibration physics as backbone. Sand and strings are mutually exclusive. Audio-driven velocity/density. Glass (String) and Glass (Sand) presets.",
+  "mode": "managed",
+  "created": "2026-03-30T14:30:00Z",
+  "updated": "2026-03-30T14:30:00Z",
+  "base_commit": "3a98797f97b6132c081c1a67ca47db460ff09791",
+  "phases": {
+    "feature_forge": { "status": "done", "artifact": "user-provided spec" },
+    "agent_plan": { "status": "running", "artifact": null },
+    "execute_waves": { "status": "pending", "artifact": null },
+    "review_gauntlet": { "status": "pending", "artifact": null }
+  },
+  "current_phase": "agent_plan"
+}

@@ -39,8 +39,8 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
     try {
       // Determine hook path based on platform
       const hookPath = envInfo?.platform === "windows"
-        ? "%USERPROFILE%\\.claude\\symphony-root\\claude-cue\\hooks\\cue-hook"
-        : "~/.claude/symphony-root/claude-cue/hooks/cue-hook";
+        ? "%USERPROFILE%\\.claude\\symphony-root\\cue\\hooks\\cue-hook"
+        : "~/.claude/symphony-root/cue/hooks/cue-hook";
 
       await invoke("configure_hooks", { hookPath });
       setHookResult("success");
@@ -204,7 +204,7 @@ function StepWelcome({
   return (
     <div>
       <h2 className="text-xl font-semibold text-white mb-2">
-        Welcome to Claude Cue
+        Welcome to Cue
       </h2>
       <p className="text-sm text-white/60 mb-6">
         Monitor your Claude Code sessions with real-time status indicators and
@@ -348,7 +348,7 @@ function StepHooks({
         Configure Hooks
       </h2>
       <p className="text-sm text-white/60 mb-6">
-        Claude Cue uses Claude Code hooks to track session states. This will add
+        Cue uses Claude Code hooks to track session states. This will add
         entries to your <code className="bg-white/10 px-1 rounded">~/.claude/settings.json</code>.
       </p>
 
@@ -439,7 +439,7 @@ function StepDone() {
         You're All Set
       </h2>
       <p className="text-sm text-white/60 max-w-sm">
-        Claude Cue will monitor your Claude Code sessions and display real-time
+        Cue will monitor your Claude Code sessions and display real-time
         status in the system tray. Click "Get Started" to open the dashboard.
       </p>
     </div>

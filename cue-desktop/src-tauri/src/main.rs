@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    claude_cue_desktop_lib::run();
+    cue_desktop_lib::run();
 }

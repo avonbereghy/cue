@@ -53,7 +53,7 @@ mod tests {
 
     #[test]
     fn test_settings_roundtrip() {
-        let dir = std::env::temp_dir().join("claude_cue_test_settings");
+        let dir = std::env::temp_dir().join("cue_test_settings");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 

@@ -447,9 +447,9 @@ export function SettingsView() {
       signalString: true,
       signalFrequency: 1.0,
       signalMode: "preset",
-      signalAlpha: 0.75,
+      signalAlpha: 0.6,
       signalAmplitude: 0.25,
-      signalEcho: 1.0,
+      signalEcho: 1.75,
       signalGate: 0.05,
       signalBass: true,
       signalMids: true,
@@ -633,15 +633,15 @@ export function SettingsView() {
             {(settings.signalEffect ?? "string") === "string" && (
               <>
                 <SettingRow label="Opacity" description="String transparency">
-                  <Slider value={settings.signalAlpha ?? 0.25} min={0.05} max={1.0} step={0.01} defaultValue={0.75} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalAlpha: v })} />
+                  <Slider value={settings.signalAlpha ?? 0.6} min={0.05} max={1.0} step={0.01} defaultValue={0.6} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalAlpha: v })} />
                 </SettingRow>
 
                 <SettingRow label="Amplitude" description="String displacement intensity">
-                  <Slider value={settings.signalAmplitude ?? 0.25} min={0.01} max={1.0} step={0.01} defaultValue={0.75} format={formatMul} onChange={(v) => setSettings({ ...settings, signalAmplitude: v })} />
+                  <Slider value={settings.signalAmplitude ?? 0.25} min={0.01} max={1.0} step={0.01} defaultValue={0.25} format={formatMul} onChange={(v) => setSettings({ ...settings, signalAmplitude: v })} />
                 </SettingRow>
 
                 <SettingRow label="Echo" description="Trailing reverb lines behind the main string">
-                  <Slider value={settings.signalEcho ?? 1.0} min={0} max={2.0} step={0.01} defaultValue={1.0} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalEcho: v })} />
+                  <Slider value={settings.signalEcho ?? 1.75} min={0} max={2.0} step={0.01} defaultValue={1.75} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalEcho: v })} />
                 </SettingRow>
 
                 {/* Cord Animation */}

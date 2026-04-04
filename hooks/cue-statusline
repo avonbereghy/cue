@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# cue-statusline — Claude Code statusline plugin for Claude Cue
+# cue-statusline — Claude Code statusline plugin for Cue
 #
 # Captures rate limit data from Claude Code's statusline protocol
-# and writes it to a shared file that the Claude Cue desktop app reads.
+# and writes it to a shared file that the Cue desktop app reads.
 #
 # Installation:
 #   Add to ~/.claude/settings.json:
@@ -17,17 +17,17 @@
 # Claude Code pipes JSON via stdin on each render cycle containing:
 #   { model, context, rateLimits, transcriptPath, cwd, ... }
 #
-# This script extracts rateLimits and writes rate_limits.json for Claude Cue.
+# This script extracts rateLimits and writes rate_limits.json for Cue.
 
 set -euo pipefail
 
 # Determine output path (must match paths.rs rate_limits_path)
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    OUTPUT_DIR="$HOME/Library/Application Support/Claude Cue"
+    OUTPUT_DIR="$HOME/Library/Application Support/Cue"
 elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
-    OUTPUT_DIR="${LOCALAPPDATA:-$HOME/AppData/Local}/Claude Cue"
+    OUTPUT_DIR="${LOCALAPPDATA:-$HOME/AppData/Local}/Cue"
 else
-    OUTPUT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/claude-cue"
+    OUTPUT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/cue"
 fi
 
 mkdir -p "$OUTPUT_DIR"
@@ -84,5 +84,5 @@ except Exception:
 " "$OUTPUT_FILE" <<< "$INPUT"
 fi
 
-# Output minimal statusline (empty = no terminal display, Claude Cue handles display)
+# Output minimal statusline (empty = no terminal display, Cue handles display)
 echo ""

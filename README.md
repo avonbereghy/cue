@@ -1,4 +1,4 @@
-# Claude Cue
+# Cue
 
 A real-time session monitor for Claude Code — see at a glance if Claude is working, waiting for permission, spawning subagents, hit an error, or finished. Cross-platform desktop app for macOS, Windows, and Linux.
 
@@ -6,7 +6,7 @@ A real-time session monitor for Claude Code — see at a glance if Claude is wor
 ![Platform](https://img.shields.io/badge/Platform-macOS_|_Windows_|_Linux-blue)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 
-![Claude Cue Dashboard](assets/dashboard-demo.png)
+![Cue Dashboard](assets/dashboard-demo.png)
 
 ## Status Indicators
 
@@ -83,32 +83,32 @@ Multiple sessions show as a grid of dots — see all your sessions at once.
 ### macOS
 
 ```bash
-cd claude-cue-desktop
+cd cue-desktop
 npm install
 npm run tauri build
-cp -R src-tauri/target/release/bundle/macos/Claude\ Cue.app ~/Applications/
-open ~/Applications/Claude\ Cue.app
+cp -R src-tauri/target/release/bundle/macos/Cue.app ~/Applications/
+open ~/Applications/Cue.app
 ```
 
 The onboarding wizard configures the Claude Code hooks automatically on first launch.
 
-To start on login: **System Settings > General > Login Items > add "Claude Cue"**
+To start on login: **System Settings > General > Login Items > add "Cue"**
 
 ### Windows & Linux
 
-See [claude-cue-desktop/INSTALL.md](claude-cue-desktop/INSTALL.md) for MSI, NSIS, AppImage, and .deb instructions.
+See [cue-desktop/INSTALL.md](cue-desktop/INSTALL.md) for MSI, NSIS, AppImage, and .deb instructions.
 
 ### Development
 
 ```bash
-cd claude-cue-desktop
+cd cue-desktop
 npm install
 npm run tauri dev
 ```
 
 ## How It Works
 
-Claude Cue uses [Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) to track session state. A Python hook script writes session status to a platform-specific `sessions.json` on every lifecycle event:
+Cue uses [Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) to track session state. A Python hook script writes session status to a platform-specific `sessions.json` on every lifecycle event:
 
 ```
 SessionStart       → idle
@@ -169,16 +169,16 @@ Monitor sessions from the terminal — useful over SSH or on tiling window manag
 
 ```bash
 # Rich multi-line output with all stats (colors auto-detected)
-claude-cue-desktop --status --pretty
+cue-desktop --status --pretty
 
 # Dense single-line-per-session format
-claude-cue-desktop --status --pretty --compact
+cue-desktop --status --pretty --compact
 
 # JSON output for scripting (pipe to jq)
-claude-cue-desktop --status
+cue-desktop --status
 
 # Show full workspace paths (leaf name only by default)
-claude-cue-desktop --status --pretty --show-paths
+cue-desktop --status --pretty --show-paths
 ```
 
 The CLI displays the same data as the GUI dashboard: session ID, messages, input/output tokens, tool breakdown, model, source client, cache hit %, context usage bar, git branch, and duration. Sessions are sorted with active states first (working/waiting/subagent), then idle, then done.
@@ -186,7 +186,7 @@ The CLI displays the same data as the GUI dashboard: session ID, messages, input
 ## Uninstall
 
 ```bash
-rm -rf ~/Applications/Claude\ Cue.app
+rm -rf ~/Applications/Cue.app
 ```
 
 Then remove the hook entries from `~/.claude/settings.json` (search for `cue-hook`) and the statusline setting (search for `statusLine`).
@@ -194,7 +194,7 @@ Then remove the hook entries from `~/.claude/settings.json` (search for `cue-hoo
 ## Architecture
 
 ```
-claude-cue-desktop/               # Cross-platform app (Tauri v2)
+cue-desktop/               # Cross-platform app (Tauri v2)
 ├── src-tauri/src/                # Rust backend
 │   ├── lib.rs                    # Tauri commands, timers, tray + permission server
 │   ├── session_monitor.rs        # Session polling + JSONL path resolution
@@ -237,13 +237,13 @@ hooks/
 
 ## avonbereghy
 
-Claude Cue is part of [avonbereghy](https://github.com/avonbereghy), a collection of tools for Claude Code:
+Cue is part of [avonbereghy](https://github.com/avonbereghy), a collection of tools for Claude Code:
 
 | Project | What It Does |
 |---------|-------------|
 | **[Claude Symphony](https://github.com/avonbereghy/claude-symphony)** | Workflow methodology + slash commands for project generation |
 | **[Claude Conductor](https://github.com/avonbereghy/claude-conductor)** | Native macOS app for managing Claude Code configuration |
-| **[Claude Cue](https://github.com/avonbereghy/claude-cue)** | Status line indicator for Claude Code sessions |
+| **[Cue](https://github.com/avonbereghy/cue)** | Status line indicator for Claude Code sessions |
 
 ## License
 
