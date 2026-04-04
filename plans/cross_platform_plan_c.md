@@ -1,6 +1,6 @@
 # Plan C: Outside-In — User Experience & Validation Plan
 
-## Cross-Platform Claude Cue (Windows + Linux)
+## Cross-Platform Cue (Windows + Linux)
 
 ---
 
@@ -64,15 +64,15 @@ Claude Code sessions can run for minutes. Without visibility, developers:
 
 1. User downloads the installer (MSI or standalone `.exe`) from GitHub Releases.
 2. Runs the installer. It:
-   - Copies the binary to `%LOCALAPPDATA%\Claude Cue\`
+   - Copies the binary to `%LOCALAPPDATA%\Cue\`
    - Creates Start Menu shortcut
    - Detects WSL distributions and native Claude Code installs
    - Offers to configure hooks (explains what hooks are in plain language)
    - Asks: "Where does Claude Code run? (a) Windows native, (b) WSL, (c) Both"
 3. If WSL: installs the hook script inside the WSL filesystem via `wsl.exe -d <distro> -- bash -c "..."`, writes hook config to `~/.claude/settings.json` inside WSL.
 4. If native Windows: installs the hook script to `%USERPROFILE%\.claude\` and configures hooks.
-5. Claude Cue launches. A hollow ring appears in the system tray (overflow area by default on Windows 11).
-6. **Critical first-run moment**: A toast notification says "Claude Cue is running. Pin it to your taskbar tray for quick access." with a link/instructions to pin.
+5. Cue launches. A hollow ring appears in the system tray (overflow area by default on Windows 11).
+6. **Critical first-run moment**: A toast notification says "Cue is running. Pin it to your taskbar tray for quick access." with a link/instructions to pin.
 7. User starts a Claude Code session. Within 1 second, the hollow ring becomes a blinking white dot.
 8. **Aha moment**: "I can see it working without leaving my IDE."
 
@@ -134,7 +134,7 @@ Claude Code sessions can run for minutes. Without visibility, developers:
 
 ## 4. Key Retention Moments
 
-What makes someone keep Claude Cue running vs. closing it after day one:
+What makes someone keep Cue running vs. closing it after day one:
 
 1. **First saved context switch** — The moment they notice a yellow dot (permission waiting) from the corner of their eye while writing code in another window. They didn't have to Alt-tab. This is the "I need this" moment.
 
@@ -144,7 +144,7 @@ What makes someone keep Claude Cue running vs. closing it after day one:
 
 4. **End-of-day review** — Opening the usage tab to see how much they accomplished: sessions, tokens, tools used, cost. This creates a sense of productivity and informs work patterns.
 
-5. **Start-at-login becomes default** — After a week, they enable auto-start and forget Claude Cue exists as a separate app — it's just part of their development environment, like a clock in the taskbar.
+5. **Start-at-login becomes default** — After a week, they enable auto-start and forget Cue exists as a separate app — it's just part of their development environment, like a clock in the taskbar.
 
 ---
 
@@ -154,7 +154,7 @@ What makes someone keep Claude Cue running vs. closing it after day one:
 
 ```
 Step 1: Welcome
-  "Claude Cue monitors your Claude Code sessions from the system tray."
+  "Cue monitors your Claude Code sessions from the system tray."
   [Screenshot of tray with colored dots]
 
 Step 2: Claude Code Detection
@@ -175,7 +175,7 @@ Step 3: Plan Selection
 Step 4: Install
   Installing... done.
 
-  [x] Start Claude Cue now
+  [x] Start Cue now
   [x] Start automatically at login
 
   [Finish]
@@ -188,7 +188,7 @@ Post-install: Toast notification with instructions to pin the tray icon.
 No separate installer wizard — the app handles it on first run:
 
 ```
-+-- Welcome to Claude Cue ---------------------+
++-- Welcome to Cue ---------------------+
 |                                               |
 |  Desktop: GNOME 46 (Wayland)                  |
 |  Tray support: Requires AppIndicator extension|
@@ -340,9 +340,9 @@ This hierarchy must be preserved across all platforms. The tray icon is the most
 #### Tiling WM Users (i3, sway, Hyprland)
 - May or may not have a tray. i3bar and swaybar support tray icons. Waybar does too (with tray module).
 - Users with no tray configured need an alternative:
-  - **Option 1**: D-Bus API that tiling WM status bar modules can query (e.g., a custom waybar module that reads Claude Cue state).
+  - **Option 1**: D-Bus API that tiling WM status bar modules can query (e.g., a custom waybar module that reads Cue state).
   - **Option 2**: A tiny floating window.
-  - **Option 3**: CLI tool (`claude-cue status`) that outputs JSON — users can pipe it into their bar.
+  - **Option 3**: CLI tool (`cue status`) that outputs JSON — users can pipe it into their bar.
 - For V1, supporting standard tray + a CLI fallback is reasonable.
 
 #### Wayland vs X11
@@ -395,7 +395,7 @@ Platform-specific notification APIs:
 
 ### Screen Readers
 
-- **Tray icon**: Must expose current state as accessible text. E.g., "Claude Cue: 3 sessions — 1 working, 1 waiting, 1 subagent."
+- **Tray icon**: Must expose current state as accessible text. E.g., "Cue: 3 sessions — 1 working, 1 waiting, 1 subagent."
   - Windows: `Shell_NotifyIcon` supports tooltip text, which screen readers (NVDA, JAWS) can read.
   - Linux: `StatusNotifierItem` supports `Title` and `ToolTip` properties accessible via AT-SPI.
 - **Context menu**: Standard menu semantics. Each item should be a proper menu item, not custom-drawn text.
@@ -429,10 +429,10 @@ Platform-specific notification APIs:
 
 This is the **highest-priority edge case** because a large portion of Windows Claude Code users likely use WSL.
 
-**The bridge problem**: The hook script runs inside WSL (Linux filesystem). Claude Cue runs on Windows (Win32). How does the hook communicate session state to the app?
+**The bridge problem**: The hook script runs inside WSL (Linux filesystem). Cue runs on Windows (Win32). How does the hook communicate session state to the app?
 
 **Options (ranked by user simplicity)**:
-1. **Shared filesystem**: WSL2 mounts the Windows filesystem at `/mnt/c/`. The hook writes `sessions.json` to a Windows-accessible path (e.g., `/mnt/c/Users/<user>/AppData/Local/Claude Cue/sessions.json`). The Windows app reads it normally. **Simplest and most reliable.**
+1. **Shared filesystem**: WSL2 mounts the Windows filesystem at `/mnt/c/`. The hook writes `sessions.json` to a Windows-accessible path (e.g., `/mnt/c/Users/<user>/AppData/Local/Cue/sessions.json`). The Windows app reads it normally. **Simplest and most reliable.**
 2. **Named pipe / TCP socket**: Hook script sends state over a localhost socket to the Windows app. More complex, but avoids filesystem polling.
 3. **WSL interop**: Hook script calls `cmd.exe /c` to invoke a Windows-side script. Heavy and fragile.
 
@@ -446,8 +446,8 @@ Claude Code runs on a remote server; the user's local machine has the display.
 
 **V1 approach**: Explicitly out of scope. Document this limitation clearly. The hook script requires local filesystem access to communicate with the tray app.
 
-**Future approach (V2+)**: The hook script could POST session state to a lightweight HTTP endpoint that the local Claude Cue instance listens on. This would require:
-- A "remote mode" config in Claude Cue to listen on a port.
+**Future approach (V2+)**: The hook script could POST session state to a lightweight HTTP endpoint that the local Cue instance listens on. This would require:
+- A "remote mode" config in Cue to listen on a port.
 - SSH port forwarding or a secure tunnel.
 - Authentication to prevent unauthorized state injection.
 
@@ -460,13 +460,13 @@ Claude Code runs on a remote server; the user's local machine has the display.
 ### Headless Servers
 
 - No display server = no tray icon or dashboard.
-- The hook script still works (it just writes JSON). A future CLI companion (`claude-cue status --json`) could read the state file.
-- For V1: if no display is detected at launch, print a helpful error: "Claude Cue requires a desktop environment. For headless monitoring, see [future docs link]."
+- The hook script still works (it just writes JSON). A future CLI companion (`cue status --json`) could read the state file.
+- For V1: if no display is detected at launch, print a helpful error: "Cue requires a desktop environment. For headless monitoring, see [future docs link]."
 
 ### Multiple User Accounts
 
 - On shared Linux machines, each user has their own `~/.claude/` directory. No conflict.
-- On Windows with multiple user profiles: each user gets their own `%LOCALAPPDATA%\Claude Cue\`.
+- On Windows with multiple user profiles: each user gets their own `%LOCALAPPDATA%\Cue\`.
 
 ### File Locking (Cross-Platform)
 
@@ -490,7 +490,7 @@ The current hook uses `fcntl.flock()` — Unix-only.
 
 ## 11. What Must Be True for Users to Recommend This
 
-Users will recommend Claude Cue to colleagues if **all** of these are true:
+Users will recommend Cue to colleagues if **all** of these are true:
 
 1. **"It just works"** — Install takes under 2 minutes. No manual hook configuration. No obscure dependencies. The tray icon appears and sessions show up automatically.
 
@@ -513,7 +513,7 @@ Users will recommend Claude Cue to colleagues if **all** of these are true:
 **Risk**: HIGH. Windows 11 hides tray icons by default. If users don't pin it, the entire value proposition fails — they'll never see the dots.
 
 **Validation**:
-- Prototype the Windows tray icon behavior. Test with 5 Windows users who don't know about Claude Cue. How many discover the icon without prompting? How many successfully pin it?
+- Prototype the Windows tray icon behavior. Test with 5 Windows users who don't know about Cue. How many discover the icon without prompting? How many successfully pin it?
 - Consider whether a persistent notification or floating widget (like the Windows clock) would be a better primary surface than the tray.
 
 ### Assumption 2: GNOME Users Will Install the AppIndicator Extension
@@ -523,7 +523,7 @@ Users will recommend Claude Cue to colleagues if **all** of these are true:
 **Validation**:
 - Survey Linux Claude Code users: what DE do they use? Do they already have AppIndicator installed? (Many do, for Discord, Slack, etc.)
 - Test the fallback floating-window approach. Is it acceptable to GNOME users?
-- Consider whether a GNOME extension that integrates Claude Cue into the top bar (like the battery indicator) would be more native-feeling.
+- Consider whether a GNOME extension that integrates Cue into the top bar (like the battery indicator) would be more native-feeling.
 
 ### Assumption 3: The Hook-to-JSON-File Architecture Works Cross-Platform
 
@@ -539,7 +539,7 @@ Users will recommend Claude Cue to colleagues if **all** of these are true:
 **Risk**: MEDIUM. Linux developers in particular may prefer a CLI tool or tmux integration over a GUI tray app.
 
 **Validation**:
-- Include a CLI mode (`claude-cue --status`) that outputs JSON to stdout. Observe whether users prefer it.
+- Include a CLI mode (`cue --status`) that outputs JSON to stdout. Observe whether users prefer it.
 - Track which surface (tray, context menu, dashboard, CLI) users interact with most.
 
 ### Assumption 5: Token Usage Tracking Is Accurate Enough to Be Useful
@@ -547,7 +547,7 @@ Users will recommend Claude Cue to colleagues if **all** of these are true:
 **Risk**: LOW-MEDIUM. The app estimates usage from JSONL logs, but Anthropic's server-side counting may differ. If the progress bar says 80% but the user gets rate-limited at 75%, trust is destroyed.
 
 **Validation**:
-- Compare Claude Cue's token counts against actual rate-limit responses from the API over a week of heavy usage.
+- Compare Cue's token counts against actual rate-limit responses from the API over a week of heavy usage.
 - Add a disclaimer: "Estimated — actual limits may vary."
 
 ### Assumption 6: The Dot Grid Is Legible at Small Sizes
@@ -565,7 +565,7 @@ Users will recommend Claude Cue to colleagues if **all** of these are true:
 ### Test 1: Cold Install (Week 1)
 
 **Participants**: 3 Windows + 3 Linux developers who use Claude Code daily.
-**Task**: "Here's a download link. Install Claude Cue and start using it with your normal workflow."
+**Task**: "Here's a download link. Install Cue and start using it with your normal workflow."
 **Observe**:
 - Time from download to first tray icon visible
 - Whether they successfully pin the tray icon (Windows)
@@ -593,14 +593,14 @@ Users will recommend Claude Cue to colleagues if **all** of these are true:
 **Observe**:
 - How quickly they notice the yellow dot or notification
 - Whether they take action within 30 seconds
-- Compare with a control day (no Claude Cue) — how long did permission requests go unnoticed?
+- Compare with a control day (no Cue) — how long did permission requests go unnoticed?
 
 **Success criteria**: Median time to notice permission request < 30 seconds (vs. estimated 3-5 minutes without Cue).
 
 ### Test 4: Usage Dashboard Comprehension (Week 2)
 
 **Participants**: 6 developers.
-**Task**: "You want to know if you can run another large session without hitting your rate limit. Use Claude Cue to decide."
+**Task**: "You want to know if you can run another large session without hitting your rate limit. Use Cue to decide."
 **Observe**:
 - Do they find the Usage tab?
 - Can they interpret the progress bars and "resets in" text?
@@ -612,7 +612,7 @@ Users will recommend Claude Cue to colleagues if **all** of these are true:
 ### Test 5: WSL Bridge Reliability (Week 1, Windows-Only)
 
 **Participants**: 3 WSL users.
-**Setup**: Claude Code running in WSL, Claude Cue on Windows host.
+**Setup**: Claude Code running in WSL, Cue on Windows host.
 **Task**: Normal Claude Code usage for 2 hours.
 **Observe**:
 - Any dropped state updates (sessions that don't appear in the tray)
@@ -625,11 +625,11 @@ Users will recommend Claude Cue to colleagues if **all** of these are true:
 ### Test 6: One-Week Retention (Week 3)
 
 **Participants**: All 6 from Test 1.
-**Task**: Use Claude Cue for a full work week with no intervention.
+**Task**: Use Cue for a full work week with no intervention.
 **Measure at end of week**:
-- Is Claude Cue still running?
+- Is Cue still running?
 - Did they enable start-at-login?
-- Can they describe a specific moment where Claude Cue was useful?
+- Can they describe a specific moment where Cue was useful?
 - Would they recommend it to a colleague?
 
 **Success criteria**: 4/6 still running at end of week. 3/6 enabled start-at-login. 4/6 can cite a specific useful moment.
@@ -643,10 +643,10 @@ Users will recommend Claude Cue to colleagues if **all** of these are true:
 | Tray API | `Shell_NotifyIcon` (Win32) or `NotifyIcon` (.NET) | `StatusNotifierItem` (D-Bus) via `libappindicator3` |
 | Tray icon hidden by default? | Yes (Win 11 overflow) | Depends on DE config |
 | Notifications | Windows Toast (WinRT) | `org.freedesktop.Notifications` (D-Bus) |
-| Settings storage | `%LOCALAPPDATA%\Claude Cue\settings.json` | `~/.config/claude-cue/settings.json` (XDG) |
-| Session data path | `%LOCALAPPDATA%\Claude Cue\sessions.json` | `~/.local/share/claude-cue/sessions.json` (XDG) |
+| Settings storage | `%LOCALAPPDATA%\Cue\settings.json` | `~/.config/cue/settings.json` (XDG) |
+| Session data path | `%LOCALAPPDATA%\Cue\sessions.json` | `~/.local/share/cue/sessions.json` (XDG) |
 | Hook data path (JSONL) | `%USERPROFILE%\.claude\projects\` | `~/.claude/projects/` (same as macOS) |
-| Autostart | Registry `HKCU\...\Run` or Task Scheduler | `~/.config/autostart/claude-cue.desktop` (XDG) |
+| Autostart | Registry `HKCU\...\Run` or Task Scheduler | `~/.config/autostart/cue.desktop` (XDG) |
 | File locking (hook) | `msvcrt.locking()` | `fcntl.flock()` (same as macOS) |
 | DPI scaling | Per-monitor DPI awareness API | Wayland: compositor-handled; X11: `Xft.dpi` |
 | Color scheme | `UISettings.GetColorValue()` | `org.freedesktop.portal.Settings` / `gtk-theme-name` |

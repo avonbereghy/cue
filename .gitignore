@@ -7,7 +7,7 @@ DerivedData/
 .claude/
 
 # Tauri / Node
-claude-cue-desktop/node_modules/
-claude-cue-desktop/dist/
-claude-cue-desktop/src-tauri/gen/
-claude-cue-desktop/src-tauri/target/
+cue-desktop/node_modules/
+cue-desktop/dist/
+cue-desktop/src-tauri/gen/
+cue-desktop/src-tauri/target/

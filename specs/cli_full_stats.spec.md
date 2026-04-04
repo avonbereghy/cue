@@ -2,7 +2,7 @@
 
 ## Overview
 
-Enhance the existing `claude-cue-desktop --status` CLI to display all session statistics that the GUI dashboard shows — including session ID, message counts, input/output tokens, tool usage breakdown, model, source client, cache hit rate, context usage, and git branch. This enables full session monitoring over SSH without needing the desktop UI.
+Enhance the existing `cue-desktop --status` CLI to display all session statistics that the GUI dashboard shows — including session ID, message counts, input/output tokens, tool usage breakdown, model, source client, cache hit rate, context usage, and git branch. This enables full session monitoring over SSH without needing the desktop UI.
 
 ## Functional Requirements
 
@@ -86,22 +86,22 @@ The CLI shall display only the leaf directory name for workspaces by default, sh
 
 ### AC-001: Full Stats in Pretty Mode
 Given two active sessions with JSONL logs,
-When the user runs `claude-cue-desktop --status --pretty`,
+When the user runs `cue-desktop --status --pretty`,
 Then the output shows all stats for each session: state icon, title, session ID (8 chars), state badge, duration, messages (user/total), input tokens, output tokens, tool breakdown, model, source, cache %, context bar with %, and git branch.
 
 ### AC-002: Full Stats in JSON Mode
 Given an active session with JSONL logs,
-When the user runs `claude-cue-desktop --status`,
+When the user runs `cue-desktop --status`,
 Then the JSON output contains all enriched fields including `inputTokens`, `outputTokens`, `toolCounts`, `modelDisplayName`, `sourceDisplay`, `cacheHitPercent`, `contextUsagePercent`, and `gitBranch`.
 
 ### AC-003: Compact Mode
 Given active sessions,
-When the user runs `claude-cue-desktop --status --pretty --compact`,
+When the user runs `cue-desktop --status --pretty --compact`,
 Then each session is rendered as a single line with key stats.
 
 ### AC-004: Summary Header
 Given 3 active sessions with a combined 150 messages and 80K tokens,
-When the user runs `claude-cue-desktop --status --pretty`,
+When the user runs `cue-desktop --status --pretty`,
 Then the header shows `● 3 sessions  💬 150 messages  ↕ 80.0K tokens`.
 
 ### AC-005: Color Auto-Detection
@@ -120,12 +120,12 @@ Then the session is still displayed with available data from sessions.json (stat
 
 ### AC-007: Sort Order
 Given one session in "done" state and one in "working" state,
-When the user runs `claude-cue-desktop --status --pretty`,
+When the user runs `cue-desktop --status --pretty`,
 Then the "working" session appears before the "done" session.
 
 ### AC-008: SSH Usability
 Given the user is connected via SSH to the machine,
-When they run `claude-cue-desktop --status --pretty`,
+When they run `cue-desktop --status --pretty`,
 Then the output renders correctly in the terminal without requiring a display server.
 
 ## Error Handling

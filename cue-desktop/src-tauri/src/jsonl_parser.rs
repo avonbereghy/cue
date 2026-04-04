@@ -682,7 +682,7 @@ mod tests {
             USER_MESSAGE, ASSISTANT_WITH_USAGE, CUSTOM_TITLE, GIT_BRANCH, ISO_TIMESTAMP
         );
 
-        let dir = std::env::temp_dir().join("claude_cue_test_jsonl");
+        let dir = std::env::temp_dir().join("cue_test_jsonl");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.jsonl");
@@ -773,7 +773,7 @@ mod tests {
         let create_line = r#"{"type":"assistant","timestamp":1710000000.0,"message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50},"content":[{"type":"tool_use","name":"TaskCreate","input":{"subject":"Build feature"}}]}}"#;
         let update_line = r#"{"type":"assistant","timestamp":1710000001.0,"message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50},"content":[{"type":"tool_use","name":"TaskUpdate","input":{"taskId":"1","status":"completed"}}]}}"#;
 
-        let dir = std::env::temp_dir().join("claude_cue_test_todo_agg");
+        let dir = std::env::temp_dir().join("cue_test_todo_agg");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.jsonl");
@@ -810,7 +810,7 @@ mod tests {
     fn test_pending_tool_use_with_running_tool() {
         let assistant = r#"{"type":"assistant","timestamp":1710000000.0,"message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50},"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/src/lib.rs"}}],"stop_reason":"tool_use"}}"#;
 
-        let dir = std::env::temp_dir().join("claude_cue_test_pending_tool");
+        let dir = std::env::temp_dir().join("cue_test_pending_tool");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.jsonl");
@@ -827,7 +827,7 @@ mod tests {
     // -- check_last_entry_verdict tests --
 
     fn write_temp_jsonl(name: &str, content: &str) -> (std::path::PathBuf, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!("claude_cue_test_verdict_{}", name));
+        let dir = std::env::temp_dir().join(format!("cue_test_verdict_{}", name));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.jsonl");
@@ -888,7 +888,7 @@ mod tests {
 
     #[test]
     fn test_verdict_nonexistent_file_is_unknown() {
-        let path = std::env::temp_dir().join("claude_cue_test_verdict_nonexistent/nope.jsonl");
+        let path = std::env::temp_dir().join("cue_test_verdict_nonexistent/nope.jsonl");
         assert_eq!(check_last_entry_verdict(&path), LastEntryVerdict::Unknown);
     }
 

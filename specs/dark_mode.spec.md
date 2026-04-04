@@ -2,7 +2,7 @@
 
 ## Overview
 
-Claude Cue follows macOS system appearance but (a) has no manual override toggle, and (b) the light mode looks washed out with poor contrast. This spec adds a Dark/Light/System theme picker in Settings and polishes light mode to be a first-class experience.
+Cue follows macOS system appearance but (a) has no manual override toggle, and (b) the light mode looks washed out with poor contrast. This spec adds a Dark/Light/System theme picker in Settings and polishes light mode to be a first-class experience.
 
 ## User Value
 

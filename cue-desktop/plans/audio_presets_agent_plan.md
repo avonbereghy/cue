@@ -38,7 +38,7 @@ This is a **2-wave** implementation (foundation → integration). No parallel tr
    - Keep backward compat: `#[serde(alias = "audioFileName")]` or just ignore unknown fields (serde default)
 
 5. **Rust Paths** (`src-tauri/src/paths.rs`)
-   - Add `presets_dir() -> PathBuf` (e.g., `~/Library/Application Support/com.claude-cue.app/presets/`)
+   - Add `presets_dir() -> PathBuf` (e.g., `~/Library/Application Support/com.cueapp/presets/`)
    - Remove `audio_file_path()`
 
 6. **Rust Commands** (`src-tauri/src/lib.rs`)

@@ -43,29 +43,29 @@ Phase 1's Tauri scaffold generated boilerplate frontend files (`src/App.tsx`, `p
     - Model breakdown: per-model token totals (if multiple models)
 16. Create `src/components/ProgressBar.tsx` — reusable, accepts `value`, `max`, renders colored fill
 17. Create `src/components/StatBadge.tsx` — icon + label + value (used in header)
-18. Update `index.html` — set title "Claude Cue Dashboard", dark background color
+18. Update `index.html` — set title "Cue Dashboard", dark background color
 
 ## Files to create (new)
-- `claude-cue-desktop/src/components/Dashboard.tsx`
-- `claude-cue-desktop/src/components/SessionsTab.tsx`
-- `claude-cue-desktop/src/components/SessionCard.tsx`
-- `claude-cue-desktop/src/components/UsageView.tsx`
-- `claude-cue-desktop/src/components/WindowSection.tsx`
-- `claude-cue-desktop/src/components/ProgressBar.tsx`
-- `claude-cue-desktop/src/components/StatBadge.tsx`
-- `claude-cue-desktop/src/hooks/useSessionMonitor.ts`
-- `claude-cue-desktop/src/hooks/useUsageMetrics.ts`
-- `claude-cue-desktop/src/lib/types.ts`
-- `claude-cue-desktop/src/lib/format.ts`
-- `claude-cue-desktop/src/styles/globals.css`
-- `claude-cue-desktop/tailwind.config.ts`
+- `cue-desktop/src/components/Dashboard.tsx`
+- `cue-desktop/src/components/SessionsTab.tsx`
+- `cue-desktop/src/components/SessionCard.tsx`
+- `cue-desktop/src/components/UsageView.tsx`
+- `cue-desktop/src/components/WindowSection.tsx`
+- `cue-desktop/src/components/ProgressBar.tsx`
+- `cue-desktop/src/components/StatBadge.tsx`
+- `cue-desktop/src/hooks/useSessionMonitor.ts`
+- `cue-desktop/src/hooks/useUsageMetrics.ts`
+- `cue-desktop/src/lib/types.ts`
+- `cue-desktop/src/lib/format.ts`
+- `cue-desktop/src/styles/globals.css`
+- `cue-desktop/tailwind.config.ts`
 
 ## Files to modify (scaffold replacements)
-- `claude-cue-desktop/src/App.tsx` — replace boilerplate with Dashboard root
-- `claude-cue-desktop/package.json` — add dependencies
-- `claude-cue-desktop/tsconfig.json` — strict mode
-- `claude-cue-desktop/vite.config.ts` — Tauri config
-- `claude-cue-desktop/index.html` — title, dark bg
+- `cue-desktop/src/App.tsx` — replace boilerplate with Dashboard root
+- `cue-desktop/package.json` — add dependencies
+- `cue-desktop/tsconfig.json` — strict mode
+- `cue-desktop/vite.config.ts` — Tauri config
+- `cue-desktop/index.html` — title, dark bg
 
 ## Files NOT to touch
 - Everything in `Sources/` and `hooks/`

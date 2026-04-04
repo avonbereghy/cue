@@ -1,4 +1,4 @@
-//! Data models for Claude Cue — port of Models.swift.
+//! Data models for Cue — port of Models.swift.
 //!
 //! All structs use serde for JSON serialization to/from the React frontend.
 
@@ -259,31 +259,7 @@ impl EnrichedSession {
             .unwrap_or_default()
             .as_secs_f64();
 
-        // Stale "working" detection: if a session claims working/subagent but
-        // lastActivity is older than 90s, the hook stopped firing (session ended
-        // without a Stop event). Downgrade to "idle" so the UI doesn't show
-        // animated working state for dead sessions.
-        // Note: session_monitor.rs bumps lastActivity from JSONL mtime for
-        // sessions that are still actively streaming, so this won't fire prematurely.
         let mut info = info;
-        if (info.state == "working" || info.state == "subagent")
-            && (now - info.last_activity) > 90.0
-        {
-            info.state = "idle".to_string();
-        }
-
-        // JSONL-based subagent recovery: if the hook's counter says 0 but
-        // JSONL files show active subagents, trust the files (missed events).
-        // If counter says >0 but files say inactive, trust the counter (it's
-        // more responsive than the 60s file mtime threshold).
-        let file_active_subs = metrics.subagents.iter().filter(|s| s.is_active).count() as i64;
-        if file_active_subs > 0 && info.active_subagents == 0
-            && (info.state == "working" || info.state == "done" || info.state == "idle")
-        {
-            info.state = "subagent".to_string();
-            info.active_subagents = file_active_subs;
-        }
-
         let workspace_name = std::path::Path::new(&info.workspace)
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
@@ -636,7 +612,7 @@ fn default_true() -> bool {
 }
 
 fn default_signal_alpha() -> f64 {
-    0.25
+    0.6
 }
 
 fn default_one() -> f64 {
@@ -704,9 +680,9 @@ impl Default for Settings {
             signal_string: true,
             signal_frequency: 1.0,
             signal_mode: "preset".to_string(),
-            signal_alpha: 0.25,
+            signal_alpha: 0.6,
             signal_amplitude: 0.25,
-            signal_echo: 1.0,
+            signal_echo: 1.75,
             signal_gate: 0.05,
             signal_bass: true,
             signal_mids: true,
@@ -881,39 +857,22 @@ mod tests {
     }
 
     #[test]
-    fn test_stale_working_downgrades_to_idle() {
+    fn test_state_passthrough() {
+        // States are passed through without modification
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs_f64();
 
-        // Fresh working session (10s ago) — stays working
         let mut info = make_test_info("s1", "/tmp", "working");
         info.last_activity = now - 10.0;
+        info.started_at = now - 100.0;
         let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default());
         assert_eq!(es.info.state, "working");
 
-        // Stale working session (120s ago) — downgraded to idle
-        let mut info = make_test_info("s2", "/tmp", "working");
-        info.last_activity = now - 120.0;
-        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default());
-        assert_eq!(es.info.state, "idle");
-
-        // Stale subagent (100s ago) — downgraded to idle
-        let mut info = make_test_info("s3", "/tmp", "subagent");
-        info.last_activity = now - 100.0;
-        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default());
-        assert_eq!(es.info.state, "idle");
-
-        // Idle session stays idle regardless of age
-        let mut info = make_test_info("s4", "/tmp", "idle");
+        let mut info = make_test_info("s2", "/tmp", "done");
         info.last_activity = now - 500.0;
-        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default());
-        assert_eq!(es.info.state, "idle");
-
-        // Done session stays done regardless of age
-        let mut info = make_test_info("s5", "/tmp", "done");
-        info.last_activity = now - 500.0;
+        info.started_at = now - 600.0;
         let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default());
         assert_eq!(es.info.state, "done");
     }

@@ -48,15 +48,15 @@ After both teammates complete, the team lead integrates by modifying `main.rs` t
 5. Platform-specific click behavior:
    - Windows: left-click opens dashboard, right-click opens menu
    - Linux: left-click opens menu (standard StatusNotifierItem behavior)
-6. Tooltip: "Claude Cue — N sessions"
+6. Tooltip: "Cue — N sessions"
 7. Blink timer: 0.5s interval, only active when `sessions.iter().any(|s| s.info.state == "working" || s.info.state == "subagent")`. Stop timer when no blinking sessions.
 
 ## Files to create
-- `claude-cue-desktop/src-tauri/src/tray.rs` (Track A)
-- `claude-cue-desktop/src-tauri/src/cli.rs` (Track B)
+- `cue-desktop/src-tauri/src/tray.rs` (Track A)
+- `cue-desktop/src-tauri/src/cli.rs` (Track B)
 
 ## Files to modify (integration only, after tracks complete)
-- `claude-cue-desktop/src-tauri/src/main.rs` — add `mod tray; mod cli;`, tray setup, blink timer, CLI check at startup
+- `cue-desktop/src-tauri/src/main.rs` — add `mod tray; mod cli;`, tray setup, blink timer, CLI check at startup
 
 ## Files NOT to touch
 - Everything in `Sources/` and `hooks/`
@@ -68,7 +68,7 @@ After both teammates complete, the team lead integrates by modifying `main.rs` t
 - Menu shows real session data with state icons, elapsed time, token counts
 - Blink animation at 0.5s cadence for working/subagent states
 - Blink timer stops when no blinking sessions exist (verify CPU drops to ~0%)
-- `claude-cue --status` outputs valid JSON with session data
-- `claude-cue --status --pretty` outputs readable table
+- `cue --status` outputs valid JSON with session data
+- `cue --status --pretty` outputs readable table
 - Dots legible at 16x16 and 32x32 pixel sizes
 - High-contrast variant visible on light backgrounds

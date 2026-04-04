@@ -3,11 +3,11 @@
 Read plans/cross_platform_final_plan.md for full context.
 
 ## Tasks
-1. Scaffold Tauri v2 project: `npm create tauri-app@latest claude-cue-desktop -- --template react-ts`
+1. Scaffold Tauri v2 project: `npm create tauri-app@latest cue-desktop -- --template react-ts`
    - This generates boilerplate frontend files (`src/App.tsx`, `package.json`, etc.). Leave them as-is for now — Phase 3 will replace them.
    - Focus this phase entirely on the Rust backend in `src-tauri/`.
 2. Configure `tauri.conf.json`:
-   - App identifier: `com.claudecue.desktop`
+   - App identifier: `com.cueapp.desktop`
    - Set `"devtools": false` for release profile
    - Minimal capabilities: `event:default`, `window:default`, custom commands only
    - NO `shell`, `http`, or `fs` permissions for the frontend
@@ -53,17 +53,17 @@ Read plans/cross_platform_final_plan.md for full context.
     - Startup: verify file permissions, clean stale temp files
 
 ## Files to create
-- `claude-cue-desktop/src-tauri/Cargo.toml`
-- `claude-cue-desktop/src-tauri/tauri.conf.json`
-- `claude-cue-desktop/src-tauri/src/main.rs`
-- `claude-cue-desktop/src-tauri/src/models.rs`
-- `claude-cue-desktop/src-tauri/src/paths.rs`
-- `claude-cue-desktop/src-tauri/src/security.rs`
-- `claude-cue-desktop/src-tauri/src/jsonl_parser.rs`
-- `claude-cue-desktop/src-tauri/src/session_monitor.rs`
-- `claude-cue-desktop/src-tauri/src/usage_aggregator.rs`
-- `claude-cue-desktop/src-tauri/src/settings.rs`
-- `claude-cue-desktop/src-tauri/tests/fixtures/*.jsonl` (test data)
+- `cue-desktop/src-tauri/Cargo.toml`
+- `cue-desktop/src-tauri/tauri.conf.json`
+- `cue-desktop/src-tauri/src/main.rs`
+- `cue-desktop/src-tauri/src/models.rs`
+- `cue-desktop/src-tauri/src/paths.rs`
+- `cue-desktop/src-tauri/src/security.rs`
+- `cue-desktop/src-tauri/src/jsonl_parser.rs`
+- `cue-desktop/src-tauri/src/session_monitor.rs`
+- `cue-desktop/src-tauri/src/usage_aggregator.rs`
+- `cue-desktop/src-tauri/src/settings.rs`
+- `cue-desktop/src-tauri/tests/fixtures/*.jsonl` (test data)
 
 ## Files NOT to touch
 - Everything in `Sources/` (macOS Swift app)

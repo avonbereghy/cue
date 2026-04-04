@@ -1,4 +1,4 @@
-# Cross-Platform Claude Cue — Final Plan
+# Cross-Platform Cue — Final Plan
 
 > Merged from Plans A, B, and C. Priorities: security > polish > speed.
 
@@ -18,9 +18,9 @@ All data — `sessions.json`, JSONL logs, `settings.json` — stays on the local
 
 | Platform | Sessions | Settings |
 |----------|----------|----------|
-| macOS | `~/Library/Application Support/Claude Cue/sessions.json` | `~/Library/Application Support/com.claude-cue.app/settings.json` |
-| Windows | `%LOCALAPPDATA%\Claude Cue\sessions.json` | `%LOCALAPPDATA%\Claude Cue\settings.json` |
-| Linux | `~/.local/share/claude-cue/sessions.json` | `~/.config/claude-cue/settings.json` |
+| macOS | `~/Library/Application Support/Cue/sessions.json` | `~/Library/Application Support/com.cueapp/settings.json` |
+| Windows | `%LOCALAPPDATA%\Cue\sessions.json` | `%LOCALAPPDATA%\Cue\settings.json` |
+| Linux | `~/.local/share/cue/sessions.json` | `~/.config/cue/settings.json` |
 
 ### No Credential Storage
 
@@ -98,7 +98,7 @@ The existing Swift/SwiftUI macOS app is untouched. The Tauri app is purely addit
 ### 3.1 Repository Structure
 
 ```
-claude-cue/
+cue/
 ├── Sources/                    # Existing macOS Swift app (UNCHANGED)
 │   ├── main.swift
 │   ├── Models.swift
@@ -109,7 +109,7 @@ claude-cue/
 ├── Package.swift               # Existing SPM manifest
 ├── hooks/
 │   └── cue-hook                # Python hook (adapted for cross-platform)
-├── claude-cue-desktop/         # NEW: Tauri cross-platform app
+├── cue-desktop/         # NEW: Tauri cross-platform app
 │   ├── src-tauri/              # Rust backend
 │   │   ├── Cargo.toml
 │   │   ├── tauri.conf.json
@@ -188,7 +188,7 @@ Rust backend (Tokio timers)
 - Hook script working on Windows and Linux (including WSL bridge)
 - First-run onboarding wizard (GNOME detection, WSL detection, plan picker)
 - Full accessibility (screen readers, keyboard nav, high contrast, reduced motion)
-- CLI fallback: `claude-cue --status` for tiling WM users
+- CLI fallback: `cue --status` for tiling WM users
 - Windows installer (MSI) and Linux packages (AppImage, .deb)
 - All security invariants from Section 1
 
@@ -272,17 +272,17 @@ OS-specific path resolution with XDG compliance on Linux and proper Windows path
 ```rust
 pub fn sessions_json_path() -> PathBuf {
     match std::env::consts::OS {
-        "macos" => home().join("Library/Application Support/Claude Cue/sessions.json"),
-        "windows" => appdata_local().join("Claude Cue/sessions.json"),
-        _ => xdg_data_home().join("claude-cue/sessions.json"),
+        "macos" => home().join("Library/Application Support/Cue/sessions.json"),
+        "windows" => appdata_local().join("Cue/sessions.json"),
+        _ => xdg_data_home().join("cue/sessions.json"),
     }
 }
 
 pub fn settings_path() -> PathBuf {
     match std::env::consts::OS {
-        "macos" => home().join("Library/Application Support/com.claude-cue.app/settings.json"),
-        "windows" => appdata_local().join("Claude Cue/settings.json"),
-        _ => xdg_config_home().join("claude-cue/settings.json"),
+        "macos" => home().join("Library/Application Support/com.cueapp/settings.json"),
+        "windows" => appdata_local().join("Cue/settings.json"),
+        _ => xdg_config_home().join("cue/settings.json"),
     }
 }
 
@@ -391,7 +391,7 @@ No-session state: hollow white ring.
 | Left-click | Open dashboard | Open dashboard |
 | Right-click | Open menu | Open menu |
 | Icon format | ICO (auto-converted) | PNG |
-| Tooltip | "Claude Cue - N sessions" | Same |
+| Tooltip | "Cue - N sessions" | Same |
 
 ### 6.3 Dynamic Tray Menu
 
@@ -411,8 +411,8 @@ Quit                Ctrl+Q
 For tiling WM users without a system tray:
 
 ```bash
-claude-cue --status          # JSON output of current sessions
-claude-cue --status --pretty # Human-readable status
+cue --status          # JSON output of current sessions
+cue --status --pretty # Human-readable status
 ```
 
 This can be piped into waybar, i3status, polybar, or any status bar.
@@ -503,12 +503,12 @@ else:
 def get_status_dir():
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local"))
-        return os.path.join(base, "Claude Cue")
+        return os.path.join(base, "Cue")
     elif sys.platform == "darwin":
-        return os.path.expanduser("~/Library/Application Support/Claude Cue")
+        return os.path.expanduser("~/Library/Application Support/Cue")
     else:
         base = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
-        return os.path.join(base, "claude-cue")
+        return os.path.join(base, "cue")
 ```
 
 ### 8.3 Atomic Write
@@ -544,7 +544,7 @@ def get_wsl_windows_status_dir():
                 win_user = candidates[0]  # Usually only one real user
             else:
                 return None  # Cannot detect; fall back to Linux-local path
-        return f"/mnt/c/Users/{win_user}/AppData/Local/Claude Cue"
+        return f"/mnt/c/Users/{win_user}/AppData/Local/Cue"
     return None
 ```
 
@@ -571,7 +571,7 @@ A single-page wizard shown on first launch. Detects environment and guides setup
 
 ```
 Step 1: Environment Detection
-  "Claude Cue monitors your Claude Code sessions from the system tray."
+  "Cue monitors your Claude Code sessions from the system tray."
   [Screenshot of tray with colored dots]
 
   Found Claude Code (native Windows) at C:\Users\...\
@@ -589,7 +589,7 @@ Step 2: Plan Selection
   ( ) Custom / Skip
 
 Step 3: Done
-  [x] Start Claude Cue now
+  [x] Start Cue now
   [Get Started]
 ```
 
@@ -598,7 +598,7 @@ Post-install: Toast notification guiding user to pin the tray icon.
 #### Linux Flow
 
 ```
-+-- Welcome to Claude Cue -------------------------+
++-- Welcome to Cue -------------------------+
 |                                                    |
 |  Desktop: GNOME 46 (Wayland)                       |
 |  Tray support: Requires AppIndicator extension     |
@@ -629,7 +629,7 @@ Post-install: Toast notification guiding user to pin the tray icon.
 
 ### Screen Readers
 
-- **Tray icon**: Expose current state as accessible text. E.g., "Claude Cue: 3 sessions, 1 working, 1 waiting, 1 subagent."
+- **Tray icon**: Expose current state as accessible text. E.g., "Cue: 3 sessions, 1 working, 1 waiting, 1 subagent."
   - Windows: `Shell_NotifyIcon` tooltip text readable by NVDA/JAWS.
   - Linux: `StatusNotifierItem` `Title` and `ToolTip` accessible via AT-SPI.
 - **Context menu**: Standard menu semantics — proper menu items, not custom-drawn text.
@@ -664,7 +664,7 @@ Post-install: Toast notification guiding user to pin the tray icon.
 **Goal**: All core data logic works, all security primitives in place.
 
 **What to build**:
-- Scaffold Tauri v2 project in `claude-cue-desktop/`
+- Scaffold Tauri v2 project in `cue-desktop/`
 - `models.rs` — all data structs with Serde derive
 - `paths.rs` — OS-specific path resolution (XDG, LOCALAPPDATA, Library)
 - `security.rs` — atomic writes, file permission enforcement, path sanitization
@@ -675,16 +675,16 @@ Post-install: Toast notification guiding user to pin the tray icon.
 - Wire up Tauri commands and event emission
 
 **Files created**:
-- `claude-cue-desktop/src-tauri/Cargo.toml`
-- `claude-cue-desktop/src-tauri/tauri.conf.json`
-- `claude-cue-desktop/src-tauri/src/main.rs`
-- `claude-cue-desktop/src-tauri/src/models.rs`
-- `claude-cue-desktop/src-tauri/src/paths.rs`
-- `claude-cue-desktop/src-tauri/src/security.rs`
-- `claude-cue-desktop/src-tauri/src/jsonl_parser.rs`
-- `claude-cue-desktop/src-tauri/src/session_monitor.rs`
-- `claude-cue-desktop/src-tauri/src/usage_aggregator.rs`
-- `claude-cue-desktop/src-tauri/src/settings.rs`
+- `cue-desktop/src-tauri/Cargo.toml`
+- `cue-desktop/src-tauri/tauri.conf.json`
+- `cue-desktop/src-tauri/src/main.rs`
+- `cue-desktop/src-tauri/src/models.rs`
+- `cue-desktop/src-tauri/src/paths.rs`
+- `cue-desktop/src-tauri/src/security.rs`
+- `cue-desktop/src-tauri/src/jsonl_parser.rs`
+- `cue-desktop/src-tauri/src/session_monitor.rs`
+- `cue-desktop/src-tauri/src/usage_aggregator.rs`
+- `cue-desktop/src-tauri/src/settings.rs`
 
 **Execution**: Sequential. Each module builds on the previous.
 
@@ -711,12 +711,12 @@ Post-install: Toast notification guiding user to pin the tray icon.
 - Dynamic menu construction from session data
 - Left-click / right-click behavior per platform
 - Tooltip with session count
-- `claude-cue --status` CLI output mode
+- `cue --status` CLI output mode
 
 **Files created/modified**:
-- `claude-cue-desktop/src-tauri/src/tray.rs`
-- `claude-cue-desktop/src-tauri/src/main.rs` (tray setup)
-- `claude-cue-desktop/src-tauri/src/cli.rs` (CLI fallback)
+- `cue-desktop/src-tauri/src/tray.rs`
+- `cue-desktop/src-tauri/src/main.rs` (tray setup)
+- `cue-desktop/src-tauri/src/cli.rs` (CLI fallback)
 
 **Execution**: Track A and Track B in parallel. Integration after both complete.
 
@@ -724,7 +724,7 @@ Post-install: Toast notification guiding user to pin the tray icon.
 - Tray icon visible and correctly colored on Windows 10, Windows 11, Ubuntu (GNOME + AppIndicator), KDE Plasma.
 - Menu shows real session data.
 - Blink animation runs at correct cadence.
-- `claude-cue --status` outputs valid JSON.
+- `cue --status` outputs valid JSON.
 - Dots are legible at 16x16 and 32x32 pixel sizes.
 
 ### Phase 3: Dashboard Frontend
@@ -745,20 +745,20 @@ Post-install: Toast notification guiding user to pin the tray icon.
 - Dark theme styling
 
 **Files created**:
-- `claude-cue-desktop/src/App.tsx`
-- `claude-cue-desktop/src/components/Dashboard.tsx`
-- `claude-cue-desktop/src/components/SessionCard.tsx`
-- `claude-cue-desktop/src/components/UsageView.tsx`
-- `claude-cue-desktop/src/components/ProgressBar.tsx`
-- `claude-cue-desktop/src/components/StatBadge.tsx`
-- `claude-cue-desktop/src/hooks/useSessionMonitor.ts`
-- `claude-cue-desktop/src/hooks/useUsageMetrics.ts`
-- `claude-cue-desktop/src/lib/types.ts`
-- `claude-cue-desktop/src/lib/format.ts`
-- `claude-cue-desktop/index.html`
-- `claude-cue-desktop/package.json`
-- `claude-cue-desktop/tsconfig.json`
-- `claude-cue-desktop/tailwind.config.ts`
+- `cue-desktop/src/App.tsx`
+- `cue-desktop/src/components/Dashboard.tsx`
+- `cue-desktop/src/components/SessionCard.tsx`
+- `cue-desktop/src/components/UsageView.tsx`
+- `cue-desktop/src/components/ProgressBar.tsx`
+- `cue-desktop/src/components/StatBadge.tsx`
+- `cue-desktop/src/hooks/useSessionMonitor.ts`
+- `cue-desktop/src/hooks/useUsageMetrics.ts`
+- `cue-desktop/src/lib/types.ts`
+- `cue-desktop/src/lib/format.ts`
+- `cue-desktop/index.html`
+- `cue-desktop/package.json`
+- `cue-desktop/tsconfig.json`
+- `cue-desktop/tailwind.config.ts`
 
 **Execution**: Sequential within the phase (components depend on hooks/types).
 
@@ -796,8 +796,8 @@ Post-install: Toast notification guiding user to pin the tray icon.
 - First-run toast notification (Windows tray pinning guidance)
 
 **Files created/modified**:
-- `claude-cue-desktop/src/components/SettingsView.tsx`
-- `claude-cue-desktop/src/components/OnboardingWizard.tsx`
+- `cue-desktop/src/components/SettingsView.tsx`
+- `cue-desktop/src/components/OnboardingWizard.tsx`
 - `hooks/cue-hook` (modified for cross-platform)
 
 **Execution**: All three tracks in parallel.
@@ -821,9 +821,9 @@ Post-install: Toast notification guiding user to pin the tray icon.
 - Hook installation automation (copy to correct path, offer to configure)
 
 **Files created/modified**:
-- `claude-cue-desktop/src-tauri/tauri.conf.json` (bundle config)
+- `cue-desktop/src-tauri/tauri.conf.json` (bundle config)
 - `.github/workflows/release.yml`
-- `claude-cue-desktop/src-tauri/icons/` (app icons for all platforms)
+- `cue-desktop/src-tauri/icons/` (app icons for all platforms)
 
 **Execution**: Sequential (CI config depends on bundle config).
 
@@ -852,7 +852,7 @@ Post-install: Toast notification guiding user to pin the tray icon.
 **Files modified**:
 - Various component files (ARIA attributes, focus management)
 - `tray.rs` (high-contrast icon variant, theme-aware dots)
-- `claude-cue-desktop/src/lib/a11y.ts` (accessibility utilities)
+- `cue-desktop/src/lib/a11y.ts` (accessibility utilities)
 
 **Execution**: Sequential (testing informs fixes).
 
@@ -881,7 +881,7 @@ Post-install: Toast notification guiding user to pin the tray icon.
 
 **Risk**: HIGH. Windows 11 hides new tray icons in the overflow area by default. If users don't pin it, they never see the dots — the entire value proposition fails.
 
-**Validation**: Test with 5 Windows users who don't know about Claude Cue. Measure how many discover and pin the icon without prompting. The first-run toast notification must guide them clearly.
+**Validation**: Test with 5 Windows users who don't know about Cue. Measure how many discover and pin the icon without prompting. The first-run toast notification must guide them clearly.
 
 ### 3. GNOME AppIndicator Extension Requirement
 
@@ -893,7 +893,7 @@ Post-install: Toast notification guiding user to pin the tray icon.
 
 **Risk**: MEDIUM. The app estimates usage from JSONL logs, but Anthropic's server-side counting may differ. If the progress bar says 80% but the user gets rate-limited at 75%, trust is destroyed.
 
-**Validation**: Compare Claude Cue's token counts against actual rate-limit responses over a week of heavy usage. Add a disclaimer: "Estimated — actual limits may vary."
+**Validation**: Compare Cue's token counts against actual rate-limit responses over a week of heavy usage. Add a disclaimer: "Estimated — actual limits may vary."
 
 ### 5. Tray Icon Legibility at Small Sizes
 
@@ -984,7 +984,7 @@ Post-install: Toast notification guiding user to pin the tray icon.
 
 ### Noted (Minor)
 
-15. **macOS paths inconsistent** — Standardize to `Claude Cue` (display name) for both sessions and settings dirs.
+15. **macOS paths inconsistent** — Standardize to `Cue` (display name) for both sessions and settings dirs.
 16. **`chrono` crate security history** — Consider `jiff` or `time` crate as alternative. Run `cargo audit` before V1.
 17. **Tauri capability-based IPC** — Define minimal capabilities: `event:default`, `window:default`, custom commands only. No `shell`, `http`, or `fs` from frontend.
 18. **Token accuracy** — Add rate-limit event detector for ground-truth calibration when available.

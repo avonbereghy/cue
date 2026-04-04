@@ -1,4 +1,4 @@
-//! Claude Cue Desktop — Rust backend library.
+//! Cue Desktop — Rust backend library.
 //!
 //! Cross-platform session monitor for Claude Code.
 //! All file I/O, JSONL parsing, and timer logic lives here.
@@ -157,12 +157,12 @@ fn get_settings() -> Settings {
 fn update_settings(app: tauri::AppHandle, new_settings: Settings) -> Result<(), String> {
     // Toggle native vibrancy when theme changes to/from "glass"
     // Debug: write to temp file to verify this code path runs
-    let _ = std::fs::write("/tmp/claude-cue-vibrancy.log",
+    let _ = std::fs::write("/tmp/cue-vibrancy.log",
         format!("update_settings called, active_theme_id={}\n", new_settings.active_theme_id));
     if let Some(window) = app.get_webview_window("main") {
         toggle_vibrancy(&window, new_settings.active_theme_id == "glass" || new_settings.active_theme_id == "glass-sand");
     } else {
-        let _ = std::fs::write("/tmp/claude-cue-vibrancy.log", "ERROR: no main window\n");
+        let _ = std::fs::write("/tmp/cue-vibrancy.log", "ERROR: no main window\n");
     }
 
     settings::save_settings(&new_settings)?;
@@ -203,7 +203,7 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
     use std::io::Write;
 
     let mut f = std::fs::OpenOptions::new().create(true).append(true)
-        .open("/tmp/claude-cue-vibrancy.log").unwrap();
+        .open("/tmp/cue-vibrancy.log").unwrap();
     let _ = writeln!(f, "toggle_vibrancy called, enabled={}", enabled);
 
     #[cfg(target_os = "macos")]
@@ -1053,7 +1053,7 @@ fn tray_active_sessions(sessions: &[EnrichedSession]) -> Vec<EnrichedSession> {
 fn format_tooltip(sessions: &[EnrichedSession]) -> String {
     let count = sessions.len();
     if count == 0 {
-        return "Claude Cue: no active sessions".to_string();
+        return "Cue: no active sessions".to_string();
     }
 
     let mut working = 0u32;
@@ -1095,7 +1095,7 @@ fn format_tooltip(sessions: &[EnrichedSession]) -> String {
     }
 
     format!(
-        "Claude Cue: {} session{} \u{2014} {}",
+        "Cue: {} session{} \u{2014} {}",
         count,
         if count == 1 { "" } else { "s" },
         parts.join(", ")
@@ -1114,7 +1114,7 @@ fn setup_tray(
 
     let menu = build_tray_menu(handle, &sessions)?;
 
-    TrayIconBuilder::with_id("claude-cue-tray")
+    TrayIconBuilder::with_id("cue-tray")
         .icon(icon)
         .menu(&menu)
         .tooltip(format_tooltip(&sessions))
@@ -1295,7 +1295,7 @@ fn update_tray(
         *last != icon_key
     };
 
-    if let Some(tray) = handle.tray_by_id("claude-cue-tray") {
+    if let Some(tray) = handle.tray_by_id("cue-tray") {
         // Only render + push a new PNG when the visual state actually changed
         if icon_changed {
             let png_bytes = tray::render_dot_grid(sessions, blink_on, 44);

@@ -1,4 +1,4 @@
-//! OS-specific path resolution for Claude Cue data files.
+//! OS-specific path resolution for Cue data files.
 //!
 //! - macOS: ~/Library/Application Support/
 //! - Windows: %LOCALAPPDATA%
@@ -10,12 +10,12 @@ use std::path::PathBuf;
 pub fn sessions_json_path() -> PathBuf {
     if cfg!(target_os = "macos") {
         home_dir()
-            .join("Library/Application Support/Claude Cue/sessions.json")
+            .join("Library/Application Support/Cue/sessions.json")
     } else if cfg!(target_os = "windows") {
-        appdata_local().join("Claude Cue").join("sessions.json")
+        appdata_local().join("Cue").join("sessions.json")
     } else {
         // Linux — XDG
-        xdg_data_home().join("claude-cue").join("sessions.json")
+        xdg_data_home().join("cue").join("sessions.json")
     }
 }
 
@@ -23,11 +23,11 @@ pub fn sessions_json_path() -> PathBuf {
 pub fn settings_path() -> PathBuf {
     if cfg!(target_os = "macos") {
         home_dir()
-            .join("Library/Application Support/com.claude-cue.app/settings.json")
+            .join("Library/Application Support/com.cueapp/settings.json")
     } else if cfg!(target_os = "windows") {
-        appdata_local().join("Claude Cue").join("settings.json")
+        appdata_local().join("Cue").join("settings.json")
     } else {
-        xdg_config_home().join("claude-cue").join("settings.json")
+        xdg_config_home().join("cue").join("settings.json")
     }
 }
 
@@ -40,11 +40,11 @@ pub fn claude_projects_path() -> PathBuf {
 pub fn presets_dir() -> PathBuf {
     if cfg!(target_os = "macos") {
         home_dir()
-            .join("Library/Application Support/com.claude-cue.app/presets")
+            .join("Library/Application Support/com.cueapp/presets")
     } else if cfg!(target_os = "windows") {
-        appdata_local().join("Claude Cue").join("presets")
+        appdata_local().join("Cue").join("presets")
     } else {
-        xdg_config_home().join("claude-cue").join("presets")
+        xdg_config_home().join("cue").join("presets")
     }
 }
 
@@ -53,11 +53,11 @@ pub fn presets_dir() -> PathBuf {
 pub fn rate_limits_path() -> PathBuf {
     if cfg!(target_os = "macos") {
         home_dir()
-            .join("Library/Application Support/Claude Cue/rate_limits.json")
+            .join("Library/Application Support/Cue/rate_limits.json")
     } else if cfg!(target_os = "windows") {
-        appdata_local().join("Claude Cue").join("rate_limits.json")
+        appdata_local().join("Cue").join("rate_limits.json")
     } else {
-        xdg_data_home().join("claude-cue").join("rate_limits.json")
+        xdg_data_home().join("cue").join("rate_limits.json")
     }
 }
 

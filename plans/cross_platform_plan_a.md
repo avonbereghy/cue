@@ -1,4 +1,4 @@
-# Plan A: Top-Down Comprehensive — Cross-Platform Claude Cue
+# Plan A: Top-Down Comprehensive — Cross-Platform Cue
 
 > Making Claude Code session monitoring available on Windows and Linux alongside the existing macOS app.
 
@@ -6,7 +6,7 @@
 
 ## 1. Product Vision
 
-Claude Cue becomes the universal companion for Claude Code users on every desktop OS. A lightweight system tray app that shows live session status at a glance, tracks token usage against plan limits, and surfaces JSONL-derived metrics — regardless of whether you are on macOS, Windows, or Linux.
+Cue becomes the universal companion for Claude Code users on every desktop OS. A lightweight system tray app that shows live session status at a glance, tracks token usage against plan limits, and surfaces JSONL-derived metrics — regardless of whether you are on macOS, Windows, or Linux.
 
 **Non-goal:** replacing the native macOS Swift app. The macOS version continues to ship as-is. This plan adds a *second* app target — a cross-platform build — that covers Windows and Linux (and could optionally replace the macOS version later if quality parity is reached).
 
@@ -23,8 +23,8 @@ Claude Cue becomes the universal companion for Claude Code users on every deskto
 | Flutter Desktop | Single codebase, good tray plugins | Dart ecosystem weaker for CLI/file tooling, large binary |
 | .NET MAUI / Avalonia | Native-feel on Windows | Weak Linux story, C# diverges from existing Swift codebase |
 
-**Why Tauri wins for Claude Cue:**
-- Claude Cue is a *tray-first* app with a small dashboard window — Tauri's tiny footprint is ideal.
+**Why Tauri wins for Cue:**
+- Cue is a *tray-first* app with a small dashboard window — Tauri's tiny footprint is ideal.
 - The Rust backend handles all file I/O (JSONL parsing, `sessions.json` polling, settings persistence) with excellent cross-platform filesystem APIs.
 - Tauri v2 has first-class system tray support (`tauri-plugin-tray`) on all three platforms.
 - The React/TypeScript frontend replicates the SwiftUI dashboard with modern web UI primitives.
@@ -48,7 +48,7 @@ Claude Cue becomes the universal companion for Claude Code users on every deskto
 ### 3.1 Mono-repo structure
 
 ```
-claude-cue/
+cue/
 ├── Sources/                    # Existing macOS Swift app (unchanged)
 │   ├── main.swift
 │   ├── Models.swift
@@ -59,7 +59,7 @@ claude-cue/
 ├── Package.swift               # Existing SPM manifest
 ├── hooks/
 │   └── cue-hook                # Python hook (adapted for cross-platform)
-├── claude-cue-desktop/         # NEW: Tauri cross-platform app
+├── cue-desktop/         # NEW: Tauri cross-platform app
 │   ├── src-tauri/              # Rust backend
 │   │   ├── Cargo.toml
 │   │   ├── tauri.conf.json
@@ -187,9 +187,9 @@ Shared JSONL parsing extracted as a module:
 ```rust
 pub fn sessions_json_path() -> PathBuf {
     match std::env::consts::OS {
-        "macos" => home().join("Library/Application Support/Claude Cue/sessions.json"),
-        "windows" => appdata_local().join("Claude Cue/sessions.json"),
-        _ => home().join(".config/claude-cue/sessions.json"),  // Linux / XDG
+        "macos" => home().join("Library/Application Support/Cue/sessions.json"),
+        "windows" => appdata_local().join("Cue/sessions.json"),
+        _ => home().join(".config/cue/sessions.json"),  // Linux / XDG
     }
 }
 
@@ -406,7 +406,7 @@ No-session state: hollow white ring (same as macOS).
 | Left-click | Open dashboard | Open dashboard | Open menu (macOS convention) |
 | Right-click | Open menu | Open menu | N/A (left-click opens menu) |
 | Icon format | ICO (auto-converted by Tauri) | PNG | PNG |
-| Tooltip | "Claude Cue -- N sessions" | Same | Same |
+| Tooltip | "Cue -- N sessions" | Same | Same |
 
 ### 7.4 Tray menu
 
@@ -527,13 +527,13 @@ else:
 def get_status_dir():
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local"))
-        return os.path.join(base, "Claude Cue")
+        return os.path.join(base, "Cue")
     elif sys.platform == "darwin":
-        return os.path.expanduser("~/Library/Application Support/Claude Cue")
+        return os.path.expanduser("~/Library/Application Support/Cue")
     else:
         # Linux: XDG_DATA_HOME or ~/.local/share
         base = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
-        return os.path.join(base, "claude-cue")
+        return os.path.join(base, "cue")
 ```
 
 ### 9.3 Atomic write on Windows
@@ -581,7 +581,7 @@ Tauri's built-in bundler produces both MSI and NSIS installers:
 
 - MSI for enterprise/IT deployment
 - NSIS for user-friendly "Next, Next, Finish" installation
-- Install location: `C:\Program Files\Claude Cue\`
+- Install location: `C:\Program Files\Cue\`
 - Start Menu shortcut + optional Desktop shortcut
 - Bundle the `cue-hook` Python script in the installation directory
 
@@ -595,10 +595,10 @@ Tauri produces AppImage and `.deb` bundles natively:
     "targets": ["appimage", "deb"],
     "linux": {
       "desktop": {
-        "Name": "Claude Cue",
+        "Name": "Cue",
         "Comment": "Monitor Claude Code sessions",
         "Categories": "Development;Utility;",
-        "StartupWMClass": "claude-cue"
+        "StartupWMClass": "cue"
       }
     }
   }
@@ -627,9 +627,9 @@ The plugin stores settings in a JSON file at the OS-appropriate config directory
 
 | Platform | Settings file location |
 |----------|----------------------|
-| macOS | `~/Library/Application Support/com.claude-cue.app/settings.json` |
-| Windows | `%LOCALAPPDATA%\Claude Cue\settings.json` |
-| Linux | `~/.config/claude-cue/settings.json` |
+| macOS | `~/Library/Application Support/com.cueapp/settings.json` |
+| Windows | `%LOCALAPPDATA%\Cue\settings.json` |
+| Linux | `~/.config/cue/settings.json` |
 
 ### Settings schema
 
@@ -665,7 +665,7 @@ fn get_token_limit(app: &AppHandle, window: &UsageWindow) -> i64 {
 
 ### Phase 1: Rust Core Engine (Week 1-2)
 
-1. Scaffold Tauri v2 project in `claude-cue-desktop/`
+1. Scaffold Tauri v2 project in `cue-desktop/`
 2. Implement `models.rs` — all data structs with Serde derive
 3. Implement `paths.rs` — OS-specific path resolution
 4. Implement `jsonl_parser.rs` — line-by-line JSONL parsing
@@ -689,7 +689,7 @@ fn get_token_limit(app: &AppHandle, window: &UsageWindow) -> i64 {
 
 ### Phase 3: Dashboard Frontend (Week 3-4)
 
-1. Set up React + TypeScript + Tailwind in `claude-cue-desktop/src/`
+1. Set up React + TypeScript + Tailwind in `cue-desktop/src/`
 2. Implement `useSessionMonitor` and `useUsageMetrics` hooks
 3. Build `<Dashboard />` with tab bar
 4. Build `<SessionsTab />` with stat badges and session cards
@@ -718,7 +718,7 @@ fn get_token_limit(app: &AppHandle, window: &UsageWindow) -> i64 {
 4. Write installation instructions
 5. First release (GitHub Releases with platform-specific assets)
 
-**Exit criteria:** Users can download and install Claude Cue on Windows or Linux and have it working within 5 minutes.
+**Exit criteria:** Users can download and install Cue on Windows or Linux and have it working within 5 minutes.
 
 ---
 

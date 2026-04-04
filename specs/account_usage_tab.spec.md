@@ -2,7 +2,7 @@
 
 ## Overview
 
-Add a "Usage" tab to the Claude Cue dashboard that aggregates token consumption across all Claude Code sessions over rolling time windows (5-hour, daily, weekly). This gives users real-time visibility into their account utilization — including token totals, session counts, estimated API cost, message counts, and tool breakdowns — so they can pace their usage and avoid hitting rate limits.
+Add a "Usage" tab to the Cue dashboard that aggregates token consumption across all Claude Code sessions over rolling time windows (5-hour, daily, weekly). This gives users real-time visibility into their account utilization — including token totals, session counts, estimated API cost, message counts, and tool breakdowns — so they can pace their usage and avoid hitting rate limits.
 
 ## User Value
 

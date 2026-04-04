@@ -36,21 +36,21 @@ Read plans/cross_platform_final_plan.md for full context.
      - Verify `devtools` is false: `grep -q '"devtools": false' src-tauri/tauri.conf.json`
    - Matrix: ubuntu-22.04 (Linux) + windows-latest (Windows)
    - Install WebKit2GTK on Linux runner: `sudo apt-get install -y libwebkit2gtk-4.1-dev`
-5. Create `INSTALL.md` in `claude-cue-desktop/`:
+5. Create `INSTALL.md` in `cue-desktop/`:
    - Windows: download MSI from Releases, run installer, follow onboarding wizard
    - Linux AppImage: download, `chmod +x ClaudeCue.AppImage`, run. Note: GNOME users need AppIndicator extension for tray icon.
-   - Linux .deb: `sudo dpkg -i claude-cue-desktop_*.deb` (auto-installs WebKit2GTK dependency)
+   - Linux .deb: `sudo dpkg -i cue-desktop_*.deb` (auto-installs WebKit2GTK dependency)
    - Prerequisites: Python 3 (for hook script), Claude Code installed
 
 ## Files to create
 - `.github/workflows/release.yml`
 - `.github/workflows/ci.yml`
-- `claude-cue-desktop/src-tauri/icons/icon.ico`
-- `claude-cue-desktop/src-tauri/icons/icon.png` (multiple sizes)
-- `claude-cue-desktop/INSTALL.md`
+- `cue-desktop/src-tauri/icons/icon.ico`
+- `cue-desktop/src-tauri/icons/icon.png` (multiple sizes)
+- `cue-desktop/INSTALL.md`
 
 ## Files to modify
-- `claude-cue-desktop/src-tauri/tauri.conf.json` — update bundle section only (do not change capabilities, commands, or other config)
+- `cue-desktop/src-tauri/tauri.conf.json` — update bundle section only (do not change capabilities, commands, or other config)
 
 ## Files NOT to touch
 - Everything in `Sources/` and `hooks/`
@@ -67,5 +67,5 @@ Read plans/cross_platform_final_plan.md for full context.
 - `cargo audit` and `npm audit` pass in CI
 - CI rejects if `devtools` is not `false` in release config
 - Release artifacts include SHA-256 checksums
-- Uninstall is clean (no leftover files except `~/.config/claude-cue/` user data)
+- Uninstall is clean (no leftover files except `~/.config/cue/` user data)
 - GitHub Actions workflow runs successfully on both matrix targets

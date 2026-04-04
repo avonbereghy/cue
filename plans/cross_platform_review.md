@@ -175,10 +175,10 @@ Phase-by-phase reality check:
 ### 16. MINOR — Contradiction: macOS paths in settings vs. sessions
 
 Section 1 data paths table shows:
-- Sessions: `~/Library/Application Support/Claude Cue/sessions.json`
-- Settings: `~/Library/Application Support/com.claude-cue.app/settings.json`
+- Sessions: `~/Library/Application Support/Cue/sessions.json`
+- Settings: `~/Library/Application Support/com.cueapp/settings.json`
 
-These are in *different* directories on macOS (`Claude Cue` vs `com.claude-cue.app`). This is inconsistent — either use the app bundle ID convention for both, or the display name for both. Having two different conventions for the same app creates confusion during debugging and backup.
+These are in *different* directories on macOS (`Cue` vs `com.cueapp`). This is inconsistent — either use the app bundle ID convention for both, or the display name for both. Having two different conventions for the same app creates confusion during debugging and backup.
 
 ---
 

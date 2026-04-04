@@ -58,7 +58,7 @@ Wave 2 (Integration — sequential)
 
 ```
 Read specs/permission_request_ui.spec.md fully.
-Read claude-cue-desktop/.claude/CLAUDE.md fully.
+Read cue-desktop/.claude/CLAUDE.md fully.
 
 Execute the foundation tasks:
 
@@ -76,7 +76,7 @@ Execute the foundation tasks:
 
 3. **CLAUDE.md hardening** — Edit `.claude/CLAUDE.md`:
    - Amend security rule: "NO outbound network calls. Localhost-only HTTP server (`127.0.0.1`) is permitted for Claude Code hook communication. Never bind to `0.0.0.0`. No HTTP clients in deps."
-   - Add under Conventions: "Hook must support macOS (`~/Library/Application Support/`), Linux (`$XDG_DATA_HOME/claude-cue/` or `~/.local/share/claude-cue/`), and Windows (`%LOCALAPPDATA%\Claude Cue\`). No `fcntl` on Windows — use `msvcrt.locking` or the `filelock` package."
+   - Add under Conventions: "Hook must support macOS (`~/Library/Application Support/`), Linux (`$XDG_DATA_HOME/cue/` or `~/.local/share/cue/`), and Windows (`%LOCALAPPDATA%\Cue\`). No `fcntl` on Windows — use `msvcrt.locking` or the `filelock` package."
    - Add sessions.json schema contract (see spec FR-DOC-003)
    - Add hook event → state mapping table (see spec FR-DOC-004)
    - Add: "See `../specs/` for feature specifications and `../plans/` for architecture decisions (especially `cross_platform_final_plan.md`)."
@@ -100,7 +100,7 @@ Verify it compiles: `cargo check`
 
 ```
 Read specs/permission_request_ui.spec.md fully.
-Read claude-cue-desktop/.claude/CLAUDE.md fully.
+Read cue-desktop/.claude/CLAUDE.md fully.
 
 Spawn teammates:
 
@@ -231,7 +231,7 @@ Wait for ALL teammates to complete before proceeding.
 
 ```
 Read specs/permission_request_ui.spec.md fully.
-Read claude-cue-desktop/.claude/CLAUDE.md fully.
+Read cue-desktop/.claude/CLAUDE.md fully.
 
 Wire the permission request feature into the existing app:
 

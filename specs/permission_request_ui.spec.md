@@ -2,7 +2,7 @@
 
 ## Overview
 
-Add an in-app permission approval UI to claude-cue so users can approve or deny Claude Code's `PermissionRequest` events directly from the dashboard — instead of switching to the terminal/VSCode. Also harden the desktop app's CLAUDE.md with cross-platform guidance, a schema contract, hook-event mapping, and audit escalation rules. Together these changes evolve claude-cue from a passive status monitor into an active session control surface.
+Add an in-app permission approval UI to cue so users can approve or deny Claude Code's `PermissionRequest` events directly from the dashboard — instead of switching to the terminal/VSCode. Also harden the desktop app's CLAUDE.md with cross-platform guidance, a schema contract, hook-event mapping, and audit escalation rules. Together these changes evolve cue from a passive status monitor into an active session control surface.
 
 ## Target Users
 
@@ -64,7 +64,7 @@ The CLAUDE.md security rules shall be amended to:
 
 #### FR-DOC-002: Cross-Platform Hook Guidance
 The CLAUDE.md shall include a note:
-> "Hook must support macOS (`~/Library/Application Support/`), Linux (`$XDG_DATA_HOME/claude-cue/` or `~/.local/share/claude-cue/`), and Windows (`%LOCALAPPDATA%\Claude Cue\`). No `fcntl` on Windows — use `msvcrt.locking` or the `filelock` package."
+> "Hook must support macOS (`~/Library/Application Support/`), Linux (`$XDG_DATA_HOME/cue/` or `~/.local/share/cue/`), and Windows (`%LOCALAPPDATA%\Cue\`). No `fcntl` on Windows — use `msvcrt.locking` or the `filelock` package."
 
 #### FR-DOC-003: Session Schema Contract
 The CLAUDE.md shall document the `sessions.json` schema:
@@ -133,7 +133,7 @@ The CLAUDE.md audit rules shall be amended to:
 ## Acceptance Criteria
 
 ### AC-001: Permission Request Appears in Dashboard
-Given claude-cue is running and the HTTP hook server is active,
+Given cue is running and the HTTP hook server is active,
 When Claude Code sends a `PermissionRequest` hook to the configured port,
 Then the matching session row shows an inline permission prompt with summary, expand button, Approve, and Deny.
 

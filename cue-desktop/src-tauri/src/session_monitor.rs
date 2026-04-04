@@ -16,32 +16,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
-/// Staleness thresholds (seconds) by session state.
-/// Shared between poll_status and CLI to avoid divergence.
-/// Sessions that haven't had hook activity for a long time are pruned
-/// as zombies (the SessionEnd hook likely never fired).
-pub fn is_session_stale(state: &str, age_secs: f64) -> bool {
-    match state {
-        // Errors auto-expire after 10 min (usually from crashed sessions).
-        "error" => age_secs >= 600.0,
-        // Done/idle sessions expire after 30 min of no hook activity.
-        // Long enough to survive a lunch break, short enough to prune
-        // zombies where SessionEnd never fired.
-        "done" | "idle" => age_secs >= 1800.0,
-        // Active states (working, waiting, subagent) are never pruned —
-        // they are only removed when the SessionEnd hook fires.
-        _ => false,
-    }
-}
-
-/// Filter stale sessions and sort by start time. Used by both the monitor and CLI.
-pub fn filter_and_sort_active(sessions: impl IntoIterator<Item = SessionInfo>, now: f64) -> Vec<SessionInfo> {
-    let mut active: Vec<_> = sessions
-        .into_iter()
-        .filter(|s| !is_session_stale(&s.state, now - s.last_activity))
-        .collect();
-    active.sort_by(|a, b| a.started_at.partial_cmp(&b.started_at).unwrap_or(std::cmp::Ordering::Equal));
-    active
+/// Sort sessions by start time. Used by both the monitor and CLI.
+pub fn sort_sessions(sessions: impl IntoIterator<Item = SessionInfo>) -> Vec<SessionInfo> {
+    let mut list: Vec<_> = sessions.into_iter().collect();
+    list.sort_by(|a, b| a.started_at.partial_cmp(&b.started_at).unwrap_or(std::cmp::Ordering::Equal));
+    list
 }
 
 /// Shared state for the session monitor.
@@ -67,10 +46,17 @@ pub struct SessionMonitorState {
     output_speed_cache: Mutex<HashMap<String, (i64, f64)>>, // session_id → (prev_output_tokens, prev_timestamp)
     /// Cached sysinfo::System instance to avoid re-allocation every poll
     sysinfo_system: Mutex<sysinfo::System>,
+    /// Cue's launch timestamp (seconds since UNIX epoch) — only sessions
+    /// with activity after this are shown. Starts empty, reads forwards only.
+    launched_at: f64,
 }
 
 impl Default for SessionMonitorState {
     fn default() -> Self {
+        let launched_at = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
         Self {
             enriched_sessions: Mutex::new(Vec::new()),
             metrics_cache: Mutex::new(HashMap::new()),
@@ -83,6 +69,7 @@ impl Default for SessionMonitorState {
             config_counts_cache: Mutex::new(HashMap::new()),
             output_speed_cache: Mutex::new(HashMap::new()),
             sysinfo_system: Mutex::new(sysinfo::System::new()),
+            launched_at,
         }
     }
 }
@@ -116,90 +103,47 @@ impl SessionMonitorState {
             .unwrap_or_default()
             .as_secs_f64();
 
-        // Filter stale sessions and sanitize workspace paths
-        let active = filter_and_sort_active(
+        // Only show sessions with activity after Cue launched.
+        // Starts empty, reads forwards — no stale data from before launch.
+        let launched_at = self.launched_at;
+        let active = sort_sessions(
             status.sessions.into_values().filter(|s| {
-                // Reject sessions with path traversal in workspace
-                security::sanitize_workspace_path(&s.workspace).is_ok()
+                s.last_activity >= launched_at
+                    && security::sanitize_workspace_path(&s.workspace).is_ok()
             }),
-            now,
         );
 
-        // JSONL-based reconciliation for sessions claiming "working"/"subagent".
-        //
-        // When both the hook AND JSONL have been silent, we check the JSONL
-        // content to distinguish between:
-        //   - Still thinking/streaming: last entry is `user` or `tool_result`
-        //     → Claude hasn't responded yet, keep as "working"
-        //   - Turn finished: last entry is `assistant` with end_turn
-        //     → downgrade to "done" (Stop hook was missed)
-        //   - Interrupted: last entry is `user` but silent for >5 min
-        //     → downgrade to "done" (session was Ctrl+C'd mid-think)
-        //
-        // Also bumps lastActivity from JSONL mtime when the hook is stale
-        // but JSONL is still being written (long streaming).
-        let projects_path = paths::claude_projects_path();
-        let active: Vec<_> = active
-            .into_iter()
-            .map(|mut session| {
-                if (session.state == "working" || session.state == "subagent")
-                    && (now - session.last_activity) > 15.0
-                {
-                    let jpath = self.jsonl_path(&session.id, &session.workspace, &projects_path);
-                    let jsonl_age = std::fs::metadata(&jpath)
-                        .and_then(|m| m.modified())
-                        .map(|mtime| {
-                            now - mtime
-                                .duration_since(SystemTime::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs_f64()
-                        })
-                        .unwrap_or(f64::MAX);
-
-                    if jsonl_age > 15.0 {
-                        // Both hook and JSONL silent for 15s — check what
-                        // the JSONL content says before deciding.
-                        let jpath_ref = Path::new(&jpath);
-                        let verdict = jsonl_parser::check_last_entry_verdict(jpath_ref);
-                        match verdict {
-                            jsonl_parser::LastEntryVerdict::StillWorking => {
-                                // Claude is thinking/generating — keep as working.
-                                // Bump lastActivity so models.rs doesn't downgrade
-                                // to "idle" at the 90s mark.
-                                session.last_activity = now;
-                                // Failsafe: if the JSONL hasn't been touched in 5 min
-                                // while the last entry is still "user", the session was
-                                // likely interrupted (Ctrl+C during thinking).
-                                if jsonl_age > 300.0 {
-                                    session.state = "done".to_string();
-                                }
-                            }
-                            jsonl_parser::LastEntryVerdict::TurnFinished => {
-                                // Turn completed but Stop hook was missed.
-                                session.state = "done".to_string();
-                            }
-                            jsonl_parser::LastEntryVerdict::PendingToolUse => {
-                                // Tool use pending but no result yet — keep working.
-                                // The tool may be executing (Bash with long timeout).
-                                session.last_activity = now;
-                                if jsonl_age > 300.0 {
-                                    session.state = "done".to_string();
-                                }
-                            }
-                            jsonl_parser::LastEntryVerdict::Unknown => {
-                                // Can't read JSONL — fall back to original behavior.
-                                session.state = "done".to_string();
-                            }
-                        }
-                    } else if (now - session.last_activity) > 90.0 {
-                        // Hook stale but JSONL still active — bump lastActivity
-                        // to prevent models.rs from downgrading to "idle".
-                        session.last_activity = now - jsonl_age;
-                    }
+        // Deduplicate sessions sharing the same workspace that started within
+        // 30s of each other. Collapses phantom sessions (e.g. from agent teams)
+        // that create a second short-lived process on startup.
+        let active = {
+            let state_priority = |s: &str| -> u8 {
+                match s {
+                    "working" | "subagent" => 3,
+                    "waiting" => 2,
+                    "idle" => 1,
+                    _ => 0, // done, error
                 }
-                session
-            })
-            .collect();
+            };
+            let mut deduped: Vec<SessionInfo> = Vec::new();
+            for session in active {
+                if let Some(existing) = deduped.iter_mut().find(|s| {
+                    s.workspace == session.workspace
+                        && (s.started_at - session.started_at).abs() < 30.0
+                }) {
+                    if state_priority(&session.state) > state_priority(&existing.state)
+                        || (state_priority(&session.state)
+                            == state_priority(&existing.state)
+                            && session.last_activity > existing.last_activity)
+                    {
+                        *existing = session;
+                    }
+                } else {
+                    deduped.push(session);
+                }
+            }
+            deduped
+        };
 
         let enriched: Vec<_> = {
             let cache = self.metrics_cache.lock().unwrap();
@@ -524,7 +468,7 @@ mod tests {
 
     #[test]
     fn test_jsonl_path_resolution_with_fixture() {
-        let dir = std::env::temp_dir().join("claude_cue_test_resolve");
+        let dir = std::env::temp_dir().join("cue_test_resolve");
         let _ = std::fs::remove_dir_all(&dir);
 
         // Create a fixture: projects/-Users-dev-App/session-1.jsonl
@@ -542,7 +486,7 @@ mod tests {
 
     #[test]
     fn test_jsonl_path_parent_walk() {
-        let dir = std::env::temp_dir().join("claude_cue_test_parent_walk");
+        let dir = std::env::temp_dir().join("cue_test_parent_walk");
         let _ = std::fs::remove_dir_all(&dir);
 
         // JSONL is stored under the git root (parent), not the exact workspace
@@ -573,84 +517,23 @@ mod tests {
     }
 
     #[test]
-    fn test_filter_and_sort_active_prunes_stale_idle() {
-        let now = 1000000.0;
-        let sessions = vec![
-            make_session("s1", "idle", now - 7200.0, now - 10000.0), // 2 hours old — stale
-            make_session("s2", "idle", now - 30.0, now - 100.0),     // 30s old — fresh
-        ];
-        let active = filter_and_sort_active(sessions, now);
-        assert_eq!(active.len(), 1, "stale idle sessions should be pruned after 30 min");
-        assert_eq!(active[0].id, "s2");
-    }
-
-    #[test]
-    fn test_filter_and_sort_active_keeps_working_indefinitely() {
-        let now = 1000000.0;
-        let sessions = vec![
-            make_session("s1", "working", now - 3600.0, now - 5000.0), // 1 hour old — still active
-            make_session("s2", "working", now - 7200.0, now - 10000.0), // 2 hours old — still active
-        ];
-        let active = filter_and_sort_active(sessions, now);
-        assert_eq!(active.len(), 2, "working sessions should never be pruned by timeout");
-    }
-
-    #[test]
-    fn test_filter_and_sort_active_filters_error_over_600s() {
-        let now = 5000.0;
-        let sessions = vec![
-            make_session("s1", "error", now - 601.0, now - 1000.0), // stale (error > 600s)
-            make_session("s2", "error", now - 100.0, now - 400.0), // fresh
-        ];
-        let active = filter_and_sort_active(sessions, now);
-        assert_eq!(active.len(), 1);
-        assert_eq!(active[0].id, "s2");
-    }
-
-    #[test]
-    fn test_filter_and_sort_active_sorts_by_started_at() {
+    fn test_sort_sessions_by_started_at() {
         let now = 1000.0;
         let sessions = vec![
             make_session("s3", "working", now - 5.0, now - 30.0),
             make_session("s1", "working", now - 5.0, now - 100.0),
             make_session("s2", "working", now - 5.0, now - 50.0),
         ];
-        let active = filter_and_sort_active(sessions, now);
-        assert_eq!(active.len(), 3);
-        // Should be sorted by started_at ascending
-        assert_eq!(active[0].id, "s1"); // started_at = 900
-        assert_eq!(active[1].id, "s2"); // started_at = 950
-        assert_eq!(active[2].id, "s3"); // started_at = 970
-    }
-
-    #[test]
-    fn test_is_session_stale_active_states_never_stale() {
-        // Active states (working, waiting, subagent) are never pruned by timeout
-        for state in &["working", "waiting", "subagent"] {
-            assert!(!is_session_stale(state, 60.0), "{} should not be stale at 60s", state);
-            assert!(!is_session_stale(state, 1800.0), "{} should not be stale at 1800s", state);
-            assert!(!is_session_stale(state, 86400.0), "{} should not be stale at 24h", state);
-        }
-    }
-
-    #[test]
-    fn test_is_session_stale_error() {
-        assert!(!is_session_stale("error", 599.0));
-        assert!(is_session_stale("error", 600.0));
-    }
-
-    #[test]
-    fn test_is_session_stale_done_and_idle() {
-        // done/idle expire after 30 min (1800s) of no activity
-        assert!(!is_session_stale("done", 1799.0));
-        assert!(is_session_stale("done", 1800.0));
-        assert!(!is_session_stale("idle", 1799.0));
-        assert!(is_session_stale("idle", 1800.0));
+        let sorted = sort_sessions(sessions);
+        assert_eq!(sorted.len(), 3);
+        assert_eq!(sorted[0].id, "s1"); // started_at = 900
+        assert_eq!(sorted[1].id, "s2"); // started_at = 950
+        assert_eq!(sorted[2].id, "s3"); // started_at = 970
     }
 
     #[test]
     fn test_jsonl_path_fallback_scan() {
-        let dir = std::env::temp_dir().join("claude_cue_test_fallback");
+        let dir = std::env::temp_dir().join("cue_test_fallback");
         let _ = std::fs::remove_dir_all(&dir);
 
         // JSONL is in a completely different project dir

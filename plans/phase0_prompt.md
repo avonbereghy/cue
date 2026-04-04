@@ -14,9 +14,9 @@ The existing `hooks/cue-hook` Python script has security gaps that must be fixed
    - Unix: `fcntl.flock()` (existing)
    - Windows: `msvcrt.locking()` — write a single byte `b"L"` to the lock file before locking (msvcrt requires the file to have content covering the locked range)
 6. Add `get_status_dir()` function returning OS-appropriate path:
-   - macOS: `~/Library/Application Support/Claude Cue`
-   - Windows: `%LOCALAPPDATA%\Claude Cue`
-   - Linux: `$XDG_DATA_HOME/claude-cue` (default: `~/.local/share/claude-cue`)
+   - macOS: `~/Library/Application Support/Cue`
+   - Windows: `%LOCALAPPDATA%\Cue`
+   - Linux: `$XDG_DATA_HOME/cue` (default: `~/.local/share/cue`)
 7. Add WSL detection and bridge path (`get_wsl_windows_status_dir()`) using filesystem inspection only — NO subprocess, NO cmd.exe
 8. Replace hardcoded `STATUS_DIR` with `get_status_dir()` call
 

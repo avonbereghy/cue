@@ -78,13 +78,13 @@ After all teammates complete, the team lead integrates by wiring into `App.tsx` 
    - After onboarding completes: transition to Dashboard
 
 ## Files to create (teammates)
-- `claude-cue-desktop/src/components/SettingsView.tsx` (Track A)
-- `claude-cue-desktop/src/components/OnboardingWizard.tsx` (Track B)
-- `claude-cue-desktop/src-tauri/src/env_detect.rs` (Track C)
+- `cue-desktop/src/components/SettingsView.tsx` (Track A)
+- `cue-desktop/src/components/OnboardingWizard.tsx` (Track B)
+- `cue-desktop/src-tauri/src/env_detect.rs` (Track C)
 
 ## Files to modify (integration only, after tracks complete)
-- `claude-cue-desktop/src/App.tsx` — onboarding routing
-- `claude-cue-desktop/src-tauri/src/main.rs` — `mod env_detect;`, Tauri commands, settings window
+- `cue-desktop/src/App.tsx` — onboarding routing
+- `cue-desktop/src-tauri/src/main.rs` — `mod env_detect;`, Tauri commands, settings window
 
 ## Files NOT to touch
 - Everything in `Sources/`

@@ -11,7 +11,7 @@ Read plans/cross_platform_final_plan.md for full context.
 4. `src/components/Dashboard.tsx`: Tab bar uses `role="tablist"`, each tab uses `role="tab"`, `aria-selected`, `aria-controls`
 5. `src/components/StatBadge.tsx`: Add `aria-label` combining label + value (e.g., "Sessions: 3")
 6. `src/components/UsageView.tsx`: Plan picker has `aria-label="Select plan tier"`
-7. `src-tauri/src/tray.rs`: Update tooltip to descriptive text: "Claude Cue: 3 sessions — 1 working, 1 waiting, 1 subagent"
+7. `src-tauri/src/tray.rs`: Update tooltip to descriptive text: "Cue: 3 sessions — 1 working, 1 waiting, 1 subagent"
 8. Create `src/lib/a11y.ts`: utility for live region announcements (`aria-live="polite"` div for dynamic updates)
 
 ### Keyboard Navigation
@@ -49,20 +49,20 @@ Read plans/cross_platform_final_plan.md for full context.
 3. Profile JSONL parsing with large files (> 10MB) — ensure it completes in < 1 second
 
 ## Files to create
-- `claude-cue-desktop/src/lib/a11y.ts`
+- `cue-desktop/src/lib/a11y.ts`
 
 ## Files to modify
-- `claude-cue-desktop/src/components/SessionCard.tsx` — ARIA labels, focus ring, leaf name
-- `claude-cue-desktop/src/components/ProgressBar.tsx` — ARIA progressbar role, border for high contrast
-- `claude-cue-desktop/src/components/WindowSection.tsx` — ARIA label
-- `claude-cue-desktop/src/components/Dashboard.tsx` — tablist/tab roles, keyboard nav
-- `claude-cue-desktop/src/components/StatBadge.tsx` — ARIA label
-- `claude-cue-desktop/src/components/UsageView.tsx` — plan picker ARIA, keyboard nav
-- `claude-cue-desktop/src/components/SettingsView.tsx` — label associations, tab order
-- `claude-cue-desktop/src/components/OnboardingWizard.tsx` — focus trap, keyboard nav
-- `claude-cue-desktop/src/styles/globals.css` — high contrast, reduced motion, light mode
-- `claude-cue-desktop/src-tauri/src/tray.rs` — descriptive tooltip, theme detection, reduced motion, privacy (leaf names)
-- `claude-cue-desktop/src-tauri/src/cli.rs` — `--show-paths` flag, default path masking
+- `cue-desktop/src/components/SessionCard.tsx` — ARIA labels, focus ring, leaf name
+- `cue-desktop/src/components/ProgressBar.tsx` — ARIA progressbar role, border for high contrast
+- `cue-desktop/src/components/WindowSection.tsx` — ARIA label
+- `cue-desktop/src/components/Dashboard.tsx` — tablist/tab roles, keyboard nav
+- `cue-desktop/src/components/StatBadge.tsx` — ARIA label
+- `cue-desktop/src/components/UsageView.tsx` — plan picker ARIA, keyboard nav
+- `cue-desktop/src/components/SettingsView.tsx` — label associations, tab order
+- `cue-desktop/src/components/OnboardingWizard.tsx` — focus trap, keyboard nav
+- `cue-desktop/src/styles/globals.css` — high contrast, reduced motion, light mode
+- `cue-desktop/src-tauri/src/tray.rs` — descriptive tooltip, theme detection, reduced motion, privacy (leaf names)
+- `cue-desktop/src-tauri/src/cli.rs` — `--show-paths` flag, default path masking
 
 ## Files NOT to touch
 - Everything in `Sources/`
