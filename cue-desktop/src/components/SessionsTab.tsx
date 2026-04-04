@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import type { EnrichedSession, Settings, SignalPreset } from "@/lib/types";
-import { SIGNAL_THEMES, applyThemeCssVars } from "@/lib/types";
 import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, setGate as setGateEngine } from "@/lib/presetEngine";
 // import { formatTokens } from "@/lib/format";
 // import { StatBadge } from "./StatBadge";
@@ -327,10 +326,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setShowConfigCounts(s.showConfigCounts ?? false);
     if (s.lowPower) document.documentElement.setAttribute("data-low-power", "");
     else document.documentElement.removeAttribute("data-low-power");
-    // Apply theme CSS variables for UI surfaces
-    const themeId = s.activeThemeId ?? "default";
-    const theme = SIGNAL_THEMES.find(t => t.id === themeId) ?? SIGNAL_THEMES[0];
-    applyThemeCssVars(theme);
   }, []);
 
   useEffect(() => {

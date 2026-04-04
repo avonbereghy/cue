@@ -160,16 +160,10 @@ fn get_settings() -> Settings {
 
 #[tauri::command]
 fn update_settings(app: tauri::AppHandle, new_settings: Settings) -> Result<(), String> {
-    // Toggle native vibrancy when theme changes to/from "glass"
-    // Debug: write to temp file to verify this code path runs
-    let _ = std::fs::write("/tmp/cue-vibrancy.log",
-        format!("update_settings called, active_theme_id={}\n", new_settings.active_theme_id));
-    if let Some(window) = app.get_webview_window("main") {
-        toggle_vibrancy(&window, new_settings.active_theme_id == "glass" || new_settings.active_theme_id == "glass-sand");
-    } else {
-        let _ = std::fs::write("/tmp/cue-vibrancy.log", "ERROR: no main window\n");
-    }
-
+    // Vibrancy is toggled by the frontend via the set_vibrancy command
+    // when the user actively selects a glass theme. We do NOT call
+    // toggle_vibrancy here — doing so on every save resets the window
+    // theme and causes a white flash.
     settings::save_settings(&new_settings)?;
     let _ = app.emit("settings-changed", &new_settings);
     Ok(())
@@ -234,7 +228,7 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                         // prevents a pure black flash. Matched to typical warm wallpaper tones.
                         let nscolor_class = objc2::runtime::AnyClass::get(c"NSColor").unwrap();
                         let bg: *const objc2::runtime::AnyObject = objc2::msg_send![
-                            nscolor_class, colorWithRed: 0.22_f64 green: 0.18_f64 blue: 0.14_f64 alpha: 1.0_f64
+                            nscolor_class, colorWithRed: 0.22_f64, green: 0.18_f64, blue: 0.14_f64, alpha: 1.0_f64
                         ];
                         let _: () = objc2::msg_send![ns_window, setBackgroundColor: bg];
 
@@ -283,12 +277,10 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                                 tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
                                 // Make WKWebView layer transparent
                                 let _ = w.with_webview(|wv| {
-                                    unsafe {
-                                        let wkwebview: *mut std::ffi::c_void = wv.inner().cast();
-                                        let obj: &objc2::runtime::AnyObject = &*(wkwebview as *const objc2::runtime::AnyObject);
-                                        let sel = objc2::sel!(_setDrawsBackground:);
-                                        let _: () = objc2::runtime::MessageReceiver::send_message(obj, sel, (objc2::runtime::Bool::NO,));
-                                    }
+                                    let wkwebview: *mut std::ffi::c_void = wv.inner().cast();
+                                    let obj: &objc2::runtime::AnyObject = &*(wkwebview as *const objc2::runtime::AnyObject);
+                                    let sel = objc2::sel!(_setDrawsBackground:);
+                                    let _: () = objc2::runtime::MessageReceiver::send_message(obj, sel, (objc2::runtime::Bool::NO,));
                                 });
                                 // Force CSS backgrounds transparent via JS injection
                                 let _ = w.eval(
@@ -322,12 +314,10 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
 
                         // Re-enable WKWebView background drawing
                         let _ = window.with_webview(|wv| {
-                            unsafe {
-                                let wkwebview: *mut std::ffi::c_void = wv.inner().cast();
-                                let obj: &objc2::runtime::AnyObject = &*(wkwebview as *const objc2::runtime::AnyObject);
-                                let sel = objc2::sel!(_setDrawsBackground:);
-                                let _: () = objc2::runtime::MessageReceiver::send_message(obj, sel, (objc2::runtime::Bool::YES,));
-                            }
+                            let wkwebview: *mut std::ffi::c_void = wv.inner().cast();
+                            let obj: &objc2::runtime::AnyObject = &*(wkwebview as *const objc2::runtime::AnyObject);
+                            let sel = objc2::sel!(_setDrawsBackground:);
+                            let _: () = objc2::runtime::MessageReceiver::send_message(obj, sel, (objc2::runtime::Bool::YES,));
                         });
 
                         // Clear the inline styles that glass mode injected — without this,
@@ -339,10 +329,21 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                              document.body.style.removeProperty('background');"
                         );
 
-                        // Re-apply system theme to fix title bar appearance
-                        let sys_theme = detect_system_theme();
-                        let _ = window.set_theme(Some(sys_theme));
-                        set_native_appearance(window, sys_theme == Theme::Dark);
+                        // Re-apply saved theme to fix title bar appearance.
+                        // Use the user's saved preference (resolved through "auto")
+                        // instead of forcing the system theme, which would override
+                        // a user who explicitly chose dark/light.
+                        let s = settings::load_settings();
+                        let effective_dark = if s.theme == "light" {
+                            false
+                        } else if s.theme == "dark" {
+                            true
+                        } else {
+                            // "auto" — follow system
+                            detect_system_theme() == Theme::Dark
+                        };
+                        let _ = window.set_theme(Some(if effective_dark { Theme::Dark } else { Theme::Light }));
+                        set_native_appearance(window, effective_dark);
 
                         let _ = writeln!(f, "Vibrancy cleared, contentView restored");
                     }
