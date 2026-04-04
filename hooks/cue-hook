@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude Code hook — updates session status for the Claude Cue menu bar app.
+"""Claude Code hook — updates session status for the Cue menu bar app.
 
 Called by Claude Code hooks with: cue-hook <idle|working|waiting|done|remove>
 Receives hook JSON on stdin (contains session_id, cwd, etc.)
@@ -65,21 +65,21 @@ def _get_wsl_windows_status_dir():
 
     win_user = candidates[0]
     return os.path.join(
-        win_users, win_user, "AppData", "Local", "Claude Cue"
+        win_users, win_user, "AppData", "Local", "Cue"
     )
 
 
 # --- Cross-platform status directory (Task 6) ---
 def get_status_dir():
-    """Return OS-appropriate path for Claude Cue data."""
+    """Return OS-appropriate path for Cue data."""
     if sys.platform == "darwin":
-        return os.path.expanduser("~/Library/Application Support/Claude Cue")
+        return os.path.expanduser("~/Library/Application Support/Cue")
 
     if sys.platform == "win32":
         local = os.environ.get("LOCALAPPDATA", "")
         if local:
-            return os.path.join(local, "Claude Cue")
-        return os.path.expanduser("~/AppData/Local/Claude Cue")
+            return os.path.join(local, "Cue")
+        return os.path.expanduser("~/AppData/Local/Cue")
 
     # Linux (or other Unix)
     if _is_wsl():
@@ -90,14 +90,13 @@ def get_status_dir():
     xdg = os.environ.get("XDG_DATA_HOME", "")
     if not xdg:
         xdg = os.path.expanduser("~/.local/share")
-    return os.path.join(xdg, "claude-cue")
+    return os.path.join(xdg, "cue")
 
 
 # --- Task 8: Use get_status_dir() instead of hardcoded path ---
 STATUS_DIR = get_status_dir()
 STATUS_FILE = os.path.join(STATUS_DIR, "sessions.json")
 LOCK_FILE = os.path.join(STATUS_DIR, "sessions.lock")
-STALE_THRESHOLD = 600  # 10 minutes
 
 # Required keys and their expected types for session validation (Task 4)
 _SESSION_SCHEMA = {
@@ -135,7 +134,7 @@ def _validate_sessions(data):
 
 
 def _forward_permission_request(hook_data, session_id):
-    """Forward a permission request to the Claude Cue dashboard via localhost HTTP.
+    """Forward a permission request to the Cue dashboard via localhost HTTP.
 
     The dashboard's permission server (port 3002) will block this connection
     until the user approves or denies. Returns the decision JSON or None on error.
@@ -200,15 +199,11 @@ def _should_ignore_session(hook_data):
 
     Detects `claude -p` (print mode) and other non-interactive sessions:
     1. Claude Code's own session_type field (print, pipe, headless)
-    2. CORTEX_SUBPROCESS=1 set by Claude Cortex hooks
-    3. CUE_SKIP=1 — generic opt-out for any caller
+    2. CUE_SKIP=1 — generic opt-out for any caller
     """
     # Claude Code includes session_type in hook data for non-interactive modes
     session_type = hook_data.get("session_type", "")
     if session_type and session_type != "interactive":
-        return True
-    # Env var guards for programmatic callers
-    if os.environ.get("CORTEX_SUBPROCESS") == "1":
         return True
     if os.environ.get("CUE_SKIP") == "1":
         return True
@@ -340,15 +335,8 @@ def main():
             now = time.time()
 
             if action == "remove":
-                # Session exited — mark as "ended" (distinct from "done" which
-                # means "finished a turn, still at the prompt"). The frontend
-                # moves "ended" sessions to the revive list.
-                existing = status["sessions"].get(session_id, {})
-                if existing:
-                    existing["state"] = "ended"
-                    existing["lastActivity"] = now
-                    existing["activeSubagents"] = 0
-                    status["sessions"][session_id] = existing
+                # Session exited — delete immediately.
+                status["sessions"].pop(session_id, None)
             else:
                 # Update or create session
                 existing = status["sessions"].get(session_id, {})
@@ -363,49 +351,27 @@ def main():
                     if existing_activity > hook_start_time:
                         return  # A newer hook already wrote — don't clobber it
 
-                # Don't let "done" or "idle" overwrite "waiting" — the
-                # permission prompt is still unanswered. Only "working",
-                # "error", "subagent", or "remove" should clear it.
-                if existing.get("state") == "waiting" and action in ("done", "idle"):
-                    return
-
-                # Hold "error" state for at least 3 seconds so the user
-                # can see the red highlight before it's overwritten by the
-                # next PreToolUse/PostToolUse "working" event.
-                if existing.get("state") == "error" and action == "working":
-                    error_at = existing.get("lastActivity", 0)
-                    if now - error_at < 3.0:
-                        return
-
                 # Subagent counter: increment on start, decrement on stop.
-                # While count > 0, keep state as "subagent" so the UI shows
-                # the blue dot. The Rust backend uses JSONL file scan as
-                # fallback recovery if this counter gets stuck.
+                # "done" and "idle" are authoritative turn-end signals that
+                # reset the counter — if it's still positive, it's a leaked
+                # counter (denied agent, crash, missed SubagentStop).
                 active_subs = existing.get("activeSubagents", 0)
-                if action == "subagent":
+                if action in ("done", "idle"):
+                    active_subs = 0
+                elif action == "subagent":
                     active_subs += 1
                 elif action == "subagent_stop":
                     active_subs = max(0, active_subs - 1)
                     action = "subagent" if active_subs > 0 else "working"
 
-                # Override state to "subagent" while subagents are active.
-                # This prevents working/done/idle from hiding that subagents
-                # are still running. Waiting and error are NOT overridden —
-                # those need user attention.
-                if active_subs > 0 and action in ("working", "done", "idle"):
+                # While subagents are active, override "working" to show
+                # subagent state. Waiting and error are NOT overridden.
+                if active_subs > 0 and action == "working":
                     action = "subagent"
 
-                # Reset counter when session truly finishes with no subagents
-                if action in ("done", "idle") and active_subs <= 0:
-                    active_subs = 0
-
-                # Keep the original workspace once set — prevents card title
-                # from flipping when subagents run in worktree paths.
-                stable_workspace = (
-                    existing.get("workspace", workspace)
-                    if active_subs > 0 and existing.get("workspace")
-                    else workspace
-                )
+                # Keep the original workspace from SessionStart — prevents
+                # the card title from flipping when tools cd into subdirs.
+                stable_workspace = existing.get("workspace", workspace)
 
                 entry = {
                     "id": session_id,
@@ -427,21 +393,6 @@ def main():
                     entry["outputTokens"] = existing.get("outputTokens", 0)
                     entry["model"] = existing.get("model", "")
                 status["sessions"][session_id] = entry
-
-            # Prune stale sessions: "error" and "done" sessions auto-expire.
-            # "done" from SessionEnd means the session has exited — keep it
-            # around for 5 minutes so the frontend can capture it for revive.
-            DONE_THRESHOLD = 300  # 5 minutes
-            stale = [
-                sid
-                for sid, s in status["sessions"].items()
-                if (s.get("state") == "error"
-                    and now - s.get("lastActivity", 0) > STALE_THRESHOLD)
-                or (s.get("state") == "ended"
-                    and now - s.get("lastActivity", 0) > DONE_THRESHOLD)
-            ]
-            for sid in stale:
-                del status["sessions"][sid]
 
             # Atomic write with unique temp file to avoid collisions
             fd, tmp = tempfile.mkstemp(dir=STATUS_DIR, suffix=".json.tmp")

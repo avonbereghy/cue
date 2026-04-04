@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn test_write_and_read_roundtrip() {
-        let dir = std::env::temp_dir().join("claude_cue_test_perm_log_roundtrip");
+        let dir = std::env::temp_dir().join("cue_test_perm_log_roundtrip");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -150,7 +150,7 @@ mod tests {
 
     #[test]
     fn test_multiple_entries_append() {
-        let dir = std::env::temp_dir().join("claude_cue_test_perm_log_multi");
+        let dir = std::env::temp_dir().join("cue_test_perm_log_multi");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn test_filter_by_session_id() {
-        let dir = std::env::temp_dir().join("claude_cue_test_perm_log_filter");
+        let dir = std::env::temp_dir().join("cue_test_perm_log_filter");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -201,14 +201,14 @@ mod tests {
 
     #[test]
     fn test_missing_file_returns_empty() {
-        let path = std::env::temp_dir().join("claude_cue_test_perm_log_missing/nonexistent.jsonl");
+        let path = std::env::temp_dir().join("cue_test_perm_log_missing/nonexistent.jsonl");
         let entries = read_permission_log_from(&path, "any-session");
         assert!(entries.is_empty());
     }
 
     #[test]
     fn test_empty_file_returns_empty() {
-        let dir = std::env::temp_dir().join("claude_cue_test_perm_log_empty");
+        let dir = std::env::temp_dir().join("cue_test_perm_log_empty");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn test_malformed_lines_are_skipped() {
-        let dir = std::env::temp_dir().join("claude_cue_test_perm_log_malformed");
+        let dir = std::env::temp_dir().join("cue_test_perm_log_malformed");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -247,7 +247,7 @@ mod tests {
     fn test_file_permissions_are_restricted() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = std::env::temp_dir().join("claude_cue_test_perm_log_perms");
+        let dir = std::env::temp_dir().join("cue_test_perm_log_perms");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 

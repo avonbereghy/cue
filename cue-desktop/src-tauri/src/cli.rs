@@ -12,11 +12,10 @@ use crate::jsonl_parser;
 use crate::models::{EnrichedSession, SessionMetrics, StatusData, SupplementalData};
 use crate::paths;
 use crate::security;
-use crate::session_monitor::{encode_workspace_path, filter_and_sort_active};
+use crate::session_monitor::{encode_workspace_path, sort_sessions};
 use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 /// Attempt to handle CLI arguments. Returns `Some(())` if a CLI command was
 /// handled (caller should exit), or `None` if normal GUI mode should proceed.
@@ -109,16 +108,10 @@ fn load_sessions() -> Vec<EnrichedSession> {
         Err(_) => return Vec::new(),
     };
 
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs_f64();
-
-    let active = filter_and_sort_active(
+    let active = sort_sessions(
         status.sessions.into_values().filter(|s| {
             security::sanitize_workspace_path(&s.workspace).is_ok()
         }),
-        now,
     );
 
     let projects_path = paths::claude_projects_path();
@@ -394,7 +387,7 @@ fn print_pretty_rich(sessions: &[EnrichedSession], show_paths: bool, use_color: 
 
     println!(
         "{}",
-        bold("Claude Cue Sessions", use_color)
+        bold("Cue Sessions", use_color)
     );
     println!(
         "{} {} sessions  {} {} messages  {} {} tokens",
@@ -560,14 +553,14 @@ mod tests {
 
     #[test]
     fn test_try_run_cli_no_args_returns_none() {
-        let args = vec!["claude-cue-desktop".to_string()];
+        let args = vec!["cue-desktop".to_string()];
         assert!(try_run_cli_inner(&args).is_none());
     }
 
     #[test]
     fn test_try_run_cli_status_returns_some() {
         let args = vec![
-            "claude-cue-desktop".to_string(),
+            "cue-desktop".to_string(),
             "--status".to_string(),
         ];
         assert!(try_run_cli_inner(&args).is_some());
@@ -576,7 +569,7 @@ mod tests {
     #[test]
     fn test_try_run_cli_status_pretty_returns_some() {
         let args = vec![
-            "claude-cue-desktop".to_string(),
+            "cue-desktop".to_string(),
             "--status".to_string(),
             "--pretty".to_string(),
         ];
@@ -586,7 +579,7 @@ mod tests {
     #[test]
     fn test_try_run_cli_compact_returns_some() {
         let args = vec![
-            "claude-cue-desktop".to_string(),
+            "cue-desktop".to_string(),
             "--status".to_string(),
             "--pretty".to_string(),
             "--compact".to_string(),
@@ -597,7 +590,7 @@ mod tests {
     #[test]
     fn test_try_run_cli_unrelated_args_returns_none() {
         let args = vec![
-            "claude-cue-desktop".to_string(),
+            "cue-desktop".to_string(),
             "--some-other-flag".to_string(),
         ];
         assert!(try_run_cli_inner(&args).is_none());
@@ -606,7 +599,7 @@ mod tests {
     #[test]
     fn test_try_run_cli_show_paths_without_status_returns_none() {
         let args = vec![
-            "claude-cue-desktop".to_string(),
+            "cue-desktop".to_string(),
             "--show-paths".to_string(),
         ];
         assert!(try_run_cli_inner(&args).is_none());
@@ -905,7 +898,7 @@ mod tests {
 
     #[test]
     fn test_resolve_jsonl_metrics_missing_returns_default() {
-        let dir = std::env::temp_dir().join("claude_cue_cli_test_missing");
+        let dir = std::env::temp_dir().join("cue_cli_test_missing");
         let _ = std::fs::create_dir_all(&dir);
         let metrics = resolve_jsonl_metrics("nonexistent-session", "/tmp/fake", &dir);
         assert_eq!(metrics.total_tokens(), 0);
@@ -915,7 +908,7 @@ mod tests {
 
     #[test]
     fn test_resolve_jsonl_metrics_with_fixture() {
-        let dir = std::env::temp_dir().join("claude_cue_cli_test_fixture");
+        let dir = std::env::temp_dir().join("cue_cli_test_fixture");
         let _ = std::fs::remove_dir_all(&dir);
 
         let project_dir = dir.join("-Users-dev-App");

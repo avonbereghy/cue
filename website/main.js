@@ -1,5 +1,5 @@
 /* ============================================================
-   Claude Cue — Marketing Website Interactions
+   Cue — Marketing Website Interactions
    ============================================================ */
 
 document.addEventListener('DOMContentLoaded', () => {

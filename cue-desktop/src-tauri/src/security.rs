@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn test_atomic_write() {
-        let dir = std::env::temp_dir().join("claude_cue_test_atomic");
+        let dir = std::env::temp_dir().join("cue_test_atomic");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
@@ -193,7 +193,7 @@ mod tests {
     fn test_owner_only_permissions() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = std::env::temp_dir().join("claude_cue_test_perms");
+        let dir = std::env::temp_dir().join("cue_test_perms");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
@@ -222,7 +222,7 @@ mod tests {
 
     #[test]
     fn test_cleanup_stale_tmp_files() {
-        let dir = std::env::temp_dir().join("claude_cue_test_cleanup");
+        let dir = std::env::temp_dir().join("cue_test_cleanup");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
@@ -276,7 +276,7 @@ mod tests {
     fn test_atomic_write_content_and_permissions() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = std::env::temp_dir().join("claude_cue_test_atomic_perms");
+        let dir = std::env::temp_dir().join("cue_test_atomic_perms");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
@@ -300,7 +300,7 @@ mod tests {
     fn test_verify_file_permissions() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = std::env::temp_dir().join("claude_cue_test_verify");
+        let dir = std::env::temp_dir().join("cue_test_verify");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
