@@ -262,7 +262,7 @@ impl EnrichedSession {
             .unwrap_or_default()
             .as_secs_f64();
 
-        let mut info = info;
+        let info = info;
         let workspace_name = std::path::Path::new(&info.workspace)
             .file_name()
             .map(|s| s.to_string_lossy().to_string())

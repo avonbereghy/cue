@@ -98,11 +98,6 @@ impl SessionMonitorState {
             }
         };
 
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs_f64();
-
         // Only show sessions that appeared after Cue launched.
         // Check both started_at and last_activity so sessions that were
         // already idle when Cue opened aren't hidden until their next event.
