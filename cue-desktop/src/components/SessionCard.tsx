@@ -51,7 +51,8 @@ interface SessionCardProps {
   keyReleaseSpeed?: number;
   compactMode?: boolean;
   slimMode?: boolean;
-  contextThreshold?: boolean;
+  /** Context bar visibility: "always", "never", or "after200k" */
+  contextThreshold?: string;
   /** Context display mode: "percent", "tokens", "remaining", "both" */
   contextDisplay?: string;
   /** Beta: show per-tool usage pills */
@@ -65,7 +66,7 @@ interface SessionCardProps {
   onExpandCycle?: () => void;
 }
 
-export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = false, contextDisplay = "percent", showToolPills = false, showCurrentTool = false, showConfigCounts = false, expandOverride, onExpandCycle }: SessionCardProps) {
+export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "percent", showToolPills = false, showCurrentTool = false, showConfigCounts = false, expandOverride, onExpandCycle }: SessionCardProps) {
   // Effective display mode: expandOverride takes precedence over global compact/slim
   const effectiveCompact = expandOverride !== undefined ? expandOverride === 0 : compactMode;
   const effectiveSlim = expandOverride !== undefined ? expandOverride <= 1 : slimMode;
@@ -280,7 +281,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
         isWaiting ? "session-card--waiting" : isError ? "session-card--error" : displayState === "thinking" ? "session-card--thinking" : ""
       } ${
         effectiveCompact ? "px-2.5 py-1.5 space-y-0"
-        : signalString && (signalMode === "preset" || signalMode === "audio") ? "px-4 py-5 space-y-5" : "p-3 space-y-2.5"
+        : signalString && (signalMode === "preset" || signalMode === "audio") ? "px-4 pt-4 pb-5 space-y-4" : "px-3 pt-2 pb-1 space-y-2"
       } ${effectiveSlim && !effectiveCompact ? "flex flex-col" : ""} ${
         compactMode ? "cursor-pointer" : ""
       }`}
@@ -426,12 +427,6 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                 {session.outputTokensPerSec.toFixed(1)} tok/s
               </span>
             )}
-            {!isNarrow && session.modelDisplayName !== "\u2014" && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
-                {session.modelDisplayName}
-                {session.provider && <span className="text-white/30"> ({session.provider})</span>}
-              </span>
-            )}
             {!isNarrow && session.sourceDisplay !== "\u2014" && (
               <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
                 {session.sourceDisplay}
@@ -466,8 +461,18 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
           {/* Spacer pushes context bar to bottom in slim mode */}
           {effectiveSlim && !effectiveCompact && <div className="flex-1" />}
 
+          {/* Model name + context bar — grouped tightly */}
+          {!effectiveCompact && (session.modelDisplayName !== "\u2014" || (contextThreshold !== "never" && (contextThreshold !== "after200k" || metrics.lastInputTokens >= 200000))) && (
+            <div className="flex flex-col gap-0.5">
+          {session.modelDisplayName !== "\u2014" && (
+            <span className="text-[0.625rem] text-white/30 font-mono self-end">
+              {session.modelDisplayName}
+              {session.provider && <span className="text-white/20"> ({session.provider})</span>}
+            </span>
+          )}
+
           {/* Row 4: Context usage — visible in regular and slim mode, hidden in compact */}
-          {!effectiveCompact && (!contextThreshold || metrics.lastInputTokens >= 200000) && (
+          {contextThreshold !== "never" && (contextThreshold !== "after200k" || metrics.lastInputTokens >= 200000) && (
             <div className="relative flex items-center gap-2">
               <span className="text-[0.625rem] text-white/40 shrink-0">Context</span>
               <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden">
@@ -512,6 +517,8 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                   {formatTokens(metrics.lastInputTokens)} / {formatTokens(session.contextLimit)}
                 </span>
               )}
+            </div>
+          )}
             </div>
           )}
 

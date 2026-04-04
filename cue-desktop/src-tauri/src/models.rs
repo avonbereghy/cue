@@ -581,9 +581,9 @@ pub struct Settings {
     /// Slim mode: hide metrics and tool chips, keep title, timer, context bar, and animations
     #[serde(default = "default_true")]
     pub slim_mode: bool,
-    /// Only show context bar when usage >= 200k tokens
-    #[serde(default)]
-    pub context_threshold: bool,
+    /// When to show the context bar: "always", "never", or "after200k"
+    #[serde(default = "default_context_threshold")]
+    pub context_threshold: String,
     /// Context display mode: "percent", "tokens", "remaining", or "both"
     #[serde(default = "default_context_display")]
     pub context_display: String,
@@ -664,6 +664,10 @@ fn default_font_scale() -> f64 {
     1.0
 }
 
+fn default_context_threshold() -> String {
+    "always".to_string()
+}
+
 fn default_context_display() -> String {
     "percent".to_string()
 }
@@ -714,7 +718,7 @@ impl Default for Settings {
             vine_border: false,
             compact_mode: false,
             slim_mode: true,
-            context_threshold: false,
+            context_threshold: "always".to_string(),
             context_display: "percent".to_string(),
             low_power: false,
         }
