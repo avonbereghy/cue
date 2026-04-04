@@ -7,10 +7,12 @@ import type { Settings } from "@/lib/types";
 import App from "./App";
 
 function applyTheme(theme: string) {
-  // Glass theme always forces dark mode
+  // Glass theme always forces dark mode — check the live data-glass attribute
+  // (set by applyThemeCssVars) rather than re-reading settings, which may be stale.
   invoke<Settings>("get_settings").then((s) => {
     const themeId = s.activeThemeId ?? "default";
-    const effectiveTheme = themeId === "glass" ? "dark" : theme;
+    const isGlass = document.documentElement.hasAttribute("data-glass");
+    const effectiveTheme = isGlass ? "dark" : theme;
     document.documentElement.setAttribute("data-theme", effectiveTheme);
     document.body.style.color = effectiveTheme === "light" ? "#1a1a1a" : "#fff";
     const signalTheme = SIGNAL_THEMES.find(t => t.id === themeId) ?? SIGNAL_THEMES[0];

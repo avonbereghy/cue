@@ -364,9 +364,10 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // ---------------------------------------------------------------------------
   // Sandbox mode — full keyboard-driven session designer for screenshots
   // ---------------------------------------------------------------------------
-  const SANDBOX_STATES = ["working", "waiting", "error", "subagent", "idle", "done", "ended"] as const;
+  const SANDBOX_STATES = ["working", "thinking", "waiting", "error", "subagent", "idle", "done", "ended"] as const;
   const SANDBOX_STATE_META: Record<string, { icon: string; display: string; key: string }> = {
     working:  { icon: "\u27F3", display: "Working",  key: "W" },
+    thinking: { icon: "\uD83D\uDCAD", display: "Thinking", key: "T" },
     waiting:  { icon: "\u23F8", display: "Waiting",  key: "P" },
     error:    { icon: "\u2717", display: "Error",    key: "E" },
     subagent: { icon: "\u2934", display: "Subagent", key: "A" },
@@ -405,6 +406,32 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [sandboxShowHelp, setSandboxShowHelp] = useState(false);
   const [sandboxEditingTitle, setSandboxEditingTitle] = useState(false);
   const sandboxTitleInputRef = useRef<HTMLInputElement>(null);
+
+  // Clean up sandbox sessions when the component unmounts
+  useEffect(() => {
+    return () => { invoke("clear_sandbox_sessions").catch(() => {}); };
+  }, []);
+
+  // Sync sandbox sessions into sessions.json so the real Rust pipeline processes them.
+  // Sandbox IDs use the "sandbox-" prefix so they're never confused with real sessions.
+  useEffect(() => {
+    if (!testMode) {
+      // Clean up when leaving sandbox mode
+      invoke("clear_sandbox_sessions").catch(() => {});
+      return;
+    }
+    const now = Date.now() / 1000;
+    const payload = sandboxSessions.map((s) => ({
+      id: s.info.id.startsWith("sandbox-") ? s.info.id : `sandbox-${s.info.id}`,
+      workspace: `/sandbox/${s.info.workspace ?? "session"}`,
+      state: s.info.state,
+      lastActivity: s.info.lastActivity ?? now,
+      startedAt: s.info.startedAt ?? now,
+      activeSubagents: s.info.activeSubagents ?? 0,
+      source: "sandbox",
+    }));
+    invoke("write_sandbox_sessions", { sessions: payload }).catch(() => {});
+  }, [testMode, sandboxSessions]);
 
   const makeSandboxSession = useCallback((state: string = "idle", overrides?: Partial<{ title: string; workspace: string; model: string; source: string; branch: string; contextPct: number; tool: [string, string] | null; todoCompleted: number; todoTotal: number; subagentCount: number; tokPerSec: number; durationSecs: number }>): EnrichedSession => {
     const n = ++sandboxCounterRef.current;
@@ -1163,6 +1190,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // State button color mapping for sandbox controls
   const SANDBOX_STATE_COLORS: Record<string, string> = {
     working: "bg-white/15 text-white/80 hover:bg-white/25",
+    thinking: "bg-orange-400/20 text-orange-400 hover:bg-orange-400/30",
     waiting: "bg-yellow-400/20 text-yellow-400 hover:bg-yellow-400/30",
     error: "bg-red-500/20 text-red-500 hover:bg-red-500/30",
     subagent: "bg-blue-400/20 text-blue-400 hover:bg-blue-400/30",
@@ -1411,7 +1439,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                 <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="space-y-0">
                   {/* Selection indicator + slot number */}
                   <div
-                    className={`relative ${isSelected ? "ring-1 ring-amber-400/40 rounded-lg" : ""}`}
+                    className="relative"
                     onClick={() => setSandboxSelectedIdx(originalIdx)}
                   >
                     {/* Slot number badge */}

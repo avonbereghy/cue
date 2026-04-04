@@ -103,15 +103,17 @@ impl SessionMonitorState {
             .unwrap_or_default()
             .as_secs_f64();
 
-        // Only show sessions with activity after Cue launched.
-        // Starts empty, reads forwards — no stale data from before launch.
+        // Only show sessions that appeared after Cue launched.
+        // Check both started_at and last_activity so sessions that were
+        // already idle when Cue opened aren't hidden until their next event.
         let launched_at = self.launched_at;
         let active = sort_sessions(
             status.sessions.into_values().filter(|s| {
-                s.last_activity >= launched_at
+                (s.last_activity >= launched_at || s.started_at >= launched_at)
                     && security::sanitize_workspace_path(&s.workspace).is_ok()
             }),
         );
+
 
         // Deduplicate sessions sharing the same workspace that started within
         // 30s of each other. Collapses phantom sessions (e.g. from agent teams)
@@ -120,7 +122,7 @@ impl SessionMonitorState {
             let state_priority = |s: &str| -> u8 {
                 match s {
                     "working" | "subagent" => 3,
-                    "waiting" => 2,
+                    "thinking" | "waiting" => 2,
                     "idle" => 1,
                     _ => 0, // done, error
                 }
@@ -196,7 +198,7 @@ impl SessionMonitorState {
             // check file mod times before reparsing.
             let is_active = matches!(
                 session.info.state.as_str(),
-                "working" | "subagent" | "waiting"
+                "working" | "thinking" | "subagent" | "waiting"
             );
 
             if !is_active {
@@ -513,6 +515,7 @@ mod tests {
             hook_output_tokens: 0,
             hook_model: String::new(),
             active_subagents: 0,
+            subprocess: None,
         }
     }
 
