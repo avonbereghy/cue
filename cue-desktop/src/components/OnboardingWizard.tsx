@@ -127,7 +127,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
             />
             <span
               className={`text-xs ${
-                i === step ? "text-white" : "text-white/40"
+                i === step ? "text-white" : "text-white/50"
               }`}
               aria-hidden="true"
             >
@@ -311,7 +311,7 @@ function EnvRow({
 }) {
   return (
     <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-white/5">
-      <span className="text-sm text-white/60">{label}</span>
+      <span className="text-sm text-white/80">{label}</span>
       <span className={`text-sm ${ok ? "text-green-400" : "text-yellow-400"}`}>
         {value}
       </span>
