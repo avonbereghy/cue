@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState } from "react";
 import { usePageVisible } from "@/hooks/usePageVisible";
 import { getFrequencyData, getFrequencyDataAtTime, getCurrentTime, getDuration, isPlaying, getOnsets } from "@/lib/presetEngine";
+import { listen } from "@tauri-apps/api/event";
 
 /**
  * Signal String — animated separator with two modes:
@@ -90,8 +91,13 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
 
   // Smoothly interpolated string color (r,g,b) — transitions between states
   const currentColorRef = useRef<{ r: number; g: number; b: number } | null>(null);
+  // Track current state in a ref so the draw loop can determine effect type (sand vs string)
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  // Smooth blend between string (0) and sand (1) effects — crossfades during state transitions
+  const sandBlendRef = useRef(state === "thinking" ? 1.0 : 0.0);
 
-  const stateIsActive = state === "working" || state === "subagent";
+  const stateIsActive = state === "working" || state === "subagent" || state === "thinking";
   // Delayed deactivation: keep strings active while the audio fades out,
   // then cut input and begin the retract sequence. Activation is instant.
   const [isActive, setIsActive] = useState(stateIsActive);
@@ -119,7 +125,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     return () => clearTimeout(timer);
   }, [stateIsActive]);
 
-  const isAudio = signalMode === "preset" || signalMode === "audio";
+  const isAudio = signalMode === "preset" || signalMode === "audio" || signalMode === "live";
   // Track when session became inactive for decay timing
   const deactivatedAtRef = useRef<number | null>(null);
   // Driven oscillator state: position + velocity per mode per band (max 3 bands × 6 modes)
@@ -149,15 +155,26 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     signalBass, signalMids, signalTreble,
     signalColorDark, signalColorLight, signalOffset,
     signalEffect, sandEnabled, sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize, sandTurbulence, sandAlpha,
-    cordRetractDelay, cordDeployForce, cordRetractForce,
+    cordRetractDelay, cordDeployForce, cordRetractForce, signalMode,
   });
   configRef.current = {
     signalAlpha, signalAmplitude, signalEcho, frequency,
     signalBass, signalMids, signalTreble,
     signalColorDark, signalColorLight, signalOffset,
     signalEffect, sandEnabled, sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize, sandTurbulence, sandAlpha,
-    cordRetractDelay, cordDeployForce, cordRetractForce,
+    cordRetractDelay, cordDeployForce, cordRetractForce, signalMode,
   };
+
+  // Live audio data from system audio capture (Beta)
+  const liveDataRef = useRef<{ bass: number; mids: number; treble: number }>({ bass: 0, mids: 0, treble: 0 });
+  useEffect(() => {
+    if (signalMode !== "live") return;
+    let unlisten: (() => void) | null = null;
+    listen<{ bass: number; mids: number; treble: number }>("live-audio-data", (event) => {
+      liveDataRef.current = event.payload;
+    }).then((fn) => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, [signalMode]);
 
   useEffect(() => {
     const clearAllTimers = () => {
@@ -207,6 +224,37 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     return clearAllTimers;
   }, [isActive, cordRetractDelay, cordDeployForce]);
 
+  // When transitioning out of thinking (sand → strings), the cord fractions are already
+  // at [1,1,1] because isActive never changed. Reset to retracted and trigger a fresh deploy
+  // so the startup animation plays as strings emerge from under the fading sand.
+  const prevStateRef = useRef(state);
+  useEffect(() => {
+    const prev = prevStateRef.current;
+    prevStateRef.current = state;
+
+    if (prev === "thinking" && (state === "working" || state === "subagent")) {
+      clipFractionsRef.current.fill(0);
+      clipVelsRef.current.fill(0);
+      retractReadyRef.current = [false, false, false];
+      deployReadyRef.current = [false, false, false];
+      for (let i = 0; i < 3; i++) {
+        if (deployTimersRef.current[i] !== null) {
+          clearTimeout(deployTimersRef.current[i]!);
+          deployTimersRef.current[i] = null;
+        }
+      }
+      const bandNudge = [0.35, 0.15, 0.15];
+      for (let i = 0; i < 3; i++) {
+        const delay = 850 + bandStaggerMs[i];
+        deployTimersRef.current[i] = window.setTimeout(() => {
+          deployReadyRef.current[i] = true;
+          clipVelsRef.current[i] = Math.max(clipVelsRef.current[i], bandNudge[i] * cordDeployForce);
+          deployTimersRef.current[i] = null;
+        }, delay);
+      }
+    }
+  }, [state, cordDeployForce]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -237,23 +285,31 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       const { signalAlpha, signalAmplitude, signalEcho, frequency,
         signalBass, signalMids, signalTreble,
         signalColorDark, signalColorLight, signalOffset,
-        signalEffect: cfgEffect, sandEnabled: cfgSandEnabled, sandIntensity: cfgSandIntensity,
+        signalEffect: _cfgEffect, sandEnabled: _cfgSandEnabled, sandIntensity: cfgSandIntensity,
         sandDirection: cfgSandDirection, sandDensity: cfgSandDensity, sandSpeed: cfgSandSpeed,
         sandGrainSize: cfgSandGrainSize, sandTurbulence: cfgSandTurbulence, sandAlpha: cfgSandAlpha } = cfg;
-      const isSand = cfgEffect === "sand" && cfgSandEnabled;
+      // Smooth crossfade between string and sand effects
+      const sandTarget = stateRef.current === "thinking" ? 1.0 : 0.0;
+      sandBlendRef.current += (sandTarget - sandBlendRef.current) * 0.045;
+      if (Math.abs(sandBlendRef.current - sandTarget) < 0.003) sandBlendRef.current = sandTarget;
+      const sandBlend = sandBlendRef.current;
+      const drawStrings = sandBlend < 0.99;
+      const drawSand = sandBlend > 0.01 || sandGrainsRef.current.length > 0;
       const isGlass = document.documentElement.hasAttribute("data-glass");
       const isDark = isGlass || document.documentElement.getAttribute("data-theme") !== "light";
       const defaultColor = isDark ? hexToRgb(signalColorDark) : hexToRgb(signalColorLight);
       const a = signalAlpha;
 
       // Skip all computation when nothing to draw
-      if (a <= 0 && !isSand) {
+      if (a <= 0 && !drawSand) {
         animRef.current = requestAnimationFrame(draw);
         return;
       }
 
-      // State-aware target color: waiting=yellow, error=red, default=configured color
-      const targetColor = state === "waiting"
+      // State-aware target color: thinking=orange, waiting=yellow, error=red, default=configured color
+      const targetColor = state === "thinking"
+        ? (isDark ? { r: 246, g: 165, b: 96 } : { r: 194, g: 65, b: 12 })  // thinking orange
+        : state === "waiting"
         ? { r: 234, g: 179, b: 8 }   // amber/yellow
         : state === "error"
         ? { r: 239, g: 68, b: 68 }    // red
@@ -320,15 +376,15 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         }
 
         // Fully retracted — nothing to draw, just keep the loop alive
-        // In sand mode, don't exit early while grains are still falling
+        // Don't exit early while grains are still falling or blending
         const maxClip = Math.max(fracs[0], fracs[1], fracs[2]);
-        if (maxClip < 0.001 && !isActiveRef.current && (!isSand || sandGrainsRef.current.length === 0)) {
+        if (maxClip < 0.001 && !isActiveRef.current && sandGrainsRef.current.length === 0) {
           animRef.current = requestAnimationFrame(draw);
           return;
         }
 
-        // Apply global clip at the widest band — sand grains fall freely, skip clip
-        if (!isSand) {
+        // Apply global clip at the widest band — only for string rendering
+        if (drawStrings) {
           const clipX = maxClip * w;
           ctx.save();
           ctx.beginPath();
@@ -338,7 +394,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       }
 
       // clipped tracks whether ctx.save() was called (for ctx.restore() at end)
-      let clipped = !revived && !isSand;
+      let clipped = !revived && drawStrings;
 
       // ── Revived mode: randomized lightning strikes ──
       if (revived) {
@@ -497,7 +553,17 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         // Per-session offset: derive random position + speed from session ID
         let freqData: Uint8Array;
         let t: number;
-        if (signalOffset > 0 && sessionId) {
+        if (cfg.signalMode === "live") {
+          // Live mode: synthesize frequency bins from 3-band data
+          const ld = liveDataRef.current;
+          const bins = new Uint8Array(128);
+          // Bass: bins 0-10, Mids: bins 11-40, Treble: bins 41-127
+          for (let i = 0; i < 11; i++) bins[i] = Math.min(255, Math.floor(ld.bass * 255));
+          for (let i = 11; i < 41; i++) bins[i] = Math.min(255, Math.floor(ld.mids * 255));
+          for (let i = 41; i < 128; i++) bins[i] = Math.min(255, Math.floor(ld.treble * 255));
+          freqData = bins;
+          t = now / 1000;
+        } else if (signalOffset > 0 && sessionId) {
           // Hash session ID to get deterministic random values
           let hash = 0;
           for (let i = 0; i < sessionId.length; i++) {
@@ -757,8 +823,9 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             // Save trail-0 path for particles
             if (trail === 0) bandPaths.push(points);
 
-            // Draw glow + core lines — skipped in sand mode (paths are still computed above for energy)
-            if (!isSand) {
+            // Draw glow + core lines — blend alpha fades strings during crossfade to sand
+            if (drawStrings) {
+              ctx.globalAlpha = 1 - sandBlend;
               if (trail === 0) {
                 ctx.beginPath();
                 for (let i = 0; i < points.length; i++) {
@@ -784,6 +851,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
               ctx.stroke();
             }
           }
+              ctx.globalAlpha = 1;
 
           // Restore per-band clip
           if (!revived) ctx.restore();
@@ -791,7 +859,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
 
         // ── Sand effect: 3 layers (bass/mids/treble) driven independently ──
         // Grains continue falling under gravity after the session stops.
-        if (isSand && (isActiveRef.current || sandGrainsRef.current.length > 0)) {
+        if (drawSand && (isActiveRef.current || sandGrainsRef.current.length > 0)) {
           const grains = sandGrainsRef.current;
           const dirRad = ((cfgSandDirection + 180) * Math.PI) / 180;
           const windX = Math.cos(dirRad) * 120 * cfgSandSpeed;
@@ -833,8 +901,8 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             const bwY = windY * spd * windRamp;
             const energyMod = (0.5 + bandEnergy * cfgSandIntensity * 15) * windRamp;
 
-            // Spawn only while active
-            if (isActiveRef.current && bi < activeBands) {
+            // Spawn only while in thinking state
+            if (isActiveRef.current && bi < activeBands && stateRef.current === "thinking") {
               const rawEnergy = 0.5 + bandEnergy * cfgSandIntensity * 15;
               const spawnRate = 0.06 * cfgSandDensity * rawEnergy * spd;
               if (Math.random() < spawnRate && bandCounts[bi] < layerMaxGrains[bi]) {
@@ -944,18 +1012,20 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       // Inactive with no pulses to drain — draw resting string and keep animating
       // (no abrupt snap — the cord retract handles the visual fade-out)
       if (!isActiveRef.current && !hasPulses) {
-        // Only draw the resting line if the cord is still visible (not in sand mode)
+        // Only draw the resting line if the cord is still visible and strings are active
         const maxClipSim = Math.max(clipFractionsRef.current[0], clipFractionsRef.current[1], clipFractionsRef.current[2]);
-        if (!isSand && maxClipSim > 0.001) {
+        if (drawStrings && maxClipSim > 0.001) {
+          ctx.globalAlpha = 1 - sandBlend;
           ctx.beginPath();
           ctx.moveTo(0, midY);
           ctx.lineTo(w, midY);
           ctx.strokeStyle = strokeColor;
           ctx.lineWidth = 1;
           ctx.stroke();
+          ctx.globalAlpha = 1;
         }
-        // In sand mode, fall through so grains can continue to fall under gravity
-        if (!isSand || sandGrainsRef.current.length === 0) {
+        // Fall through when grains still exist so they continue to fall
+        if (sandGrainsRef.current.length === 0) {
           if (clipped) ctx.restore();
           animRef.current = requestAnimationFrame(draw);
           return;
@@ -968,7 +1038,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       const omega = f * 20;
       const physDecay = 1.2 + f * 0.4;
 
-      if (!isSand) ctx.beginPath();
+      if (drawStrings) ctx.beginPath();
 
       const simPoints: number[] = [];
       for (let x = 0; x <= w; x += 2) {
@@ -989,7 +1059,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         const y = Math.tanh(sum * 0.2) * halfH;
         simPoints.push(midY + y);
 
-        if (!isSand) {
+        if (drawStrings) {
           if (x === 0) {
             ctx.moveTo(x, midY + y);
           } else {
@@ -998,15 +1068,17 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         }
       }
 
-      if (!isSand) {
+      if (drawStrings) {
+        ctx.globalAlpha = 1 - sandBlend;
         ctx.strokeStyle = strokeColor;
         ctx.lineWidth = 1;
         ctx.stroke();
+        ctx.globalAlpha = 1;
       }
 
       // ── Sand effect for simulated mode: 3 layers (bass/mids/treble) ──
       // Grains continue falling under gravity after the session stops.
-      if (isSand && (isActiveRef.current || sandGrainsRef.current.length > 0)) {
+      if (drawSand && (isActiveRef.current || sandGrainsRef.current.length > 0)) {
         const grains = sandGrainsRef.current;
         const dirRad = (cfgSandDirection * Math.PI) / 180;
         const windX = Math.cos(dirRad) * 120 * cfgSandSpeed;
@@ -1049,8 +1121,8 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           const bwY = windY * spd * windRamp;
           const energyMod = (0.5 + simEnergy * cfgSandIntensity * 15 * layerEnergyBias[bi]) * windRamp;
 
-          // Spawn only while active with pulses
-          if (isActiveRef.current && hasPulses) {
+          // Spawn only while in thinking state with pulses
+          if (isActiveRef.current && hasPulses && stateRef.current === "thinking") {
             const rawEnergy = 0.5 + simEnergy * cfgSandIntensity * 15 * layerEnergyBias[bi];
             const spawnRate = 0.04 * cfgSandDensity * rawEnergy * spd;
             if (Math.random() < spawnRate && bandCounts[bi] < layerMaxGrains[bi]) {

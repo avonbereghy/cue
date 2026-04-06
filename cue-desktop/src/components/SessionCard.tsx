@@ -61,12 +61,14 @@ interface SessionCardProps {
   showCurrentTool?: boolean;
   /** Beta: show config counts row */
   showConfigCounts?: boolean;
+  /** Timer display: "minutes" (HH:MM), "seconds" (HH:MM:SS), or "off" */
+  timerDisplay?: string;
   /** Per-card expand override: 0=compact, 1=slim (no details), 2=full details. undefined = use global mode. */
   expandOverride?: number;
   onExpandCycle?: () => void;
 }
 
-export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "percent", showToolPills = false, showCurrentTool = false, showConfigCounts = false, expandOverride, onExpandCycle }: SessionCardProps) {
+export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "percent", showToolPills = false, showCurrentTool = false, showConfigCounts = false, timerDisplay = "seconds", expandOverride, onExpandCycle }: SessionCardProps) {
   // Effective display mode: expandOverride takes precedence over global compact/slim
   const effectiveCompact = expandOverride !== undefined ? expandOverride === 0 : compactMode;
   const effectiveSlim = expandOverride !== undefined ? expandOverride <= 1 : slimMode;
@@ -281,7 +283,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
         isWaiting ? "session-card--waiting" : isError ? "session-card--error" : displayState === "thinking" ? "session-card--thinking" : ""
       } ${
         effectiveCompact ? "px-2.5 py-1.5 space-y-0"
-        : signalString && (signalMode === "preset" || signalMode === "audio") ? "px-4 pt-4 pb-5 space-y-4" : "px-3 pt-2 pb-1 space-y-2"
+        : signalString && (signalMode === "preset" || signalMode === "audio" || signalMode === "live") ? "px-4 pt-4 pb-5 space-y-4" : "px-3 pt-2 pb-1 space-y-2"
       } ${effectiveSlim && !effectiveCompact ? "flex flex-col" : ""} ${
         compactMode ? "cursor-pointer" : ""
       }`}
@@ -370,9 +372,11 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                 {(session.gitStatus?.behind ?? 0) > 0 && <span className="text-red-500/60">{"\u2193"}{session.gitStatus!.behind}</span>}
               </span>
             )}
-            {!effectiveCompact && (
+            {!effectiveCompact && timerDisplay !== "off" && (
             <span className="ml-auto text-[0.625rem] font-mono text-white/40 mono-nums shrink-0">
-              {formatDuration(session.durationSecs)}
+              {timerDisplay === "minutes"
+                ? formatDuration(session.durationSecs).slice(0, 5)
+                : formatDuration(session.durationSecs)}
             </span>
             )}
           </div>

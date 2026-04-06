@@ -117,6 +117,9 @@ function formatPct(v: number): string { return `${Math.round(v * 100)}%`; }
 function formatMul(v: number): string { return `${v.toFixed(2)}x`; }
 function formatSec(v: number): string { return `${Math.round(v * 1000)}ms`; }
 
+// LiveAudioMeters disabled — Core Audio Taps permission issue
+// See logged problem: AudioDeviceStart returns "nope" (OSStatus 1852797029)
+
 function formatDuration(secs: number): string {
   const m = Math.floor(secs / 60);
   const s = Math.floor(secs % 60);
@@ -446,8 +449,8 @@ export function SettingsView() {
       signalString: true,
       signalFrequency: 1.0,
       signalMode: "preset",
-      signalAlpha: 0.6,
-      signalAmplitude: 0.25,
+      signalAlpha: 0.7,
+      signalAmplitude: 0.20,
       signalEcho: 1.75,
       signalGate: 0.05,
       signalBass: true,
@@ -459,13 +462,13 @@ export function SettingsView() {
       activeThemeId: "default",
       signalOffset: 0.5,
       signalEffect: "string",
-      sandEnabled: false,
-      sandIntensity: 3.0,
+      sandEnabled: true,
+      sandIntensity: 1.51,
       sandDirection: 0,
-      sandDensity: 4.0,
-      sandSpeed: 3.0,
-      sandGrainSize: 0.5,
-      sandTurbulence: 0.6,
+      sandDensity: 6.07,
+      sandSpeed: 4.0,
+      sandGrainSize: 0.4,
+      sandTurbulence: 0.4,
       sandAlpha: 0.75,
       cordRetractDelay: 0.5,
       cordDeployForce: 1.0,
@@ -483,6 +486,7 @@ export function SettingsView() {
       showToolPills: false,
       showCurrentTool: false,
       showConfigCounts: false,
+      timerDisplay: "seconds",
     };
     setSettings(defaults);
     // Apply theme immediately
@@ -491,6 +495,15 @@ export function SettingsView() {
       (win.__applyTheme as (p: string) => void)("auto");
     }
   };
+
+  // Live audio disabled — Core Audio Taps permission issue
+  // const currentMode = settings?.signalMode ?? "simulated";
+  // useEffect(() => {
+  //   if (currentMode === "live") {
+  //     invoke("start_live_audio").catch((e) => console.warn("Live audio start failed:", e));
+  //     return () => { invoke("stop_live_audio").catch(() => {}); };
+  //   }
+  // }, [currentMode]);
 
   if (!settings) {
     return (
@@ -613,79 +626,79 @@ export function SettingsView() {
             { id: "both", label: "Both" },
           ]} onChange={(v) => setSettings({ ...settings, contextDisplay: v })} />
         </SettingRow>
+        <SettingRow label="Timer Display" description="How session duration is shown on cards" onReset={(settings.timerDisplay ?? "seconds") !== "seconds" ? () => setSettings({ ...settings, timerDisplay: "seconds" }) : undefined}>
+          <Select value={settings.timerDisplay ?? "seconds"} options={[
+            { id: "seconds", label: "Seconds" },
+            { id: "minutes", label: "Minutes" },
+            { id: "off", label: "Off" },
+          ]} onChange={(v) => setSettings({ ...settings, timerDisplay: v })} />
+        </SettingRow>
       </section>
 
 
       {/* Special Effects */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
-        <SettingRow label="Special Effects" description="String vibrations or sandstorm animated in session cards" onReset={!settings.signalString ? () => setSettings({ ...settings, signalString: true }) : undefined}>
+        <SettingRow label="Special Effects" description="Strings animate during working, sand during thinking" onReset={!settings.signalString ? () => setSettings({ ...settings, signalString: true }) : undefined}>
           <Toggle checked={settings.signalString} onChange={() => setSettings({ ...settings, signalString: !settings.signalString })} label="Special effects" />
         </SettingRow>
 
         {settings.signalString && (
           <>
-            {/* Effect selector — controls which mode is active (mutually exclusive) */}
-            <SettingRow label="Effect" description="String vibrations or sand storm — only one active at a time">
-              <Select value={settings.signalEffect ?? "string"} onChange={(v) => {
-                const isSand = v === "sand";
-                setSettings({ ...settings, signalEffect: v, sandEnabled: isSand });
-              }} options={[{ id: "string", label: "String" }, { id: "sand", label: "Sand" }]} />
+            {/* ── String settings (active during working state) ── */}
+            <div className="flex items-center gap-2 py-2.5 px-1">
+              <span className="text-xs font-semibold text-white/70 uppercase tracking-wider">Strings</span>
+              <span className="text-xs text-white/40">Working state</span>
+            </div>
+
+            <SettingRow label="Opacity" description="String transparency">
+              <Slider value={settings.signalAlpha ?? 0.7} min={0.05} max={1.0} step={0.01} defaultValue={0.7} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalAlpha: v })} />
             </SettingRow>
 
-            {/* ── String settings — only shown when effect = "string" ── */}
-            {(settings.signalEffect ?? "string") === "string" && (
-              <>
-                <SettingRow label="Opacity" description="String transparency">
-                  <Slider value={settings.signalAlpha ?? 0.6} min={0.05} max={1.0} step={0.01} defaultValue={0.6} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalAlpha: v })} />
-                </SettingRow>
+            <SettingRow label="Amplitude" description="String displacement intensity">
+              <Slider value={settings.signalAmplitude ?? 0.20} min={0.01} max={1.0} step={0.01} defaultValue={0.20} format={formatMul} onChange={(v) => setSettings({ ...settings, signalAmplitude: v })} />
+            </SettingRow>
 
-                <SettingRow label="Amplitude" description="String displacement intensity">
-                  <Slider value={settings.signalAmplitude ?? 0.25} min={0.01} max={1.0} step={0.01} defaultValue={0.25} format={formatMul} onChange={(v) => setSettings({ ...settings, signalAmplitude: v })} />
-                </SettingRow>
+            <SettingRow label="Echo" description="Trailing reverb lines behind the main string">
+              <Slider value={settings.signalEcho ?? 1.75} min={0} max={2.0} step={0.01} defaultValue={1.75} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalEcho: v })} />
+            </SettingRow>
 
-                <SettingRow label="Echo" description="Trailing reverb lines behind the main string">
-                  <Slider value={settings.signalEcho ?? 1.75} min={0} max={2.0} step={0.01} defaultValue={1.75} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalEcho: v })} />
-                </SettingRow>
+            <SettingRow label="Retract Delay" description="Seconds before strings retract after session stops">
+              <Slider value={settings.cordRetractDelay ?? 0.5} min={0} max={2.0} step={0.1} defaultValue={0.5} format={(v) => `${v.toFixed(1)}s`} onChange={(v) => setSettings({ ...settings, cordRetractDelay: v })} />
+            </SettingRow>
+            <SettingRow label="Deploy Force" description="How forcefully strings launch when session starts working">
+              <Slider value={settings.cordDeployForce ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, cordDeployForce: v })} />
+            </SettingRow>
+            <SettingRow label="Retract Force" description="How hard the vacuum pulls the strings back">
+              <Slider value={settings.cordRetractForce ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, cordRetractForce: v })} />
+            </SettingRow>
 
-                {/* Cord Animation */}
-                <SettingRow label="Retract Delay" description="Seconds before strings retract after session stops">
-                  <Slider value={settings.cordRetractDelay ?? 0.5} min={0} max={2.0} step={0.1} defaultValue={0.5} format={(v) => `${v.toFixed(1)}s`} onChange={(v) => setSettings({ ...settings, cordRetractDelay: v })} />
-                </SettingRow>
-                <SettingRow label="Deploy Force" description="How forcefully strings launch when session starts working">
-                  <Slider value={settings.cordDeployForce ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, cordDeployForce: v })} />
-                </SettingRow>
-                <SettingRow label="Retract Force" description="How hard the vacuum pulls the strings back">
-                  <Slider value={settings.cordRetractForce ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, cordRetractForce: v })} />
-                </SettingRow>
-              </>
-            )}
+            {/* ── Sand settings (active during thinking state) ── */}
+            <div className="flex items-center gap-2 py-2.5 px-1">
+              <span className="text-xs font-semibold text-white/70 uppercase tracking-wider">Sand</span>
+              <span className="text-xs text-white/40">Thinking state</span>
+            </div>
 
-            {/* ── Sand settings — only shown when effect = "sand" ── */}
-            {(settings.signalEffect === "sand") && (
-              <>
-                <SettingRow label="Intensity" description="How strongly audio energy drives the sandstorm">
-                  <Slider value={settings.sandIntensity ?? 3.0} min={0.1} max={6.0} step={0.01} defaultValue={3.0} format={formatMul} onChange={(v) => setSettings({ ...settings, sandIntensity: v })} />
-                </SettingRow>
-                <SettingRow label="Direction" description="Wind direction in degrees (0 = left, 90 = up, 180 = right)">
-                  <Slider value={settings.sandDirection ?? 0} min={-180} max={180} step={1} defaultValue={0} format={(v) => `${v}°`} onChange={(v) => setSettings({ ...settings, sandDirection: v })} />
-                </SettingRow>
-                <SettingRow label="Density" description="How many sand grains spawn per frame">
-                  <Slider value={settings.sandDensity ?? 4.0} min={0.1} max={8.0} step={0.01} defaultValue={4.0} format={formatMul} onChange={(v) => setSettings({ ...settings, sandDensity: v })} />
-                </SettingRow>
-                <SettingRow label="Speed" description="How fast grains travel across the card">
-                  <Slider value={settings.sandSpeed ?? 3.0} min={0.1} max={6.0} step={0.01} defaultValue={3.0} format={formatMul} onChange={(v) => setSettings({ ...settings, sandSpeed: v })} />
-                </SettingRow>
-                <SettingRow label="Grain Size" description="Size of individual sand grains">
-                  <Slider value={settings.sandGrainSize ?? 0.5} min={0.05} max={0.95} step={0.01} defaultValue={0.5} format={formatMul} onChange={(v) => setSettings({ ...settings, sandGrainSize: v })} />
-                </SettingRow>
-                <SettingRow label="Turbulence" description="How chaotic the grain paths are (0 = straight, 1.2 = swirling)">
-                  <Slider value={settings.sandTurbulence ?? 0.6} min={0} max={1.2} step={0.01} defaultValue={0.6} format={formatMul} onChange={(v) => setSettings({ ...settings, sandTurbulence: v })} />
-                </SettingRow>
-                <SettingRow label="Opacity" description="Brightness of sand grains">
-                  <Slider value={settings.sandAlpha ?? 0.75} min={0.05} max={1.0} step={0.01} defaultValue={0.75} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, sandAlpha: v })} />
-                </SettingRow>
-              </>
-            )}
+            <SettingRow label="Intensity" description="How strongly energy drives the sandstorm">
+              <Slider value={settings.sandIntensity ?? 1.51} min={0.1} max={6.0} step={0.01} defaultValue={1.51} format={formatMul} onChange={(v) => setSettings({ ...settings, sandIntensity: v })} />
+            </SettingRow>
+            <SettingRow label="Direction" description="Wind direction in degrees (0 = left, 90 = up, 180 = right)">
+              <Slider value={settings.sandDirection ?? 0} min={-180} max={180} step={1} defaultValue={0} format={(v) => `${v}°`} onChange={(v) => setSettings({ ...settings, sandDirection: v })} />
+            </SettingRow>
+            <SettingRow label="Density" description="How many sand grains spawn per frame">
+              <Slider value={settings.sandDensity ?? 6.07} min={0.1} max={8.0} step={0.01} defaultValue={6.07} format={formatMul} onChange={(v) => setSettings({ ...settings, sandDensity: v })} />
+            </SettingRow>
+            <SettingRow label="Speed" description="How fast grains travel across the card">
+              <Slider value={settings.sandSpeed ?? 4.0} min={0.1} max={6.0} step={0.01} defaultValue={4.0} format={formatMul} onChange={(v) => setSettings({ ...settings, sandSpeed: v })} />
+            </SettingRow>
+            <SettingRow label="Grain Size" description="Size of individual sand grains">
+              <Slider value={settings.sandGrainSize ?? 0.4} min={0.05} max={0.95} step={0.01} defaultValue={0.4} format={formatMul} onChange={(v) => setSettings({ ...settings, sandGrainSize: v })} />
+            </SettingRow>
+            <SettingRow label="Turbulence" description="How chaotic the grain paths are (0 = straight, 1.2 = swirling)">
+              <Slider value={settings.sandTurbulence ?? 0.4} min={0} max={1.2} step={0.01} defaultValue={0.4} format={formatMul} onChange={(v) => setSettings({ ...settings, sandTurbulence: v })} />
+            </SettingRow>
+            <SettingRow label="Opacity" description="Brightness of sand grains">
+              <Slider value={settings.sandAlpha ?? 0.75} min={0.05} max={1.0} step={0.01} defaultValue={0.75} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, sandAlpha: v })} />
+            </SettingRow>
           </>
         )}
       </section>
@@ -700,10 +713,17 @@ export function SettingsView() {
         <SettingRow label="Mode" onReset={signalMode !== "preset" ? () => setSettings({ ...settings, signalMode: "preset" }) : undefined}>
                 <Select
                   value={signalMode}
-                  options={[{ id: "simulated", label: "Simulated" }, { id: "preset", label: "Preset" }]}
+                  options={[
+                    { id: "simulated", label: "Simulated" },
+                    { id: "preset", label: "Preset" },
+                    // Live mode disabled — Core Audio Taps permission issue (see logged problem)
+                    // ...(navigator.platform?.includes("Mac") ? [{ id: "live", label: "Live \u00b7 Beta" }] : []),
+                  ]}
                   onChange={(v) => setSettings({ ...settings, signalMode: v })}
                 />
               </SettingRow>
+
+              {/* {signalMode === "live" && <LiveAudioMeters />} */}
 
               <SettingRow label="Bands" description="Frequency bands used to drive the effect" onReset={(!settings.signalBass || !settings.signalMids || !settings.signalTreble) ? () => setSettings({ ...settings, signalBass: true, signalMids: true, signalTreble: true }) : undefined}>
                 <div className="flex items-center gap-3">

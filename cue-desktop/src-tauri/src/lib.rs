@@ -18,6 +18,7 @@ pub mod permission_log;
 pub mod summary_formatter;
 pub mod git_status;
 pub mod config_counter;
+pub mod live_audio;
 pub mod system_info;
 
 use models::{EnrichedSession, Settings};
@@ -33,6 +34,7 @@ pub struct AppState {
     pub monitor: Arc<SessionMonitorState>,
     pub pending_permissions: Arc<permission_server::PendingRequests>,
     pub permission_metadata: Arc<Mutex<HashMap<String, models::PermissionRequest>>>,
+    pub live_audio: Arc<Mutex<live_audio::LiveAudioState>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -718,6 +720,25 @@ fn spawn_terminal_with_resume(_session_id: &str, _workspace: &str) -> Result<(),
 }
 
 // ---------------------------------------------------------------------------
+// Live Audio (Beta)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn start_live_audio(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    live_audio::start(&app, &state.live_audio)
+}
+
+#[tauri::command]
+fn stop_live_audio(state: State<'_, AppState>) -> Result<(), String> {
+    live_audio::stop(&state.live_audio)
+}
+
+#[tauri::command]
+fn get_live_audio_status(state: State<'_, AppState>) -> live_audio::LiveAudioStatus {
+    live_audio::status(&state.live_audio)
+}
+
+// ---------------------------------------------------------------------------
 // Startup + Timer Setup
 // ---------------------------------------------------------------------------
 
@@ -822,6 +843,7 @@ pub fn run() {
             monitor: monitor.clone(),
             pending_permissions,
             permission_metadata,
+            live_audio: Arc::new(Mutex::new(live_audio::LiveAudioState::default())),
         })
         .invoke_handler(tauri::generate_handler![
             get_sessions,
@@ -849,6 +871,9 @@ pub fn run() {
             write_sandbox_sessions,
             clear_sandbox_sessions,
             take_window_screenshot,
+            start_live_audio,
+            stop_live_audio,
+            get_live_audio_status,
         ])
         .on_window_event(|window, event| {
             match event {

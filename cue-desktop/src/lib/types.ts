@@ -183,6 +183,8 @@ export interface Settings {
   showCurrentTool: boolean;
   /** Beta: show config counts (CLAUDE.md, hooks, MCP) in detail mode */
   showConfigCounts: boolean;
+  /** Timer display: "minutes" (HH:MM), "seconds" (HH:MM:SS), or "off" */
+  timerDisplay: string;
 }
 
 export interface SignalPreset {
@@ -259,7 +261,7 @@ const DARK_SURFACES = {
 };
 
 // Sand defaults per-theme: effect, enabled, intensity, direction, density, speed, grainSize, turbulence, alpha
-const SAND_OFF = { signalEffect: "string" as const, sandEnabled: false, sandIntensity: 3.0, sandDirection: 0, sandDensity: 4.0, sandSpeed: 3.0, sandGrainSize: 0.5, sandTurbulence: 0.6, sandAlpha: 0.75 };
+const SAND_OFF = { signalEffect: "string" as const, sandEnabled: false, sandIntensity: 1.51, sandDirection: 0, sandDensity: 6.07, sandSpeed: 4.0, sandGrainSize: 0.4, sandTurbulence: 0.4, sandAlpha: 0.75 };
 const SAND_ON  = (overrides: Partial<typeof SAND_OFF> = {}) => ({ ...SAND_OFF, signalEffect: "string" as const, sandEnabled: true, ...overrides });
 
 export const SIGNAL_THEMES: SignalTheme[] = [
