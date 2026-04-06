@@ -1,0 +1,15 @@
+{
+  "feature": "live_listen",
+  "description": "Beta feature: Live Listen mode that captures system audio via Core Audio Taps (macOS 14.2+) to drive string/sand visualizations with real now-playing music instead of preset files",
+  "mode": "managed",
+  "created": "2026-04-05T22:13:00Z",
+  "updated": "2026-04-05T22:13:00Z",
+  "base_commit": "73e61171a4cddda63bcf99cd7066b38778abe334",
+  "phases": {
+    "feature_forge": { "status": "done", "artifact": "specs/live_listen.spec.md", "completed_at": "2026-04-05T22:15:00Z" },
+    "agent_plan": { "status": "done", "artifact": "plans/live_listen_agent_plan.md", "completed_at": "2026-04-05T22:16:30Z" },
+    "execute_waves": { "status": "done", "artifact": "4 waves executed", "completed_at": "2026-04-05T22:30:00Z" },
+    "review_gauntlet": { "status": "pending", "artifact": null }
+  },
+  "current_phase": "feature_forge"
+}

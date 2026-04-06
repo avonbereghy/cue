@@ -53,6 +53,13 @@
         "bundleMediaFramework": false
       }
     },
+    "macOS": {
+      "frameworks": [],
+      "minimumSystemVersion": "14.2"
+    },
+    "resources": [
+      "sidecar/cue-audio-tap"
+    ],
     "publisher": "Cue",
     "shortDescription": "Cross-platform Claude Code session monitor",
     "category": "DeveloperTool"
