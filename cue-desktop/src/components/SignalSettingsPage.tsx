@@ -20,9 +20,9 @@ export function SignalSettingsPage() {
 
   // Settings state
   const [mode, setMode] = useState("preset");
-  const [alpha, setAlpha] = useState(0.25);
-  const [amplitude, setAmplitude] = useState(0.25);
-  const [echo, setEcho] = useState(1.0);
+  const [alpha, setAlpha] = useState(0.7);
+  const [amplitude, setAmplitude] = useState(0.20);
+  const [echo, setEcho] = useState(1.75);
   const [gateVal, setGateVal] = useState(0.05);
   const [frequency, setFrequency] = useState(1.0);
   const [bass, setBass] = useState(true);
@@ -41,9 +41,9 @@ export function SignalSettingsPage() {
     invoke<Settings>("get_settings").then((s) => {
       const m = s.signalMode === "audio" ? "preset" : (s.signalMode ?? "simulated");
       setMode(m);
-      setAlpha(s.signalAlpha ?? 0.25);
-      setAmplitude(s.signalAmplitude ?? 0.25);
-      setEcho(s.signalEcho ?? 1.0);
+      setAlpha(s.signalAlpha ?? 0.7);
+      setAmplitude(s.signalAmplitude ?? 0.20);
+      setEcho(s.signalEcho ?? 1.75);
       const g = s.signalGate ?? 0.05;
       setGateVal(g);
       setGate(g);
