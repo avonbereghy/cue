@@ -1218,7 +1218,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
   // Helper to update a setting and persist immediately
 
-  const hasContent = sessions.length > 0 || revivedSessions.length > 0;
 
   // State button color mapping for sandbox controls
   const SANDBOX_STATE_COLORS: Record<string, string> = {
@@ -1549,14 +1548,22 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       */}
 
       {/* Session list or empty state */}
-      {!hasContent ? (
-        <div className="flex-1 flex flex-col items-center justify-center text-white/40 gap-2">
+      {sessions.length === 0 && revivedSessions.length === 0 ? (
+        <div className="flex-1 flex flex-col items-center justify-center text-white/60 gap-2">
           <span className="text-4xl">○</span>
           <span className="text-lg font-medium">No Active Sessions</span>
-          <span className="text-sm">Sessions will appear here when Claude Code is running</span>
+          <span className="text-sm text-white/40">Sessions will appear here when Claude Code is running</span>
         </div>
       ) : (
         <div ref={listRef} className={`flex-1 ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto p-4 pb-12 space-y-3"}`}>
+          {/* Empty active sessions message */}
+          {sessions.length === 0 && revivedSessions.length > 0 && (
+            <div className="flex flex-col items-center justify-center text-white/60 gap-2 py-12">
+              <span className="text-4xl">○</span>
+              <span className="text-lg font-medium">No Active Sessions</span>
+              <span className="text-sm text-white/40">Sessions will appear here when Claude Code is running</span>
+            </div>
+          )}
           {/* Active sessions */}
           {sortedSessions.map((session, idx) => {
             const pending = pendingBySession[session.info.id] ?? [];
