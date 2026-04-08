@@ -196,8 +196,10 @@ fn set_frameless(window: tauri::Window, frameless: bool) {
 }
 
 #[tauri::command]
-fn set_vibrancy(window: tauri::WebviewWindow, enabled: bool) {
-    toggle_vibrancy(&window, enabled);
+fn set_vibrancy(app: tauri::AppHandle, enabled: bool) {
+    if let Some(window) = app.get_webview_window("main") {
+        toggle_vibrancy(&window, enabled);
+    }
 }
 
 fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
@@ -907,7 +909,7 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 // Apply native vibrancy if the saved theme is "glass"
                 let s = settings::load_settings();
-                let is_glass = s.active_theme_id == "glass" || s.active_theme_id == "glass-sand";
+                let is_glass = s.active_theme_id == "glass";
                 toggle_vibrancy(&window, is_glass);
 
                 // Set theme AFTER vibrancy — glass forces dark, others follow system
@@ -930,7 +932,7 @@ pub fn run() {
 
                             // Glass theme always stays dark — skip theme switching
                             let s = settings::load_settings();
-                            if s.active_theme_id == "glass" || s.active_theme_id == "glass-sand" {
+                            if s.active_theme_id == "glass" {
                                 continue;
                             }
 

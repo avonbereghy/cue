@@ -615,7 +615,7 @@ export function SettingsView() {
           <Select value={settings.contextThreshold ?? "always"} options={[
             { id: "always", label: "Always Show" },
             { id: "never", label: "Never Show" },
-            { id: "after200k", label: "After 200k" },
+            { id: "after200k", label: "When High (200k Opus / 120k other)" },
           ]} onChange={(v) => setSettings({ ...settings, contextThreshold: v })} />
         </SettingRow>
         <SettingRow label="Context Display" description="How to show context usage values" onReset={(settings.contextDisplay ?? "percent") !== "percent" ? () => setSettings({ ...settings, contextDisplay: "percent" }) : undefined}>

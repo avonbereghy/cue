@@ -52,6 +52,24 @@ listen<string>("system-theme-changed", (event) => {
     .catch(() => {});
 });
 
+// Re-apply theme CSS vars when settings change (e.g. theme picker selects glass)
+listen<Settings>("settings-changed", (event) => {
+  const s = event.payload;
+  const themeId = s.activeThemeId ?? "default";
+  const signalTheme = SIGNAL_THEMES.find(t => t.id === themeId) ?? SIGNAL_THEMES[0];
+  applyThemeCssVars(signalTheme);
+  const isGlass = themeId === "glass";
+  if (isGlass) {
+    document.documentElement.setAttribute("data-theme", "dark");
+    document.body.style.color = "#fff";
+  } else {
+    resolveTheme(s.theme ?? "auto").then((effective) => {
+      document.documentElement.setAttribute("data-theme", effective);
+      document.body.style.color = effective === "light" ? "#1a1a1a" : "#fff";
+    });
+  }
+});
+
 // Expose for SettingsView to call when theme changes
 (window as unknown as Record<string, unknown>).__applyTheme = (pref: string) => {
   resolveTheme(pref).then(applyTheme).catch(() => applyTheme("dark"));

@@ -73,6 +73,8 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
   const effectiveCompact = expandOverride !== undefined ? expandOverride === 0 : compactMode;
   const effectiveSlim = expandOverride !== undefined ? expandOverride <= 1 : slimMode;
   const { info, metrics } = session;
+  const contextTokenThreshold = session.contextLimit >= 1_000_000 ? 200000 : 120000;
+  const contextMeetsThreshold = contextThreshold !== "after200k" || metrics.lastInputTokens >= contextTokenThreshold;
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const pageVisible = usePageVisible();
@@ -352,6 +354,16 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
             <span className="text-xs px-2 py-0.5 rounded-full text-center" style={{ backgroundColor: badgeHex.bg, color: badgeHex.text, transition: stateTransition, minWidth: "8.5em" }}>
               {displayStateName}
             </span>
+            {activeSubs > 0 && displayState !== "subagent" && (
+              <span className="text-xs px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: "rgba(139,92,246,0.25)", color: "#c4b5fd" }}>
+                {activeSubs} subprocess{activeSubs !== 1 ? "es" : ""}
+              </span>
+            )}
+            {info.subprocess && (
+              <span className="text-xs px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: "rgba(139,92,246,0.25)", color: "#c4b5fd" }}>
+                via {info.subprocess}
+              </span>
+            )}
             {showCurrentTool && !effectiveCompact && !effectiveSlim && session.runningToolName && (
               <span className="inline-block text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/50 truncate w-[200px] shrink-0 overflow-hidden whitespace-nowrap" title={session.runningToolTarget || session.runningToolName}>
                 {session.runningToolName}
@@ -436,11 +448,6 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                 {session.sourceDisplay}
               </span>
             )}
-            {info.subprocess && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300 whitespace-nowrap">
-                {info.subprocess}
-              </span>
-            )}
           </div>
 
           {/* Row 3: Tool chips (beta) */}
@@ -466,7 +473,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
           {effectiveSlim && !effectiveCompact && <div className="flex-1" />}
 
           {/* Model name + context bar — grouped tightly */}
-          {!effectiveCompact && (session.modelDisplayName !== "\u2014" || (contextThreshold !== "never" && (contextThreshold !== "after200k" || metrics.lastInputTokens >= 200000))) && (
+          {!effectiveCompact && (session.modelDisplayName !== "\u2014" || (contextThreshold !== "never" && contextMeetsThreshold)) && (
             <div className="flex flex-col gap-0.5">
           {session.modelDisplayName !== "\u2014" && (
             <span className="text-[0.625rem] text-white/30 font-mono self-end">
@@ -476,7 +483,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
           )}
 
           {/* Row 4: Context usage — visible in regular and slim mode, hidden in compact */}
-          {contextThreshold !== "never" && (contextThreshold !== "after200k" || metrics.lastInputTokens >= 200000) && (
+          {contextThreshold !== "never" && contextMeetsThreshold && (
             <div className="relative flex items-center gap-2">
               <span className="text-[0.625rem] text-white/40 shrink-0">Context</span>
               <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden">
