@@ -25,7 +25,7 @@ export function ThemePickerPage() {
     setActiveId(theme.id);
     applyThemeCssVars(theme);
     // Toggle native vibrancy when switching to/from glass themes
-    const isGlass = theme.id === "glass" || theme.id === "glass-sand";
+    const isGlass = theme.id === "glass";
     invoke("set_vibrancy", { enabled: isGlass }).catch(() => {});
     invoke<Settings>("get_settings").then((s) => {
       invoke("update_settings", {

@@ -367,19 +367,9 @@ export const SIGNAL_THEMES: SignalTheme[] = [
     surfaceBg: "rgba(179,229,252,0.03)", surfaceBorder: "rgba(179,229,252,0.08)",
     accentColor: "#b3e5fc", accentBg: "rgba(179,229,252,0.12)" },
   // --- Special ---
-  { id: "glass",    label: "Glass (String)", accent: "#c0c0c0",
+  { id: "glass",    label: "Glass", accent: "#c0c0c0",
     colorDark: "#ffffff", colorLight: "#333333", alpha: 0.35, amplitude: 0.18, echo: 1.2,
     ...SAND_OFF,
-    appBg: "transparent", appText: "rgba(255,255,255,0.95)",
-    cardFloatBg: "rgba(255,255,255,0.08)", cardFloatBorder: "rgba(255,255,255,0.25)",
-    cardFloatShadow: "none",
-    cardPressBg: "rgba(255,255,255,0.04)", cardPressBorder: "rgba(255,255,255,0.15)",
-    cardPressShadow: "none",
-    surfaceBg: "rgba(255,255,255,0.06)", surfaceBorder: "rgba(255,255,255,0.12)",
-    accentColor: "#ffffff", accentBg: "rgba(255,255,255,0.12)" },
-  { id: "glass-sand", label: "Glass (Sand)", accent: "#d4a574",
-    colorDark: "#ffffff", colorLight: "#333333", alpha: 0.35, amplitude: 0.18, echo: 1.2,
-    signalEffect: "sand", sandEnabled: true, sandIntensity: 0.8, sandDirection: 15, sandDensity: 1.2, sandSpeed: 0.6, sandGrainSize: 0.8, sandTurbulence: 0.6, sandAlpha: 0.35,
     appBg: "transparent", appText: "rgba(255,255,255,0.95)",
     cardFloatBg: "rgba(255,255,255,0.08)", cardFloatBorder: "rgba(255,255,255,0.25)",
     cardFloatShadow: "none",
@@ -429,7 +419,7 @@ export function applyThemeCssVars(theme: SignalTheme) {
   s.setProperty("--accent-bg", theme.accentBg);
 
   // Toggle glass mode attribute for CSS-only frosted effects
-  const isGlass = theme.id === "glass" || theme.id === "glass-sand";
+  const isGlass = theme.id === "glass";
   if (isGlass) {
     document.documentElement.setAttribute("data-glass", "");
   } else {
