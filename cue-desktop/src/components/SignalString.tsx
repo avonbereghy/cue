@@ -98,6 +98,8 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   const sandBlendRef = useRef(state === "thinking" ? 1.0 : 0.0);
 
   const stateIsActive = state === "working" || state === "subagent" || state === "thinking";
+  // Track whether we deactivated from thinking (sand-only) — strings should not retract
+  const deactivatedFromThinkingRef = useRef(false);
   // Delayed deactivation: keep strings active while the audio fades out,
   // then cut input and begin the retract sequence. Activation is instant.
   const [isActive, setIsActive] = useState(stateIsActive);
@@ -113,8 +115,11 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     if (stateIsActive) {
       setIsActive(true);
       fadingRef.current = false;
+      deactivatedFromThinkingRef.current = false;
       return;
     }
+    // Track whether we're deactivating from thinking — strings should stay hidden
+    deactivatedFromThinkingRef.current = stateRef.current === "thinking" || sandBlendRef.current > 0.5;
     // State left working/subagent — begin fade, then deactivate after fade completes
     fadingRef.current = true;
     fadeStartRef.current = performance.now();
@@ -211,14 +216,21 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       // Cancel any pending deploy
       deployReadyRef.current = [false, false, false];
       clearAllTimers();
-      // Staggered retract: band 0 first, band 1 after 500ms, band 2 after 600ms
-      retractReadyRef.current = [false, false, false];
-      for (let i = 0; i < 3; i++) {
-        const delay = cordRetractDelay * 1000 + bandStaggerMs[i];
-        retractTimersRef.current[i] = window.setTimeout(() => {
-          retractReadyRef.current[i] = true;
-          retractTimersRef.current[i] = null;
-        }, delay);
+      if (deactivatedFromThinkingRef.current) {
+        // Deactivated from thinking — strings were never deployed, keep them retracted
+        clipFractionsRef.current.fill(0);
+        clipVelsRef.current.fill(0);
+        retractReadyRef.current = [false, false, false];
+      } else {
+        // Staggered retract: band 0 first, band 1 after 500ms, band 2 after 600ms
+        retractReadyRef.current = [false, false, false];
+        for (let i = 0; i < 3; i++) {
+          const delay = cordRetractDelay * 1000 + bandStaggerMs[i];
+          retractTimersRef.current[i] = window.setTimeout(() => {
+            retractReadyRef.current[i] = true;
+            retractTimersRef.current[i] = null;
+          }, delay);
+        }
       }
     }
     return clearAllTimers;
@@ -290,10 +302,17 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         sandGrainSize: cfgSandGrainSize, sandTurbulence: cfgSandTurbulence, sandAlpha: cfgSandAlpha } = cfg;
       // Smooth crossfade between string and sand effects
       const sandTarget = stateRef.current === "thinking" ? 1.0 : 0.0;
-      sandBlendRef.current += (sandTarget - sandBlendRef.current) * 0.045;
-      if (Math.abs(sandBlendRef.current - sandTarget) < 0.003) sandBlendRef.current = sandTarget;
+      if (isActiveRef.current && stateRef.current !== "thinking") {
+        // Active but not thinking (e.g. thinking→working) — snap sand off immediately
+        sandBlendRef.current = 0;
+        sandGrainsRef.current.length = 0;
+      } else {
+        sandBlendRef.current += (sandTarget - sandBlendRef.current) * 0.045;
+        if (Math.abs(sandBlendRef.current - sandTarget) < 0.003) sandBlendRef.current = sandTarget;
+      }
       const sandBlend = sandBlendRef.current;
-      const drawStrings = sandBlend < 0.99;
+      // Don't draw strings if we deactivated from thinking — let sand fade out alone
+      const drawStrings = sandBlend < 0.99 && !deactivatedFromThinkingRef.current;
       const drawSand = sandBlend > 0.01 || sandGrainsRef.current.length > 0;
       const isGlass = document.documentElement.hasAttribute("data-glass");
       const isDark = isGlass || document.documentElement.getAttribute("data-theme") !== "light";

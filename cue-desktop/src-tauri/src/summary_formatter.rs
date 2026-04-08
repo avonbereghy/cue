@@ -70,7 +70,10 @@ pub(crate) fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
+        let end = max_len.saturating_sub(3);
+        // Find a valid UTF-8 char boundary at or before the target index
+        let end = s.floor_char_boundary(end);
+        format!("{}...", &s[..end])
     }
 }
 
