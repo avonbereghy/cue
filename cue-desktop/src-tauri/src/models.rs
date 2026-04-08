@@ -590,6 +590,30 @@ pub struct Settings {
     /// Low power mode: disables animations, signal strings, sand, backdrop-filter
     #[serde(default)]
     pub low_power: bool,
+    /// Seconds before strings retract after session stops
+    #[serde(default = "default_cord_retract_delay")]
+    pub cord_retract_delay: f64,
+    /// How forcefully strings launch when session starts working
+    #[serde(default = "default_one")]
+    pub cord_deploy_force: f64,
+    /// How hard the vacuum pulls the strings back
+    #[serde(default = "default_one")]
+    pub cord_retract_force: f64,
+    /// Vertical spread between the three strings (0 = all at center, 0.5 = fully spread)
+    #[serde(default = "default_string_spread")]
+    pub string_spread: f64,
+    /// Beta: show per-tool usage pills in detail mode
+    #[serde(default)]
+    pub show_tool_pills: bool,
+    /// Beta: show current running tool name in header
+    #[serde(default)]
+    pub show_current_tool: bool,
+    /// Beta: show config counts (CLAUDE.md, hooks, MCP) in detail mode
+    #[serde(default)]
+    pub show_config_counts: bool,
+    /// Timer display mode: "minutes" (HH:MM), "seconds" (HH:MM:SS), or "off"
+    #[serde(default = "default_timer_display")]
+    pub timer_display: String,
 }
 
 fn default_theme() -> String {
@@ -672,6 +696,18 @@ fn default_context_display() -> String {
     "percent".to_string()
 }
 
+fn default_cord_retract_delay() -> f64 {
+    0.5
+}
+
+fn default_string_spread() -> f64 {
+    0.15
+}
+
+fn default_timer_display() -> String {
+    "seconds".to_string()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         // Default to Max Standard ($100/mo)
@@ -721,6 +757,14 @@ impl Default for Settings {
             context_threshold: "always".to_string(),
             context_display: "percent".to_string(),
             low_power: false,
+            cord_retract_delay: 0.5,
+            cord_deploy_force: 1.0,
+            cord_retract_force: 1.0,
+            string_spread: 0.15,
+            show_tool_pills: false,
+            show_current_tool: false,
+            show_config_counts: false,
+            timer_display: "seconds".to_string(),
         }
     }
 }
