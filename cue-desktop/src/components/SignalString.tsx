@@ -82,9 +82,11 @@ interface SignalStringProps {
   contentRef?: React.RefObject<HTMLDivElement | null>;
   /** Key release animation duration (seconds) — strings stay active until key finishes rising */
   keyReleaseSpeed?: number;
+  /** Vertical spread between the three strings (0 = all at center, 0.5 = fully spread) */
+  stringSpread?: number;
 }
 
-export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 0.5, cordDeployForce = 1.0, cordRetractForce = 1.0, sessionId = "", contentRef, keyReleaseSpeed: _keyReleaseSpeed = 0.4 }: SignalStringProps) {
+export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 0.5, cordDeployForce = 1.0, cordRetractForce = 1.0, stringSpread = 0.15, sessionId = "", contentRef, keyReleaseSpeed: _keyReleaseSpeed = 0.4 }: SignalStringProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const pageVisible = usePageVisible();
@@ -160,15 +162,23 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     signalBass, signalMids, signalTreble,
     signalColorDark, signalColorLight, signalOffset,
     signalEffect, sandEnabled, sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize, sandTurbulence, sandAlpha,
-    cordRetractDelay, cordDeployForce, cordRetractForce, signalMode,
+    cordRetractDelay, cordDeployForce, cordRetractForce, stringSpread, signalMode,
   });
   configRef.current = {
     signalAlpha, signalAmplitude, signalEcho, frequency,
     signalBass, signalMids, signalTreble,
     signalColorDark, signalColorLight, signalOffset,
     signalEffect, sandEnabled, sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize, sandTurbulence, sandAlpha,
-    cordRetractDelay, cordDeployForce, cordRetractForce, signalMode,
+    cordRetractDelay, cordDeployForce, cordRetractForce, stringSpread, signalMode,
   };
+
+  // Whip pulses — triggered when each band starts retracting
+  // Each pulse: a Gaussian kink at the cord tip that travels left and decays
+  const whipPulsesRef = useRef([
+    { active: false, t0: 0, amp: 0, dir: 1 },
+    { active: false, t0: 0, amp: 0, dir: -1 },
+    { active: false, t0: 0, amp: 0, dir: 1 },
+  ]);
 
   // Live audio data from system audio capture (Beta)
   const liveDataRef = useRef<{ bass: number; mids: number; treble: number }>({ bass: 0, mids: 0, treble: 0 });
@@ -224,11 +234,14 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       } else {
         // Staggered retract: band 0 first, band 1 after 500ms, band 2 after 600ms
         retractReadyRef.current = [false, false, false];
+        const whipAmps = [2.2, 1.6, 1.1];
         for (let i = 0; i < 3; i++) {
           const delay = cordRetractDelay * 1000 + bandStaggerMs[i];
           retractTimersRef.current[i] = window.setTimeout(() => {
             retractReadyRef.current[i] = true;
             retractTimersRef.current[i] = null;
+            // Fire whip pulse at the cord tip
+            whipPulsesRef.current[i] = { active: true, t0: performance.now(), amp: whipAmps[i], dir: i % 2 === 0 ? 1 : -1 };
           }, delay);
         }
       }
@@ -299,7 +312,8 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         signalColorDark, signalColorLight, signalOffset,
         signalEffect: _cfgEffect, sandEnabled: _cfgSandEnabled, sandIntensity: cfgSandIntensity,
         sandDirection: cfgSandDirection, sandDensity: cfgSandDensity, sandSpeed: cfgSandSpeed,
-        sandGrainSize: cfgSandGrainSize, sandTurbulence: cfgSandTurbulence, sandAlpha: cfgSandAlpha } = cfg;
+        sandGrainSize: cfgSandGrainSize, sandTurbulence: cfgSandTurbulence, sandAlpha: cfgSandAlpha,
+        stringSpread: cfgStringSpread } = cfg;
       // Smooth crossfade between string and sand effects
       const sandTarget = stateRef.current === "thinking" ? 1.0 : 0.0;
       if (isActiveRef.current && stateRef.current !== "thinking") {
@@ -783,10 +797,15 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         // Store trail-0 points per band for particle rendering
         const bandPaths: number[][] = [];
 
+        // Per-band Y offsets: bass above center (-), mids at center, treble below (+)
+        // Indexed by bandIdx (0=bass, 1=mids, 2=treble)
+        const bandYOffsets = [-cfgStringSpread * halfH, 0, cfgStringSpread * halfH];
+
         for (let bi = 0; bi < bands.length; bi++) {
           const band = bands[bi];
           const modeAmps = allModeAmps[bi];
           const avgAmp = modeAmps.reduce((s, v) => s + v, 0) / modeAmps.length;
+          const yOffset = bandYOffsets[band.bandIdx] ?? 0;
 
           // Per-band clip region (each string deploys/retracts at its own speed)
           if (!revived) {
@@ -835,8 +854,29 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
               // Add breathing noise — persists even when inactive (not scaled by decayEnvelope)
               const breath = breathe(xNorm, tOff, decayEnvelope > 0.01 ? avgAmp : 0);
 
-              const y = Math.tanh((sum * decayEnvelope + breath) * band.gain) * halfH;
-              points.push(midY + y);
+              // Whip pulse: Gaussian kink that fires at the cord tip on retract,
+              // travels leftward and decays — only on trail 0 for crispness
+              let whipContrib = 0;
+              if (trail === 0) {
+                const wp = whipPulsesRef.current[band.bandIdx];
+                if (wp.active) {
+                  const elapsed = (now - wp.t0) / 1000;
+                  const decay = Math.exp(-elapsed * 5.5);
+                  if (decay < 0.01) {
+                    wp.active = false;
+                  } else {
+                    const clipFrac = clipFractionsRef.current[band.bandIdx];
+                    // Kink center starts at cord tip and travels left with the retract
+                    const kinkCenter = Math.max(0, clipFrac - elapsed * 0.35);
+                    const sigma = 0.07;
+                    const gaussian = Math.exp(-((xNorm - kinkCenter) ** 2) / (2 * sigma * sigma));
+                    whipContrib = wp.dir * wp.amp * decay * gaussian;
+                  }
+                }
+              }
+
+              const y = Math.tanh((sum * decayEnvelope + breath + whipContrib) * band.gain) * halfH;
+              points.push(midY + yOffset + y);
             }
 
             // Save trail-0 path for particles

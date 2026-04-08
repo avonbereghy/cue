@@ -61,7 +61,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [signalFrequency, setSignalFrequency] = useState(1.0);
   const [signalMode, setSignalMode] = useState("simulated");
   const [signalAlpha, setSignalAlpha] = useState(0.7);
-  const [signalAmplitude, setSignalAmplitude] = useState(0.20);
+  const [signalAmplitude, setSignalAmplitude] = useState(0.15);
   const [signalEcho, setSignalEcho] = useState(1.75);
   const [signalBass, setSignalBass] = useState(true);
   const [signalMids, setSignalMids] = useState(true);
@@ -73,14 +73,15 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [sandEnabled, setSandEnabled] = useState(true);
   const [sandIntensity, setSandIntensity] = useState(1.51);
   const [sandDirection, setSandDirection] = useState(0);
-  const [sandDensity, setSandDensity] = useState(6.07);
-  const [sandSpeed, setSandSpeed] = useState(4.0);
-  const [sandGrainSize, setSandGrainSize] = useState(0.4);
+  const [sandDensity, setSandDensity] = useState(8.0);
+  const [sandSpeed, setSandSpeed] = useState(3.0);
+  const [sandGrainSize, setSandGrainSize] = useState(0.5);
   const [sandTurbulence, setSandTurbulence] = useState(0.4);
-  const [sandAlpha, setSandAlpha] = useState(0.75);
+  const [sandAlpha, setSandAlpha] = useState(0.9);
   const [cordRetractDelay, setCordRetractDelay] = useState(0.5);
   const [cordDeployForce, setCordDeployForce] = useState(1.0);
   const [cordRetractForce, setCordRetractForce] = useState(1.0);
+  const [stringSpread, setStringSpread] = useState(0.15);
   const [activePresetId, setActivePresetId] = useState("");
   const [presetBootAttempted, setPresetBootAttempted] = useState(false);
   const [testMode, setTestMode] = useState(false);
@@ -289,7 +290,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     const mode = s.signalMode === "audio" ? "preset" : s.signalMode === "live" ? "simulated" : (s.signalMode ?? "simulated");
     setSignalMode(mode);
     setSignalAlpha(s.signalAlpha ?? 0.7);
-    setSignalAmplitude(s.signalAmplitude ?? 0.20);
+    setSignalAmplitude(s.signalAmplitude ?? 0.15);
     setSignalEcho(s.signalEcho ?? 1.75);
     setSignalBass(s.signalBass ?? true);
     setSignalMids(s.signalMids ?? true);
@@ -301,14 +302,15 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setSandEnabled(s.sandEnabled ?? true);
     setSandIntensity(s.sandIntensity ?? 1.51);
     setSandDirection(s.sandDirection ?? 0);
-    setSandDensity(s.sandDensity ?? 6.07);
-    setSandSpeed(s.sandSpeed ?? 4.0);
-    setSandGrainSize(s.sandGrainSize ?? 0.4);
+    setSandDensity(s.sandDensity ?? 8.0);
+    setSandSpeed(s.sandSpeed ?? 3.0);
+    setSandGrainSize(s.sandGrainSize ?? 0.5);
     setSandTurbulence(s.sandTurbulence ?? 0.4);
-    setSandAlpha(s.sandAlpha ?? 0.75);
+    setSandAlpha(s.sandAlpha ?? 0.9);
     setCordRetractDelay(s.cordRetractDelay ?? 0.5);
     setCordDeployForce(s.cordDeployForce ?? 1.0);
     setCordRetractForce(s.cordRetractForce ?? 1.0);
+    setStringSpread(s.stringSpread ?? 0.15);
     setGateEngine(s.signalGate ?? 0.05);
     setActivePresetId(s.activePresetId ?? "");
     setKeyPressSpeed(s.keyPressSpeed ?? 0.35);
@@ -1486,7 +1488,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                         {originalIdx + 1}
                       </div>
                     )}
-                    <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} timerDisplay={timerDisplay} />
+                    <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} timerDisplay={timerDisplay} />
                   </div>
 
                   {/* Per-session state controls — hidden in screenshot mode */}
@@ -1579,7 +1581,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
             return (
               <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="relative space-y-2" style={{ zIndex: idx + 1 }}>
-                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} timerDisplay={timerDisplay} expandOverride={compactMode ? expandOverrides[session.info.id] : undefined} onExpandCycle={compactMode ? () => {
+                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} timerDisplay={timerDisplay} expandOverride={compactMode ? expandOverrides[session.info.id] : undefined} onExpandCycle={compactMode ? () => {
                   setExpandOverrides((prev) => {
                     const current = prev[session.info.id] ?? 0;
                     const next = (current + 1) % 3;

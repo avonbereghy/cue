@@ -164,6 +164,7 @@ export interface Settings {
   cordRetractDelay: number;
   cordDeployForce: number;
   cordRetractForce: number;
+  stringSpread: number;
   keyPressSpeed: number;
   keyReleaseSpeed: number;
   autoReorder: boolean;

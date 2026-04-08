@@ -450,7 +450,7 @@ export function SettingsView() {
       signalFrequency: 1.0,
       signalMode: "preset",
       signalAlpha: 0.7,
-      signalAmplitude: 0.20,
+      signalAmplitude: 0.15,
       signalEcho: 1.75,
       signalGate: 0.05,
       signalBass: true,
@@ -465,14 +465,15 @@ export function SettingsView() {
       sandEnabled: true,
       sandIntensity: 1.51,
       sandDirection: 0,
-      sandDensity: 6.07,
-      sandSpeed: 4.0,
-      sandGrainSize: 0.4,
+      sandDensity: 8.0,
+      sandSpeed: 3.0,
+      sandGrainSize: 0.5,
       sandTurbulence: 0.4,
-      sandAlpha: 0.75,
+      sandAlpha: 0.9,
       cordRetractDelay: 0.5,
       cordDeployForce: 1.0,
       cordRetractForce: 1.0,
+      stringSpread: 0.15,
       keyPressSpeed: 0.35,
       keyReleaseSpeed: 0.4,
       autoReorder: false,
@@ -655,7 +656,7 @@ export function SettingsView() {
             </SettingRow>
 
             <SettingRow label="Amplitude" description="String displacement intensity">
-              <Slider value={settings.signalAmplitude ?? 0.20} min={0.01} max={1.0} step={0.01} defaultValue={0.20} format={formatMul} onChange={(v) => setSettings({ ...settings, signalAmplitude: v })} />
+              <Slider value={settings.signalAmplitude ?? 0.15} min={0.01} max={1.0} step={0.01} defaultValue={0.15} format={formatMul} onChange={(v) => setSettings({ ...settings, signalAmplitude: v })} />
             </SettingRow>
 
             <SettingRow label="Echo" description="Trailing reverb lines behind the main string">
@@ -671,6 +672,9 @@ export function SettingsView() {
             <SettingRow label="Retract Force" description="How hard the vacuum pulls the strings back">
               <Slider value={settings.cordRetractForce ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, cordRetractForce: v })} />
             </SettingRow>
+            <SettingRow label="Spread" description="Vertical separation between the three strings">
+              <Slider value={settings.stringSpread ?? 0.15} min={0} max={0.5} step={0.01} defaultValue={0.15} format={formatMul} onChange={(v) => setSettings({ ...settings, stringSpread: v })} />
+            </SettingRow>
 
             {/* ── Sand settings (active during thinking state) ── */}
             <div className="flex items-center gap-2 py-2.5 px-1">
@@ -685,19 +689,19 @@ export function SettingsView() {
               <Slider value={settings.sandDirection ?? 0} min={-180} max={180} step={1} defaultValue={0} format={(v) => `${v}°`} onChange={(v) => setSettings({ ...settings, sandDirection: v })} />
             </SettingRow>
             <SettingRow label="Density" description="How many sand grains spawn per frame">
-              <Slider value={settings.sandDensity ?? 6.07} min={0.1} max={8.0} step={0.01} defaultValue={6.07} format={formatMul} onChange={(v) => setSettings({ ...settings, sandDensity: v })} />
+              <Slider value={settings.sandDensity ?? 8.0} min={0.1} max={32.0} step={0.01} defaultValue={8.0} format={formatMul} onChange={(v) => setSettings({ ...settings, sandDensity: v })} />
             </SettingRow>
             <SettingRow label="Speed" description="How fast grains travel across the card">
-              <Slider value={settings.sandSpeed ?? 4.0} min={0.1} max={6.0} step={0.01} defaultValue={4.0} format={formatMul} onChange={(v) => setSettings({ ...settings, sandSpeed: v })} />
+              <Slider value={settings.sandSpeed ?? 3.0} min={0.1} max={6.0} step={0.01} defaultValue={3.0} format={formatMul} onChange={(v) => setSettings({ ...settings, sandSpeed: v })} />
             </SettingRow>
             <SettingRow label="Grain Size" description="Size of individual sand grains">
-              <Slider value={settings.sandGrainSize ?? 0.4} min={0.05} max={0.95} step={0.01} defaultValue={0.4} format={formatMul} onChange={(v) => setSettings({ ...settings, sandGrainSize: v })} />
+              <Slider value={settings.sandGrainSize ?? 0.5} min={0.05} max={0.95} step={0.01} defaultValue={0.5} format={formatMul} onChange={(v) => setSettings({ ...settings, sandGrainSize: v })} />
             </SettingRow>
             <SettingRow label="Turbulence" description="How chaotic the grain paths are (0 = straight, 1.2 = swirling)">
               <Slider value={settings.sandTurbulence ?? 0.4} min={0} max={1.2} step={0.01} defaultValue={0.4} format={formatMul} onChange={(v) => setSettings({ ...settings, sandTurbulence: v })} />
             </SettingRow>
             <SettingRow label="Opacity" description="Brightness of sand grains">
-              <Slider value={settings.sandAlpha ?? 0.75} min={0.05} max={1.0} step={0.01} defaultValue={0.75} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, sandAlpha: v })} />
+              <Slider value={settings.sandAlpha ?? 0.9} min={0.05} max={1.0} step={0.01} defaultValue={0.9} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, sandAlpha: v })} />
             </SettingRow>
           </>
         )}

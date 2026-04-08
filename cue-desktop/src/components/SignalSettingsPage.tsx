@@ -42,7 +42,7 @@ export function SignalSettingsPage() {
       const m = s.signalMode === "audio" ? "preset" : (s.signalMode ?? "simulated");
       setMode(m);
       setAlpha(s.signalAlpha ?? 0.7);
-      setAmplitude(s.signalAmplitude ?? 0.20);
+      setAmplitude(s.signalAmplitude ?? 0.15);
       setEcho(s.signalEcho ?? 1.75);
       const g = s.signalGate ?? 0.05;
       setGateVal(g);
