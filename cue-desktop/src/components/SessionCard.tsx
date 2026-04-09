@@ -1,4 +1,5 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import React, { useState, useCallback, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { usePageVisible } from "@/hooks/usePageVisible";
 
 /** Deterministic per-character hash for stable animation randomness */
@@ -71,6 +72,80 @@ interface SessionCardProps {
   isDuplicate?: boolean;
 }
 
+function PromptPopup({ text, onClose, isDark }: {
+  text: string;
+  onClose: () => void;
+  isDark: boolean;
+}) {
+  useEffect(() => {
+    const handleClick = () => onClose();
+    document.addEventListener("mousedown", handleClick);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+    };
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 99999,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "rgba(0,0,0,0.35)",
+        backdropFilter: "blur(4px)",
+        WebkitBackdropFilter: "blur(4px)",
+      }}
+    >
+      <div
+        style={{
+          background: isDark ? "rgba(28,28,32,0.96)" : "rgba(255,255,255,0.97)",
+          border: isDark ? "1px solid rgba(255,255,255,0.13)" : "1px solid rgba(0,0,0,0.10)",
+          borderRadius: "14px",
+          padding: "20px 24px",
+          maxWidth: text.length > 300 ? "680px" : "460px",
+          width: "calc(100% - 48px)",
+          maxHeight: "70vh",
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: isDark
+            ? "0 24px 64px rgba(0,0,0,0.7), 0 4px 16px rgba(0,0,0,0.5)"
+            : "0 24px 48px rgba(0,0,0,0.18), 0 4px 12px rgba(0,0,0,0.10)",
+          animation: "prompt-popup-in 0.15s cubic-bezier(0.34, 1.4, 0.64, 1) forwards",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{
+          fontSize: "0.65rem",
+          fontStyle: "normal",
+          fontWeight: 600,
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+          color: isDark ? "rgba(255,255,255,0.30)" : "rgba(0,0,0,0.35)",
+          marginBottom: "8px",
+          flexShrink: 0,
+        }}>
+          Last prompt
+        </div>
+        <div style={{
+          fontSize: "0.85rem",
+          lineHeight: "1.65",
+          color: isDark ? "rgba(255,255,255,0.82)" : "rgba(0,0,0,0.72)",
+          fontStyle: "italic",
+          wordBreak: "break-word",
+          overflowY: "auto",
+          whiteSpace: "pre-wrap",
+        }}>
+          {text}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, stringSpread = 0.15, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "percent", showToolPills = false, showCurrentTool = false, showConfigCounts = false, timerDisplay = "seconds", expandOverride, onExpandCycle, isDuplicate = false }: SessionCardProps) {
   // Effective display mode: expandOverride takes precedence over global compact/slim
   const effectiveCompact = expandOverride !== undefined ? expandOverride === 0 : compactMode;
@@ -80,6 +155,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
   const contextMeetsThreshold = contextThreshold !== "after200k" || metrics.lastInputTokens >= contextTokenThreshold;
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [promptPopupOpen, setPromptPopupOpen] = useState(false);
   const pageVisible = usePageVisible();
 
   // Sticky state: hold error/waiting states for a minimum duration before fading out
@@ -355,9 +431,21 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
               </span>
             )}
             {isDuplicate && !metrics.customTitle && metrics.lastPrompt && (
-              <span className="text-[0.65rem] px-1.5 py-0.5 rounded-full bg-white/10 text-white/55 italic overflow-hidden whitespace-nowrap text-ellipsis w-[140px] shrink-0 border-0" title={metrics.lastPrompt}>
-                {metrics.lastPrompt}
-              </span>
+              <>
+                <span
+                  className="text-[0.65rem] px-1.5 py-0.5 rounded-full bg-white/10 text-white/55 italic overflow-hidden whitespace-nowrap text-ellipsis w-[140px] shrink-0 border-0 cursor-pointer hover:bg-white/18 hover:text-white/75 transition-colors"
+                  onClick={(e) => { e.stopPropagation(); setPromptPopupOpen((v) => !v); }}
+                >
+                  {metrics.lastPrompt}
+                </span>
+                {promptPopupOpen && (
+                  <PromptPopup
+                    text={metrics.lastPrompt}
+                    onClose={() => setPromptPopupOpen(false)}
+                    isDark={isDark}
+                  />
+                )}
+              </>
             )}
             <span className="text-xs px-2 py-0.5 rounded-full text-center" style={{ backgroundColor: badgeHex.bg, color: badgeHex.text, transition: stateTransition, minWidth: "8.5em" }}>
               {displayStateName}
@@ -393,7 +481,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
               </span>
             )}
             {!effectiveCompact && timerDisplay !== "off" && (
-            <span className="ml-auto text-[0.625rem] font-mono text-white/40 mono-nums shrink-0">
+            <span className={`ml-auto text-[0.625rem] font-mono mono-nums shrink-0 ${isGlass ? "text-white/65" : "text-white/40"}`}>
               {timerDisplay === "minutes"
                 ? formatDuration(session.durationSecs).slice(0, 5)
                 : formatDuration(session.durationSecs)}
@@ -484,16 +572,16 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
           {!effectiveCompact && (session.modelDisplayName !== "\u2014" || (contextThreshold !== "never" && contextMeetsThreshold)) && (
             <div className="flex flex-col gap-0.5">
           {session.modelDisplayName !== "\u2014" && (
-            <span className="text-[0.625rem] text-white/30 font-mono self-end">
+            <span className={`text-[0.625rem] font-mono self-end ${isGlass ? "text-white/55" : "text-white/30"}`}>
               {session.modelDisplayName}
-              {session.provider && <span className="text-white/20"> ({session.provider})</span>}
+              {session.provider && <span className={isGlass ? "text-white/40" : "text-white/20"}> ({session.provider})</span>}
             </span>
           )}
 
           {/* Row 4: Context usage — visible in regular and slim mode, hidden in compact */}
           {contextThreshold !== "never" && contextMeetsThreshold && (
             <div className="relative flex items-center gap-2">
-              <span className="text-[0.625rem] text-white/40 shrink-0">Context</span>
+              <span className={`text-[0.625rem] shrink-0 ${isGlass ? "text-white/65" : "text-white/40"}`}>Context</span>
               <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden">
                 <div
                   className="absolute left-0 top-0 bottom-0 rounded-full transition-all duration-500"
@@ -519,7 +607,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                   }}
                 />
               </div>
-              <span className="text-[0.625rem] text-white/50 mono-nums shrink-0">
+              <span className={`text-[0.625rem] mono-nums shrink-0 ${isGlass ? "text-white/75" : "text-white/50"}`}>
                 {(() => {
                   const pct = Math.round(session.contextUsagePercent * 100);
                   const tok = `${formatTokens(metrics.lastInputTokens)} / ${formatTokens(session.contextLimit)}`;
@@ -532,7 +620,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                 })()}
               </span>
               {contextDisplay !== "tokens" && contextDisplay !== "both" && (
-                <span className="text-[0.625rem] text-white/30 mono-nums shrink-0">
+                <span className={`text-[0.625rem] mono-nums shrink-0 ${isGlass ? "text-white/55" : "text-white/30"}`}>
                   {formatTokens(metrics.lastInputTokens)} / {formatTokens(session.contextLimit)}
                 </span>
               )}

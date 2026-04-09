@@ -1027,6 +1027,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         result.push(sessionMap.get(id)!);
       }
     }
+    // Prune stale IDs from committed so they don't accumulate
+    committedOrderRef.current = result.map((s) => s.info.id);
     return result;
   })();
 
@@ -1127,9 +1129,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         el.style.zIndex = String(50 + totalMovers - staggerIdx);
         el.style.position = "relative";
 
-        // Add floating appearance during slide
+        // Add reordering appearance during slide (overrides pressed/floating via CSS order)
         if (cardEl) {
-          cardEl.classList.remove("session-card--pressed");
           cardEl.classList.add("session-card--reordering");
         }
 

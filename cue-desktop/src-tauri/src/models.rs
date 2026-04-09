@@ -171,7 +171,7 @@ pub struct SessionMetrics {
     /// Todo/task items parsed from TodoWrite/TaskCreate tool uses
     #[serde(default)]
     pub todo_items: Vec<TodoItem>,
-    /// Truncated text of the last user prompt (for disambiguation)
+    /// Full text of the last user prompt (pill truncates visually; popup shows all)
     #[serde(default)]
     pub last_prompt: Option<String>,
 }

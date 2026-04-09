@@ -325,7 +325,7 @@ fn parse_iso8601(s: &str) -> Option<f64> {
     None
 }
 
-/// Extract the first text content from a user message, truncated to ~80 chars.
+/// Extract the first text content from a user message (full text, not truncated).
 /// Handles both string content and array-of-blocks content formats.
 /// Strips XML tags (like <command-message>) to get plain user text.
 fn extract_user_prompt_text(obj: &serde_json::Map<String, Value>) -> Option<String> {
@@ -351,22 +351,14 @@ fn extract_user_prompt_text(obj: &serde_json::Map<String, Value>) -> Option<Stri
 
     // Strip XML-like tags and trim
     let stripped = strip_xml_tags(&raw);
+    // Also strip bracket-style markers like [Image source: ...] and [Image #N]
+    let stripped = strip_bracket_markers(&stripped);
     let trimmed = stripped.trim();
     if trimmed.is_empty() {
         return None;
     }
 
-    // Truncate to first 80 chars on a word boundary
-    let truncated = if trimmed.len() <= 80 {
-        trimmed.to_string()
-    } else {
-        match trimmed[..80].rfind(' ') {
-            Some(pos) if pos > 20 => format!("{}...", &trimmed[..pos]),
-            _ => format!("{}...", &trimmed[..80]),
-        }
-    };
-
-    Some(truncated)
+    Some(trimmed.to_string())
 }
 
 /// Strip XML/HTML-like tags from a string.
@@ -379,6 +371,45 @@ fn strip_xml_tags(s: &str) -> String {
         } else if ch == '>' {
             in_tag = false;
         } else if !in_tag {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+/// Strip bracket-style markers injected by the Claude Code harness.
+/// Removes patterns like [Image source: /path/to/img.png], [Image #3],
+/// [image source: ...], etc., leaving only real user text.
+fn strip_bracket_markers(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '[' {
+            // Collect until matching ']' or end of string
+            let mut marker = String::new();
+            let mut closed = false;
+            for inner in chars.by_ref() {
+                if inner == ']' {
+                    closed = true;
+                    break;
+                }
+                marker.push(inner);
+            }
+            if closed {
+                let lower = marker.to_lowercase();
+                // Drop image/attachment markers
+                if lower.starts_with("image") || lower.starts_with("attachment") {
+                    // skip — don't push to result
+                    continue;
+                }
+            }
+            // Not a known marker — put it back verbatim
+            result.push('[');
+            result.push_str(&marker);
+            if closed {
+                result.push(']');
+            }
+        } else {
             result.push(ch);
         }
     }
