@@ -430,7 +430,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       let clipped = !revived && drawStrings;
 
       // ── Revived mode: randomized lightning strikes ──
-      if (revived) {
+      if (revived && !prefersReducedMotion) {
         const t = now / 1000;
         const a = signalAlpha;
         const hash = (v: number) => ((v * 2654435761) >>> 0);
