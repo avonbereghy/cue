@@ -133,7 +133,14 @@ impl SessionMonitorState {
                             == state_priority(&existing.state)
                             && session.last_activity > existing.last_activity)
                     {
+                        // Keep the original session's ID so the frontend sees a
+                        // stable identity. Without this, the winner's ID flips
+                        // on every poll (parent vs subagent) whenever
+                        // last_activity alternates, causing the UI to reorder
+                        // cards continuously.
+                        let stable_id = existing.id.clone();
                         *existing = session;
+                        existing.id = stable_id;
                     }
                 } else {
                     deduped.push(session);
