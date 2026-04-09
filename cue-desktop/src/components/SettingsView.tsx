@@ -891,7 +891,7 @@ export function SettingsView() {
       {/* Beta Features */}
       <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Beta Features</h3>
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
-        <SettingRow label="Auto Reorder" description="Move working and waiting sessions to the top automatically" onReset={(settings.autoReorder ?? false) ? () => setSettings({ ...settings, autoReorder: false }) : undefined}>
+        <SettingRow label="Auto Reorder" description="Sort sessions by priority after 5s of inactivity" onReset={(settings.autoReorder ?? false) ? () => setSettings({ ...settings, autoReorder: false }) : undefined}>
           <Toggle
             checked={settings.autoReorder ?? false}
             onChange={() => setSettings({ ...settings, autoReorder: !(settings.autoReorder ?? false) })}
