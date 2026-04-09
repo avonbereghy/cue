@@ -42,6 +42,8 @@ pub struct ParsedEntry {
     /// Pending task status updates: (taskId, new_status) from TaskUpdate tool uses.
     /// Applied during aggregation against the accumulated todo list.
     pub task_status_updates: Vec<(String, String)>,
+    /// Extracted text from user messages (first text content block, truncated)
+    pub user_prompt_text: Option<String>,
 }
 
 /// Parse a JSONL file into a list of entries.
@@ -105,9 +107,10 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
     entry.agent_id = obj.get("agentId").and_then(|v| v.as_str()).map(String::from);
     entry.slug = obj.get("slug").and_then(|v| v.as_str()).map(String::from);
 
-    // Count user messages
+    // Count user messages and extract prompt text
     if entry_type == "user" {
         entry.is_user_message = true;
+        entry.user_prompt_text = extract_user_prompt_text(obj);
     }
 
     // Parse assistant messages for tokens and tool usage
@@ -322,6 +325,66 @@ fn parse_iso8601(s: &str) -> Option<f64> {
     None
 }
 
+/// Extract the first text content from a user message, truncated to ~80 chars.
+/// Handles both string content and array-of-blocks content formats.
+/// Strips XML tags (like <command-message>) to get plain user text.
+fn extract_user_prompt_text(obj: &serde_json::Map<String, Value>) -> Option<String> {
+    let message = obj.get("message")?.as_object()?;
+    let content = message.get("content")?;
+
+    let raw = if let Some(s) = content.as_str() {
+        s.to_string()
+    } else if let Some(arr) = content.as_array() {
+        // Find the first text block
+        arr.iter()
+            .find_map(|block| {
+                let obj = block.as_object()?;
+                if obj.get("type")?.as_str()? == "text" {
+                    obj.get("text")?.as_str().map(String::from)
+                } else {
+                    None
+                }
+            })?
+    } else {
+        return None;
+    };
+
+    // Strip XML-like tags and trim
+    let stripped = strip_xml_tags(&raw);
+    let trimmed = stripped.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // Truncate to first 80 chars on a word boundary
+    let truncated = if trimmed.len() <= 80 {
+        trimmed.to_string()
+    } else {
+        match trimmed[..80].rfind(' ') {
+            Some(pos) if pos > 20 => format!("{}...", &trimmed[..pos]),
+            _ => format!("{}...", &trimmed[..80]),
+        }
+    };
+
+    Some(truncated)
+}
+
+/// Strip XML/HTML-like tags from a string.
+fn strip_xml_tags(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for ch in s.chars() {
+        if ch == '<' {
+            in_tag = true;
+        } else if ch == '>' {
+            in_tag = false;
+        } else if !in_tag {
+            result.push(ch);
+        }
+    }
+    result
+}
+
 /// What the last meaningful JSONL entry tells us about session state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LastEntryVerdict {
@@ -496,6 +559,10 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
 
         if entry.is_user_message {
             m.user_message_count += 1;
+            // Last user prompt text wins
+            if let Some(ref text) = entry.user_prompt_text {
+                m.last_prompt = Some(text.clone());
+            }
         }
 
         if entry.is_assistant_message {

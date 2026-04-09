@@ -336,6 +336,27 @@ html[data-theme="light"]:not([data-glass]) .session-card--compact.session-card--
   animation: none !important;
 }
 
+/* Reordering — smooth mechanical slide with subtle lift */
+.session-card--reordering {
+  animation: none !important;
+  background-color: var(--card-float-bg);
+  border-color: var(--card-float-border);
+  box-shadow:
+    0 1px 4px rgba(0,0,0,0.3),
+    0 4px 16px rgba(0,0,0,0.25),
+    0 0 0 0.5px rgba(255,255,255,0.06);
+  transform: translateY(0);
+}
+html[data-theme="light"]:not([data-glass]) .session-card--reordering {
+  box-shadow:
+    0 1px 3px rgba(0,0,0,0.14),
+    0 3px 10px rgba(0,0,0,0.12),
+    0 6px 20px rgba(0,0,0,0.08);
+}
+.session-card--compact.session-card--reordering {
+  box-shadow: 0 1px 4px rgba(0,0,0,0.16), 0 3px 8px rgba(0,0,0,0.10);
+}
+
 /* Light mode — shadows use lighter values; bg/border use CSS vars (theme-aware) */
 html[data-theme="light"]:not([data-glass]) .session-card--floating {
   background-color: var(--card-float-bg);
