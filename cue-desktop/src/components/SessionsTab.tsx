@@ -104,7 +104,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
   const cardPositions = useRef<Map<string, DOMRect>>(new Map());
-  const prevStates = useRef<Map<string, string>>(new Map());
   const listRef = useRef<HTMLDivElement>(null);
   const [collapsedSessions, setCollapsedSessions] = useState<Set<string>>(
     new Set(),
@@ -946,135 +945,252 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     return () => window.removeEventListener("keydown", handleKey);
   }, [testMode, sandboxSelectedIdx, sandboxEditingTitle, makeSandboxSession, setAllSandboxState, cycleSandboxModel, cycleSandboxSource, cycleSandboxBranch, randomizeSandboxTokens, cycleSandboxSubagents, cycleSandboxTodos, cycleSandboxTool, cycleSandboxProvider, adjustSandboxContext, adjustSandboxDuration, loadSandboxPreset]);
 
-  // Sort sessions: autoReorder moves working/waiting/error to top.
-  // Without autoReorder: arrival order (oldest first).
-  // Filter out "ended" sessions — they've exited and are in the revive list.
-  const sortedSessions = (() => {
-    const active = sessions.filter((s) => s.info.state !== "ended");
-    const all = [...active];
+  // ---------------------------------------------------------------------------
+  // Auto-reorder: sort sessions by priority, but ONLY after all sessions have
+  // been idle/done for 5+ seconds. Animation is a smooth mechanical FLIP.
+  // ---------------------------------------------------------------------------
+
+  // The "desired" sorted order (what we'd sort to if we triggered now)
+  const reorderPriority = useCallback((s: EnrichedSession) => {
+    const st = s.info.state;
+    if (st === "waiting") return 0;
+    if (st === "error") return 1;
+    if (st === "working" || st === "subagent") return 2;
+    return 3;
+  }, []);
+
+  // Track the committed display order (list of session IDs).
+  // This only changes when a reorder animation is triggered.
+  const committedOrderRef = useRef<string[]>([]);
+  const quiesceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isAnimatingRef = useRef(false);
+
+  // Check whether ALL sessions are idle or done
+  const allQuiescent = useCallback((list: EnrichedSession[]) => {
+    return list.every((s) => {
+      const st = s.info.state;
+      return st === "idle" || st === "done";
+    });
+  }, []);
+
+  // Build the active (non-ended) session list
+  const activeSessions = sessions.filter((s) => s.info.state !== "ended");
+
+  // Compute what the desired order would be right now
+  const desiredOrder = (() => {
+    const all = [...activeSessions];
     if (autoReorder) {
-      const priority = (s: EnrichedSession) => {
-        const st = s.info.state;
-        if (st === "waiting") return 0;
-        if (st === "error") return 1;
-        if (st === "working" || st === "subagent") return 2;
-        return 3;
-      };
-      return all.sort((a, b) => {
-        const pa = priority(a);
-        const pb = priority(b);
+      all.sort((a, b) => {
+        const pa = reorderPriority(a);
+        const pb = reorderPriority(b);
         if (pa !== pb) return pa - pb;
         return b.info.lastActivity - a.info.lastActivity;
       });
+    } else {
+      all.sort((a, b) => a.info.startedAt - b.info.startedAt);
     }
-    return all.sort((a, b) => a.info.startedAt - b.info.startedAt);
+    return all.map((s) => s.info.id);
   })();
 
-  // FLIP animation — only active when autoReorder is on
-  const sortKey = sortedSessions.map(s => s.info.id).join(",");
-  const stateKey = sortedSessions.map(s => s.info.state).join(",");
+  // The actual display order: uses committed order when autoReorder is on,
+  // falls back to desired order for new/removed sessions.
+  const sortedSessions = (() => {
+    if (!autoReorder) {
+      // When off, always use arrival order
+      const sorted = [...activeSessions].sort((a, b) => a.info.startedAt - b.info.startedAt);
+      committedOrderRef.current = sorted.map((s) => s.info.id);
+      return sorted;
+    }
 
+    const committed = committedOrderRef.current;
+    const activeIds = new Set(activeSessions.map((s) => s.info.id));
+    const sessionMap = new Map(activeSessions.map((s) => [s.info.id, s]));
+
+    // If no committed order yet, or order has no overlap, bootstrap from desired
+    if (committed.length === 0 || !committed.some((id) => activeIds.has(id))) {
+      committedOrderRef.current = desiredOrder;
+      return desiredOrder.map((id) => sessionMap.get(id)!).filter(Boolean);
+    }
+
+    // Keep committed order for existing sessions, append new ones at the end
+    const result: EnrichedSession[] = [];
+    const used = new Set<string>();
+    for (const id of committed) {
+      if (sessionMap.has(id)) {
+        result.push(sessionMap.get(id)!);
+        used.add(id);
+      }
+    }
+    // Append any new sessions not in committed order
+    for (const id of desiredOrder) {
+      if (!used.has(id) && sessionMap.has(id)) {
+        result.push(sessionMap.get(id)!);
+      }
+    }
+    return result;
+  })();
+
+  // Keep refs to latest values so the timer callback can re-check
+  const activeSessionsRef = useRef(activeSessions);
+  activeSessionsRef.current = activeSessions;
+  const desiredOrderRef = useRef(desiredOrder);
+  desiredOrderRef.current = desiredOrder;
+
+  // 5-second quiescence timer: when all sessions are idle/done, start countdown.
+  // When any session becomes active, cancel the timer.
+  useEffect(() => {
+    if (!autoReorder) {
+      if (quiesceTimerRef.current) {
+        clearTimeout(quiesceTimerRef.current);
+        quiesceTimerRef.current = null;
+      }
+      return;
+    }
+
+    const currentOrderKey = sortedSessions.map((s) => s.info.id).join(",");
+    const desiredOrderKey = desiredOrder.join(",");
+    const orderAlreadyCorrect = currentOrderKey === desiredOrderKey;
+
+    if (allQuiescent(activeSessions) && !orderAlreadyCorrect && !isAnimatingRef.current) {
+      // All quiet and order differs — start 5s countdown (if not already running)
+      if (!quiesceTimerRef.current) {
+        quiesceTimerRef.current = setTimeout(() => {
+          quiesceTimerRef.current = null;
+          // Re-check quiescence at fire time — sessions may have changed
+          if (!allQuiescent(activeSessionsRef.current)) return;
+          // Commit the latest desired order (not the stale closure)
+          committedOrderRef.current = desiredOrderRef.current;
+          setReorderTick((t) => t + 1);
+        }, 5000);
+      }
+    } else {
+      // Not quiescent or order is correct — cancel any pending timer
+      if (quiesceTimerRef.current) {
+        clearTimeout(quiesceTimerRef.current);
+        quiesceTimerRef.current = null;
+      }
+    }
+  });
+
+  // State to force re-render when committed order changes via timer
+  const [reorderTick, setReorderTick] = useState(0);
+
+  // Keys for FLIP animation tracking
+  const sortKey = sortedSessions.map((s) => s.info.id).join(",");
+
+  // FLIP animation — smooth mechanical reorder
   useLayoutEffect(() => {
     const list = listRef.current;
-    if (!list) return;
+    if (!list || !autoReorder) return;
 
-    if (autoReorder) {
-      const prev = cardPositions.current;
+    const prev = cardPositions.current;
+    if (prev.size === 0) {
+      // First render — just snapshot positions
+      const cards = list.querySelectorAll<HTMLElement>("[data-session-id]");
+      const positions = new Map<string, DOMRect>();
+      cards.forEach((el) => {
+        const id = el.dataset.sessionId!;
+        positions.set(id, el.getBoundingClientRect());
+      });
+      cardPositions.current = positions;
+      return;
+    }
 
-      // Detect which sessions just transitioned to working/subagent
-      const justBecameWorking = new Set<string>();
-      for (const session of sortedSessions) {
-        const id = session.info.id;
-        const oldState = prevStates.current.get(id);
-        const newState = session.info.state;
-        if (
-          (newState === "working" || newState === "subagent") &&
-          oldState !== undefined &&
-          oldState !== "working" && oldState !== "subagent"
-        ) {
-          justBecameWorking.add(id);
+    const cards = list.querySelectorAll<HTMLElement>("[data-session-id]");
+    const movers: { el: HTMLElement; dy: number; idx: number }[] = [];
+
+    cards.forEach((el, idx) => {
+      const id = el.dataset.sessionId!;
+      const oldRect = prev.get(id);
+      if (!oldRect) return;
+      const newRect = el.getBoundingClientRect();
+      const dy = oldRect.top - newRect.top;
+      if (Math.abs(dy) < 1) return;
+      movers.push({ el, dy, idx });
+    });
+
+    if (movers.length > 0) {
+      isAnimatingRef.current = true;
+
+      // Sort movers by absolute displacement (largest moves first for stagger)
+      movers.sort((a, b) => Math.abs(b.dy) - Math.abs(a.dy));
+
+      let completedCount = 0;
+      const totalMovers = movers.length;
+
+      movers.forEach(({ el, dy }, staggerIdx) => {
+        const cardEl = el.querySelector<HTMLElement>(".session-card");
+
+        // Invert: place at old position
+        el.style.transform = `translateY(${dy}px)`;
+        el.style.transition = "none";
+        el.style.zIndex = String(50 + totalMovers - staggerIdx);
+        el.style.position = "relative";
+
+        // Add floating appearance during slide
+        if (cardEl) {
+          cardEl.classList.remove("session-card--pressed");
+          cardEl.classList.add("session-card--reordering");
         }
-      }
 
-      // FLIP: DOM is updated but not yet painted
-      if (prev.size > 0) {
-        const cards = list.querySelectorAll<HTMLElement>("[data-session-id]");
-        cards.forEach((el) => {
-          const id = el.dataset.sessionId!;
-          const oldRect = prev.get(id);
-          if (!oldRect) return;
-          const newRect = el.getBoundingClientRect();
-          const dy = oldRect.top - newRect.top;
-          if (Math.abs(dy) < 1) return;
+        // Stagger delay: 60ms between each card for mechanical feel
+        const staggerDelay = staggerIdx * 60;
+        // Duration scales with distance for realistic feel (min 400ms, max 700ms)
+        const distance = Math.abs(dy);
+        const duration = Math.min(700, Math.max(400, 300 + distance * 0.5));
 
-          const isSliding = justBecameWorking.has(id) && dy < -10;
-          const cardEl = el.querySelector<HTMLElement>(".session-card");
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            el.style.transition = `transform ${duration}ms cubic-bezier(0.22, 0.61, 0.36, 1) ${staggerDelay}ms`;
+            el.style.transform = "translateY(0)";
 
-          if (isSliding && cardEl) {
-            // Slide up as floating card, then snap key down on arrival
-            cardEl.classList.remove("session-card--pressed");
-            cardEl.classList.add("session-card--floating", "session-card--sliding");
+            const onEnd = () => {
+              el.style.transition = "";
+              el.style.transform = "";
+              el.style.zIndex = "";
+              el.style.position = "";
+              el.removeEventListener("transitionend", onEnd);
+              if (cardEl) {
+                cardEl.classList.remove("session-card--reordering");
+              }
+              completedCount++;
+              if (completedCount === totalMovers) {
+                isAnimatingRef.current = false;
+              }
+            };
+            el.addEventListener("transitionend", onEnd);
 
-            el.style.zIndex = "50";
-            el.style.position = "relative";
-            el.style.transform = `translateY(${dy}px)`;
-            el.style.transition = "none";
-
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                el.style.transition = "transform 500ms cubic-bezier(0.25, 0.1, 0.25, 1)";
-                el.style.transform = "translateY(0)";
-
-                const onSlideEnd = () => {
-                  el.style.transition = "";
-                  el.style.transform = "";
-                  el.style.zIndex = "";
-                  el.style.position = "";
-                  el.removeEventListener("transitionend", onSlideEnd);
-                  cardEl.classList.remove("session-card--sliding", "session-card--floating");
-                  cardEl.classList.add("session-card--pressed");
-                };
-                el.addEventListener("transitionend", onSlideEnd);
-              });
-            });
-          } else {
-            // Normal FLIP for displaced cards
-            el.style.transform = `translateY(${dy}px)`;
-            el.style.transition = "none";
-
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                el.style.transition = "transform 500ms cubic-bezier(0.25, 0.1, 0.25, 1)";
-                el.style.transform = "translateY(0)";
-                const cleanup = () => {
-                  el.style.transition = "";
-                  el.style.transform = "";
-                  el.removeEventListener("transitionend", cleanup);
-                };
-                el.addEventListener("transitionend", cleanup);
-              });
-            });
-          }
+            // Safety fallback — clear animation state if transitionend never fires
+            setTimeout(() => {
+              if (el.style.transform !== "") {
+                el.style.transition = "";
+                el.style.transform = "";
+                el.style.zIndex = "";
+                el.style.position = "";
+                if (cardEl) {
+                  cardEl.classList.remove("session-card--reordering");
+                }
+                completedCount++;
+                if (completedCount === totalMovers) {
+                  isAnimatingRef.current = false;
+                }
+              }
+            }, duration + staggerDelay + 100);
+          });
         });
-      }
+      });
     }
-
-    // Update state tracking
-    const newStates = new Map<string, string>();
-    for (const session of sortedSessions) {
-      newStates.set(session.info.id, session.info.state);
-    }
-    prevStates.current = newStates;
 
     // Snapshot positions for next render
-    const cards = list.querySelectorAll<HTMLElement>("[data-session-id]");
+    const allCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
     const positions = new Map<string, DOMRect>();
-    cards.forEach((el) => {
+    allCards.forEach((el) => {
       const id = el.dataset.sessionId!;
       positions.set(id, el.getBoundingClientRect());
     });
     cardPositions.current = positions;
-  }, [sortKey, stateKey, autoReorder]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortKey, autoReorder, reorderTick]);
 
   // Keyboard animation handler — listens for Tauri events from keyboard window
   useEffect(() => {
@@ -1241,16 +1357,9 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     const sortedSandbox = (() => {
       const all = [...sandboxSessions];
       if (autoReorder) {
-        const priority = (s: EnrichedSession) => {
-          const st = s.info.state;
-          if (st === "waiting") return 0;
-          if (st === "error") return 1;
-          if (st === "working" || st === "subagent") return 2;
-          return 3;
-        };
         return all.sort((a, b) => {
-          const pa = priority(a);
-          const pb = priority(b);
+          const pa = reorderPriority(a);
+          const pb = reorderPriority(b);
           if (pa !== pb) return pa - pb;
           return b.info.lastActivity - a.info.lastActivity;
         });
@@ -1567,7 +1676,16 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             </div>
           )}
           {/* Active sessions */}
-          {sortedSessions.map((session, idx) => {
+          {(() => {
+            // Compute which displayTitles appear more than once
+            const titleCounts = new Map<string, number>();
+            for (const s of sortedSessions) {
+              titleCounts.set(s.displayTitle, (titleCounts.get(s.displayTitle) ?? 0) + 1);
+            }
+            const duplicateTitles = new Set(
+              [...titleCounts.entries()].filter(([, count]) => count > 1).map(([title]) => title)
+            );
+            return sortedSessions.map((session, idx) => {
             const pending = pendingBySession[session.info.id] ?? [];
             const history = permissionHistory[session.info.id] ?? [];
             const hasPermissionActivity = pending.length > 0 || history.length > 0;
@@ -1581,7 +1699,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
             return (
               <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="relative space-y-2" style={{ zIndex: idx + 1 }}>
-                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} timerDisplay={timerDisplay} expandOverride={compactMode ? expandOverrides[session.info.id] : undefined} onExpandCycle={compactMode ? () => {
+                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} timerDisplay={timerDisplay} isDuplicate={duplicateTitles.has(session.displayTitle)} expandOverride={compactMode ? expandOverrides[session.info.id] : undefined} onExpandCycle={compactMode ? () => {
                   setExpandOverrides((prev) => {
                     const current = prev[session.info.id] ?? 0;
                     const next = (current + 1) % 3;
@@ -1640,7 +1758,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                 )}
               </div>
             );
-          })}
+          });
+          })()}
 
           {/* Revived (ended) sessions — collapsible, collapsed by default */}
           {!compactMode && !slimMode && revivedSessions.length > 0 && (

@@ -67,9 +67,11 @@ interface SessionCardProps {
   /** Per-card expand override: 0=compact, 1=slim (no details), 2=full details. undefined = use global mode. */
   expandOverride?: number;
   onExpandCycle?: () => void;
+  /** True when another session shares the same displayTitle — shows last prompt for disambiguation */
+  isDuplicate?: boolean;
 }
 
-export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, stringSpread = 0.15, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "percent", showToolPills = false, showCurrentTool = false, showConfigCounts = false, timerDisplay = "seconds", expandOverride, onExpandCycle }: SessionCardProps) {
+export function SessionCard({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, stringSpread = 0.15, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "percent", showToolPills = false, showCurrentTool = false, showConfigCounts = false, timerDisplay = "seconds", expandOverride, onExpandCycle, isDuplicate = false }: SessionCardProps) {
   // Effective display mode: expandOverride takes precedence over global compact/slim
   const effectiveCompact = expandOverride !== undefined ? expandOverride === 0 : compactMode;
   const effectiveSlim = expandOverride !== undefined ? expandOverride <= 1 : slimMode;
@@ -350,6 +352,11 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
             {metrics.customTitle && (
               <span className="text-xs text-white/40 truncate">
                 {session.workspaceName}
+              </span>
+            )}
+            {isDuplicate && !metrics.customTitle && metrics.lastPrompt && (
+              <span className="text-[0.65rem] px-1.5 py-0.5 rounded-full bg-white/10 text-white/55 italic overflow-hidden whitespace-nowrap text-ellipsis w-[140px] shrink-0 border-0" title={metrics.lastPrompt}>
+                {metrics.lastPrompt}
               </span>
             )}
             <span className="text-xs px-2 py-0.5 rounded-full text-center" style={{ backgroundColor: badgeHex.bg, color: badgeHex.text, transition: stateTransition, minWidth: "8.5em" }}>

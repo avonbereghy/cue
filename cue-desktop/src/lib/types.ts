@@ -83,6 +83,7 @@ export interface SessionMetrics {
   runningToolName?: string;
   runningToolTarget?: string;
   todoItems: TodoItem[];
+  lastPrompt?: string | null;
 }
 
 /** Pre-computed by Rust backend (EnrichedSession includes derived fields) */
