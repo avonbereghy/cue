@@ -288,6 +288,7 @@ impl EnrichedSession {
             "error" => "\u{2717}",     // ✗
             "subagent" => "\u{2934}",  // ⤴
             "compacting" => "\u{21BB}", // ↻
+            "clearing" => "\u{21E1}",  // ⇡
             "idle" => "\u{25CB}",      // ○
             _ => "\u{2713}",           // ✓
         }
@@ -300,6 +301,7 @@ impl EnrichedSession {
             "error" => "Error",
             "subagent" => "Subagent",
             "compacting" => "Compacting",
+            "clearing" => "Clearing",
             "idle" => "Idle",
             "done" => "Done",
             other => other,

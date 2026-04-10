@@ -69,6 +69,17 @@ export function StatusDot({ state, color }: { state: string; color: string }) {
         </svg>
       );
 
+    // ── clearing: dissolve-up (particles rise and fade) ─────────────────────
+    case "clearing":
+      return (
+        <svg width={S} height={S} viewBox="0 0 12 12" className="status-clearing shrink-0" aria-hidden="true">
+          <circle cx="6" cy="8" r="1.4" fill={color} className="clearing-core" />
+          <circle cx="4" cy="5" r="0.9" fill={color} className="clearing-particle clearing-p1" />
+          <circle cx="6" cy="3.5" r="0.7" fill={color} className="clearing-particle clearing-p2" />
+          <circle cx="8" cy="5.5" r="0.8" fill={color} className="clearing-particle clearing-p3" />
+        </svg>
+      );
+
     // ── done: static checkmark ──────────────────────────────────────────────
     case "done":
       return (
