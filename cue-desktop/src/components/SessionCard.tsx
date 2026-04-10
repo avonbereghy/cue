@@ -194,13 +194,16 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
   const lastStrikeCycleRef = useRef<Map<number, number>>(new Map());
   const strikeRafRef = useRef<number>(0);
 
-  const [isNarrow, setIsNarrow] = useState(false);
+  const [cardWidth, setCardWidth] = useState(9999);
+  const isNarrow = cardWidth < 600;
+  const hidePromptPill = cardWidth < 420;
+  const hideTimer = cardWidth < 340;
 
   useEffect(() => {
     const el = cardRef.current;
     if (!el) return;
     const obs = new ResizeObserver(([entry]) => {
-      setIsNarrow(entry.contentRect.width < 600);
+      setCardWidth(entry.contentRect.width);
     });
     obs.observe(el);
     return () => obs.disconnect();
@@ -386,13 +389,17 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
       {signalString && (revived || info.state !== "ended") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={signalEffect} sandEnabled={sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} sessionId={info.id} contentRef={contentRef} keyReleaseSpeed={keyReleaseSpeed} />}
 
       <div ref={contentRef} className={`${effectiveCompact ? "space-y-0" : "space-y-2.5"} ${effectiveSlim && !effectiveCompact ? "flex flex-col flex-1" : ""}`} style={{ position: "relative", zIndex: 10 }}>
-          {/* Row 1: Status dot + title + state badge + git branch + duration */}
-          <div className="relative flex items-center gap-2">
+          {/* Row 1: Status dot + state badge + title + prompt pill + duration
+              Shrink priority: prompt pill first (shrinks → hides), timer second, title last */}
+          <div className="relative flex items-center gap-2 min-w-0 overflow-hidden">
             <StatusDot state={displayState} color={dotHex} />
+            <span className="text-xs px-2 py-0.5 rounded-full text-center shrink-0" style={{ backgroundColor: badgeHex.bg, color: badgeHex.text, transition: stateTransition, minWidth: "8.5em" }}>
+              {displayStateName}
+            </span>
             {(info.state === "working" || info.state === "thinking" || info.state === "subagent") && titleAnimation !== "none" ? (
               <span
                 ref={titleContainerRef}
-                className={`font-semibold anim-${titleAnimation} whitespace-nowrap overflow-hidden`}
+                className={`font-semibold anim-${titleAnimation} whitespace-nowrap overflow-hidden shrink-0`}
                 style={{ color: titleHex, transition: stateTransition }}
                 aria-label={session.displayTitle}
               >
@@ -421,19 +428,20 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                 })}
               </span>
             ) : (
-              <span className="font-semibold truncate" style={{ color: titleHex, transition: stateTransition }}>
+              <span className="font-semibold whitespace-nowrap shrink-0" style={{ color: titleHex, transition: stateTransition }}>
                 {session.displayTitle}
               </span>
             )}
             {metrics.customTitle && (
-              <span className="text-xs text-white/40 truncate">
+              <span className="text-xs text-white/40 truncate min-w-0 shrink">
                 {session.workspaceName}
               </span>
             )}
-            {isDuplicate && !metrics.customTitle && metrics.lastPrompt && (!metrics.lastPromptSessionId || metrics.lastPromptSessionId === info.id) && (
+            {!hidePromptPill && isDuplicate && !metrics.customTitle && metrics.lastPrompt && (!metrics.lastPromptSessionId || metrics.lastPromptSessionId === info.id) && (
               <>
                 <span
-                  className="text-[0.65rem] px-1.5 py-0.5 rounded-full bg-white/10 text-white/55 italic overflow-hidden whitespace-nowrap text-ellipsis w-[140px] shrink-0 border-0 cursor-pointer hover:bg-white/18 hover:text-white/75 transition-colors"
+                  className="text-[0.65rem] px-1.5 py-0.5 rounded-full bg-white/10 text-white/55 italic overflow-hidden whitespace-nowrap text-ellipsis min-w-0 shrink border-0 cursor-pointer hover:bg-white/18 hover:text-white/75 transition-colors"
+                  style={{ maxWidth: "140px" }}
                   onClick={(e) => { e.stopPropagation(); setPromptPopupOpen((v) => !v); }}
                 >
                   {metrics.lastPrompt}
@@ -447,9 +455,6 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                 )}
               </>
             )}
-            <span className="text-xs px-2 py-0.5 rounded-full text-center" style={{ backgroundColor: badgeHex.bg, color: badgeHex.text, transition: stateTransition, minWidth: "8.5em" }}>
-              {displayStateName}
-            </span>
             {activeSubs > 0 && displayState !== "subagent" && (
               <span className="text-xs px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: "rgba(139,92,246,0.25)", color: "#c4b5fd" }}>
                 {activeSubs} subprocess{activeSubs !== 1 ? "es" : ""}
@@ -480,7 +485,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                 {(session.gitStatus?.behind ?? 0) > 0 && <span className="text-red-500/60">{"\u2193"}{session.gitStatus!.behind}</span>}
               </span>
             )}
-            {!effectiveCompact && timerDisplay !== "off" && (
+            {!hideTimer && !effectiveCompact && timerDisplay !== "off" && (
             <span className={`ml-auto text-[0.625rem] font-mono mono-nums shrink-0 ${isGlass ? "text-white/65" : "text-white/40"}`}>
               {timerDisplay === "minutes"
                 ? formatDuration(session.durationSecs).slice(0, 5)

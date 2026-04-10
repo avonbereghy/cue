@@ -60,6 +60,15 @@ export function StatusDot({ state, color }: { state: string; color: string }) {
         </svg>
       );
 
+    // ── compacting: ripple-out (inner core + expanding ring) ───────────────
+    case "compacting":
+      return (
+        <svg width={S} height={S} viewBox="0 0 12 12" className="status-compacting shrink-0" aria-hidden="true">
+          <circle cx="6" cy="6" r="2.4" fill={color} className="compact-core" />
+          <circle cx="6" cy="6" r="2.4" fill="none" stroke={color} strokeWidth="1" className="compact-ring" />
+        </svg>
+      );
+
     // ── done: static checkmark ──────────────────────────────────────────────
     case "done":
       return (

@@ -44,6 +44,10 @@ fn color_for_state(state: &str, blink_on: bool) -> Rgba {
             let a = if blink_on { 255 } else { 38 };
             Rgba { r: 0, g: 255, b: 255, a } // cyan (0,255,255)
         }
+        "compacting" => {
+            let a = if blink_on { 220 } else { 50 };
+            Rgba { r: 139, g: 159, b: 212, a } // periwinkle (blinking, slightly dimmer than full white)
+        }
         "idle" => Rgba { r: 212, g: 165, b: 116, a: 178 }, // warm sand at 70%
         _ => Rgba { r: 48, g: 209, b: 88, a: 255 },  // green (48,209,88) done/default
     }

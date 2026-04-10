@@ -227,6 +227,45 @@ def _detect_subprocess():
     return None
 
 
+def _last_tool_was_ask_question(transcript_path):
+    """Return True if the last assistant message ended with an AskUserQuestion tool call.
+
+    Used to detect when Claude's turn ended by asking the user a question —
+    in that case we want to show 'waiting' rather than 'idle'/'done'.
+    """
+    if not transcript_path:
+        return False
+    try:
+        with open(transcript_path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            chunk = min(size, 16384)
+            f.seek(-chunk, 2)
+            tail = f.read().decode("utf-8", errors="ignore")
+        for line in reversed(tail.splitlines()):
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if obj.get("type") != "assistant":
+                continue
+            msg = obj.get("message", {})
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                return False
+            # Check if any content block is a tool_use for AskUserQuestion
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    if block.get("name") == "AskUserQuestion":
+                        return True
+            return False  # Found the last assistant message — no AskUserQuestion
+    except Exception:
+        pass
+    return False
+
+
 def _read_last_tokens(transcript_path):
     """Read the last assistant usage entry from the JSONL transcript.
     Returns a dict with input_tokens, cache_creation, cache_read, output_tokens, model — or {}."""
@@ -274,7 +313,7 @@ def main():
         return
 
     action = sys.argv[1]
-    valid_actions = {"idle", "working", "thinking", "waiting", "done", "remove", "error", "subagent", "subagent_stop"}
+    valid_actions = {"idle", "working", "thinking", "waiting", "done", "remove", "error", "subagent", "subagent_stop", "compacting"}
     if action not in valid_actions:
         return  # Silently ignore unknown actions
 
@@ -376,6 +415,10 @@ def main():
                 active_subs = existing.get("activeSubagents", 0)
                 if action in ("done", "idle"):
                     active_subs = 0
+                    # If the turn ended by asking the user a question, stay
+                    # in "waiting" rather than transitioning to done/idle.
+                    if _last_tool_was_ask_question(transcript_path):
+                        action = "waiting"
                 elif action == "subagent":
                     active_subs += 1
                 elif action == "subagent_stop":
