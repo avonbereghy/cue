@@ -130,6 +130,24 @@ html[data-theme="light"]:not([data-glass]) .dot-pulse {
   100%     { opacity: 1;   transform: scale(1); }
 }
 
+/* compacting — ripple-out: core pulses softly, ring expands and fades */
+.compact-core {
+  animation: compact-core-pulse 1.8s ease-in-out infinite;
+}
+.compact-ring {
+  animation: compact-ring-expand 1.8s ease-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+@keyframes compact-core-pulse {
+  0%, 100% { opacity: 0.9; }
+  50%       { opacity: 0.5; }
+}
+@keyframes compact-ring-expand {
+  0%   { transform: scale(1);   opacity: 0.75; }
+  100% { transform: scale(2.1); opacity: 0; }
+}
+
 /* error — horizontal shake with slight rotation */
 .status-error {
   animation: status-error-shake 2.2s ease-in-out infinite;
@@ -267,6 +285,7 @@ html[data-theme="light"]:not([data-glass]) .anim-shine .title-char {
     box-shadow var(--key-release-speed, 0.4s) cubic-bezier(0.4, 0, 0.2, 1),
     background-color var(--key-release-speed, 0.4s) ease,
     border-color var(--key-release-speed, 0.4s) ease,
+    transform var(--key-press-speed, 0.35s) cubic-bezier(0.22, 1, 0.36, 1),
     opacity 300ms ease;
 }
 /* New cards fade in on first appearance */
@@ -275,8 +294,7 @@ html[data-theme="light"]:not([data-glass]) .anim-shine .title-char {
 }
 .session-card.session-card--compact {
   min-height: 0 !important;
-  /* Disable press/pop animations — no translateY shift in compact mode */
-  animation: none !important;
+  /* No vertical shift in compact mode */
   transform: none !important;
   transition:
     box-shadow var(--key-release-speed, 0.4s) cubic-bezier(0.4, 0, 0.2, 1),
@@ -308,7 +326,8 @@ html[data-theme="light"]:not([data-glass]) .session-card--compact.session-card--
   transform: translateY(0);
 }
 
-/* Pressed — subtle inset with faint light rim */
+/* Pressed — subtle inset with faint light rim.
+   Override transform easing: pressing down uses a heavier curve than popping up. */
 .session-card--pressed {
   background-color: var(--card-press-bg);
   border-color: var(--card-press-border);
@@ -317,32 +336,17 @@ html[data-theme="light"]:not([data-glass]) .session-card--compact.session-card--
     inset 0 1px 3px rgba(0,0,0,0.4),
     0 0 1px rgba(255,255,255,0.05);
   transform: translateY(3px);
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); /* heavier deceleration for press-down */
 }
 
-/* Mechanical press — no bounce */
-@keyframes card-press-down {
-  0%   { transform: translateY(0); }
-  100% { transform: translateY(3px); }
-}
+/* Press/pop uses CSS transition on transform (defined on .session-card base).
+   This gives smooth interpolation between ALL state transforms:
+   floating(0) ↔ pressed(3px) ↔ waiting(-2px) ↔ error(-2px) ↔ compacting(3px)
+   No keyframe animations needed — transitions handle interruption gracefully. */
 
-/* Mechanical release — snappy return with subtle overshoot */
-@keyframes card-pop-up {
-  0%   { transform: translateY(3px); }
-  70%  { transform: translateY(-1px); }
-  100% { transform: translateY(0); }
-}
-
-.session-card--pressed {
-  animation: card-press-down var(--key-press-speed, 0.35s) cubic-bezier(0.4, 0, 0.2, 1) forwards;
-}
-
-.session-card--floating {
-  animation: card-pop-up var(--key-release-speed, 0.4s) cubic-bezier(0.22, 1, 0.36, 1) forwards;
-}
-
-/* During slide-to-top: hold floating appearance, suppress press animation */
+/* During slide-to-top: hold floating appearance, suppress state transitions */
 .session-card--sliding {
-  animation: none !important;
+  transition: none !important;
 }
 
 /* Prompt popup entry animation */
@@ -353,7 +357,7 @@ html[data-theme="light"]:not([data-glass]) .session-card--compact.session-card--
 
 /* Reordering — smooth mechanical slide with subtle lift */
 .session-card--reordering {
-  animation: none !important;
+  transition: none !important; /* FLIP handles the transform directly */
   background-color: var(--card-float-bg);
   border-color: var(--card-float-border);
   box-shadow:
@@ -391,13 +395,13 @@ html[data-theme="light"]:not([data-glass]) .session-card--pressed {
 
 /* Waiting state — yellow highlight + construction tape stripes + elevated */
 .session-card--waiting {
-  background-color: rgba(255, 204, 0, 0.06) !important;
+  background-color: rgba(255, 204, 0, 0.06);
   box-shadow:
     0 2px 6px rgba(255, 204, 0, 0.08),
     0 6px 20px rgba(255, 204, 0, 0.06),
     inset 0 0 40px rgba(255, 204, 0, 0.15),
-    0 0 20px rgba(255, 204, 0, 0.10) !important;
-  border-color: rgba(255, 204, 0, 0.4) !important;
+    0 0 20px rgba(255, 204, 0, 0.10);
+  border-color: rgba(255, 204, 0, 0.4);
   transform: translateY(-2px);
 }
 /* State accent bars — shared base for pseudo-element transitions */
@@ -411,7 +415,8 @@ html[data-theme="light"]:not([data-glass]) .session-card--pressed {
   z-index: 20;
   pointer-events: none;
   opacity: 0;
-  transition: opacity 600ms ease, background 600ms ease;
+  transition: opacity var(--key-release-speed, 0.4s) cubic-bezier(0.16, 1, 0.3, 1),
+              background var(--key-release-speed, 0.4s) ease;
 }
 .session-card::before { top: 0; border-radius: 0.5rem 0.5rem 0 0; }
 .session-card::after { bottom: 0; border-radius: 0 0 0.5rem 0.5rem; }
@@ -435,11 +440,11 @@ html[data-theme="light"]:not([data-glass]) .session-card--pressed {
   100% { background-position: 200% 0; }
 }
 .session-card--thinking {
-  border-color: rgba(246, 165, 96, 0.35) !important;
+  border-color: rgba(246, 165, 96, 0.35);
   box-shadow:
     0 2px 6px rgba(246, 165, 96, 0.06),
     0 6px 20px rgba(246, 165, 96, 0.04),
-    inset 0 0 30px rgba(246, 165, 96, 0.06) !important;
+    inset 0 0 30px rgba(246, 165, 96, 0.06);
 }
 .session-card--thinking::before {
   opacity: 1;
@@ -455,23 +460,55 @@ html[data-theme="light"]:not([data-glass]) .session-card--pressed {
   animation: thinking-bar-sweep 3s ease-in-out infinite;
 }
 html[data-theme="light"]:not([data-glass]) .session-card--thinking {
-  background-color: rgba(234, 88, 12, 0.06) !important;
-  border-color: rgba(194, 65, 12, 0.30) !important;
+  background-color: rgba(234, 88, 12, 0.06);
+  border-color: rgba(194, 65, 12, 0.30);
   box-shadow:
     0 2px 4px rgba(0,0,0,0.10),
     0 6px 16px rgba(0,0,0,0.12),
     0 14px 36px rgba(0,0,0,0.14),
-    inset 0 0 40px rgba(234, 88, 12, 0.10) !important;
+    inset 0 0 40px rgba(234, 88, 12, 0.10);
+}
+
+/* Compacting state — periwinkle border glow + slow sweep bar */
+@keyframes compacting-bar-sweep {
+  0%   { background-position: -100% 0; }
+  100% { background-position: 200% 0; }
+}
+.session-card--compacting {
+  border-color: rgba(139, 159, 212, 0.35);
+  box-shadow:
+    inset 0 2px 8px rgba(0,0,0,0.6),
+    0 0 0 1px rgba(139, 159, 212, 0.12),
+    0 0 24px rgba(139, 159, 212, 0.07);
+}
+.session-card--compacting::before {
+  opacity: 1;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(139, 159, 212, 0.35) 40%,
+    rgba(139, 159, 212, 0.55) 50%,
+    rgba(139, 159, 212, 0.35) 60%,
+    transparent 100%);
+  background-size: 300% 100%;
+  animation: compacting-bar-sweep 2.8s ease-in-out infinite;
+}
+html[data-theme="light"]:not([data-glass]) .session-card--compacting {
+  background-color: rgba(74, 95, 160, 0.04);
+  border-color: rgba(74, 95, 160, 0.25);
+  box-shadow:
+    0 2px 4px rgba(0,0,0,0.08),
+    0 6px 16px rgba(0,0,0,0.10),
+    inset 0 0 30px rgba(74, 95, 160, 0.06);
 }
 
 /* Error state — red highlight + solid red bars + elevated */
 .session-card--error {
-  background-color: rgba(255, 69, 58, 0.05) !important;
+  background-color: rgba(255, 69, 58, 0.05);
   box-shadow:
     0 2px 6px rgba(255, 69, 58, 0.08),
     0 6px 20px rgba(255, 69, 58, 0.06),
-    inset 0 0 30px rgba(255, 69, 58, 0.12) !important;
-  border-color: rgba(255, 69, 58, 0.3) !important;
+    inset 0 0 30px rgba(255, 69, 58, 0.12);
+  border-color: rgba(255, 69, 58, 0.3);
   transform: translateY(-2px);
 }
 .session-card--error::before,
@@ -482,14 +519,14 @@ html[data-theme="light"]:not([data-glass]) .session-card--thinking {
 
 /* Light mode variants */
 html[data-theme="light"]:not([data-glass]) .session-card--waiting {
-  background-color: rgba(255, 204, 0, 0.08) !important;
+  background-color: rgba(255, 204, 0, 0.08);
   box-shadow:
     0 2px 4px rgba(0,0,0,0.1),
     0 6px 16px rgba(0,0,0,0.12),
     0 14px 36px rgba(0,0,0,0.14),
     inset 0 0 40px rgba(255, 204, 0, 0.15),
-    0 0 20px rgba(255, 204, 0, 0.1) !important;
-  border-color: rgba(200, 160, 0, 0.4) !important;
+    0 0 20px rgba(255, 204, 0, 0.1);
+  border-color: rgba(200, 160, 0, 0.4);
   transform: translateY(-2px);
 }
 html[data-theme="light"]:not([data-glass]) .session-card--waiting::before,
@@ -503,13 +540,13 @@ html[data-theme="light"]:not([data-glass]) .session-card--waiting::after {
   );
 }
 html[data-theme="light"]:not([data-glass]) .session-card--error {
-  background-color: rgba(255, 69, 58, 0.06) !important;
+  background-color: rgba(255, 69, 58, 0.06);
   box-shadow:
     0 2px 4px rgba(0,0,0,0.1),
     0 6px 16px rgba(0,0,0,0.12),
     0 14px 36px rgba(0,0,0,0.14),
-    inset 0 0 30px rgba(255, 69, 58, 0.12) !important;
-  border-color: rgba(220, 50, 40, 0.3) !important;
+    inset 0 0 30px rgba(255, 69, 58, 0.12);
+  border-color: rgba(220, 50, 40, 0.3);
   transform: translateY(-2px);
 }
 html[data-theme="light"]:not([data-glass]) .session-card--error::before,
