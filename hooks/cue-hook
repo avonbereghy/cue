@@ -313,7 +313,7 @@ def main():
         return
 
     action = sys.argv[1]
-    valid_actions = {"idle", "working", "thinking", "waiting", "done", "remove", "error", "subagent", "subagent_stop", "compacting"}
+    valid_actions = {"idle", "working", "thinking", "waiting", "done", "remove", "error", "subagent", "subagent_stop", "compacting", "clearing"}
     if action not in valid_actions:
         return  # Silently ignore unknown actions
 
@@ -398,6 +398,22 @@ def main():
                 # Update or create session
                 existing = status["sessions"].get(session_id, {})
 
+                # Detect /clear: SessionStart for a session that already has
+                # transcript content means /clear was run (not a fresh session).
+                # Uses hook_event_name to distinguish SessionStart from Stop.
+                is_clear = False
+                event_name = hook_data.get("hook_event_name", "")
+                if action == "idle" and event_name == "SessionStart":
+                    has_prior = False
+                    if transcript_path:
+                        try:
+                            has_prior = os.path.getsize(transcript_path) > 100
+                        except OSError:
+                            pass
+                    if has_prior or (existing and now - existing.get("lastActivity", 0) < 120):
+                        action = "clearing"
+                        is_clear = True
+
                 # Guard against stale "waiting" writes: PermissionRequest hooks
                 # are slow (HTTP request) and can finish after PostToolUse
                 # already moved the state to "working". Only skip writes for
@@ -409,21 +425,35 @@ def main():
                         return  # A newer hook already wrote — don't clobber it
 
                 # Subagent counter: increment on start, decrement on stop.
-                # "done" and "idle" are authoritative turn-end signals that
-                # reset the counter — if it's still positive, it's a leaked
-                # counter (denied agent, crash, missed SubagentStop).
+                # Leaked counters (denied agent, crash, missed SubagentStop)
+                # are handled by the Rust backend's 90s stale-session timeout.
                 active_subs = existing.get("activeSubagents", 0)
                 if action in ("done", "idle"):
-                    active_subs = 0
-                    # If the turn ended by asking the user a question, stay
-                    # in "waiting" rather than transitioning to done/idle.
-                    if _last_tool_was_ask_question(transcript_path):
+                    # Guard: don't let done/idle overwrite "waiting" state.
+                    # The user hasn't responded yet — only forward-progressing
+                    # events (working, thinking, error, remove) should clear it.
+                    existing_state = existing.get("state", "")
+                    if existing_state == "waiting":
+                        return
+
+                    if active_subs > 0:
+                        # Main session went idle/done but subagents still running —
+                        # override to subagent; counter resets as SubagentStops arrive
+                        action = "subagent"
+                    elif _last_tool_was_ask_question(transcript_path):
+                        # Turn ended by asking user a question — show waiting
                         action = "waiting"
                 elif action == "subagent":
                     active_subs += 1
                 elif action == "subagent_stop":
                     active_subs = max(0, active_subs - 1)
                     action = "subagent" if active_subs > 0 else "working"
+
+                # While clearing, keep the clearing state visible — don't let
+                # working/thinking from internal clear operations overwrite it.
+                # Only done/idle (from Stop) or user action can end clearing.
+                if existing.get("state") == "clearing" and action in ("working", "thinking"):
+                    action = "clearing"
 
                 # While subagents are active, override "working"/"thinking" to show
                 # subagent state. Waiting and error are NOT overridden.
@@ -439,7 +469,7 @@ def main():
                     "workspace": stable_workspace,
                     "state": action,
                     "lastActivity": now,
-                    "startedAt": existing.get("startedAt", now),
+                    "startedAt": now if is_clear else existing.get("startedAt", now),
                     "source": existing.get("source", source),
                     "activeSubagents": active_subs,
                 }

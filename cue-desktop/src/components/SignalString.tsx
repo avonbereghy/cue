@@ -618,24 +618,27 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         }
         const numBins = freqData.length;
 
-        // Fade envelope: smoothly reduces FFT drive and string opacity
-        // during the fade-out period (while fading) and after (when fully inactive).
-        let fadeEnvelope = 1.0;
+        // Decay envelope: only applies AFTER all bands are fully retracted.
+        // During retraction the physics (audio + straightening force) handles amplitude.
         let decayEnvelope = 1.0;
-        if (fadingRef.current) {
-          // Fading: gradually reduce over FADE_DURATION
-          const elapsed = (now - fadeStartRef.current) / 1000;
-          fadeEnvelope = Math.max(0, 1.0 - elapsed / FADE_DURATION);
-          // Ease out for smoother tail
-          fadeEnvelope = fadeEnvelope * fadeEnvelope;
-        }
         if (!isActiveRef.current) {
-          if (deactivatedAtRef.current === null) {
-            deactivatedAtRef.current = now;
+          const maxClipFrac = Math.max(
+            clipFractionsRef.current[0],
+            clipFractionsRef.current[1],
+            clipFractionsRef.current[2],
+          );
+          if (maxClipFrac > 0.001) {
+            // Still retracting — physics handles amplitude via straightening force
+            decayEnvelope = 1.0;
+            deactivatedAtRef.current = null; // reset so post-retract decay starts fresh
+          } else {
+            if (deactivatedAtRef.current === null) {
+              deactivatedAtRef.current = now;
+            }
+            const elapsed = (now - deactivatedAtRef.current) / 1000;
+            decayEnvelope = Math.exp(-elapsed * 1.2);
+            if (decayEnvelope < 0.005) decayEnvelope = 0;
           }
-          const elapsed = (now - deactivatedAtRef.current) / 1000;
-          decayEnvelope = Math.exp(-elapsed * 1.2); // post-fade cord retract decay
-          if (decayEnvelope < 0.005) decayEnvelope = 0;
         }
 
         // Three strings with DIFFERENT spatial modes so they visually separate:
@@ -703,22 +706,34 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             const modeDamping = band.baseDamping * (1 + m * 0.3);
 
             // Driven oscillator: position tracks target with inertia
-            // fadeEnvelope gradually reduces drive force during transition
             const idx = bi * 6 + m;
-            const drive = fadeEnvelope;
+            const bandClip = clipFractionsRef.current[band.bandIdx];
             if (isActiveRef.current || fadingRef.current) {
-              // Drive oscillator toward FFT target, scaled by fade envelope
-              const scaledTarget = target * drive;
-              const force = (scaledTarget - ms.pos[idx]) * STIFFNESS - ms.vel[idx] * modeDamping;
+              // Active/fading: drive oscillator toward FFT target at full strength.
+              // No fade reduction — strings keep receiving audio until retraction handles it.
+              const force = (target - ms.pos[idx]) * STIFFNESS - ms.vel[idx] * modeDamping;
               ms.vel[idx] += force * dt;
-              ms.pos[idx] += ms.vel[idx] * dt;
-              ms.pos[idx] = Math.max(0, Math.min(1.5, ms.pos[idx]));
+            } else if (bandClip > 0.001) {
+              // Retracting: audio input continues as additive excitation,
+              // competing with a straightening force that pulls the string flat.
+              // The competition creates organic retract — the string fights between
+              // audio response and the retracting tension that tries to straighten it.
+              const retractProgress = 1 - bandClip; // 0 = deployed, 1 = retracted
+              // Audio drive tapers as string retracts (100% → 40%)
+              const audioStrength = 1 - retractProgress * 0.6;
+              // Straightening force ramps up quadratically — pulls mode toward rest (flat)
+              const straightenStrength = retractProgress * retractProgress * STIFFNESS * 1.5;
+              const audioForce = (target * audioStrength - ms.pos[idx]) * STIFFNESS;
+              const straightenForce = -ms.pos[idx] * straightenStrength;
+              // Extra damping during retraction to prevent wild oscillation
+              const dampForce = -ms.vel[idx] * (modeDamping + retractProgress * 8);
+              ms.vel[idx] += (audioForce + straightenForce + dampForce) * dt;
             } else {
-              // Fully inactive: gently damp residual motion
+              // Fully retracted: gently damp residual motion
               ms.vel[idx] *= 0.92;
-              ms.pos[idx] += ms.vel[idx] * dt;
-              ms.pos[idx] = Math.max(0, Math.min(1.5, ms.pos[idx]));
             }
+            ms.pos[idx] += ms.vel[idx] * dt;
+            ms.pos[idx] = Math.max(0, Math.min(1.5, ms.pos[idx]));
             modeAmps.push(ms.pos[idx]);
           }
           allModeAmps.push(modeAmps);

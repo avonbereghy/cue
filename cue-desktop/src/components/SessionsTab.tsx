@@ -78,10 +78,10 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [sandGrainSize, setSandGrainSize] = useState(0.5);
   const [sandTurbulence, setSandTurbulence] = useState(0.4);
   const [sandAlpha, setSandAlpha] = useState(0.9);
-  const [cordRetractDelay, setCordRetractDelay] = useState(0.5);
-  const [cordDeployForce, setCordDeployForce] = useState(1.0);
-  const [cordRetractForce, setCordRetractForce] = useState(1.0);
-  const [stringSpread, setStringSpread] = useState(0.15);
+  const [cordRetractDelay, setCordRetractDelay] = useState(0.2);
+  const [cordDeployForce, setCordDeployForce] = useState(1.5);
+  const [cordRetractForce, setCordRetractForce] = useState(1.5);
+  const [stringSpread, setStringSpread] = useState(0.02);
   const [activePresetId, setActivePresetId] = useState("");
   const [presetBootAttempted, setPresetBootAttempted] = useState(false);
   const [testMode, setTestMode] = useState(false);
@@ -306,10 +306,10 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setSandGrainSize(s.sandGrainSize ?? 0.5);
     setSandTurbulence(s.sandTurbulence ?? 0.4);
     setSandAlpha(s.sandAlpha ?? 0.9);
-    setCordRetractDelay(s.cordRetractDelay ?? 0.5);
-    setCordDeployForce(s.cordDeployForce ?? 1.0);
-    setCordRetractForce(s.cordRetractForce ?? 1.0);
-    setStringSpread(s.stringSpread ?? 0.15);
+    setCordRetractDelay(s.cordRetractDelay ?? 0.2);
+    setCordDeployForce(s.cordDeployForce ?? 1.5);
+    setCordRetractForce(s.cordRetractForce ?? 1.5);
+    setStringSpread(s.stringSpread ?? 0.02);
     setGateEngine(s.signalGate ?? 0.05);
     setActivePresetId(s.activePresetId ?? "");
     setKeyPressSpeed(s.keyPressSpeed ?? 0.35);
@@ -1318,16 +1318,16 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           cardEl.classList.add("session-card--reordering");
         }
 
-        // Stagger: 40ms base + slight randomization for organic cascade feel
-        const staggerDelay = staggerIdx * 40 + Math.round(Math.random() * 12);
-        // Duration: 280-450ms, scales with distance — snappy but readable
+        // Stagger: 120ms base + slight randomization — very deliberate, each card its own moment
+        const staggerDelay = staggerIdx * 120 + Math.round(Math.random() * 30);
+        // Duration: 1000-1600ms, scales with distance — very slow and fluid
         const distance = Math.abs(dy);
-        const duration = Math.min(450, Math.max(280, 220 + distance * 0.35));
+        const duration = Math.min(1600, Math.max(1000, 800 + distance * 1.4));
 
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            // outQuart deceleration with very subtle overshoot — cards "land" decisively
-            el.style.transition = `transform ${duration}ms cubic-bezier(0.25, 1.04, 0.5, 1) ${staggerDelay}ms`;
+            // outExpo deceleration — smooth glide to rest, no overshoot
+            el.style.transition = `transform ${duration}ms cubic-bezier(0.16, 1, 0.3, 1) ${staggerDelay}ms`;
             el.style.transform = "translateY(0)";
 
             const cleanup = () => {
