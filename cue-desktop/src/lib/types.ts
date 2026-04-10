@@ -84,6 +84,8 @@ export interface SessionMetrics {
   runningToolTarget?: string;
   todoItems: TodoItem[];
   lastPrompt?: string | null;
+  /** Session ID extracted from the JSONL metadata header — used to verify the prompt belongs to this session */
+  lastPromptSessionId?: string | null;
 }
 
 /** Pre-computed by Rust backend (EnrichedSession includes derived fields) */
@@ -187,6 +189,25 @@ export interface Settings {
   showConfigCounts: boolean;
   /** Timer display: "minutes" (HH:MM), "seconds" (HH:MM:SS), or "off" */
   timerDisplay: string;
+  /** Per-theme appearance customizations saved by the user, keyed by theme ID */
+  themeCustomizations: Record<string, ThemeCustomization>;
+}
+
+export interface ThemeCustomization {
+  signalColorDark: string;
+  signalColorLight: string;
+  signalAlpha: number;
+  signalAmplitude: number;
+  signalEcho: number;
+  signalEffect: string;
+  sandEnabled: boolean;
+  sandIntensity: number;
+  sandDirection: number;
+  sandDensity: number;
+  sandSpeed: number;
+  sandGrainSize: number;
+  sandTurbulence: number;
+  sandAlpha: number;
 }
 
 export interface SignalPreset {
@@ -468,6 +489,7 @@ export const STATE_COLORS: Record<string, string> = {
   waiting: "text-yellow-400",
   error: "text-red-500",
   subagent: "text-blue-400",
+  compacting: "text-[#8B9FD4]",
   idle: "text-amber-300",
   done: "text-green-500",
   ended: "text-red-400",
@@ -479,6 +501,7 @@ export const STATE_DOT_COLORS: Record<string, string> = {
   waiting: "bg-yellow-400",
   error: "bg-red-500",
   subagent: "bg-blue-400",
+  compacting: "bg-[#9CAEE0]",
   idle: "bg-amber-300",
   done: "bg-green-500",
   ended: "bg-red-400",
@@ -490,6 +513,7 @@ export const STATE_BADGE_BG: Record<string, string> = {
   waiting: "bg-yellow-400/20 text-yellow-400",
   error: "bg-red-500/20 text-red-500",
   subagent: "bg-blue-400/20 text-blue-400",
+  compacting: "bg-[#8B9FD4]/20 text-[#8B9FD4]",
   idle: "bg-amber-300/20 text-amber-300",
   done: "bg-green-500/20 text-green-500",
   ended: "bg-red-400/20 text-red-400",
@@ -502,6 +526,7 @@ export const STATE_HEX: Record<string, string> = {
   waiting: "#facc15",
   error: "#ef4444",
   subagent: "#60a5fa",
+  compacting: "#8B9FD4",
   idle: "#d4a574",
   done: "#22c55e",
   ended: "#f87171",
@@ -513,6 +538,7 @@ export const STATE_HEX_LIGHT: Record<string, string> = {
   waiting: "#b45309",
   error: "#b91c1c",
   subagent: "#1d4ed8",
+  compacting: "#4A5FA0",
   idle: "#78716c",
   done: "#15803d",
   ended: "#b91c1c",
@@ -524,6 +550,7 @@ export const STATE_DOT_HEX: Record<string, string> = {
   waiting: "#facc15",
   error: "#ef4444",
   subagent: "#60a5fa",
+  compacting: "#9CAEE0",
   idle: "#d4a574",
   done: "#22c55e",
   ended: "#f87171",
@@ -535,6 +562,7 @@ export const STATE_DOT_HEX_LIGHT: Record<string, string> = {
   waiting: "#b45309",
   error: "#dc2626",
   subagent: "#2563eb",
+  compacting: "#4A5FA0",
   idle: "#a8a29e",
   done: "#16a34a",
   ended: "#dc2626",
@@ -546,6 +574,7 @@ export const STATE_BADGE_HEX: Record<string, { bg: string; text: string }> = {
   waiting: { bg: "rgba(250,204,21,0.2)", text: "#facc15" },
   error: { bg: "rgba(239,68,68,0.2)", text: "#ef4444" },
   subagent: { bg: "rgba(96,165,250,0.2)", text: "#60a5fa" },
+  compacting: { bg: "rgba(139,159,212,0.15)", text: "#8B9FD4" },
   idle: { bg: "rgba(212,165,116,0.15)", text: "#d4a574" },
   done: { bg: "rgba(34,197,94,0.2)", text: "#22c55e" },
   ended: { bg: "rgba(248,113,113,0.2)", text: "#f87171" },
@@ -557,6 +586,7 @@ export const STATE_BADGE_HEX_LIGHT: Record<string, { bg: string; text: string }>
   waiting: { bg: "rgba(180,83,9,0.14)", text: "#b45309" },
   error: { bg: "rgba(185,28,28,0.12)", text: "#b91c1c" },
   subagent: { bg: "rgba(29,78,216,0.12)", text: "#1d4ed8" },
+  compacting: { bg: "rgba(74,95,160,0.12)", text: "#4A5FA0" },
   idle: { bg: "rgba(120,113,108,0.12)", text: "#78716c" },
   done: { bg: "rgba(21,128,61,0.12)", text: "#15803d" },
   ended: { bg: "rgba(185,28,28,0.12)", text: "#b91c1c" },

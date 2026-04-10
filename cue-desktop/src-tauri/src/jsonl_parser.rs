@@ -44,6 +44,8 @@ pub struct ParsedEntry {
     pub task_status_updates: Vec<(String, String)>,
     /// Extracted text from user messages (first text content block, truncated)
     pub user_prompt_text: Option<String>,
+    /// Session ID from JSONL metadata (permission-mode header entry)
+    pub jsonl_session_id: Option<String>,
 }
 
 /// Parse a JSONL file into a list of entries.
@@ -94,6 +96,11 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
     // Extract custom title
     if entry_type == "custom-title" {
         entry.custom_title = obj.get("customTitle").and_then(|v| v.as_str()).map(String::from);
+    }
+
+    // Extract session ID from metadata entries (permission-mode or system headers)
+    if let Some(sid) = obj.get("sessionId").and_then(|v| v.as_str()) {
+        entry.jsonl_session_id = Some(sid.to_string());
     }
 
     // Track git branch from any message that has it
@@ -578,6 +585,13 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
     let mut m = crate::models::SessionMetrics::default();
 
     for entry in &entries {
+        // Session ID from JSONL metadata — first occurrence wins
+        if m.last_prompt_session_id.is_none() {
+            if let Some(ref sid) = entry.jsonl_session_id {
+                m.last_prompt_session_id = Some(sid.clone());
+            }
+        }
+
         // Custom title — last one wins
         if let Some(ref title) = entry.custom_title {
             m.custom_title = Some(title.clone());
