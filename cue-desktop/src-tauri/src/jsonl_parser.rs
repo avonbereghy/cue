@@ -340,6 +340,16 @@ fn extract_user_prompt_text(obj: &serde_json::Map<String, Value>) -> Option<Stri
     let content = message.get("content")?;
 
     let raw = if let Some(s) = content.as_str() {
+        // Skip JSON objects injected as user-role messages by the Claude Code harness
+        // (e.g. idle_notification, teammate_terminated, shutdown_approved events).
+        let trimmed_s = s.trim();
+        if trimmed_s.starts_with('{') && trimmed_s.ends_with('}') {
+            if let Ok(v) = serde_json::from_str::<Value>(trimmed_s) {
+                if v.get("type").is_some() {
+                    return None;
+                }
+            }
+        }
         s.to_string()
     } else if let Some(arr) = content.as_array() {
         // Find the first text block

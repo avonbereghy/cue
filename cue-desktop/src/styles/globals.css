@@ -148,6 +148,40 @@ html[data-theme="light"]:not([data-glass]) .dot-pulse {
   100% { transform: scale(2.1); opacity: 0; }
 }
 
+/* clearing — dissolve-up: core shrinks, particles drift up and fade */
+.clearing-core {
+  animation: clearing-core-fade 2s ease-in-out infinite;
+}
+.clearing-particle {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.clearing-p1 {
+  animation: clearing-rise-1 2s ease-out infinite;
+}
+.clearing-p2 {
+  animation: clearing-rise-2 2s ease-out infinite 0.3s;
+}
+.clearing-p3 {
+  animation: clearing-rise-3 2s ease-out infinite 0.6s;
+}
+@keyframes clearing-core-fade {
+  0%, 100% { opacity: 0.8; }
+  50%       { opacity: 0.35; }
+}
+@keyframes clearing-rise-1 {
+  0%   { transform: translateY(0);    opacity: 0.8; }
+  100% { transform: translateY(-4px); opacity: 0; }
+}
+@keyframes clearing-rise-2 {
+  0%   { transform: translateY(0);    opacity: 0.7; }
+  100% { transform: translateY(-5px); opacity: 0; }
+}
+@keyframes clearing-rise-3 {
+  0%   { transform: translateY(0);    opacity: 0.75; }
+  100% { transform: translateY(-3.5px); opacity: 0; }
+}
+
 /* error — horizontal shake with slight rotation */
 .status-error {
   animation: status-error-shake 2.2s ease-in-out infinite;
@@ -499,6 +533,38 @@ html[data-theme="light"]:not([data-glass]) .session-card--compacting {
     0 2px 4px rgba(0,0,0,0.08),
     0 6px 16px rgba(0,0,0,0.10),
     inset 0 0 30px rgba(74, 95, 160, 0.06);
+}
+
+/* Clearing state — rose mauve border glow + slow sweep bar */
+@keyframes clearing-bar-sweep {
+  0%   { background-position: -100% 0; }
+  100% { background-position: 200% 0; }
+}
+.session-card--clearing {
+  border-color: rgba(196, 144, 180, 0.35);
+  box-shadow:
+    inset 0 2px 8px rgba(0,0,0,0.6),
+    0 0 0 1px rgba(196, 144, 180, 0.12),
+    0 0 24px rgba(196, 144, 180, 0.07);
+}
+.session-card--clearing::before {
+  opacity: 1;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(196, 144, 180, 0.35) 40%,
+    rgba(196, 144, 180, 0.55) 50%,
+    rgba(196, 144, 180, 0.35) 60%,
+    transparent 100%);
+  background-size: 300% 100%;
+  animation: clearing-bar-sweep 2.8s ease-in-out infinite;
+}
+html[data-theme="light"]:not([data-glass]) .session-card--clearing {
+  background-color: rgba(139, 74, 112, 0.04);
+  border-color: rgba(139, 74, 112, 0.25);
+  box-shadow:
+    0 2px 4px rgba(0,0,0,0.08),
+    0 6px 16px rgba(0,0,0,0.10),
+    inset 0 0 30px rgba(139, 74, 112, 0.06);
 }
 
 /* Error state — red highlight + solid red bars + elevated */

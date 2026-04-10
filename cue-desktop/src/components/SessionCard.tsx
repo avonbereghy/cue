@@ -300,7 +300,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
     };
   }, [isAnimating, signalString, session.displayTitle, titleAnimation, animationSpeed, randomAnimation, pageVisible]);
 
-  const isWorking = displayState === "working" || displayState === "subagent" || displayState === "compacting";
+  const isWorking = displayState === "working" || displayState === "subagent" || displayState === "compacting" || displayState === "clearing";
   const isWaiting = displayState === "waiting";
   const isError = displayState === "error";
 
@@ -309,7 +309,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
 
   const STATE_DISPLAY_NAME: Record<string, string> = {
     working: "Working", thinking: "Thinking", waiting: "Waiting", error: "Error",
-    subagent: "Subagent", compacting: "Compacting", idle: "Idle", done: "Done", ended: "Ended",
+    subagent: "Subagent", compacting: "Compacting", clearing: "Clearing", idle: "Idle", done: "Done", ended: "Ended",
   };
 
   // Dot color follows displayState so it transitions smoothly with the badge
@@ -364,7 +364,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
       } ${
         isWorking ? "session-card--pressed" : "session-card--floating"
       } ${
-        isWaiting ? "session-card--waiting" : isError ? "session-card--error" : displayState === "thinking" ? "session-card--thinking" : displayState === "compacting" ? "session-card--compacting" : ""
+        isWaiting ? "session-card--waiting" : isError ? "session-card--error" : displayState === "thinking" ? "session-card--thinking" : displayState === "compacting" ? "session-card--compacting" : displayState === "clearing" ? "session-card--clearing" : ""
       } ${
         effectiveCompact ? "px-2.5 py-1.5 space-y-0"
         : signalString && (signalMode === "preset" || signalMode === "audio" || signalMode === "live") ? "px-4 pt-4 pb-5 space-y-4" : "px-3 pt-2 pb-1 space-y-2"

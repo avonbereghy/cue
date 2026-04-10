@@ -470,10 +470,10 @@ export function SettingsView() {
       sandGrainSize: 0.5,
       sandTurbulence: 0.4,
       sandAlpha: 0.9,
-      cordRetractDelay: 0.5,
-      cordDeployForce: 1.0,
-      cordRetractForce: 1.0,
-      stringSpread: 0.15,
+      cordRetractDelay: 0.2,
+      cordDeployForce: 1.5,
+      cordRetractForce: 1.5,
+      stringSpread: 0.02,
       keyPressSpeed: 0.35,
       keyReleaseSpeed: 0.4,
       autoReorder: false,
@@ -653,28 +653,28 @@ export function SettingsView() {
             </div>
 
             <SettingRow label="Opacity" description="String transparency">
-              <Slider value={settings.signalAlpha ?? 0.7} min={0.05} max={1.0} step={0.01} defaultValue={0.7} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalAlpha: v })} />
+              <Slider value={settings.signalAlpha ?? 0.75} min={0.05} max={1.0} step={0.01} defaultValue={0.75} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalAlpha: v })} />
             </SettingRow>
 
             <SettingRow label="Amplitude" description="String displacement intensity">
-              <Slider value={settings.signalAmplitude ?? 0.15} min={0.01} max={1.0} step={0.01} defaultValue={0.15} format={formatMul} onChange={(v) => setSettings({ ...settings, signalAmplitude: v })} />
+              <Slider value={settings.signalAmplitude ?? 0.10} min={0.01} max={1.0} step={0.01} defaultValue={0.10} format={formatMul} onChange={(v) => setSettings({ ...settings, signalAmplitude: v })} />
             </SettingRow>
 
             <SettingRow label="Echo" description="Trailing reverb lines behind the main string">
-              <Slider value={settings.signalEcho ?? 1.75} min={0} max={2.0} step={0.01} defaultValue={1.75} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalEcho: v })} />
+              <Slider value={settings.signalEcho ?? 1.50} min={0} max={2.0} step={0.01} defaultValue={1.50} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalEcho: v })} />
             </SettingRow>
 
             <SettingRow label="Retract Delay" description="Seconds before strings retract after session stops">
-              <Slider value={settings.cordRetractDelay ?? 0.5} min={0} max={2.0} step={0.1} defaultValue={0.5} format={(v) => `${v.toFixed(1)}s`} onChange={(v) => setSettings({ ...settings, cordRetractDelay: v })} />
+              <Slider value={settings.cordRetractDelay ?? 0.2} min={0} max={2.0} step={0.1} defaultValue={0.2} format={(v) => `${v.toFixed(1)}s`} onChange={(v) => setSettings({ ...settings, cordRetractDelay: v })} />
             </SettingRow>
             <SettingRow label="Deploy Force" description="How forcefully strings launch when session starts working">
-              <Slider value={settings.cordDeployForce ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, cordDeployForce: v })} />
+              <Slider value={settings.cordDeployForce ?? 1.5} min={0.2} max={3.0} step={0.01} defaultValue={1.5} format={formatMul} onChange={(v) => setSettings({ ...settings, cordDeployForce: v })} />
             </SettingRow>
             <SettingRow label="Retract Force" description="How hard the vacuum pulls the strings back">
-              <Slider value={settings.cordRetractForce ?? 1.0} min={0.2} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, cordRetractForce: v })} />
+              <Slider value={settings.cordRetractForce ?? 1.5} min={0.2} max={3.0} step={0.01} defaultValue={1.5} format={formatMul} onChange={(v) => setSettings({ ...settings, cordRetractForce: v })} />
             </SettingRow>
             <SettingRow label="Spread" description="Vertical separation between the three strings">
-              <Slider value={settings.stringSpread ?? 0.15} min={0} max={0.5} step={0.01} defaultValue={0.15} format={formatMul} onChange={(v) => setSettings({ ...settings, stringSpread: v })} />
+              <Slider value={settings.stringSpread ?? 0.02} min={0} max={0.5} step={0.01} defaultValue={0.02} format={formatMul} onChange={(v) => setSettings({ ...settings, stringSpread: v })} />
             </SettingRow>
 
             {/* ── Sand settings (active during thinking state) ── */}
