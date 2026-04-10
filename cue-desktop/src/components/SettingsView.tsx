@@ -488,6 +488,7 @@ export function SettingsView() {
       showCurrentTool: false,
       showConfigCounts: false,
       timerDisplay: "seconds",
+      themeCustomizations: settings.themeCustomizations ?? {},
     };
     setSettings(defaults);
     // Apply theme immediately
