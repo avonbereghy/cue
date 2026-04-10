@@ -772,7 +772,139 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         ];
       },
     },
+    {
+      key: "F6", label: "Transitions", description: "Auto-run 50+ state transitions",
+      build: () => {
+        sandboxCounterRef.current = 0;
+        return [
+          makeSandboxSession("idle", { title: "Auth middleware", workspace: "api-server", branch: "feat/auth", contextPct: 0.25, durationSecs: 120 }),
+          makeSandboxSession("idle", { title: "Dashboard UI", workspace: "web-client", branch: "main", contextPct: 0.40, durationSecs: 300 }),
+          makeSandboxSession("idle", { title: "Test suite", workspace: "cue", branch: "fix/bug-123", contextPct: 0.55, durationSecs: 500 }),
+          makeSandboxSession("idle", { title: "DB migration", workspace: "ml-pipeline", branch: "dev", contextPct: 0.70, durationSecs: 180 }),
+        ];
+      },
+    },
   ];
+
+  // Transition test runner — F6 preset triggers this
+  const transitionTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  const runTransitionTest = useCallback(() => {
+    // Clear any previous test run
+    for (const t of transitionTimersRef.current) clearTimeout(t);
+    transitionTimersRef.current = [];
+
+    // Scripted sequence: [delayMs, sessionIndex (0-3), targetState]
+    // Covers all important transition pairs across 4 sessions with realistic timing
+    const script: Array<[number, number, string]> = [
+      // --- Wave 1: cold start — all idle, sessions wake up one by one ---
+      [  600, 0, "thinking"],     // 0: idle → thinking
+      [ 1200, 0, "working"],      // 0: thinking → working
+      [ 1800, 1, "thinking"],     // 1: idle → thinking
+      [ 2200, 1, "working"],      // 1: thinking → working
+      [ 2600, 2, "thinking"],     // 2: idle → thinking
+      [ 3000, 2, "working"],      // 2: thinking → working
+
+      // --- Wave 2: permission request interrupts working ---
+      [ 3800, 1, "waiting"],      // 1: working → waiting
+      [ 5200, 1, "working"],      // 1: waiting → working (approved)
+      [ 5600, 0, "waiting"],      // 0: working → waiting
+      [ 6000, 0, "error"],        // 0: waiting → error (denied/failed)
+      [ 7000, 0, "working"],      // 0: error → working (retried)
+
+      // --- Wave 3: subagent spawning ---
+      [ 7800, 2, "subagent"],     // 2: working → subagent
+      [ 8400, 0, "subagent"],     // 0: working → subagent
+      [ 9200, 1, "subagent"],     // 1: working → subagent
+
+      // --- Wave 4: mixed completions and new activity ---
+      [10000, 0, "working"],      // 0: subagent → working (subagent done)
+      [10400, 3, "thinking"],     // 3: idle → thinking (wakes up)
+      [10800, 3, "working"],      // 3: thinking → working
+      [11200, 0, "done"],         // 0: working → done
+      [11600, 2, "working"],      // 2: subagent → working
+      [12000, 1, "working"],      // 1: subagent → working
+      [12400, 2, "done"],         // 2: working → done
+      [12800, 1, "thinking"],     // 1: working → thinking (new turn)
+      [13200, 1, "working"],      // 1: thinking → working
+
+      // --- Wave 5: rapid-fire state changes (stress test) ---
+      [13800, 3, "waiting"],      // 3: working → waiting
+      [14000, 3, "working"],      // 3: waiting → working (quick approve)
+      [14200, 3, "waiting"],      // 3: working → waiting (another permission)
+      [14600, 3, "error"],        // 3: waiting → error
+      [15200, 3, "idle"],         // 3: error → idle
+
+      // --- Wave 6: compacting ---
+      [15800, 1, "compacting"],   // 1: working → compacting
+      [17000, 1, "thinking"],     // 1: compacting → thinking
+      [17400, 1, "working"],      // 1: thinking → working
+      [17800, 0, "thinking"],     // 0: done → thinking (new prompt)
+      [18200, 0, "working"],      // 0: thinking → working
+
+      // --- Wave 7: error cascade and recovery ---
+      [18800, 0, "error"],        // 0: working → error
+      [19200, 1, "error"],        // 1: working → error
+      [19800, 0, "working"],      // 0: error → working (retry)
+      [20200, 1, "working"],      // 1: error → working (retry)
+
+      // --- Wave 8: all settle down ---
+      [21000, 0, "done"],         // 0: working → done
+      [21400, 1, "done"],         // 1: working → done
+      [21800, 3, "done"],         // 3: idle → done
+
+      // --- Wave 9: one wakes back up (tests bubble-up on settled list) ---
+      [24000, 2, "thinking"],     // 2: done → thinking (after ~11s idle)
+      [24400, 2, "working"],      // 2: thinking → working
+      [25000, 2, "subagent"],     // 2: working → subagent
+
+      // --- Wave 10: final wind-down — all to idle/done ---
+      [26000, 2, "working"],      // 2: subagent → working
+      [26500, 2, "done"],         // 2: working → done
+      [27000, 0, "idle"],         // 0: done → idle
+      [27500, 1, "idle"],         // 1: done → idle
+      [28000, 3, "idle"],         // 3: done → idle
+      [28500, 2, "idle"],         // 2: done → idle
+    ];
+
+    // Schedule all transitions
+    for (const [delay, idx, state] of script) {
+      const timer = setTimeout(() => {
+        setSandboxSessions((prev) => {
+          if (idx >= prev.length) return prev;
+          const id = prev[idx].info.id;
+          const meta = SANDBOX_STATE_META[state] ?? SANDBOX_STATE_META.idle;
+          const tool = state === "working" ? SANDBOX_TOOLS_ACTIVE[Math.floor(Math.random() * SANDBOX_TOOLS_ACTIVE.length)] : null;
+          return prev.map((s) =>
+            s.info.id === id ? {
+              ...s,
+              info: { ...s.info, state, lastActivity: Date.now() / 1000 },
+              stateIcon: meta.icon,
+              stateDisplayName: meta.display,
+              hasSubagents: state === "subagent" ? true : (state === "working" ? false : s.hasSubagents),
+              outputTokensPerSec: (state === "working" || state === "subagent") ? Math.random() * 25 + 5 : 0,
+              runningToolName: tool ? tool[0] : (state === "working" ? s.runningToolName : undefined),
+              runningToolTarget: tool ? tool[1] : (state === "working" ? s.runningToolTarget : undefined),
+              metrics: {
+                ...s.metrics,
+                subagents: state === "subagent" ? (s.metrics.subagents.length > 0 ? s.metrics.subagents : [
+                  { agentId: `sub_test_1`, description: "Research task", slug: "research", inputTokens: 12000, outputTokens: 3000, cacheCreationTokens: 0, cacheReadTokens: 5000, model: s.metrics.model, toolCounts: { Read: 3, Grep: 2 }, messageCount: 8, isActive: true },
+                ]) : (state === "working" ? [] : s.metrics.subagents),
+              },
+            } : s,
+          );
+        });
+      }, delay);
+      transitionTimersRef.current.push(timer);
+    }
+  }, [makeSandboxSession, setSandboxSessions]);
+
+  // Cleanup transition timers on unmount
+  useEffect(() => {
+    return () => {
+      for (const t of transitionTimersRef.current) clearTimeout(t);
+    };
+  }, []);
 
   // Load a sandbox preset. F5 (Screenshot) hides chrome, captures, then restores.
   const loadSandboxPreset = useCallback((preset: typeof SANDBOX_PRESETS[number]) => {
@@ -796,7 +928,12 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           .finally(() => setScreenshotMode(false));
       }));
     }
-  }, []);
+
+    if (preset.key === "F6") {
+      // Wait 1 frame for sessions to render, then start transition test
+      requestAnimationFrame(() => runTransitionTest());
+    }
+  }, [runTransitionTest]);
 
   // Keyboard handler for sandbox mode
   useEffect(() => {
@@ -946,11 +1083,20 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   }, [testMode, sandboxSelectedIdx, sandboxEditingTitle, makeSandboxSession, setAllSandboxState, cycleSandboxModel, cycleSandboxSource, cycleSandboxBranch, randomizeSandboxTokens, cycleSandboxSubagents, cycleSandboxTodos, cycleSandboxTool, cycleSandboxProvider, adjustSandboxContext, adjustSandboxDuration, loadSandboxPreset]);
 
   // ---------------------------------------------------------------------------
-  // Auto-reorder: sort sessions by priority, but ONLY after all sessions have
-  // been idle/done for 5+ seconds. Animation is a smooth mechanical FLIP.
+  // Auto-reorder: two-tier sorting system.
+  //
+  // IMMEDIATE: When a session becomes active (working/thinking/waiting/error/
+  // subagent/compacting), it bubbles above all "settled" sessions (idle/done
+  // for 5+ seconds). Active sessions keep their relative order. Settled
+  // sessions keep their relative order. Only the active↔settled boundary moves.
+  //
+  // DEFERRED: When ALL sessions have been idle/done for 5+ seconds, a full
+  // priority sort runs (waiting > error > working > idle) with FLIP animation.
   // ---------------------------------------------------------------------------
 
-  // The "desired" sorted order (what we'd sort to if we triggered now)
+  const SETTLE_MS = 5000;
+
+  // The "desired" fully-sorted order (used by the deferred full rearrange)
   const reorderPriority = useCallback((s: EnrichedSession) => {
     const st = s.info.state;
     if (st === "waiting") return 0;
@@ -965,18 +1111,44 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const quiesceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isAnimatingRef = useRef(false);
 
-  // Check whether ALL sessions are idle or done
-  const allQuiescent = useCallback((list: EnrichedSession[]) => {
+  // Per-session "settled since" timestamps. A session is "settled" when it
+  // has been idle/done for ≥ SETTLE_MS. Active sessions are removed from this map.
+  const settledSinceRef = useRef<Map<string, number>>(new Map());
+
+  const isQuiescent = useCallback((st: string) => st === "idle" || st === "done", []);
+
+  // Check whether ALL sessions are settled (idle/done for 5s+)
+  const allSettled = useCallback((list: EnrichedSession[], now: number) => {
     return list.every((s) => {
-      const st = s.info.state;
-      return st === "idle" || st === "done";
+      if (!isQuiescent(s.info.state)) return false;
+      const since = settledSinceRef.current.get(s.info.id);
+      return since !== undefined && (now - since) >= SETTLE_MS;
     });
-  }, []);
+  }, [isQuiescent]);
 
   // Build the active (non-ended) session list
   const activeSessions = sessions.filter((s) => s.info.state !== "ended");
 
-  // Compute what the desired order would be right now
+  // Update settled-since timestamps
+  const now = Date.now();
+  for (const s of activeSessions) {
+    if (isQuiescent(s.info.state)) {
+      // Record when it first became idle/done (if not already tracked)
+      if (!settledSinceRef.current.has(s.info.id)) {
+        settledSinceRef.current.set(s.info.id, now);
+      }
+    } else {
+      // Active — clear any settled timestamp
+      settledSinceRef.current.delete(s.info.id);
+    }
+  }
+  // Prune sessions that no longer exist
+  const activeIdSet = new Set(activeSessions.map((s) => s.info.id));
+  for (const id of settledSinceRef.current.keys()) {
+    if (!activeIdSet.has(id)) settledSinceRef.current.delete(id);
+  }
+
+  // Compute fully-sorted desired order (for deferred full rearrange)
   const desiredOrder = (() => {
     const all = [...activeSessions];
     if (autoReorder) {
@@ -992,42 +1164,53 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     return all.map((s) => s.info.id);
   })();
 
-  // The actual display order: uses committed order when autoReorder is on,
-  // falls back to desired order for new/removed sessions.
+  // The actual display order: partitions committed order into
+  // non-settled (top) and settled (bottom), preserving relative order within each.
   const sortedSessions = (() => {
     if (!autoReorder) {
-      // When off, always use arrival order
       const sorted = [...activeSessions].sort((a, b) => a.info.startedAt - b.info.startedAt);
       committedOrderRef.current = sorted.map((s) => s.info.id);
       return sorted;
     }
 
     const committed = committedOrderRef.current;
-    const activeIds = new Set(activeSessions.map((s) => s.info.id));
     const sessionMap = new Map(activeSessions.map((s) => [s.info.id, s]));
 
-    // If no committed order yet, or order has no overlap, bootstrap from desired
-    if (committed.length === 0 || !committed.some((id) => activeIds.has(id))) {
+    // Bootstrap if no committed order yet
+    if (committed.length === 0 || !committed.some((id) => activeIdSet.has(id))) {
       committedOrderRef.current = desiredOrder;
       return desiredOrder.map((id) => sessionMap.get(id)!).filter(Boolean);
     }
 
-    // Keep committed order for existing sessions, append new ones at the end
-    const result: EnrichedSession[] = [];
+    // Build ordered list from committed, adding new sessions
+    const ordered: EnrichedSession[] = [];
     const used = new Set<string>();
     for (const id of committed) {
       if (sessionMap.has(id)) {
-        result.push(sessionMap.get(id)!);
+        ordered.push(sessionMap.get(id)!);
         used.add(id);
       }
     }
-    // Append any new sessions not in committed order
     for (const id of desiredOrder) {
       if (!used.has(id) && sessionMap.has(id)) {
-        result.push(sessionMap.get(id)!);
+        ordered.push(sessionMap.get(id)!);
       }
     }
-    // Prune stale IDs from committed so they don't accumulate
+
+    // Partition into non-settled (active or recently changed) vs settled (idle/done 5s+)
+    const nonSettled: EnrichedSession[] = [];
+    const settled: EnrichedSession[] = [];
+    for (const s of ordered) {
+      const since = settledSinceRef.current.get(s.info.id);
+      const isSettled = since !== undefined && (now - since) >= SETTLE_MS;
+      if (isSettled) {
+        settled.push(s);
+      } else {
+        nonSettled.push(s);
+      }
+    }
+
+    const result = [...nonSettled, ...settled];
     committedOrderRef.current = result.map((s) => s.info.id);
     return result;
   })();
@@ -1038,8 +1221,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const desiredOrderRef = useRef(desiredOrder);
   desiredOrderRef.current = desiredOrder;
 
-  // 5-second quiescence timer: when all sessions are idle/done, start countdown.
-  // When any session becomes active, cancel the timer.
+  // Quiescence timer: when ALL sessions have been settled for 5s,
+  // do the full priority rearrange.
   useEffect(() => {
     if (!autoReorder) {
       if (quiesceTimerRef.current) {
@@ -1053,20 +1236,18 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     const desiredOrderKey = desiredOrder.join(",");
     const orderAlreadyCorrect = currentOrderKey === desiredOrderKey;
 
-    if (allQuiescent(activeSessions) && !orderAlreadyCorrect && !isAnimatingRef.current) {
-      // All quiet and order differs — start 5s countdown (if not already running)
+    if (allSettled(activeSessions, now) && !orderAlreadyCorrect && !isAnimatingRef.current) {
+      // All settled and order differs — start countdown for full rearrange
       if (!quiesceTimerRef.current) {
         quiesceTimerRef.current = setTimeout(() => {
           quiesceTimerRef.current = null;
-          // Re-check quiescence at fire time — sessions may have changed
-          if (!allQuiescent(activeSessionsRef.current)) return;
-          // Commit the latest desired order (not the stale closure)
+          const fireTime = Date.now();
+          if (!allSettled(activeSessionsRef.current, fireTime)) return;
           committedOrderRef.current = desiredOrderRef.current;
           setReorderTick((t) => t + 1);
-        }, 5000);
+        }, 1000); // short delay — sessions are already 5s settled, just debounce
       }
     } else {
-      // Not quiescent or order is correct — cancel any pending timer
       if (quiesceTimerRef.current) {
         clearTimeout(quiesceTimerRef.current);
         quiesceTimerRef.current = null;
@@ -1123,6 +1304,9 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       movers.forEach(({ el, dy }, staggerIdx) => {
         const cardEl = el.querySelector<HTMLElement>(".session-card");
 
+        // Hint the compositor before animation starts
+        el.style.willChange = "transform";
+
         // Invert: place at old position
         el.style.transform = `translateY(${dy}px)`;
         el.style.transition = "none";
@@ -1134,47 +1318,55 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           cardEl.classList.add("session-card--reordering");
         }
 
-        // Stagger delay: 60ms between each card for mechanical feel
-        const staggerDelay = staggerIdx * 60;
-        // Duration scales with distance for realistic feel (min 400ms, max 700ms)
+        // Stagger: 40ms base + slight randomization for organic cascade feel
+        const staggerDelay = staggerIdx * 40 + Math.round(Math.random() * 12);
+        // Duration: 280-450ms, scales with distance — snappy but readable
         const distance = Math.abs(dy);
-        const duration = Math.min(700, Math.max(400, 300 + distance * 0.5));
+        const duration = Math.min(450, Math.max(280, 220 + distance * 0.35));
 
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            el.style.transition = `transform ${duration}ms cubic-bezier(0.22, 0.61, 0.36, 1) ${staggerDelay}ms`;
+            // outQuart deceleration with very subtle overshoot — cards "land" decisively
+            el.style.transition = `transform ${duration}ms cubic-bezier(0.25, 1.04, 0.5, 1) ${staggerDelay}ms`;
             el.style.transform = "translateY(0)";
 
-            const onEnd = () => {
+            const cleanup = () => {
               el.style.transition = "";
               el.style.transform = "";
               el.style.zIndex = "";
               el.style.position = "";
-              el.removeEventListener("transitionend", onEnd);
+              el.style.willChange = "";
               if (cardEl) {
                 cardEl.classList.remove("session-card--reordering");
               }
               completedCount++;
               if (completedCount === totalMovers) {
                 isAnimatingRef.current = false;
+                // Snapshot resting positions now that all cards have settled
+                if (list) {
+                  const allCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
+                  const positions = new Map<string, DOMRect>();
+                  allCards.forEach((c) => {
+                    const cid = c.dataset.sessionId!;
+                    positions.set(cid, c.getBoundingClientRect());
+                  });
+                  cardPositions.current = positions;
+                }
               }
             };
-            el.addEventListener("transitionend", onEnd);
+
+            const onEnd = (e: TransitionEvent) => {
+              if (e.propertyName !== "transform") return; // guard against double-fire
+              el.removeEventListener("transitionend", onEnd as EventListener);
+              cleanup();
+            };
+            el.addEventListener("transitionend", onEnd as EventListener);
 
             // Safety fallback — clear animation state if transitionend never fires
             setTimeout(() => {
               if (el.style.transform !== "") {
-                el.style.transition = "";
-                el.style.transform = "";
-                el.style.zIndex = "";
-                el.style.position = "";
-                if (cardEl) {
-                  cardEl.classList.remove("session-card--reordering");
-                }
-                completedCount++;
-                if (completedCount === totalMovers) {
-                  isAnimatingRef.current = false;
-                }
+                el.removeEventListener("transitionend", onEnd as EventListener);
+                cleanup();
               }
             }, duration + staggerDelay + 100);
           });
@@ -1182,14 +1374,19 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       });
     }
 
-    // Snapshot positions for next render
-    const allCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
-    const positions = new Map<string, DOMRect>();
-    allCards.forEach((el) => {
-      const id = el.dataset.sessionId!;
-      positions.set(id, el.getBoundingClientRect());
-    });
-    cardPositions.current = positions;
+    // Snapshot positions for next render — only if nothing is animating.
+    // If movers exist, the snapshot is deferred until the last animation completes
+    // (the cleanup() call above sets isAnimatingRef=false, which triggers a re-render
+    // through reorderTick). For non-animating renders, snapshot immediately.
+    if (movers.length === 0) {
+      const allCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
+      const positions = new Map<string, DOMRect>();
+      allCards.forEach((el) => {
+        const id = el.dataset.sessionId!;
+        positions.set(id, el.getBoundingClientRect());
+      });
+      cardPositions.current = positions;
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortKey, autoReorder, reorderTick]);
 
