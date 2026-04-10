@@ -222,7 +222,6 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
 
                     if enabled {
                         // Glass always uses dark appearance
-                        let _ = window.set_theme(Some(Theme::Dark));
                         set_native_appearance(window, true);
 
                         // Make window non-opaque so vibrancy can blur the desktop
@@ -346,7 +345,6 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                             // "auto" — follow system
                             detect_system_theme() == Theme::Dark
                         };
-                        let _ = window.set_theme(Some(if effective_dark { Theme::Dark } else { Theme::Light }));
                         set_native_appearance(window, effective_dark);
 
                         let _ = writeln!(f, "Vibrancy cleared, contentView restored");
@@ -914,7 +912,6 @@ pub fn run() {
 
                 // Set theme AFTER vibrancy — glass forces dark, others follow system
                 let effective_dark = if is_glass { true } else { system_theme == Theme::Dark };
-                let _ = window.set_theme(Some(if effective_dark { Theme::Dark } else { Theme::Light }));
                 set_native_appearance(&window, effective_dark);
             }
 
@@ -944,7 +941,6 @@ pub fn run() {
                             let _ = theme_handle.emit("system-theme-changed", theme_str);
                             // Also update the webview window theme so CSS media queries work
                             if let Some(w) = theme_handle.get_webview_window("main") {
-                                let _ = w.set_theme(Some(current));
                                 let is_dark = current == Theme::Dark;
                                 let handle_clone = theme_handle.clone();
                                 let _ = w.run_on_main_thread(move || {
