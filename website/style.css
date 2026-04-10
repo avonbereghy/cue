@@ -50,6 +50,7 @@
 
   /* Typography */
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-display: 'Syne', 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', monospace;
 
   --text-h1:      clamp(1.875rem, 3vw + 0.5rem, 3rem);
@@ -93,6 +94,94 @@
 }
 
 /* ============================================================
+   § 01b — DARK THEME
+   ============================================================ */
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg-primary:    #0E1520;
+    --bg-secondary:  #121D2C;
+    --bg-elevated:   #182030;
+    --bg-sunken:     #090E18;
+
+    --text-primary:   #DDE8F4;
+    --text-secondary: #7E98B4;
+    --text-tertiary:  #56718A;
+    --text-muted:     #3B5068;
+    --text-inverse:   #0E1520;
+
+    --accent:         #5BB5D5;
+    --accent-hover:   #73C3DF;
+    --accent-subtle:  rgba(91, 181, 213, 0.12);
+    --accent-glow:    rgba(91, 181, 213, 0.18);
+    --accent-on:      #DDE8F4;
+
+    --state-working:         rgba(25, 50, 110, 0.30);
+    --state-working-border:  #5580CC;
+    --state-subagent:        rgba(12, 45, 65, 0.35);
+    --state-subagent-border: #3AAED0;
+    --state-waiting:         rgba(65, 58, 8, 0.30);
+    --state-waiting-border:  #C8A830;
+    --state-error:           rgba(80, 18, 22, 0.30);
+    --state-error-border:    #D06070;
+    --state-done:            rgba(10, 55, 30, 0.30);
+    --state-done-border:     #50C080;
+    --state-idle:            rgba(30, 42, 62, 0.30);
+    --state-idle-border:     #6882A0;
+
+    --glass-bg:           rgba(24, 32, 48, 0.82);
+    --glass-bg-hover:     rgba(28, 38, 56, 0.92);
+    --glass-border:       rgba(100, 140, 190, 0.13);
+    --glass-border-hover: rgba(100, 140, 190, 0.26);
+    --glass-shadow:       0 4px 24px rgba(0, 0, 0, 0.30), 0 1px 4px rgba(0, 0, 0, 0.18);
+    --glass-shadow-hover: 0 8px 40px rgba(0, 0, 0, 0.40), 0 2px 8px rgba(0, 0, 0, 0.24);
+
+    --gradient-hero: linear-gradient(145deg, #0E1520 0%, #121C2C 35%, #0E1820 65%, #101820 100%);
+  }
+}
+
+[data-theme="dark"] {
+  --bg-primary:    #0E1520;
+  --bg-secondary:  #121D2C;
+  --bg-elevated:   #182030;
+  --bg-sunken:     #090E18;
+
+  --text-primary:   #DDE8F4;
+  --text-secondary: #7E98B4;
+  --text-tertiary:  #56718A;
+  --text-muted:     #3B5068;
+  --text-inverse:   #0E1520;
+
+  --accent:         #5BB5D5;
+  --accent-hover:   #73C3DF;
+  --accent-subtle:  rgba(91, 181, 213, 0.12);
+  --accent-glow:    rgba(91, 181, 213, 0.18);
+  --accent-on:      #DDE8F4;
+
+  --state-working:         rgba(25, 50, 110, 0.30);
+  --state-working-border:  #5580CC;
+  --state-subagent:        rgba(12, 45, 65, 0.35);
+  --state-subagent-border: #3AAED0;
+  --state-waiting:         rgba(65, 58, 8, 0.30);
+  --state-waiting-border:  #C8A830;
+  --state-error:           rgba(80, 18, 22, 0.30);
+  --state-error-border:    #D06070;
+  --state-done:            rgba(10, 55, 30, 0.30);
+  --state-done-border:     #50C080;
+  --state-idle:            rgba(30, 42, 62, 0.30);
+  --state-idle-border:     #6882A0;
+
+  --glass-bg:           rgba(24, 32, 48, 0.82);
+  --glass-bg-hover:     rgba(28, 38, 56, 0.92);
+  --glass-border:       rgba(100, 140, 190, 0.13);
+  --glass-border-hover: rgba(100, 140, 190, 0.26);
+  --glass-shadow:       0 4px 24px rgba(0, 0, 0, 0.30), 0 1px 4px rgba(0, 0, 0, 0.18);
+  --glass-shadow-hover: 0 8px 40px rgba(0, 0, 0, 0.40), 0 2px 8px rgba(0, 0, 0, 0.24);
+
+  --gradient-hero: linear-gradient(145deg, #0E1520 0%, #121C2C 35%, #0E1820 65%, #101820 100%);
+}
+
+/* ============================================================
    § 02 — RESET & BASE
    ============================================================ */
 
@@ -122,6 +211,14 @@ a:hover { color: var(--accent-hover); }
   background: var(--accent-subtle);
   color: var(--accent-on);
 }
+
+/* Display font for headings and UI labels */
+h1, h2, h3, h4,
+.overline, .hero-badge, .section-headline,
+.footer-brand { font-family: var(--font-display); }
+
+/* Logo rect adapts to theme */
+.logo-rect { fill: var(--bg-secondary); }
 
 /* ============================================================
    § 03 — LAYOUT
@@ -256,6 +353,39 @@ section {
 .nav-hamburger[aria-expanded="true"] span:nth-child(2) { opacity: 0; }
 .nav-hamburger[aria-expanded="true"] span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
 
+/* Theme toggle button */
+.nav-theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--glass-border);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+  flex-shrink: 0;
+}
+.nav-theme-toggle:hover {
+  background: var(--glass-bg);
+  color: var(--text-primary);
+  border-color: var(--glass-border-hover);
+}
+.nav-theme-toggle svg { width: 15px; height: 15px; }
+
+/* Sun shows in light, moon shows in dark */
+.nav-theme-toggle .icon-moon { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .nav-theme-toggle .icon-sun { display: none; }
+  :root:not([data-theme="light"]) .nav-theme-toggle .icon-moon { display: block; }
+}
+[data-theme="dark"] .nav-theme-toggle .icon-sun { display: none; }
+[data-theme="dark"] .nav-theme-toggle .icon-moon { display: block; }
+[data-theme="light"] .nav-theme-toggle .icon-sun { display: block; }
+[data-theme="light"] .nav-theme-toggle .icon-moon { display: none; }
+
 /* ============================================================
    § 06 — BUTTONS
    ============================================================ */
@@ -322,7 +452,7 @@ section {
   height: 100%;
   pointer-events: none;
   z-index: 0;
-  opacity: 0.45;
+  opacity: 0.55;
   mask-image:
     linear-gradient(to right, transparent 0%, black 8%, black 92%, transparent 100%),
     linear-gradient(to bottom, transparent 0%, black 10%, black 90%, transparent 100%);
@@ -360,6 +490,25 @@ section {
   grid-template-columns: 1fr 1fr;
   gap: var(--s-12);
   align-items: center;
+}
+
+/* Ambient glow behind mockup */
+.hero::after {
+  content: '';
+  position: absolute;
+  right: 5%;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 480px;
+  height: 480px;
+  background: radial-gradient(circle, var(--accent-glow) 0%, transparent 68%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.hero-mockup:hover .mockup-card {
+  transform: translateY(-3px);
+  box-shadow: var(--glass-shadow-hover), 0 0 60px var(--accent-glow);
 }
 
 .hero-badge {
@@ -498,7 +647,9 @@ section {
   grid-template-columns: repeat(4, 1fr);
   gap: var(--s-2);
   padding: var(--s-3);
-  background: rgba(240, 244, 248, 0.92);
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--glass-border);
   border-radius: var(--r-lg);
   box-shadow: var(--glass-shadow);
@@ -674,6 +825,14 @@ section {
   border-color: var(--glass-border-hover);
 }
 
+/* State-colored left accent per feature */
+.feature-card:nth-child(1) { border-left: 3px solid var(--state-working-border); }
+.feature-card:nth-child(2) { border-left: 3px solid var(--state-subagent-border); }
+.feature-card:nth-child(3) { border-left: 3px solid var(--accent); }
+.feature-card:nth-child(4) { border-left: 3px solid var(--state-waiting-border); }
+.feature-card:nth-child(5) { border-left: 3px solid var(--state-done-border); }
+.feature-card:nth-child(6) { border-left: 3px solid var(--state-error-border); }
+
 .feature-icon {
   width: 44px;
   height: 44px;
@@ -685,12 +844,12 @@ section {
   font-size: 1.25rem;
 }
 
-.feature-card:nth-child(1) .feature-icon { background: var(--state-working); color: var(--accent); }
-.feature-card:nth-child(2) .feature-icon { background: var(--state-subagent); color: #0D3D52; }
+.feature-card:nth-child(1) .feature-icon { background: var(--state-working); color: var(--state-working-border); }
+.feature-card:nth-child(2) .feature-icon { background: var(--state-subagent); color: var(--state-subagent-border); }
 .feature-card:nth-child(3) .feature-icon { background: var(--accent-subtle); color: var(--accent); }
-.feature-card:nth-child(4) .feature-icon { background: var(--state-waiting); color: #6B5A00; }
-.feature-card:nth-child(5) .feature-icon { background: var(--state-done); color: #1A5C32; }
-.feature-card:nth-child(6) .feature-icon { background: var(--state-error); color: #8B2030; }
+.feature-card:nth-child(4) .feature-icon { background: var(--state-waiting); color: var(--state-waiting-border); }
+.feature-card:nth-child(5) .feature-icon { background: var(--state-done); color: var(--state-done-border); }
+.feature-card:nth-child(6) .feature-icon { background: var(--state-error); color: var(--state-error-border); }
 
 .feature-card h3 {
   font-size: var(--text-h3);
@@ -954,13 +1113,16 @@ details[open] .faq-chevron { transform: rotate(180deg); }
 
 .reveal {
   opacity: 0;
-  transform: translateY(20px);
+  transform: translateY(16px);
+  filter: blur(3px);
   transition: opacity var(--duration) var(--ease-out),
-              transform var(--duration) var(--ease-out);
+              transform var(--duration) var(--ease-out),
+              filter var(--duration) var(--ease-out);
 }
 .reveal.is-visible {
   opacity: 1;
   transform: translateY(0);
+  filter: blur(0);
 }
 
 /* No-JS fallback — show all content when scripting is unavailable */
@@ -1021,6 +1183,12 @@ details[open] .faq-chevron { transform: rotate(180deg); }
   .install-card { padding: var(--s-4); }
 }
 
+/* Dark mode: signal strings slightly brighter against dark bg */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .signal-strings-canvas { opacity: 0.65; }
+}
+[data-theme="dark"] .signal-strings-canvas { opacity: 0.65; }
+
 /* ============================================================
    § 20 — REDUCED MOTION
    ============================================================ */
@@ -1033,5 +1201,5 @@ details[open] .faq-chevron { transform: rotate(180deg); }
     scroll-behavior: auto !important;
   }
   .signal-strings-canvas { display: none; }
-  .reveal { opacity: 1; transform: none; }
+  .reveal { opacity: 1; transform: none; filter: none; }
 }
