@@ -297,7 +297,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
     };
   }, [isAnimating, signalString, session.displayTitle, titleAnimation, animationSpeed, randomAnimation, pageVisible]);
 
-  const isWorking = displayState === "working" || displayState === "subagent";
+  const isWorking = displayState === "working" || displayState === "subagent" || displayState === "compacting";
   const isWaiting = displayState === "waiting";
   const isError = displayState === "error";
 
@@ -306,7 +306,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
 
   const STATE_DISPLAY_NAME: Record<string, string> = {
     working: "Working", thinking: "Thinking", waiting: "Waiting", error: "Error",
-    subagent: "Subagent", idle: "Idle", done: "Done", ended: "Ended",
+    subagent: "Subagent", compacting: "Compacting", idle: "Idle", done: "Done", ended: "Ended",
   };
 
   // Dot color follows displayState so it transitions smoothly with the badge
@@ -361,7 +361,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
       } ${
         isWorking ? "session-card--pressed" : "session-card--floating"
       } ${
-        isWaiting ? "session-card--waiting" : isError ? "session-card--error" : displayState === "thinking" ? "session-card--thinking" : ""
+        isWaiting ? "session-card--waiting" : isError ? "session-card--error" : displayState === "thinking" ? "session-card--thinking" : displayState === "compacting" ? "session-card--compacting" : ""
       } ${
         effectiveCompact ? "px-2.5 py-1.5 space-y-0"
         : signalString && (signalMode === "preset" || signalMode === "audio" || signalMode === "live") ? "px-4 pt-4 pb-5 space-y-4" : "px-3 pt-2 pb-1 space-y-2"
@@ -430,7 +430,7 @@ export function SessionCard({ session, titleAnimation = "none", animationSpeed =
                 {session.workspaceName}
               </span>
             )}
-            {isDuplicate && !metrics.customTitle && metrics.lastPrompt && (
+            {isDuplicate && !metrics.customTitle && metrics.lastPrompt && (!metrics.lastPromptSessionId || metrics.lastPromptSessionId === info.id) && (
               <>
                 <span
                   className="text-[0.65rem] px-1.5 py-0.5 rounded-full bg-white/10 text-white/55 italic overflow-hidden whitespace-nowrap text-ellipsis w-[140px] shrink-0 border-0 cursor-pointer hover:bg-white/18 hover:text-white/75 transition-colors"

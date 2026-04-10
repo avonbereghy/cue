@@ -174,6 +174,11 @@ pub struct SessionMetrics {
     /// Full text of the last user prompt (pill truncates visually; popup shows all)
     #[serde(default)]
     pub last_prompt: Option<String>,
+    /// Session ID extracted from the JSONL file's metadata header.
+    /// Used to verify the parsed JSONL actually belongs to this session
+    /// (guards against dedup stable-id / cache mismatch returning the wrong file).
+    #[serde(default)]
+    pub last_prompt_session_id: Option<String>,
 }
 
 impl SessionMetrics {
@@ -282,6 +287,7 @@ impl EnrichedSession {
             "waiting" => "\u{23F8}",   // ⏸
             "error" => "\u{2717}",     // ✗
             "subagent" => "\u{2934}",  // ⤴
+            "compacting" => "\u{21BB}", // ↻
             "idle" => "\u{25CB}",      // ○
             _ => "\u{2713}",           // ✓
         }
@@ -293,6 +299,7 @@ impl EnrichedSession {
             "waiting" => "Waiting",
             "error" => "Error",
             "subagent" => "Subagent",
+            "compacting" => "Compacting",
             "idle" => "Idle",
             "done" => "Done",
             other => other,
@@ -617,6 +624,30 @@ pub struct Settings {
     /// Timer display mode: "minutes" (HH:MM), "seconds" (HH:MM:SS), or "off"
     #[serde(default = "default_timer_display")]
     pub timer_display: String,
+    /// Per-theme appearance customizations saved by the user, keyed by theme ID
+    #[serde(default)]
+    pub theme_customizations: HashMap<String, ThemeCustomization>,
+}
+
+/// Appearance fields saved when a user customizes a theme.
+/// Mirrors the fields that selectTheme() applies to settings.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemeCustomization {
+    pub signal_color_dark: String,
+    pub signal_color_light: String,
+    pub signal_alpha: f64,
+    pub signal_amplitude: f64,
+    pub signal_echo: f64,
+    pub signal_effect: String,
+    pub sand_enabled: bool,
+    pub sand_intensity: f64,
+    pub sand_direction: f64,
+    pub sand_density: f64,
+    pub sand_speed: f64,
+    pub sand_grain_size: f64,
+    pub sand_turbulence: f64,
+    pub sand_alpha: f64,
 }
 
 fn default_theme() -> String {
@@ -768,6 +799,7 @@ impl Default for Settings {
             show_current_tool: false,
             show_config_counts: false,
             timer_display: "seconds".to_string(),
+            theme_customizations: HashMap::new(),
         }
     }
 }
