@@ -303,4 +303,20 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  /* ----------------------------------------------------------
+     Theme Toggle
+     ---------------------------------------------------------- */
+
+  const themeToggle = document.getElementById('theme-toggle');
+  if (themeToggle) {
+    themeToggle.addEventListener('click', () => {
+      const current = document.documentElement.dataset.theme;
+      const sysDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      const isDark = current === 'dark' || (!current && sysDark);
+      const next = isDark ? 'light' : 'dark';
+      document.documentElement.dataset.theme = next;
+      localStorage.setItem('cue-theme', next);
+    });
+  }
+
 });
