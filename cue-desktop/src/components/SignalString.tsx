@@ -138,6 +138,8 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // Driven oscillator state: position + velocity per mode per band (max 3 bands × 6 modes)
   const modeStateRef = useRef<{ pos: Float64Array; vel: Float64Array } | null>(null);
   const lastFrameRef = useRef<number>(0);
+  // Cached canvas bounding rect — updated by ResizeObserver, not every frame
+  const rectCacheRef = useRef<DOMRect | null>(null);
   // Onset impulse accumulators per band (decays each frame)
   const onsetRef = useRef<Float64Array>(new Float64Array(3));
   // Sand grains: blown across the card, driven by audio energy
@@ -296,6 +298,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
 
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
+      rectCacheRef.current = rect;
       canvas.width = rect.width * dpr;
       canvas.height = rect.height * dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -360,11 +363,15 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       cc.b += (targetColor.b - cc.b) * lerpSpeed;
 
       const sc = cc;
+      // Pre-compute rounded integers once per frame — reused in all inner loops
+      const scR = Math.round(sc.r);
+      const scG = Math.round(sc.g);
+      const scB = Math.round(sc.b);
       const strokeColor = revived
         ? `rgba(239, 68, 68, ${0.4 * a})`
-        : `rgba(${Math.round(sc.r)}, ${Math.round(sc.g)}, ${Math.round(sc.b)}, ${0.4 * a})`;
+        : `rgba(${scR}, ${scG}, ${scB}, ${0.4 * a})`;
 
-      const rect = canvas.getBoundingClientRect();
+      const rect = rectCacheRef.current ?? canvas.getBoundingClientRect();
       const w = rect.width;
       const h = rect.height;
       const midY = h / 2;
@@ -575,7 +582,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             if (x === 0) ctx.moveTo(x, y);
             else ctx.lineTo(x, y);
           }
-          ctx.strokeStyle = isDark ? `rgba(${sc.r},${sc.g},${sc.b},${0.2 * a})` : `rgba(${sc.r},${sc.g},${sc.b},${0.15 * a})`;
+          ctx.strokeStyle = isDark ? `rgba(${scR},${scG},${scB},${0.2 * a})` : `rgba(${scR},${scG},${scB},${0.15 * a})`;
           ctx.lineWidth = 1;
           ctx.stroke();
           if (clipped) ctx.restore();
@@ -777,7 +784,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         // the waveform behind invisible layout elements in slim mode.
         const eraseRects: { x: number; y: number; w: number; h: number }[] = [];
         if (contentRef?.current && canvas) {
-          const canvasRect = canvas.getBoundingClientRect();
+          const canvasRect = rectCacheRef.current ?? canvas.getBoundingClientRect();
           const rows = contentRef.current.children;
           for (let ri = 0; ri < rows.length; ri++) {
             const row = rows[ri] as HTMLElement;
@@ -908,7 +915,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
                   else ctx.lineTo(x, points[i]);
                 }
                 const glowOp = op * 0.25;
-                ctx.strokeStyle = `rgba(${sc.r},${sc.g},${sc.b},${glowOp})`;
+                ctx.strokeStyle = `rgba(${scR},${scG},${scB},${glowOp})`;
                 ctx.lineWidth = band.lw * 4;
                 ctx.stroke();
               }
@@ -919,7 +926,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
                 if (i === 0) ctx.moveTo(x, points[i]);
                 else ctx.lineTo(x, points[i]);
               }
-              const c = `rgba(${sc.r},${sc.g},${sc.b},${op})`;
+              const c = `rgba(${scR},${scG},${scB},${op})`;
               ctx.strokeStyle = c;
               ctx.lineWidth = trail === 0 ? band.lw : band.lw * 0.6;
               ctx.stroke();
@@ -1034,7 +1041,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
               const r = g.size * (0.8 + 0.2 * Math.sin(age * 5 + g.birth));
               ctx.beginPath();
               ctx.arc(g.x, g.y, r, 0, Math.PI * 2);
-              ctx.fillStyle = `rgba(${sc.r},${sc.g},${sc.b},${alpha * 0.8})`;
+              ctx.fillStyle = `rgba(${scR},${scG},${scB},${alpha * 0.8})`;
               ctx.fill();
               if (r > 0.6) {
                 ctx.beginPath();
@@ -1251,7 +1258,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             const r = g.size * (0.8 + 0.2 * Math.sin(age * 5 + g.birth));
             ctx.beginPath();
             ctx.arc(g.x, g.y, r, 0, Math.PI * 2);
-            ctx.fillStyle = `rgba(${sc.r},${sc.g},${sc.b},${alpha * 0.8})`;
+            ctx.fillStyle = `rgba(${scR},${scG},${scB},${alpha * 0.8})`;
             ctx.fill();
             if (r > 0.6) {
               ctx.beginPath();

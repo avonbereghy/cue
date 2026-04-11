@@ -321,6 +321,7 @@ def main():
     # so we can detect if a faster hook already updated this session.
     hook_start_time = time.time()
 
+
     # Read hook payload from stdin
     try:
         hook_data = json.load(sys.stdin)
@@ -367,6 +368,19 @@ def main():
             # Task 4: Schema validation
             status = _validate_sessions(status)
 
+            # Clean up stale "clearing" sessions (>30s old) — these are set
+            # by SessionEnd. For /clear, the next hook event (working/thinking)
+            # overwrites the state within seconds. Real exits (terminal closed)
+            # stay "clearing" until cleaned up here on the next hook call.
+            stale_clearing = [
+                sid for sid, entry in status["sessions"].items()
+                if entry.get("state") == "clearing"
+                and sid != session_id  # Don't clean up the session being updated
+                and time.time() - entry.get("lastActivity", 0) > 30
+            ]
+            for sid in stale_clearing:
+                del status["sessions"][sid]
+
             if ignored_session:
                 # Best-effort cleanup for already-recorded subprocess ghosts.
                 if status["sessions"].pop(session_id, None) is None:
@@ -392,27 +406,41 @@ def main():
             now = time.time()
 
             if action == "remove":
-                # Session exited — delete immediately.
-                status["sessions"].pop(session_id, None)
+                # Set "clearing" instead of deleting — /clear fires SessionEnd
+                # but NOT SessionStart, so the card would disappear with no way
+                # to recreate it. By keeping it as "clearing", the card stays
+                # visible during the clear process and naturally transitions to
+                # whatever state the next hook event brings (working, idle, etc.).
+                # Truly ended sessions (user closed terminal) stay "clearing"
+                # until the stale cleanup below removes them after 30s.
+                existing_entry = status["sessions"].get(session_id)
+                if existing_entry:
+                    existing_entry["state"] = "clearing"
+                    existing_entry["lastActivity"] = now
             else:
                 # Update or create session
                 existing = status["sessions"].get(session_id, {})
 
-                # Detect /clear: SessionStart for a session that already has
-                # transcript content means /clear was run (not a fresh session).
-                # Uses hook_event_name to distinguish SessionStart from Stop.
+                # Detect /clear: SessionStart after SessionEnd (state="clearing")
+                # means /clear was run. Also detect via transcript content for
+                # sessions that weren't previously tracked by Cue.
                 is_clear = False
                 event_name = hook_data.get("hook_event_name", "")
                 if action == "idle" and event_name == "SessionStart":
-                    has_prior = False
-                    if transcript_path:
-                        try:
-                            has_prior = os.path.getsize(transcript_path) > 100
-                        except OSError:
-                            pass
-                    if has_prior or (existing and now - existing.get("lastActivity", 0) < 120):
+                    existing_state = existing.get("state", "")
+                    if existing_state == "clearing":
                         action = "clearing"
                         is_clear = True
+                    else:
+                        has_prior = False
+                        if transcript_path:
+                            try:
+                                has_prior = os.path.getsize(transcript_path) > 100
+                            except OSError:
+                                pass
+                        if has_prior:
+                            action = "clearing"
+                            is_clear = True
 
                 # Guard against stale "waiting" writes: PermissionRequest hooks
                 # are slow (HTTP request) and can finish after PostToolUse
