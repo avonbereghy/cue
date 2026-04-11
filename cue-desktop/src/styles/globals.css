@@ -68,6 +68,7 @@ body {
 }
 .dot-pulse {
   animation: dot-pulse var(--anim-speed, 2s) ease-in-out infinite;
+  will-change: opacity;
 }
 html[data-theme="light"]:not([data-glass]) .dot-pulse {
   animation-name: dot-pulse-light;
@@ -102,6 +103,7 @@ html[data-theme="light"]:not([data-glass]) .dot-pulse {
   animation: status-spin 0.85s linear infinite;
   transform-origin: 6px 6px;
   transform-box: fill-box;
+  will-change: transform;
 }
 @keyframes status-spin {
   from { transform: rotate(0deg); }
@@ -112,6 +114,7 @@ html[data-theme="light"]:not([data-glass]) .dot-pulse {
 .orbit-ring {
   animation: status-orbit 2.2s linear infinite;
   transform-box: fill-box;
+  will-change: transform;
 }
 @keyframes status-orbit {
   from { transform: rotate(0deg); }
@@ -123,6 +126,7 @@ html[data-theme="light"]:not([data-glass]) .dot-pulse {
   animation: status-waiting-flash 0.75s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   transform-box: fill-box;
   transform-origin: center;
+  will-change: opacity, transform;
 }
 @keyframes status-waiting-flash {
   0%, 49% { opacity: 1;   transform: scale(1); }
@@ -315,6 +319,7 @@ html[data-theme="light"]:not([data-glass]) .anim-shine .title-char {
    --------------------------------------------------------------------------- */
 .session-card {
   min-height: 10rem;
+  will-change: transform, box-shadow;
   transition:
     box-shadow var(--key-release-speed, 0.4s) cubic-bezier(0.4, 0, 0.2, 1),
     background-color var(--key-release-speed, 0.4s) ease,
