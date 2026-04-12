@@ -1233,29 +1233,73 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     isAnimatingRef.current = true;
     const gen = ++animationGenRef.current; // cancellation token
 
-    // Compute gap between cards from the final DOM layout
-    const cardArr = Array.from(cards);
-    let gap = 12;
-    if (cardArr.length >= 2) {
-      const r0 = cardArr[0].getBoundingClientRect();
-      const r1 = cardArr[1].getBoundingClientRect();
-      const measured = r1.top - (r0.top + r0.height);
-      if (measured > 0 && measured < 50) gap = measured;
-    }
+    // ─── Unified WAAPI FLIP animation ───
+    // All cards animate simultaneously from old position to new.
+    // The hero (biggest upward mover) ducks under with brightness + scale.
+    // Pure WAAPI — no CSS transitions, no transitionend, no setTimeout chains.
 
-    // Stack all cards above the hero's duck layer so the hero glides underneath
+    isQuiescenceReorderRef.current = false;
+
+    const DURATION = 500; // ms — all cards move together
+    const EASING = "cubic-bezier(0.2, 0, 0, 1)"; // Material standard
+
+    // Identify hero: biggest upward mover (or biggest mover if none go up)
+    const upwardMovers = movers.filter((m) => m.dy < 0);
+    const hero =
+      upwardMovers.length > 0
+        ? upwardMovers.reduce((a, b) =>
+            Math.abs(b.dy) > Math.abs(a.dy) ? b : a,
+          )
+        : movers.reduce((a, b) =>
+            Math.abs(b.dy) > Math.abs(a.dy) ? b : a,
+          );
+
+    // Set up z-index so hero ducks under other cards
+    const isLight = document.documentElement.dataset.theme === "light";
+    const duckBrightness = isLight ? 0.82 : 0.55;
     cards.forEach((el) => {
       el.style.position = "relative";
-      el.style.zIndex = "50";
+      el.style.zIndex = "2";
     });
+    hero.el.style.zIndex = "1";
 
-    // Helper: snapshot final positions and unlock animations.
-    // If the session list changed during the animation, force a re-render
-    // so the next FLIP pass picks up the deferred changes.
-    const snapshotAndFinish = () => {
+    // Track running animations for cleanup
+    const animations: Animation[] = [];
+
+    // Animate every mover with WAAPI
+    for (const { el, dy } of movers) {
+      if (!el.isConnected || Math.abs(dy) < 1) continue;
+
+      const anim = el.animate(
+        [
+          { transform: `translateY(${dy}px)` },
+          { transform: "translateY(0)" },
+        ],
+        { duration: DURATION, easing: EASING },
+      );
+      animations.push(anim);
+    }
+
+    // Hero duck effect: darken + slight scale through the middle, surface at end
+    const heroCard = hero.el.querySelector<HTMLElement>(".session-card");
+    if (heroCard) {
+      const duckAnim = heroCard.animate(
+        [
+          { filter: "brightness(1)", transform: "scale(1)" },
+          { filter: `brightness(${duckBrightness})`, transform: "scale(0.97)", offset: 0.15 },
+          { filter: `brightness(${duckBrightness})`, transform: "scale(0.97)", offset: 0.75 },
+          { filter: "brightness(1)", transform: "scale(1)" },
+        ],
+        { duration: DURATION, easing: EASING },
+      );
+      animations.push(duckAnim);
+    }
+
+    // Snapshot and clean up when all animations finish
+    Promise.all(animations.map((a) => a.finished)).then(() => {
+      if (animationGenRef.current !== gen) return;
       isAnimatingRef.current = false;
-      const allCards =
-        list.querySelectorAll<HTMLElement>("[data-session-id]");
+      const allCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
       const positions = new Map<string, DOMRect>();
       const ids: string[] = [];
       allCards.forEach((c) => {
@@ -1267,455 +1311,13 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       });
       cardPositions.current = positions;
       committedOrderRef.current = ids;
-      // Kick a re-render so deferred sortKey changes get picked up
       setReorderTick((t) => t + 1);
-    };
-
-    // Bump ripple: as the hero ducks under idle/done cards, briefly bump
-    // them upward. Uses WAAPI to bypass session-card--reordering's
-    // "transition: none !important".
-    const pressRipple = (
-      heroEl: HTMLElement,
-      heroDy: number,
-      heroDomTop: number,
-      heroDur: number,
-      heroDelay: number,
-    ) => {
-      const heroOld = heroDomTop + heroDy;
-      const heroNew = heroDomTop;
-      const movingUp = heroDy > 0;
-      const lo = Math.min(heroOld, heroNew);
-      const hi = Math.max(heroOld, heroNew);
-
-      // Find all idle/done cards between hero's old and new visual positions
-      const targets: { cardEl: HTMLElement; pos: number }[] = [];
-      cards.forEach((wrapper) => {
-        if (wrapper === heroEl) return;
-        const st = wrapper.dataset.sessionState;
-        if (st !== "idle" && st !== "done") return;
-        const cardEl = wrapper.querySelector<HTMLElement>(".session-card");
-        if (!cardEl) return;
-        // Use wrapper's current visual center (rect includes any transform)
-        const r = wrapper.getBoundingClientRect();
-        const center = r.top + r.height / 2;
-        if (center >= lo && center <= hi) {
-          targets.push({ cardEl, pos: center });
-        }
-      });
-
-      if (targets.length === 0) return;
-
-      // Sort by hero's travel direction: first card the hero reaches = first press
-      targets.sort((a, b) =>
-        movingUp ? b.pos - a.pos : a.pos - b.pos,
-      );
-
-      // Stagger presses: proportional to position along hero's path
-      const travel = hi - lo;
-      targets.forEach(({ cardEl, pos }) => {
-        const progress = movingUp
-          ? (heroOld - pos) / travel
-          : (pos - heroOld) / travel;
-        // Approximate outExpo: hero covers ground fast early, slows late.
-        // Invert the easing to get time-from-progress.
-        const adjustedProgress = progress * progress;  // compress early timing
-        const delay =
-          heroDelay + adjustedProgress * heroDur * 0.85;
-
-        setTimeout(() => {
-          if (!cardEl.isConnected) return; // element removed during animation
-          cardEl.animate(
-            [
-              { transform: "translateY(0)" },
-              { transform: "translateY(-2px)", offset: 0.35 },
-              { transform: "translateY(0)" },
-            ],
-            {
-              duration: 220,
-              easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-            },
-          );
-        }, delay);
-      });
-    };
-
-    // Determine animation mode: sequential (quiescence) vs block (single promotion)
-    const isSequential =
-      isQuiescenceReorderRef.current && movers.length > 1;
-    isQuiescenceReorderRef.current = false;
-
-    if (isSequential) {
-      // ─── Sequential insertion-sort animation ───
-      // Each card is placed one at a time (top to bottom in new order).
-      // Yielders shift as a unified block to make room.
-
-      // Track live transform offsets for all movers
-      const currentDy = new Map<string, number>();
-      movers.forEach(({ el, dy }) => {
-        currentDy.set(el.dataset.sessionId!, dy);
-      });
-
-      // Invert ALL movers to old visual positions
-      movers.forEach(({ el, dy }) => {
-        const cardEl = el.querySelector<HTMLElement>(".session-card");
-        el.style.willChange = "transform";
-        el.style.transform = `translateY(${dy}px)`;
-        el.style.transition = "none";
-        el.style.position = "relative";
-        el.style.zIndex = "50";
-        if (cardEl) cardEl.classList.add("session-card--reordering");
-      });
-
-      // Force layout so invert paints before we animate
-      void list.offsetHeight;
-
-      // Process in order of final DOM position (top → bottom)
-      const sequence = [...movers].sort((a, b) => a.idx - b.idx);
-      const placed = new Set<string>();
-
-      const animateStep = (stepIdx: number) => {
-        // Cancellation: if a newer animation started, abort this chain
-        if (animationGenRef.current !== gen) return;
-
-        // Skip cards already at final position or detached from DOM
-        while (stepIdx < sequence.length) {
-          const el = sequence[stepIdx].el;
-          const id = el.dataset.sessionId!;
-          if (!el.isConnected || Math.abs(currentDy.get(id)!) < 1) {
-            placed.add(id);
-            // Clean up this card immediately
-            const el = sequence[stepIdx].el;
-            el.style.transition = "";
-            el.style.transform = "";
-            el.style.zIndex = "";
-            el.style.position = "";
-            el.style.willChange = "";
-            const c = el.querySelector<HTMLElement>(".session-card");
-            if (c) c.classList.remove("session-card--reordering");
-            stepIdx++;
-          } else {
-            break;
-          }
-        }
-
-        if (stepIdx >= sequence.length) {
-          snapshotAndFinish();
-          return;
-        }
-
-        const hero = sequence[stepIdx];
-        const heroId = hero.el.dataset.sessionId!;
-        const heroDy = currentDy.get(heroId)!;
-        placed.add(heroId);
-
-        // Hero's current visual top = domTop + heroDy
-        const heroVisual = hero.domTop + heroDy;
-        const heroTarget = hero.domTop; // translateY(0)
-        const movingUp = heroDy > 0;
-        const shiftAmount = hero.height + gap;
-
-        // Identify yielders: unplaced movers between hero's target and current
-        const yielders: typeof movers = [];
-        for (const m of movers) {
-          const mId = m.el.dataset.sessionId!;
-          if (placed.has(mId) || !m.el.isConnected) continue;
-          const mDy = currentDy.get(mId)!;
-          const mVisual = m.domTop + mDy;
-          if (movingUp) {
-            if (mVisual >= heroTarget && mVisual < heroVisual)
-              yielders.push(m);
-          } else {
-            if (mVisual > heroVisual && mVisual <= heroTarget)
-              yielders.push(m);
-          }
-        }
-
-        let stepCompleted = 0;
-        const stepTotal = 1 + yielders.length;
-
-        const onStepDone = () => {
-          stepCompleted++;
-          if (stepCompleted >= stepTotal) {
-            // Brief pause between steps for visual clarity
-            setTimeout(() => animateStep(stepIdx + 1), 60);
-          }
-        };
-
-        // Hero ducks under other cards, glides to position, then surfaces
-        const heroDur = Math.min(
-          700,
-          Math.max(400, 300 + Math.abs(heroDy) * 0.6),
-        );
-        const seqIsLight = document.documentElement.dataset.theme === "light";
-        const seqDuckBrightness = seqIsLight ? 0.82 : 0.55;
-        const seqDuckDur = 120;
-        const seqSurfaceDur = 220;
-        const seqGlideDelay = Math.round(seqDuckDur * 0.6);
-
-        // Hero z-index below all other cards
-        hero.el.style.zIndex = "1";
-        const heroCard =
-          hero.el.querySelector<HTMLElement>(".session-card");
-        if (heroCard) heroCard.style.transition = "none";
-
-        // Phase 1: Duck in (depress + darken)
-        const seqDuckAnim = heroCard?.animate(
-          [
-            { filter: "brightness(1)", transform: "scale(1)" },
-            { filter: `brightness(${seqDuckBrightness})`, transform: "scale(0.97) translateY(2px)" },
-          ],
-          { duration: seqDuckDur, easing: "cubic-bezier(0.33, 1, 0.68, 1)", fill: "forwards" },
-        );
-
-        // Bump ripple on idle/done cards the hero passes underneath
-        pressRipple(hero.el, heroDy, hero.domTop, heroDur, seqGlideDelay);
-
-        // Yielders shift as a block — start immediately
-        const yielderShift = movingUp ? shiftAmount : -shiftAmount;
-        const yielderDur = 400;
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            for (const y of yielders) {
-              const yId = y.el.dataset.sessionId!;
-              const newDy = currentDy.get(yId)! + yielderShift;
-              currentDy.set(yId, newDy);
-
-              y.el.style.transition = `transform ${yielderDur}ms cubic-bezier(0.16, 1, 0.3, 1)`;
-              y.el.style.transform = `translateY(${newDy}px)`;
-
-              const yCleanup = () => {
-                y.el.style.transition = "";
-                onStepDone();
-              };
-              const yOnEnd = (e: TransitionEvent) => {
-                if (e.propertyName !== "transform") return;
-                y.el.removeEventListener(
-                  "transitionend",
-                  yOnEnd as EventListener,
-                );
-                yCleanup();
-              };
-              y.el.addEventListener(
-                "transitionend",
-                yOnEnd as EventListener,
-              );
-              setTimeout(() => {
-                y.el.removeEventListener(
-                  "transitionend",
-                  yOnEnd as EventListener,
-                );
-                yCleanup();
-              }, yielderDur + 150);
-            }
-          });
-        });
-
-        // Phase 2: Hero glides under (starts after duck delay)
-        let seqHeroArrived = false;
-        setTimeout(() => {
-          if (animationGenRef.current !== gen) return;
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              hero.el.style.transition = `transform ${heroDur}ms cubic-bezier(0.16, 1, 0.3, 1)`;
-              hero.el.style.transform = "translateY(0)";
-              currentDy.set(heroId, 0);
-
-              const heroArrive = () => {
-                if (seqHeroArrived) return;
-                seqHeroArrived = true;
-                // Phase 3: Surface (un-duck)
-                const seqSurfaceAnim = heroCard?.animate(
-                  [
-                    { filter: `brightness(${seqDuckBrightness})`, transform: "scale(0.97) translateY(2px)" },
-                    { filter: "brightness(1)", transform: "scale(1) translateY(0)" },
-                  ],
-                  { duration: seqSurfaceDur, easing: "cubic-bezier(0.16, 1, 0.3, 1)", fill: "forwards" },
-                );
-                seqDuckAnim?.cancel();
-
-                setTimeout(() => {
-                  seqSurfaceAnim?.cancel();
-                  hero.el.style.transition = "";
-                  hero.el.style.transform = "";
-                  hero.el.style.zIndex = "50";
-                  hero.el.style.willChange = "";
-                  if (heroCard) heroCard.style.transition = "";
-                  onStepDone();
-                }, seqSurfaceDur + 30);
-              };
-              const heroOnEnd = (e: TransitionEvent) => {
-                if (e.propertyName !== "transform") return;
-                hero.el.removeEventListener(
-                  "transitionend",
-                  heroOnEnd as EventListener,
-                );
-                heroArrive();
-              };
-              hero.el.addEventListener(
-                "transitionend",
-                heroOnEnd as EventListener,
-              );
-              setTimeout(() => {
-                if (hero.el.style.transform !== "") {
-                  hero.el.removeEventListener(
-                    "transitionend",
-                    heroOnEnd as EventListener,
-                  );
-                  heroArrive();
-                }
-              }, heroDur + 150);
-            });
-          });
-        }, seqGlideDelay);
-
-        // If no yielders, hero is the only animation this step
-        if (yielders.length === 0) {
-          // onStepDone will fire from heroArrive
-        }
-      };
-
-      animateStep(0);
-    } else {
-      // ─── Block animation — card ducks under to new position ───
-      // Hero depresses + darkens, glides under other cards, then surfaces.
-
-      const upwardMovers = movers.filter((m) => m.dy < 0);
-      const hero =
-        upwardMovers.length > 0
-          ? upwardMovers.reduce((a, b) =>
-              Math.abs(b.dy) > Math.abs(a.dy) ? b : a,
-            )
-          : movers.reduce((a, b) =>
-              Math.abs(b.dy) > Math.abs(a.dy) ? b : a,
-            );
-      const yielders = movers.filter((m) => m !== hero);
-
-      let completedCount = 0;
-      const totalMovers = movers.length;
-
-      // --- Yielder animation (floating slide, same as before) ---
-      yielders.forEach(({ el, dy }) => {
-        const cardEl = el.querySelector<HTMLElement>(".session-card");
-        el.style.willChange = "transform";
-        el.style.transform = `translateY(${dy}px)`;
-        el.style.transition = "none";
-
-        if (cardEl) cardEl.classList.add("session-card--reordering");
-
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            el.style.transition = `transform 500ms cubic-bezier(0.16, 1, 0.3, 1)`;
-            el.style.transform = "translateY(0)";
-
-            const cleanup = () => {
-              el.style.transition = "";
-              el.style.transform = "";
-              el.style.willChange = "";
-              if (cardEl) cardEl.classList.remove("session-card--reordering");
-              completedCount++;
-              if (completedCount === totalMovers) snapshotAndFinish();
-            };
-
-            const onEnd = (e: TransitionEvent) => {
-              if (e.propertyName !== "transform") return;
-              el.removeEventListener("transitionend", onEnd as EventListener);
-              cleanup();
-            };
-            el.addEventListener("transitionend", onEnd as EventListener);
-            setTimeout(() => {
-              if (el.style.transform !== "") {
-                el.removeEventListener("transitionend", onEnd as EventListener);
-                cleanup();
-              }
-            }, 600);
-          });
-        });
-      });
-
-      // --- Hero animation — duck under ---
-      const heroCard = hero.el.querySelector<HTMLElement>(".session-card");
-      const heroDistance = Math.abs(hero.dy);
-      const heroDuration = Math.min(900, Math.max(550, 400 + heroDistance * 0.8));
-      const blkIsLight = document.documentElement.dataset.theme === "light";
-      const blkDuckBrightness = blkIsLight ? 0.82 : 0.55;
-      const blkDuckDur = 120;
-      const blkSurfaceDur = 220;
-      const blkGlideDelay = Math.round(blkDuckDur * 0.6);
-
-      // Position hero at old location, below all other cards
-      hero.el.style.willChange = "transform";
-      hero.el.style.transform = `translateY(${hero.dy}px)`;
-      hero.el.style.transition = "none";
-      hero.el.style.zIndex = "1";
-      if (heroCard) heroCard.style.transition = "none";
-
-      // Phase 1: Duck in (depress + darken)
-      const blkDuckAnim = heroCard?.animate(
-        [
-          { filter: "brightness(1)", transform: "scale(1)" },
-          { filter: `brightness(${blkDuckBrightness})`, transform: "scale(0.97) translateY(2px)" },
-        ],
-        { duration: blkDuckDur, easing: "cubic-bezier(0.33, 1, 0.68, 1)", fill: "forwards" },
-      );
-
-      // Phase 2: Hero glides under (starts overlapping duck-in)
-      let blkHeroArrived = false;
-      setTimeout(() => {
-        if (animationGenRef.current !== gen) return;
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            hero.el.style.transition = `transform ${heroDuration}ms cubic-bezier(0.16, 1, 0.3, 1)`;
-            hero.el.style.transform = "translateY(0)";
-
-            const heroArrive = () => {
-              if (blkHeroArrived) return;
-              blkHeroArrived = true;
-              // Phase 3: Surface (un-duck)
-              const blkSurfaceAnim = heroCard?.animate(
-                [
-                  { filter: `brightness(${blkDuckBrightness})`, transform: "scale(0.97) translateY(2px)" },
-                  { filter: "brightness(1)", transform: "scale(1) translateY(0)" },
-                ],
-                { duration: blkSurfaceDur, easing: "cubic-bezier(0.16, 1, 0.3, 1)", fill: "forwards" },
-              );
-              blkDuckAnim?.cancel();
-
-              setTimeout(() => {
-                blkSurfaceAnim?.cancel();
-                hero.el.style.transition = "";
-                hero.el.style.transform = "";
-                hero.el.style.willChange = "";
-                if (heroCard) heroCard.style.transition = "";
-                completedCount++;
-                if (completedCount === totalMovers) snapshotAndFinish();
-              }, blkSurfaceDur + 30);
-            };
-
-            const onEnd = (e: TransitionEvent) => {
-              if (e.propertyName !== "transform") return;
-              hero.el.removeEventListener("transitionend", onEnd as EventListener);
-              heroArrive();
-            };
-            hero.el.addEventListener("transitionend", onEnd as EventListener);
-            setTimeout(() => {
-              if (hero.el.style.transform !== "") {
-                hero.el.removeEventListener("transitionend", onEnd as EventListener);
-                heroArrive();
-              }
-            }, heroDuration + 150);
-          });
-        });
-      }, blkGlideDelay);
-
-      // Bump ripple: idle/done cards get bumped up as the hero passes underneath
-      pressRipple(
-        hero.el,
-        hero.dy,
-        hero.domTop,
-        heroDuration,
-        blkGlideDelay,
-      );
-    }
+    }).catch(() => {
+      // Animation cancelled (new reorder started) — just clear flag
+      if (animationGenRef.current === gen) {
+        isAnimatingRef.current = false;
+      }
+    });
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortKey, autoReorder, reorderTick]);
@@ -2120,7 +1722,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             </div>
           </div>
         ) : (
-          <div ref={listRef} className={`flex-1 ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto p-4 pb-12 space-y-3"}`}>
+          <div ref={listRef} className={`flex-1 ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-scroll p-4 pb-12 space-y-3"}`}>
             {sortedSandbox.map((session) => {
               // Apply keyboard state override if active
               const overrideState = stateOverrides[session.info.id];
@@ -2213,7 +1815,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           <span className="text-sm text-white/40">Sessions will appear here when Claude Code is running</span>
         </div>
       ) : (
-        <div ref={listRef} className={`flex-1 ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto p-4 pb-12 space-y-3"}`}>
+        <div ref={listRef} className={`flex-1 ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-scroll p-4 pb-12 space-y-3"}`}>
           {/* Empty active sessions message */}
           {sessions.length === 0 && revivedSessions.length > 0 && (
             <div className="flex flex-col items-center justify-center text-white/60 gap-2 py-12">
