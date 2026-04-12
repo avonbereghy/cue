@@ -772,139 +772,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         ];
       },
     },
-    {
-      key: "F6", label: "Transitions", description: "Auto-run 50+ state transitions",
-      build: () => {
-        sandboxCounterRef.current = 0;
-        return [
-          makeSandboxSession("idle", { title: "Auth middleware", workspace: "api-server", branch: "feat/auth", contextPct: 0.25, durationSecs: 120 }),
-          makeSandboxSession("idle", { title: "Dashboard UI", workspace: "web-client", branch: "main", contextPct: 0.40, durationSecs: 300 }),
-          makeSandboxSession("idle", { title: "Test suite", workspace: "cue", branch: "fix/bug-123", contextPct: 0.55, durationSecs: 500 }),
-          makeSandboxSession("idle", { title: "DB migration", workspace: "ml-pipeline", branch: "dev", contextPct: 0.70, durationSecs: 180 }),
-        ];
-      },
-    },
   ];
 
-  // Transition test runner — F6 preset triggers this
-  const transitionTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-
-  const runTransitionTest = useCallback(() => {
-    // Clear any previous test run
-    for (const t of transitionTimersRef.current) clearTimeout(t);
-    transitionTimersRef.current = [];
-
-    // Scripted sequence: [delayMs, sessionIndex (0-3), targetState]
-    // Covers all important transition pairs across 4 sessions with realistic timing
-    const script: Array<[number, number, string]> = [
-      // --- Wave 1: cold start — all idle, sessions wake up one by one ---
-      [  600, 0, "thinking"],     // 0: idle → thinking
-      [ 1200, 0, "working"],      // 0: thinking → working
-      [ 1800, 1, "thinking"],     // 1: idle → thinking
-      [ 2200, 1, "working"],      // 1: thinking → working
-      [ 2600, 2, "thinking"],     // 2: idle → thinking
-      [ 3000, 2, "working"],      // 2: thinking → working
-
-      // --- Wave 2: permission request interrupts working ---
-      [ 3800, 1, "waiting"],      // 1: working → waiting
-      [ 5200, 1, "working"],      // 1: waiting → working (approved)
-      [ 5600, 0, "waiting"],      // 0: working → waiting
-      [ 6000, 0, "error"],        // 0: waiting → error (denied/failed)
-      [ 7000, 0, "working"],      // 0: error → working (retried)
-
-      // --- Wave 3: subagent spawning ---
-      [ 7800, 2, "subagent"],     // 2: working → subagent
-      [ 8400, 0, "subagent"],     // 0: working → subagent
-      [ 9200, 1, "subagent"],     // 1: working → subagent
-
-      // --- Wave 4: mixed completions and new activity ---
-      [10000, 0, "working"],      // 0: subagent → working (subagent done)
-      [10400, 3, "thinking"],     // 3: idle → thinking (wakes up)
-      [10800, 3, "working"],      // 3: thinking → working
-      [11200, 0, "done"],         // 0: working → done
-      [11600, 2, "working"],      // 2: subagent → working
-      [12000, 1, "working"],      // 1: subagent → working
-      [12400, 2, "done"],         // 2: working → done
-      [12800, 1, "thinking"],     // 1: working → thinking (new turn)
-      [13200, 1, "working"],      // 1: thinking → working
-
-      // --- Wave 5: rapid-fire state changes (stress test) ---
-      [13800, 3, "waiting"],      // 3: working → waiting
-      [14000, 3, "working"],      // 3: waiting → working (quick approve)
-      [14200, 3, "waiting"],      // 3: working → waiting (another permission)
-      [14600, 3, "error"],        // 3: waiting → error
-      [15200, 3, "idle"],         // 3: error → idle
-
-      // --- Wave 6: compacting ---
-      [15800, 1, "compacting"],   // 1: working → compacting
-      [17000, 1, "thinking"],     // 1: compacting → thinking
-      [17400, 1, "working"],      // 1: thinking → working
-      [17800, 0, "thinking"],     // 0: done → thinking (new prompt)
-      [18200, 0, "working"],      // 0: thinking → working
-
-      // --- Wave 7: error cascade and recovery ---
-      [18800, 0, "error"],        // 0: working → error
-      [19200, 1, "error"],        // 1: working → error
-      [19800, 0, "working"],      // 0: error → working (retry)
-      [20200, 1, "working"],      // 1: error → working (retry)
-
-      // --- Wave 8: all settle down ---
-      [21000, 0, "done"],         // 0: working → done
-      [21400, 1, "done"],         // 1: working → done
-      [21800, 3, "done"],         // 3: idle → done
-
-      // --- Wave 9: one wakes back up (tests bubble-up on settled list) ---
-      [24000, 2, "thinking"],     // 2: done → thinking (after ~11s idle)
-      [24400, 2, "working"],      // 2: thinking → working
-      [25000, 2, "subagent"],     // 2: working → subagent
-
-      // --- Wave 10: final wind-down — all to idle/done ---
-      [26000, 2, "working"],      // 2: subagent → working
-      [26500, 2, "done"],         // 2: working → done
-      [27000, 0, "idle"],         // 0: done → idle
-      [27500, 1, "idle"],         // 1: done → idle
-      [28000, 3, "idle"],         // 3: done → idle
-      [28500, 2, "idle"],         // 2: done → idle
-    ];
-
-    // Schedule all transitions
-    for (const [delay, idx, state] of script) {
-      const timer = setTimeout(() => {
-        setSandboxSessions((prev) => {
-          if (idx >= prev.length) return prev;
-          const id = prev[idx].info.id;
-          const meta = SANDBOX_STATE_META[state] ?? SANDBOX_STATE_META.idle;
-          const tool = state === "working" ? SANDBOX_TOOLS_ACTIVE[Math.floor(Math.random() * SANDBOX_TOOLS_ACTIVE.length)] : null;
-          return prev.map((s) =>
-            s.info.id === id ? {
-              ...s,
-              info: { ...s.info, state, lastActivity: Date.now() / 1000 },
-              stateIcon: meta.icon,
-              stateDisplayName: meta.display,
-              hasSubagents: state === "subagent" ? true : (state === "working" ? false : s.hasSubagents),
-              outputTokensPerSec: (state === "working" || state === "subagent") ? Math.random() * 25 + 5 : 0,
-              runningToolName: tool ? tool[0] : (state === "working" ? s.runningToolName : undefined),
-              runningToolTarget: tool ? tool[1] : (state === "working" ? s.runningToolTarget : undefined),
-              metrics: {
-                ...s.metrics,
-                subagents: state === "subagent" ? (s.metrics.subagents.length > 0 ? s.metrics.subagents : [
-                  { agentId: `sub_test_1`, description: "Research task", slug: "research", inputTokens: 12000, outputTokens: 3000, cacheCreationTokens: 0, cacheReadTokens: 5000, model: s.metrics.model, toolCounts: { Read: 3, Grep: 2 }, messageCount: 8, isActive: true },
-                ]) : (state === "working" ? [] : s.metrics.subagents),
-              },
-            } : s,
-          );
-        });
-      }, delay);
-      transitionTimersRef.current.push(timer);
-    }
-  }, [makeSandboxSession, setSandboxSessions]);
-
-  // Cleanup transition timers on unmount
-  useEffect(() => {
-    return () => {
-      for (const t of transitionTimersRef.current) clearTimeout(t);
-    };
-  }, []);
 
   // Load a sandbox preset. F5 (Screenshot) hides chrome, captures, then restores.
   const loadSandboxPreset = useCallback((preset: typeof SANDBOX_PRESETS[number]) => {
@@ -929,11 +798,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       }));
     }
 
-    if (preset.key === "F6") {
-      // Wait 1 frame for sessions to render, then start transition test
-      requestAnimationFrame(() => runTransitionTest());
-    }
-  }, [runTransitionTest]);
+  }, []);
 
   // Keyboard handler for sandbox mode
   useEffect(() => {
@@ -1110,6 +975,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const committedOrderRef = useRef<string[]>([]);
   const quiesceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isAnimatingRef = useRef(false);
+  const animationGenRef = useRef(0); // incremented each animation; stale chains check this
   const isQuiescenceReorderRef = useRef(false);
   // Sessions spawned within the last 300ms — forced to bottom until timer fires
   const newSpawnsRef = useRef<Map<string, number>>(new Map());
@@ -1229,16 +1095,28 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       }
     }
 
-    // Schedule reorder after spawn hold expires
-    if (justSpawned.length > 0 && !newSpawnTimerRef.current) {
+    // Schedule reorder after spawn hold expires — reschedule to latest expiry
+    // so all spawned sessions are released together.
+    if (justSpawned.length > 0) {
+      const latestSpawn = Math.max(
+        ...justSpawned.map((s) => newSpawnsRef.current.get(s.info.id) ?? 0),
+      );
+      const remaining = Math.max(50, latestSpawn + 320 - now);
+      if (newSpawnTimerRef.current) clearTimeout(newSpawnTimerRef.current);
       newSpawnTimerRef.current = setTimeout(() => {
         newSpawnTimerRef.current = null;
-        setReorderTick((t) => t + 1);
-      }, 320);
+        if (!isAnimatingRef.current) {
+          setReorderTick((t) => t + 1);
+        }
+      }, remaining);
     }
 
     const result = [...nonSettled, ...settled, ...justSpawned];
-    committedOrderRef.current = result.map((s) => s.info.id);
+    // Don't overwrite committed order during an in-flight animation —
+    // the animation owns the position snapshot and will update on completion.
+    if (!isAnimatingRef.current) {
+      committedOrderRef.current = result.map((s) => s.info.id);
+    }
     return result;
   })();
 
@@ -1268,6 +1146,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       if (!quiesceTimerRef.current) {
         quiesceTimerRef.current = setTimeout(() => {
           quiesceTimerRef.current = null;
+          if (isAnimatingRef.current) return; // don't fire into a live animation
           const fireTime = Date.now();
           if (!allSettled(activeSessionsRef.current, fireTime)) return;
           committedOrderRef.current = desiredOrderRef.current;
@@ -1293,6 +1172,11 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   useLayoutEffect(() => {
     const list = listRef.current;
     if (!list || !autoReorder) return;
+
+    // Don't start a new animation while one is in flight — the current
+    // animation owns cardPositions and will snapshot on completion.
+    // The next render after it finishes will pick up any pending changes.
+    if (isAnimatingRef.current) return;
 
     const prev = cardPositions.current;
     if (prev.size === 0) {
@@ -1333,7 +1217,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     });
 
     if (movers.length === 0) {
-      // No movement — just snapshot
+      // No movement — just snapshot and clear any stale flags
       const allCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
       const positions = new Map<string, DOMRect>();
       allCards.forEach((el) => {
@@ -1342,10 +1226,12 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       });
       cardPositions.current = positions;
       isQuiescenceReorderRef.current = false;
+      isAnimatingRef.current = false; // safety: clear stuck flag
       return;
     }
 
     isAnimatingRef.current = true;
+    const gen = ++animationGenRef.current; // cancellation token
 
     // Compute gap between cards from the final DOM layout
     const cardArr = Array.from(cards);
@@ -1357,17 +1243,100 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       if (measured > 0 && measured < 50) gap = measured;
     }
 
-    // Helper: snapshot final positions and unlock animations
+    // Stack all cards above the hero's duck layer so the hero glides underneath
+    cards.forEach((el) => {
+      el.style.position = "relative";
+      el.style.zIndex = "50";
+    });
+
+    // Helper: snapshot final positions and unlock animations.
+    // If the session list changed during the animation, force a re-render
+    // so the next FLIP pass picks up the deferred changes.
     const snapshotAndFinish = () => {
       isAnimatingRef.current = false;
       const allCards =
         list.querySelectorAll<HTMLElement>("[data-session-id]");
       const positions = new Map<string, DOMRect>();
+      const ids: string[] = [];
       allCards.forEach((c) => {
         const cid = c.dataset.sessionId!;
         positions.set(cid, c.getBoundingClientRect());
+        ids.push(cid);
+        c.style.zIndex = "";
+        c.style.position = "";
       });
       cardPositions.current = positions;
+      committedOrderRef.current = ids;
+      // Kick a re-render so deferred sortKey changes get picked up
+      setReorderTick((t) => t + 1);
+    };
+
+    // Bump ripple: as the hero ducks under idle/done cards, briefly bump
+    // them upward. Uses WAAPI to bypass session-card--reordering's
+    // "transition: none !important".
+    const pressRipple = (
+      heroEl: HTMLElement,
+      heroDy: number,
+      heroDomTop: number,
+      heroDur: number,
+      heroDelay: number,
+    ) => {
+      const heroOld = heroDomTop + heroDy;
+      const heroNew = heroDomTop;
+      const movingUp = heroDy > 0;
+      const lo = Math.min(heroOld, heroNew);
+      const hi = Math.max(heroOld, heroNew);
+
+      // Find all idle/done cards between hero's old and new visual positions
+      const targets: { cardEl: HTMLElement; pos: number }[] = [];
+      cards.forEach((wrapper) => {
+        if (wrapper === heroEl) return;
+        const st = wrapper.dataset.sessionState;
+        if (st !== "idle" && st !== "done") return;
+        const cardEl = wrapper.querySelector<HTMLElement>(".session-card");
+        if (!cardEl) return;
+        // Use wrapper's current visual center (rect includes any transform)
+        const r = wrapper.getBoundingClientRect();
+        const center = r.top + r.height / 2;
+        if (center >= lo && center <= hi) {
+          targets.push({ cardEl, pos: center });
+        }
+      });
+
+      if (targets.length === 0) return;
+
+      // Sort by hero's travel direction: first card the hero reaches = first press
+      targets.sort((a, b) =>
+        movingUp ? b.pos - a.pos : a.pos - b.pos,
+      );
+
+      // Stagger presses: proportional to position along hero's path
+      const travel = hi - lo;
+      targets.forEach(({ cardEl, pos }) => {
+        const progress = movingUp
+          ? (heroOld - pos) / travel
+          : (pos - heroOld) / travel;
+        // Approximate outExpo: hero covers ground fast early, slows late.
+        // Invert the easing to get time-from-progress.
+        const adjustedProgress = progress * progress;  // compress early timing
+        const delay =
+          heroDelay + adjustedProgress * heroDur * 0.85;
+
+        setTimeout(() => {
+          if (!cardEl.isConnected) return; // element removed during animation
+          cardEl.animate(
+            [
+              { transform: "translateY(0)" },
+              { transform: "translateY(-2px)", offset: 0.35 },
+              { transform: "translateY(0)" },
+            ],
+            {
+              duration: 220,
+              easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+            },
+          );
+        }, delay);
+      });
     };
 
     // Determine animation mode: sequential (quiescence) vs block (single promotion)
@@ -1405,10 +1374,14 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       const placed = new Set<string>();
 
       const animateStep = (stepIdx: number) => {
-        // Skip cards already at final position
+        // Cancellation: if a newer animation started, abort this chain
+        if (animationGenRef.current !== gen) return;
+
+        // Skip cards already at final position or detached from DOM
         while (stepIdx < sequence.length) {
-          const id = sequence[stepIdx].el.dataset.sessionId!;
-          if (Math.abs(currentDy.get(id)!) < 1) {
+          const el = sequence[stepIdx].el;
+          const id = el.dataset.sessionId!;
+          if (!el.isConnected || Math.abs(currentDy.get(id)!) < 1) {
             placed.add(id);
             // Clean up this card immediately
             const el = sequence[stepIdx].el;
@@ -1445,7 +1418,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         const yielders: typeof movers = [];
         for (const m of movers) {
           const mId = m.el.dataset.sessionId!;
-          if (placed.has(mId)) continue;
+          if (placed.has(mId) || !m.el.isConnected) continue;
           const mDy = currentDy.get(mId)!;
           const mVisual = m.domTop + mDy;
           if (movingUp) {
@@ -1468,55 +1441,40 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           }
         };
 
-        // Animate hero to translateY(0)
+        // Hero ducks under other cards, glides to position, then surfaces
         const heroDur = Math.min(
           700,
           Math.max(400, 300 + Math.abs(heroDy) * 0.6),
         );
-        hero.el.style.zIndex = "60";
+        const seqIsLight = document.documentElement.dataset.theme === "light";
+        const seqDuckBrightness = seqIsLight ? 0.82 : 0.55;
+        const seqDuckDur = 120;
+        const seqSurfaceDur = 220;
+        const seqGlideDelay = Math.round(seqDuckDur * 0.6);
 
+        // Hero z-index below all other cards
+        hero.el.style.zIndex = "1";
+        const heroCard =
+          hero.el.querySelector<HTMLElement>(".session-card");
+        if (heroCard) heroCard.style.transition = "none";
+
+        // Phase 1: Duck in (depress + darken)
+        const seqDuckAnim = heroCard?.animate(
+          [
+            { filter: "brightness(1)", transform: "scale(1)" },
+            { filter: `brightness(${seqDuckBrightness})`, transform: "scale(0.97) translateY(2px)" },
+          ],
+          { duration: seqDuckDur, easing: "cubic-bezier(0.33, 1, 0.68, 1)", fill: "forwards" },
+        );
+
+        // Bump ripple on idle/done cards the hero passes underneath
+        pressRipple(hero.el, heroDy, hero.domTop, heroDur, seqGlideDelay);
+
+        // Yielders shift as a block — start immediately
+        const yielderShift = movingUp ? shiftAmount : -shiftAmount;
+        const yielderDur = 400;
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            hero.el.style.transition = `transform ${heroDur}ms cubic-bezier(0.16, 1, 0.3, 1)`;
-            hero.el.style.transform = "translateY(0)";
-            currentDy.set(heroId, 0);
-
-            const heroCleanup = () => {
-              hero.el.style.transition = "";
-              hero.el.style.transform = "";
-              hero.el.style.zIndex = "";
-              hero.el.style.position = "";
-              hero.el.style.willChange = "";
-              const c =
-                hero.el.querySelector<HTMLElement>(".session-card");
-              if (c) c.classList.remove("session-card--reordering");
-              onStepDone();
-            };
-            const heroOnEnd = (e: TransitionEvent) => {
-              if (e.propertyName !== "transform") return;
-              hero.el.removeEventListener(
-                "transitionend",
-                heroOnEnd as EventListener,
-              );
-              heroCleanup();
-            };
-            hero.el.addEventListener(
-              "transitionend",
-              heroOnEnd as EventListener,
-            );
-            setTimeout(() => {
-              if (hero.el.style.transform !== "") {
-                hero.el.removeEventListener(
-                  "transitionend",
-                  heroOnEnd as EventListener,
-                );
-                heroCleanup();
-              }
-            }, heroDur + 150);
-
-            // Yielders shift as a block — all start together, same duration
-            const yielderShift = movingUp ? shiftAmount : -shiftAmount;
-            const yielderDur = 400;
             for (const y of yielders) {
               const yId = y.el.dataset.sessionId!;
               const newDy = currentDy.get(yId)! + yielderShift;
@@ -1526,7 +1484,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
               y.el.style.transform = `translateY(${newDy}px)`;
 
               const yCleanup = () => {
-                // Keep transform (card still displaced) but clear transition
                 y.el.style.transition = "";
                 onStepDone();
               };
@@ -1550,19 +1507,77 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                 yCleanup();
               }, yielderDur + 150);
             }
-
-            // If no yielders, hero is the only animation this step
-            if (yielders.length === 0) {
-              // onStepDone will fire from heroCleanup
-            }
           });
         });
+
+        // Phase 2: Hero glides under (starts after duck delay)
+        let seqHeroArrived = false;
+        setTimeout(() => {
+          if (animationGenRef.current !== gen) return;
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              hero.el.style.transition = `transform ${heroDur}ms cubic-bezier(0.16, 1, 0.3, 1)`;
+              hero.el.style.transform = "translateY(0)";
+              currentDy.set(heroId, 0);
+
+              const heroArrive = () => {
+                if (seqHeroArrived) return;
+                seqHeroArrived = true;
+                // Phase 3: Surface (un-duck)
+                const seqSurfaceAnim = heroCard?.animate(
+                  [
+                    { filter: `brightness(${seqDuckBrightness})`, transform: "scale(0.97) translateY(2px)" },
+                    { filter: "brightness(1)", transform: "scale(1) translateY(0)" },
+                  ],
+                  { duration: seqSurfaceDur, easing: "cubic-bezier(0.16, 1, 0.3, 1)", fill: "forwards" },
+                );
+                seqDuckAnim?.cancel();
+
+                setTimeout(() => {
+                  seqSurfaceAnim?.cancel();
+                  hero.el.style.transition = "";
+                  hero.el.style.transform = "";
+                  hero.el.style.zIndex = "50";
+                  hero.el.style.willChange = "";
+                  if (heroCard) heroCard.style.transition = "";
+                  onStepDone();
+                }, seqSurfaceDur + 30);
+              };
+              const heroOnEnd = (e: TransitionEvent) => {
+                if (e.propertyName !== "transform") return;
+                hero.el.removeEventListener(
+                  "transitionend",
+                  heroOnEnd as EventListener,
+                );
+                heroArrive();
+              };
+              hero.el.addEventListener(
+                "transitionend",
+                heroOnEnd as EventListener,
+              );
+              setTimeout(() => {
+                if (hero.el.style.transform !== "") {
+                  hero.el.removeEventListener(
+                    "transitionend",
+                    heroOnEnd as EventListener,
+                  );
+                  heroArrive();
+                }
+              }, heroDur + 150);
+            });
+          });
+        }, seqGlideDelay);
+
+        // If no yielders, hero is the only animation this step
+        if (yielders.length === 0) {
+          // onStepDone will fire from heroArrive
+        }
       };
 
       animateStep(0);
     } else {
-      // ─── Block animation — single card promotion ───
-      // Hero card slides to new position, all yielders shift as a unified block.
+      // ─── Block animation — card ducks under to new position ───
+      // Hero depresses + darkens, glides under other cards, then surfaces.
 
       const upwardMovers = movers.filter((m) => m.dy < 0);
       const hero =
@@ -1578,85 +1593,128 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       let completedCount = 0;
       const totalMovers = movers.length;
 
-      const animateCard = (
-        el: HTMLElement,
-        dy: number,
-        delay: number,
-        dur: number,
-        zIdx: number,
-      ) => {
+      // --- Yielder animation (floating slide, same as before) ---
+      yielders.forEach(({ el, dy }) => {
         const cardEl = el.querySelector<HTMLElement>(".session-card");
-
         el.style.willChange = "transform";
         el.style.transform = `translateY(${dy}px)`;
         el.style.transition = "none";
-        el.style.zIndex = String(zIdx);
-        el.style.position = "relative";
 
-        if (cardEl) {
-          cardEl.classList.add("session-card--reordering");
-        }
+        if (cardEl) cardEl.classList.add("session-card--reordering");
 
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            el.style.transition = `transform ${dur}ms cubic-bezier(0.16, 1, 0.3, 1) ${delay}ms`;
+            el.style.transition = `transform 500ms cubic-bezier(0.16, 1, 0.3, 1)`;
             el.style.transform = "translateY(0)";
 
             const cleanup = () => {
               el.style.transition = "";
               el.style.transform = "";
-              el.style.zIndex = "";
-              el.style.position = "";
               el.style.willChange = "";
-              if (cardEl) {
-                cardEl.classList.remove("session-card--reordering");
-              }
+              if (cardEl) cardEl.classList.remove("session-card--reordering");
               completedCount++;
-              if (completedCount === totalMovers) {
-                snapshotAndFinish();
-              }
+              if (completedCount === totalMovers) snapshotAndFinish();
             };
 
             const onEnd = (e: TransitionEvent) => {
               if (e.propertyName !== "transform") return;
-              el.removeEventListener(
-                "transitionend",
-                onEnd as EventListener,
-              );
+              el.removeEventListener("transitionend", onEnd as EventListener);
               cleanup();
             };
-            el.addEventListener(
-              "transitionend",
-              onEnd as EventListener,
-            );
-
+            el.addEventListener("transitionend", onEnd as EventListener);
             setTimeout(() => {
               if (el.style.transform !== "") {
-                el.removeEventListener(
-                  "transitionend",
-                  onEnd as EventListener,
-                );
+                el.removeEventListener("transitionend", onEnd as EventListener);
                 cleanup();
               }
-            }, dur + delay + 100);
+            }, 600);
           });
         });
-      };
-
-      // Yielders move as a unified block — all start together, same duration
-      const yielderDuration = 500;
-      yielders.forEach(({ el, dy }) => {
-        animateCard(el, dy, 0, yielderDuration, 50);
       });
 
-      // Hero follows after a brief pause, slides into the opened gap
+      // --- Hero animation — duck under ---
+      const heroCard = hero.el.querySelector<HTMLElement>(".session-card");
       const heroDistance = Math.abs(hero.dy);
-      const heroDuration = Math.min(
-        900,
-        Math.max(550, 400 + heroDistance * 0.8),
+      const heroDuration = Math.min(900, Math.max(550, 400 + heroDistance * 0.8));
+      const blkIsLight = document.documentElement.dataset.theme === "light";
+      const blkDuckBrightness = blkIsLight ? 0.82 : 0.55;
+      const blkDuckDur = 120;
+      const blkSurfaceDur = 220;
+      const blkGlideDelay = Math.round(blkDuckDur * 0.6);
+
+      // Position hero at old location, below all other cards
+      hero.el.style.willChange = "transform";
+      hero.el.style.transform = `translateY(${hero.dy}px)`;
+      hero.el.style.transition = "none";
+      hero.el.style.zIndex = "1";
+      if (heroCard) heroCard.style.transition = "none";
+
+      // Phase 1: Duck in (depress + darken)
+      const blkDuckAnim = heroCard?.animate(
+        [
+          { filter: "brightness(1)", transform: "scale(1)" },
+          { filter: `brightness(${blkDuckBrightness})`, transform: "scale(0.97) translateY(2px)" },
+        ],
+        { duration: blkDuckDur, easing: "cubic-bezier(0.33, 1, 0.68, 1)", fill: "forwards" },
       );
-      const heroDelay = 80;
-      animateCard(hero.el, hero.dy, heroDelay, heroDuration, 60);
+
+      // Phase 2: Hero glides under (starts overlapping duck-in)
+      let blkHeroArrived = false;
+      setTimeout(() => {
+        if (animationGenRef.current !== gen) return;
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            hero.el.style.transition = `transform ${heroDuration}ms cubic-bezier(0.16, 1, 0.3, 1)`;
+            hero.el.style.transform = "translateY(0)";
+
+            const heroArrive = () => {
+              if (blkHeroArrived) return;
+              blkHeroArrived = true;
+              // Phase 3: Surface (un-duck)
+              const blkSurfaceAnim = heroCard?.animate(
+                [
+                  { filter: `brightness(${blkDuckBrightness})`, transform: "scale(0.97) translateY(2px)" },
+                  { filter: "brightness(1)", transform: "scale(1) translateY(0)" },
+                ],
+                { duration: blkSurfaceDur, easing: "cubic-bezier(0.16, 1, 0.3, 1)", fill: "forwards" },
+              );
+              blkDuckAnim?.cancel();
+
+              setTimeout(() => {
+                blkSurfaceAnim?.cancel();
+                hero.el.style.transition = "";
+                hero.el.style.transform = "";
+                hero.el.style.willChange = "";
+                if (heroCard) heroCard.style.transition = "";
+                completedCount++;
+                if (completedCount === totalMovers) snapshotAndFinish();
+              }, blkSurfaceDur + 30);
+            };
+
+            const onEnd = (e: TransitionEvent) => {
+              if (e.propertyName !== "transform") return;
+              hero.el.removeEventListener("transitionend", onEnd as EventListener);
+              heroArrive();
+            };
+            hero.el.addEventListener("transitionend", onEnd as EventListener);
+            setTimeout(() => {
+              if (hero.el.style.transform !== "") {
+                hero.el.removeEventListener("transitionend", onEnd as EventListener);
+                heroArrive();
+              }
+            }, heroDuration + 150);
+          });
+        });
+      }, blkGlideDelay);
+
+      // Bump ripple: idle/done cards get bumped up as the hero passes underneath
+      pressRipple(
+        hero.el,
+        hero.dy,
+        hero.domTop,
+        heroDuration,
+        blkGlideDelay,
+      );
     }
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1888,6 +1946,25 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                 className="px-2 py-0.5 rounded text-[0.6rem] font-medium bg-red-500/15 text-red-400/50 hover:bg-red-500/25 hover:text-red-400 transition-colors"
               >
                 Clear
+              </button>
+            )}
+            {sandboxSessions.length > 1 && (
+              <button
+                onClick={() => {
+                  setSandboxSessions((prev) => {
+                    const sorted = [...prev].sort((a, b) => {
+                      const pa = reorderPriority(a);
+                      const pb = reorderPriority(b);
+                      if (pa !== pb) return pa - pb;
+                      return b.info.lastActivity - a.info.lastActivity;
+                    });
+                    return sorted;
+                  });
+                }}
+                title="Sort by priority (waiting > error > working > idle)"
+                className="px-2 py-0.5 rounded text-[0.6rem] font-medium bg-blue-500/15 text-blue-400/50 hover:bg-blue-500/25 hover:text-blue-400 transition-colors"
+              >
+                Sort
               </button>
             )}
             <button
