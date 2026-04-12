@@ -133,6 +133,76 @@ def _validate_sessions(data):
     return {"sessions": valid}
 
 
+def _quick_state_write(session_id, workspace, source, subprocess_label,
+                       last_tokens, hook_start_time):
+    """Write 'waiting' state to sessions.json immediately (before blocking HTTP).
+
+    This is a fast-path write so the dashboard shows 'waiting' while the
+    permission prompt is displayed, rather than staying stuck on 'working'.
+    """
+    try:
+        with open(LOCK_FILE, "a+b") as lock:
+            lock.seek(0)
+            _lock(lock)
+            try:
+                try:
+                    with open(STATUS_FILE, "r") as f:
+                        status = json.load(f)
+                except Exception:
+                    status = {"sessions": {}}
+
+                existing = status["sessions"].get(session_id, {})
+
+                # Same stale-waiting guard as the main write path
+                existing_activity = existing.get("lastActivity", 0)
+                if existing_activity > hook_start_time:
+                    return  # A newer hook already wrote
+
+                now = time.time()
+                entry = {
+                    "id": session_id,
+                    "workspace": existing.get("workspace", workspace),
+                    "state": "waiting",
+                    "lastActivity": now,
+                    "startedAt": existing.get("startedAt", now),
+                    "source": existing.get("source", source),
+                    "activeSubagents": existing.get("activeSubagents", 0),
+                }
+                sub = existing.get("subprocess") or subprocess_label
+                if sub:
+                    entry["subprocess"] = sub
+                if last_tokens:
+                    entry["inputTokens"] = last_tokens["inputTokens"]
+                    entry["outputTokens"] = last_tokens["outputTokens"]
+                    if last_tokens["model"]:
+                        entry["model"] = last_tokens["model"]
+                elif existing.get("inputTokens"):
+                    entry["inputTokens"] = existing["inputTokens"]
+                    entry["outputTokens"] = existing.get("outputTokens", 0)
+                    entry["model"] = existing.get("model", "")
+
+                status["sessions"][session_id] = entry
+
+                fd, tmp = tempfile.mkstemp(dir=STATUS_DIR, suffix=".json.tmp")
+                try:
+                    with os.fdopen(fd, "w") as f:
+                        json.dump(status, f, indent=2)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(tmp, STATUS_FILE)
+                    if sys.platform != "win32":
+                        os.chmod(STATUS_FILE, 0o600)
+                except Exception:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
+            finally:
+                _unlock(lock)
+    except Exception:
+        pass  # Best-effort — the main write path will retry
+
+
 def _forward_permission_request(hook_data, session_id):
     """Forward a permission request to the Cue dashboard via localhost HTTP.
 
@@ -339,6 +409,15 @@ def main():
     transcript_path = hook_data.get("transcript_path", "")
     last_tokens = _read_last_tokens(transcript_path)
 
+    os.makedirs(STATUS_DIR, exist_ok=True)
+
+    # For PermissionRequest, write "waiting" state BEFORE the blocking HTTP
+    # call to the dashboard. Otherwise the state stays "working" the entire
+    # time the user is looking at the permission prompt.
+    if action == "waiting":
+        _quick_state_write(session_id, workspace, source, subprocess_label,
+                           last_tokens, hook_start_time)
+
     # Forward permission requests to the dashboard for user decision.
     # PermissionRequest hooks have tool_name in the payload and action="waiting".
     if action == "waiting" and "tool_name" in hook_data:
@@ -349,8 +428,6 @@ def main():
             sys.stdout.flush()
             # Still update sessions.json below (don't return) so the
             # dashboard shows the session state change
-
-    os.makedirs(STATUS_DIR, exist_ok=True)
 
     # Hold an exclusive lock for the entire read-modify-write cycle
     # to prevent concurrent hooks from clobbering each other's updates
