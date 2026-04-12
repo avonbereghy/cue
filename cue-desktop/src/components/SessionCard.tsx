@@ -583,51 +583,64 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             </span>
           )}
 
-          {/* Row 4: Context usage — visible in regular and slim mode, hidden in compact */}
+          {/* Row 4: Context usage — right-aligned to match timer position */}
           {contextThreshold !== "never" && contextMeetsThreshold && (
-            <div className="relative flex items-center gap-2">
+            <div className="relative flex items-center gap-1.5">
               <span className={`text-[0.625rem] shrink-0 ${isGlass ? "text-white/65" : "text-white/40"}`}>Context</span>
-              <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden">
-                <div
-                  className="absolute left-0 top-0 bottom-0 rounded-full transition-all duration-500"
-                  style={{
-                    width: `${Math.min(session.contextUsagePercent * 100, 100)}%`,
-                    background: (() => {
-                      const tok = metrics.lastInputTokens;
-                      if (tok >= 400000) return "#ef4444";
-                      if (tok >= 200000) {
-                        const t = (tok - 200000) / 200000;
-                        const r = Math.round(245 + (239 - 245) * t);
-                        const g = Math.round(158 - 158 * t + 68 * t);
-                        const b = Math.round(11 + (68 - 11) * t);
-                        return `rgb(${r},${g},${b})`;
+              {metrics.lastInputTokens === 0 ? (
+                /* Loading state — no token data yet */
+                <>
+                  <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden" />
+                  <svg className="w-3 h-3 animate-spin shrink-0" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.2" strokeWidth="2" />
+                    <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeOpacity="0.5" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                </>
+              ) : (
+                <>
+                  <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden">
+                    <div
+                      className="absolute left-0 top-0 bottom-0 rounded-full transition-all duration-500"
+                      style={{
+                        width: `${Math.min(session.contextUsagePercent * 100, 100)}%`,
+                        background: (() => {
+                          const tok = metrics.lastInputTokens;
+                          if (tok >= 400000) return "#ef4444";
+                          if (tok >= 200000) {
+                            const t = (tok - 200000) / 200000;
+                            const r = Math.round(245 + (239 - 245) * t);
+                            const g = Math.round(158 - 158 * t + 68 * t);
+                            const b = Math.round(11 + (68 - 11) * t);
+                            return `rgb(${r},${g},${b})`;
+                          }
+                          const t = tok / 200000;
+                          const r = Math.round(34 + (245 - 34) * t);
+                          const g = Math.round(197 + (158 - 197) * t);
+                          const b = Math.round(94 + (11 - 94) * t);
+                          return `rgb(${r},${g},${b})`;
+                        })(),
+                        opacity: 0.25,
+                      }}
+                    />
+                  </div>
+                  <span className={`text-[0.625rem] mono-nums shrink-0 ${isGlass ? "text-white/75" : "text-white/50"}`}>
+                    {(() => {
+                      const pct = Math.round(session.contextUsagePercent * 100);
+                      const tok = `${formatTokens(metrics.lastInputTokens)} / ${formatTokens(session.contextLimit)}`;
+                      switch (contextDisplay) {
+                        case "tokens": return tok;
+                        case "remaining": return `${100 - pct}% free`;
+                        case "both": return `${pct}% (${tok})`;
+                        default: return `${pct}%`;
                       }
-                      const t = tok / 200000;
-                      const r = Math.round(34 + (245 - 34) * t);
-                      const g = Math.round(197 + (158 - 197) * t);
-                      const b = Math.round(94 + (11 - 94) * t);
-                      return `rgb(${r},${g},${b})`;
-                    })(),
-                    opacity: 0.25,
-                  }}
-                />
-              </div>
-              <span className={`text-[0.625rem] mono-nums shrink-0 ${isGlass ? "text-white/75" : "text-white/50"}`}>
-                {(() => {
-                  const pct = Math.round(session.contextUsagePercent * 100);
-                  const tok = `${formatTokens(metrics.lastInputTokens)} / ${formatTokens(session.contextLimit)}`;
-                  switch (contextDisplay) {
-                    case "tokens": return tok;
-                    case "remaining": return `${100 - pct}% free`;
-                    case "both": return `${pct}% (${tok})`;
-                    default: return `${pct}%`;
-                  }
-                })()}
-              </span>
-              {contextDisplay !== "tokens" && contextDisplay !== "both" && (
-                <span className={`text-[0.625rem] mono-nums shrink-0 ${isGlass ? "text-white/55" : "text-white/30"}`}>
-                  {formatTokens(metrics.lastInputTokens)} / {formatTokens(session.contextLimit)}
-                </span>
+                    })()}
+                  </span>
+                  {contextDisplay !== "tokens" && contextDisplay !== "both" && (
+                    <span className={`text-[0.625rem] mono-nums shrink-0 ${isGlass ? "text-white/55" : "text-white/30"}`}>
+                      {formatTokens(metrics.lastInputTokens)} / {formatTokens(session.contextLimit)}
+                    </span>
+                  )}
+                </>
               )}
             </div>
           )}

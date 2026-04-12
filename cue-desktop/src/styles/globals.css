@@ -415,6 +415,22 @@ html[data-theme="light"]:not([data-glass]) .session-card--reordering {
   box-shadow: 0 1px 4px rgba(0,0,0,0.16), 0 3px 8px rgba(0,0,0,0.10);
 }
 
+/* Hero card during reorder — opaque so it doesn't look see-through while sliding */
+.session-card--reordering-hero {
+  background-color: rgba(30,30,30,0.97);
+  box-shadow:
+    0 4px 12px rgba(0,0,0,0.5),
+    0 8px 28px rgba(0,0,0,0.4),
+    0 0 0 0.5px rgba(255,255,255,0.10);
+}
+html[data-theme="light"]:not([data-glass]) .session-card--reordering-hero {
+  background-color: rgba(255,255,255,0.98);
+  box-shadow:
+    0 2px 6px rgba(0,0,0,0.18),
+    0 6px 20px rgba(0,0,0,0.14),
+    0 10px 30px rgba(0,0,0,0.10);
+}
+
 /* Light mode — shadows use lighter values; bg/border use CSS vars (theme-aware) */
 html[data-theme="light"]:not([data-glass]) .session-card--floating {
   background-color: var(--card-float-bg);
