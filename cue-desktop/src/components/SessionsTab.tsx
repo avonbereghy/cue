@@ -1110,6 +1110,10 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const committedOrderRef = useRef<string[]>([]);
   const quiesceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isAnimatingRef = useRef(false);
+  const isQuiescenceReorderRef = useRef(false);
+  // Sessions spawned within the last 300ms — forced to bottom until timer fires
+  const newSpawnsRef = useRef<Map<string, number>>(new Map());
+  const newSpawnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Per-session "settled since" timestamps. A session is "settled" when it
   // has been idle/done for ≥ SETTLE_MS. Active sessions are removed from this map.
@@ -1185,6 +1189,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     // Build ordered list from committed, adding new sessions
     const ordered: EnrichedSession[] = [];
     const used = new Set<string>();
+    const justSpawned: EnrichedSession[] = [];
     for (const id of committed) {
       if (sessionMap.has(id)) {
         ordered.push(sessionMap.get(id)!);
@@ -1193,14 +1198,28 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     }
     for (const id of desiredOrder) {
       if (!used.has(id) && sessionMap.has(id)) {
-        ordered.push(sessionMap.get(id)!);
+        const s = sessionMap.get(id)!;
+        // Track newly seen sessions — hold at bottom for 300ms
+        if (!newSpawnsRef.current.has(id)) {
+          newSpawnsRef.current.set(id, now);
+        }
+        ordered.push(s);
       }
     }
 
-    // Partition into non-settled (active or recently changed) vs settled (idle/done 5s+)
+    // Partition: newly spawned (bottom), non-settled (top), settled (middle)
     const nonSettled: EnrichedSession[] = [];
     const settled: EnrichedSession[] = [];
     for (const s of ordered) {
+      const spawnTime = newSpawnsRef.current.get(s.info.id);
+      if (spawnTime !== undefined && now - spawnTime < 300) {
+        justSpawned.push(s);
+        continue;
+      }
+      // Clear expired spawn tracking
+      if (spawnTime !== undefined) {
+        newSpawnsRef.current.delete(s.info.id);
+      }
       const since = settledSinceRef.current.get(s.info.id);
       const isSettled = since !== undefined && (now - since) >= SETTLE_MS;
       if (isSettled) {
@@ -1210,7 +1229,15 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       }
     }
 
-    const result = [...nonSettled, ...settled];
+    // Schedule reorder after spawn hold expires
+    if (justSpawned.length > 0 && !newSpawnTimerRef.current) {
+      newSpawnTimerRef.current = setTimeout(() => {
+        newSpawnTimerRef.current = null;
+        setReorderTick((t) => t + 1);
+      }, 320);
+    }
+
+    const result = [...nonSettled, ...settled, ...justSpawned];
     committedOrderRef.current = result.map((s) => s.info.id);
     return result;
   })();
@@ -1244,6 +1271,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           const fireTime = Date.now();
           if (!allSettled(activeSessionsRef.current, fireTime)) return;
           committedOrderRef.current = desiredOrderRef.current;
+          isQuiescenceReorderRef.current = true;
           setReorderTick((t) => t + 1);
         }, 1000); // short delay — sessions are already 5s settled, just debounce
       }
@@ -1280,7 +1308,13 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     }
 
     const cards = list.querySelectorAll<HTMLElement>("[data-session-id]");
-    const movers: { el: HTMLElement; dy: number; idx: number }[] = [];
+    const movers: {
+      el: HTMLElement;
+      dy: number;
+      idx: number;
+      domTop: number;
+      height: number;
+    }[] = [];
 
     cards.forEach((el, idx) => {
       const id = el.dataset.sessionId!;
@@ -1289,45 +1323,283 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       const newRect = el.getBoundingClientRect();
       const dy = oldRect.top - newRect.top;
       if (Math.abs(dy) < 1) return;
-      movers.push({ el, dy, idx });
+      movers.push({
+        el,
+        dy,
+        idx,
+        domTop: newRect.top,
+        height: newRect.height,
+      });
     });
 
-    if (movers.length > 0) {
-      isAnimatingRef.current = true;
+    if (movers.length === 0) {
+      // No movement — just snapshot
+      const allCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
+      const positions = new Map<string, DOMRect>();
+      allCards.forEach((el) => {
+        const id = el.dataset.sessionId!;
+        positions.set(id, el.getBoundingClientRect());
+      });
+      cardPositions.current = positions;
+      isQuiescenceReorderRef.current = false;
+      return;
+    }
 
-      // Sort movers by absolute displacement (largest moves first for stagger)
-      movers.sort((a, b) => Math.abs(b.dy) - Math.abs(a.dy));
+    isAnimatingRef.current = true;
+
+    // Compute gap between cards from the final DOM layout
+    const cardArr = Array.from(cards);
+    let gap = 12;
+    if (cardArr.length >= 2) {
+      const r0 = cardArr[0].getBoundingClientRect();
+      const r1 = cardArr[1].getBoundingClientRect();
+      const measured = r1.top - (r0.top + r0.height);
+      if (measured > 0 && measured < 50) gap = measured;
+    }
+
+    // Helper: snapshot final positions and unlock animations
+    const snapshotAndFinish = () => {
+      isAnimatingRef.current = false;
+      const allCards =
+        list.querySelectorAll<HTMLElement>("[data-session-id]");
+      const positions = new Map<string, DOMRect>();
+      allCards.forEach((c) => {
+        const cid = c.dataset.sessionId!;
+        positions.set(cid, c.getBoundingClientRect());
+      });
+      cardPositions.current = positions;
+    };
+
+    // Determine animation mode: sequential (quiescence) vs block (single promotion)
+    const isSequential =
+      isQuiescenceReorderRef.current && movers.length > 1;
+    isQuiescenceReorderRef.current = false;
+
+    if (isSequential) {
+      // ─── Sequential insertion-sort animation ───
+      // Each card is placed one at a time (top to bottom in new order).
+      // Yielders shift as a unified block to make room.
+
+      // Track live transform offsets for all movers
+      const currentDy = new Map<string, number>();
+      movers.forEach(({ el, dy }) => {
+        currentDy.set(el.dataset.sessionId!, dy);
+      });
+
+      // Invert ALL movers to old visual positions
+      movers.forEach(({ el, dy }) => {
+        const cardEl = el.querySelector<HTMLElement>(".session-card");
+        el.style.willChange = "transform";
+        el.style.transform = `translateY(${dy}px)`;
+        el.style.transition = "none";
+        el.style.position = "relative";
+        el.style.zIndex = "50";
+        if (cardEl) cardEl.classList.add("session-card--reordering");
+      });
+
+      // Force layout so invert paints before we animate
+      void list.offsetHeight;
+
+      // Process in order of final DOM position (top → bottom)
+      const sequence = [...movers].sort((a, b) => a.idx - b.idx);
+      const placed = new Set<string>();
+
+      const animateStep = (stepIdx: number) => {
+        // Skip cards already at final position
+        while (stepIdx < sequence.length) {
+          const id = sequence[stepIdx].el.dataset.sessionId!;
+          if (Math.abs(currentDy.get(id)!) < 1) {
+            placed.add(id);
+            // Clean up this card immediately
+            const el = sequence[stepIdx].el;
+            el.style.transition = "";
+            el.style.transform = "";
+            el.style.zIndex = "";
+            el.style.position = "";
+            el.style.willChange = "";
+            const c = el.querySelector<HTMLElement>(".session-card");
+            if (c) c.classList.remove("session-card--reordering");
+            stepIdx++;
+          } else {
+            break;
+          }
+        }
+
+        if (stepIdx >= sequence.length) {
+          snapshotAndFinish();
+          return;
+        }
+
+        const hero = sequence[stepIdx];
+        const heroId = hero.el.dataset.sessionId!;
+        const heroDy = currentDy.get(heroId)!;
+        placed.add(heroId);
+
+        // Hero's current visual top = domTop + heroDy
+        const heroVisual = hero.domTop + heroDy;
+        const heroTarget = hero.domTop; // translateY(0)
+        const movingUp = heroDy > 0;
+        const shiftAmount = hero.height + gap;
+
+        // Identify yielders: unplaced movers between hero's target and current
+        const yielders: typeof movers = [];
+        for (const m of movers) {
+          const mId = m.el.dataset.sessionId!;
+          if (placed.has(mId)) continue;
+          const mDy = currentDy.get(mId)!;
+          const mVisual = m.domTop + mDy;
+          if (movingUp) {
+            if (mVisual >= heroTarget && mVisual < heroVisual)
+              yielders.push(m);
+          } else {
+            if (mVisual > heroVisual && mVisual <= heroTarget)
+              yielders.push(m);
+          }
+        }
+
+        let stepCompleted = 0;
+        const stepTotal = 1 + yielders.length;
+
+        const onStepDone = () => {
+          stepCompleted++;
+          if (stepCompleted >= stepTotal) {
+            // Brief pause between steps for visual clarity
+            setTimeout(() => animateStep(stepIdx + 1), 60);
+          }
+        };
+
+        // Animate hero to translateY(0)
+        const heroDur = Math.min(
+          700,
+          Math.max(400, 300 + Math.abs(heroDy) * 0.6),
+        );
+        hero.el.style.zIndex = "60";
+
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            hero.el.style.transition = `transform ${heroDur}ms cubic-bezier(0.16, 1, 0.3, 1)`;
+            hero.el.style.transform = "translateY(0)";
+            currentDy.set(heroId, 0);
+
+            const heroCleanup = () => {
+              hero.el.style.transition = "";
+              hero.el.style.transform = "";
+              hero.el.style.zIndex = "";
+              hero.el.style.position = "";
+              hero.el.style.willChange = "";
+              const c =
+                hero.el.querySelector<HTMLElement>(".session-card");
+              if (c) c.classList.remove("session-card--reordering");
+              onStepDone();
+            };
+            const heroOnEnd = (e: TransitionEvent) => {
+              if (e.propertyName !== "transform") return;
+              hero.el.removeEventListener(
+                "transitionend",
+                heroOnEnd as EventListener,
+              );
+              heroCleanup();
+            };
+            hero.el.addEventListener(
+              "transitionend",
+              heroOnEnd as EventListener,
+            );
+            setTimeout(() => {
+              if (hero.el.style.transform !== "") {
+                hero.el.removeEventListener(
+                  "transitionend",
+                  heroOnEnd as EventListener,
+                );
+                heroCleanup();
+              }
+            }, heroDur + 150);
+
+            // Yielders shift as a block — all start together, same duration
+            const yielderShift = movingUp ? shiftAmount : -shiftAmount;
+            const yielderDur = 400;
+            for (const y of yielders) {
+              const yId = y.el.dataset.sessionId!;
+              const newDy = currentDy.get(yId)! + yielderShift;
+              currentDy.set(yId, newDy);
+
+              y.el.style.transition = `transform ${yielderDur}ms cubic-bezier(0.16, 1, 0.3, 1)`;
+              y.el.style.transform = `translateY(${newDy}px)`;
+
+              const yCleanup = () => {
+                // Keep transform (card still displaced) but clear transition
+                y.el.style.transition = "";
+                onStepDone();
+              };
+              const yOnEnd = (e: TransitionEvent) => {
+                if (e.propertyName !== "transform") return;
+                y.el.removeEventListener(
+                  "transitionend",
+                  yOnEnd as EventListener,
+                );
+                yCleanup();
+              };
+              y.el.addEventListener(
+                "transitionend",
+                yOnEnd as EventListener,
+              );
+              setTimeout(() => {
+                y.el.removeEventListener(
+                  "transitionend",
+                  yOnEnd as EventListener,
+                );
+                yCleanup();
+              }, yielderDur + 150);
+            }
+
+            // If no yielders, hero is the only animation this step
+            if (yielders.length === 0) {
+              // onStepDone will fire from heroCleanup
+            }
+          });
+        });
+      };
+
+      animateStep(0);
+    } else {
+      // ─── Block animation — single card promotion ───
+      // Hero card slides to new position, all yielders shift as a unified block.
+
+      const upwardMovers = movers.filter((m) => m.dy < 0);
+      const hero =
+        upwardMovers.length > 0
+          ? upwardMovers.reduce((a, b) =>
+              Math.abs(b.dy) > Math.abs(a.dy) ? b : a,
+            )
+          : movers.reduce((a, b) =>
+              Math.abs(b.dy) > Math.abs(a.dy) ? b : a,
+            );
+      const yielders = movers.filter((m) => m !== hero);
 
       let completedCount = 0;
       const totalMovers = movers.length;
 
-      movers.forEach(({ el, dy }, staggerIdx) => {
+      const animateCard = (
+        el: HTMLElement,
+        dy: number,
+        delay: number,
+        dur: number,
+        zIdx: number,
+      ) => {
         const cardEl = el.querySelector<HTMLElement>(".session-card");
 
-        // Hint the compositor before animation starts
         el.style.willChange = "transform";
-
-        // Invert: place at old position
         el.style.transform = `translateY(${dy}px)`;
         el.style.transition = "none";
-        el.style.zIndex = String(50 + totalMovers - staggerIdx);
+        el.style.zIndex = String(zIdx);
         el.style.position = "relative";
 
-        // Add reordering appearance during slide (overrides pressed/floating via CSS order)
         if (cardEl) {
           cardEl.classList.add("session-card--reordering");
         }
 
-        // Stagger: 120ms base + slight randomization — very deliberate, each card its own moment
-        const staggerDelay = staggerIdx * 120 + Math.round(Math.random() * 30);
-        // Duration: 1000-1600ms, scales with distance — very slow and fluid
-        const distance = Math.abs(dy);
-        const duration = Math.min(1600, Math.max(1000, 800 + distance * 1.4));
-
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            // outExpo deceleration — smooth glide to rest, no overshoot
-            el.style.transition = `transform ${duration}ms cubic-bezier(0.16, 1, 0.3, 1) ${staggerDelay}ms`;
+            el.style.transition = `transform ${dur}ms cubic-bezier(0.16, 1, 0.3, 1) ${delay}ms`;
             el.style.transform = "translateY(0)";
 
             const cleanup = () => {
@@ -1341,52 +1613,52 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
               }
               completedCount++;
               if (completedCount === totalMovers) {
-                isAnimatingRef.current = false;
-                // Snapshot resting positions now that all cards have settled
-                if (list) {
-                  const allCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
-                  const positions = new Map<string, DOMRect>();
-                  allCards.forEach((c) => {
-                    const cid = c.dataset.sessionId!;
-                    positions.set(cid, c.getBoundingClientRect());
-                  });
-                  cardPositions.current = positions;
-                }
+                snapshotAndFinish();
               }
             };
 
             const onEnd = (e: TransitionEvent) => {
-              if (e.propertyName !== "transform") return; // guard against double-fire
-              el.removeEventListener("transitionend", onEnd as EventListener);
+              if (e.propertyName !== "transform") return;
+              el.removeEventListener(
+                "transitionend",
+                onEnd as EventListener,
+              );
               cleanup();
             };
-            el.addEventListener("transitionend", onEnd as EventListener);
+            el.addEventListener(
+              "transitionend",
+              onEnd as EventListener,
+            );
 
-            // Safety fallback — clear animation state if transitionend never fires
             setTimeout(() => {
               if (el.style.transform !== "") {
-                el.removeEventListener("transitionend", onEnd as EventListener);
+                el.removeEventListener(
+                  "transitionend",
+                  onEnd as EventListener,
+                );
                 cleanup();
               }
-            }, duration + staggerDelay + 100);
+            }, dur + delay + 100);
           });
         });
+      };
+
+      // Yielders move as a unified block — all start together, same duration
+      const yielderDuration = 500;
+      yielders.forEach(({ el, dy }) => {
+        animateCard(el, dy, 0, yielderDuration, 50);
       });
+
+      // Hero follows after a brief pause, slides into the opened gap
+      const heroDistance = Math.abs(hero.dy);
+      const heroDuration = Math.min(
+        900,
+        Math.max(550, 400 + heroDistance * 0.8),
+      );
+      const heroDelay = 80;
+      animateCard(hero.el, hero.dy, heroDelay, heroDuration, 60);
     }
 
-    // Snapshot positions for next render — only if nothing is animating.
-    // If movers exist, the snapshot is deferred until the last animation completes
-    // (the cleanup() call above sets isAnimatingRef=false, which triggers a re-render
-    // through reorderTick). For non-animating renders, snapshot immediately.
-    if (movers.length === 0) {
-      const allCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
-      const positions = new Map<string, DOMRect>();
-      allCards.forEach((el) => {
-        const id = el.dataset.sessionId!;
-        positions.set(id, el.getBoundingClientRect());
-      });
-      cardPositions.current = positions;
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortKey, autoReorder, reorderTick]);
 
