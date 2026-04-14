@@ -102,10 +102,19 @@ impl SessionMonitorState {
         // Check both started_at and last_activity so sessions that were
         // already idle when Cue opened aren't hidden until their next event.
         let launched_at = self.launched_at;
+        let now_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
         let active = sort_sessions(
             status.sessions.into_values().filter(|s| {
                 (s.last_activity >= launched_at || s.started_at >= launched_at)
                     && security::sanitize_workspace_path(&s.workspace).is_ok()
+                    // Remove stale "clearing" sessions (>30s old). The hook
+                    // does this too, but only when another hook event fires.
+                    // If the user's last session exits, no more hooks fire and
+                    // the card lingers indefinitely without this check.
+                    && !(s.state == "clearing" && now_epoch - s.last_activity > 30.0)
             }),
         );
 
