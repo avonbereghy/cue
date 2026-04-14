@@ -221,6 +221,7 @@ pub struct EnrichedSession {
     pub state_icon: String,
     pub state_display_name: String,
     pub duration_secs: f64,
+    pub total_duration_secs: f64,
     pub context_limit: i64,
     pub context_usage_percent: f64,
     pub model_display_name: String,
@@ -308,7 +309,8 @@ impl EnrichedSession {
         }
         .to_string();
 
-        let duration_secs = now - info.started_at;
+        let duration_secs = now - info.last_activity;
+        let total_duration_secs = now - info.started_at;
 
         // Prefer hook-sourced token counts (written at hook time from JSONL)
         // over the background-polled metrics, as they're fresher.
@@ -385,6 +387,7 @@ impl EnrichedSession {
             state_icon,
             state_display_name,
             duration_secs,
+            total_duration_secs,
             context_limit,
             context_usage_percent,
             model_display_name,
