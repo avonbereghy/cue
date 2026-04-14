@@ -539,6 +539,11 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 {"\u2610"} {session.todoCompleted}/{session.todoTotal}
               </span>
             )}
+            {session.totalDurationSecs > 0 && (
+              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap" title="Total session time">
+                &#9201; {formatDuration(session.totalDurationSecs)}
+              </span>
+            )}
             {session.outputTokensPerSec > 0 && (info.state === "working" || info.state === "thinking" || info.state === "subagent") && (
               <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
                 {session.outputTokensPerSec.toFixed(1)} tok/s
