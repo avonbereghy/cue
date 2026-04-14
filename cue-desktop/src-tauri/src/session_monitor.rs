@@ -110,11 +110,12 @@ impl SessionMonitorState {
             status.sessions.into_values().filter(|s| {
                 (s.last_activity >= launched_at || s.started_at >= launched_at)
                     && security::sanitize_workspace_path(&s.workspace).is_ok()
-                    // Remove stale "clearing" sessions (>30s old). The hook
-                    // does this too, but only when another hook event fires.
-                    // If the user's last session exits, no more hooks fire and
-                    // the card lingers indefinitely without this check.
-                    && !(s.state == "clearing" && now_epoch - s.last_activity > 30.0)
+                    // Remove stale "clearing"/"compacting" sessions (>30s old).
+                    // The hook does this too, but only when another hook event
+                    // fires. If the user's last session exits, no more hooks
+                    // fire and the card lingers indefinitely without this check.
+                    && !((s.state == "clearing" || s.state == "compacting")
+                        && now_epoch - s.last_activity > 30.0)
             }),
         );
 
