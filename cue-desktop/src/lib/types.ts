@@ -13,6 +13,10 @@ export interface SessionInfo {
   activeSubagents?: number;
   /** Subprocess label if spawned by a known caller (e.g. "retenir"). */
   subprocess?: string;
+  /** Team name if this session was spawned as a team agent. */
+  teamName?: string;
+  /** Agent name within the team (e.g. "code-reviewer"). */
+  agentName?: string;
 }
 
 export interface SubagentMetrics {
@@ -86,6 +90,10 @@ export interface SessionMetrics {
   lastPrompt?: string | null;
   /** Session ID extracted from the JSONL metadata header — used to verify the prompt belongs to this session */
   lastPromptSessionId?: string | null;
+  /** Team name from JSONL (team agent sessions) */
+  teamName?: string | null;
+  /** Agent name from JSONL (team agent sessions) */
+  agentName?: string | null;
 }
 
 /** Pre-computed by Rust backend (EnrichedSession includes derived fields) */
