@@ -509,6 +509,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       stateIcon: meta.icon,
       stateDisplayName: meta.display,
       durationSecs: overrides?.durationSecs ?? Math.floor(Math.random() * 1800 + 60),
+      totalDurationSecs: overrides?.durationSecs ?? Math.floor(Math.random() * 1800 + 60),
       contextLimit,
       contextUsagePercent: contextPct,
       modelDisplayName: modelDisplay,
@@ -698,7 +699,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const adjustSandboxDuration = useCallback((delta: number) => {
     mutateSandboxSelected((s) => {
       const newDuration = Math.max(10, s.durationSecs + delta);
-      return { ...s, durationSecs: newDuration, info: { ...s.info, startedAt: Date.now() / 1000 - newDuration } };
+      return { ...s, durationSecs: newDuration, totalDurationSecs: newDuration, info: { ...s.info, startedAt: Date.now() / 1000 - newDuration } };
     });
   }, [mutateSandboxSelected]);
 

@@ -97,6 +97,7 @@ export interface EnrichedSession {
   stateIcon: string;
   stateDisplayName: string;
   durationSecs: number;
+  totalDurationSecs: number;
   contextLimit: number;
   contextUsagePercent: number;
   modelDisplayName: string;
