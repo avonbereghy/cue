@@ -46,6 +46,10 @@ pub struct ParsedEntry {
     pub user_prompt_text: Option<String>,
     /// Session ID from JSONL metadata (permission-mode header entry)
     pub jsonl_session_id: Option<String>,
+    /// Team name from JSONL (team agent sessions)
+    pub team_name: Option<String>,
+    /// Agent name from JSONL (team agent sessions)
+    pub agent_name: Option<String>,
 }
 
 /// Parse a JSONL file into a list of entries.
@@ -102,6 +106,10 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
     if let Some(sid) = obj.get("sessionId").and_then(|v| v.as_str()) {
         entry.jsonl_session_id = Some(sid.to_string());
     }
+
+    // Extract team agent metadata (present on every entry for team-spawned sessions)
+    entry.team_name = obj.get("teamName").and_then(|v| v.as_str()).map(String::from);
+    entry.agent_name = obj.get("agentName").and_then(|v| v.as_str()).map(String::from);
 
     // Track git branch from any message that has it
     if let Some(branch) = obj.get("gitBranch").and_then(|v| v.as_str()) {
@@ -610,6 +618,18 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
         // Git branch — last non-HEAD wins
         if let Some(ref branch) = entry.git_branch {
             m.git_branch = Some(branch.clone());
+        }
+
+        // Team agent metadata — first occurrence wins
+        if m.team_name.is_none() {
+            if let Some(ref tn) = entry.team_name {
+                m.team_name = Some(tn.clone());
+            }
+        }
+        if m.agent_name.is_none() {
+            if let Some(ref an) = entry.agent_name {
+                m.agent_name = Some(an.clone());
+            }
         }
 
         if entry.is_user_message {

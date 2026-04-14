@@ -336,6 +336,8 @@ mod tests {
             hook_model: String::new(),
             active_subagents: 0,
             subprocess: None,
+            team_name: None,
+            agent_name: None,
         };
         EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default())
     }

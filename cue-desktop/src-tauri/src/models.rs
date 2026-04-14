@@ -36,6 +36,12 @@ pub struct SessionInfo {
     /// Subprocess label if this session was spawned by a known caller (e.g. "retenir").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subprocess: Option<String>,
+    /// Team name if this session was spawned as a team agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_name: Option<String>,
+    /// Agent name within the team (e.g. "code-reviewer", "test-runner").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -179,6 +185,12 @@ pub struct SessionMetrics {
     /// (guards against dedup stable-id / cache mismatch returning the wrong file).
     #[serde(default)]
     pub last_prompt_session_id: Option<String>,
+    /// Team name from JSONL (team agent sessions)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_name: Option<String>,
+    /// Agent name from JSONL (team agent sessions)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
 }
 
 impl SessionMetrics {
@@ -271,16 +283,22 @@ impl EnrichedSession {
             .unwrap_or_default()
             .as_secs_f64();
 
-        let info = info;
+        // Merge team info from JSONL metrics into session info (JSONL is authoritative)
+        let mut info = info;
+        if info.team_name.is_none() {
+            info.team_name = metrics.team_name.clone();
+        }
+        if info.agent_name.is_none() {
+            info.agent_name = metrics.agent_name.clone();
+        }
         let workspace_name = std::path::Path::new(&info.workspace)
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| info.workspace.clone());
 
-        let display_title = metrics
-            .custom_title
-            .clone()
-            .unwrap_or_else(|| workspace_name.clone());
+        // Always use workspace as the main title. When a custom title exists
+        // (agent name, /title label), the frontend renders it as a subtitle.
+        let display_title = workspace_name.clone();
 
         let state_icon = match info.state.as_str() {
             "working" => "\u{27F3}",   // ⟳
@@ -935,6 +953,8 @@ mod tests {
             hook_model: String::new(),
             active_subagents: 0,
             subprocess: None,
+            team_name: None,
+            agent_name: None,
         }
     }
 
