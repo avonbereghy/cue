@@ -301,6 +301,116 @@ function BandWaveform({ presetId, signalBass, signalMids, signalTreble, signalGa
   );
 }
 
+interface HookStatusCheck {
+  label: string;
+  ok: boolean;
+  detail: string;
+}
+
+function HookStatus() {
+  const [checks, setChecks] = useState<HookStatusCheck[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [acting, setActing] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      const result = await invoke<HookStatusCheck[]>("get_hook_status");
+      setChecks(result);
+    } catch (err) {
+      console.error("Failed to get hook status:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const allOk = checks.length > 0 && checks.every((c) => c.ok);
+  const installed = checks.find((c) => c.label === "Hook Events")?.ok ?? false;
+
+  const handleInstall = async () => {
+    setActing(true);
+    try {
+      await invoke("install_cue_hooks");
+      await refresh();
+    } catch (err) {
+      console.error("Install failed:", err);
+    } finally {
+      setActing(false);
+    }
+  };
+
+  const handleUninstall = async () => {
+    setActing(true);
+    try {
+      await invoke("uninstall_cue_hooks");
+      await refresh();
+    } catch (err) {
+      console.error("Uninstall failed:", err);
+    } finally {
+      setActing(false);
+    }
+  };
+
+  return (
+    <details className="rounded-lg bg-white/5 border border-white/10 px-3 py-2" open={!allOk}>
+      <summary className="flex items-center gap-2 text-xs cursor-pointer hover:text-white/60 transition-colors select-none">
+        <span className={`w-2 h-2 rounded-full shrink-0 ${loading ? "bg-white/20" : allOk ? "bg-green-400" : "bg-red-400"}`} />
+        <span className="text-white/50">Installation Status</span>
+        {!loading && !allOk && (
+          <span className="text-[0.625rem] text-red-400/70 ml-auto">
+            {checks.filter((c) => !c.ok).length} issue{checks.filter((c) => !c.ok).length !== 1 ? "s" : ""}
+          </span>
+        )}
+      </summary>
+      <div className="mt-2 space-y-1 pb-1">
+        {checks.map((check) => (
+          <div key={check.label} className="flex items-center gap-2 py-0.5">
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${check.ok ? "bg-green-400/80" : "bg-red-400/80"}`} />
+            <span className="text-[0.625rem] text-white/60 w-24 shrink-0">{check.label}</span>
+            <span className={`text-[0.625rem] truncate ${check.ok ? "text-white/30" : "text-red-400/60"}`}>{check.detail}</span>
+          </div>
+        ))}
+        <div className="flex items-center gap-2 mt-2 pt-1 border-t border-white/5">
+          {!installed ? (
+            <button
+              onClick={handleInstall}
+              disabled={acting}
+              className="px-2.5 py-1 rounded text-[0.625rem] font-medium bg-green-500/20 hover:bg-green-500/30 text-green-400 transition-colors disabled:opacity-50"
+            >
+              {acting ? "Installing..." : "Install Hooks"}
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={handleInstall}
+                disabled={acting}
+                className="px-2.5 py-1 rounded text-[0.625rem] font-medium bg-white/10 hover:bg-white/15 text-white/50 transition-colors disabled:opacity-50"
+              >
+                {acting ? "Reinstalling..." : "Reinstall"}
+              </button>
+              <button
+                onClick={handleUninstall}
+                disabled={acting}
+                className="px-2.5 py-1 rounded text-[0.625rem] font-medium bg-red-500/10 hover:bg-red-500/20 text-red-400/60 hover:text-red-400 transition-colors disabled:opacity-50"
+              >
+                Uninstall
+              </button>
+            </>
+          )}
+          <button
+            onClick={refresh}
+            disabled={acting}
+            className="ml-auto text-[0.625rem] text-white/30 hover:text-white/60 transition-colors disabled:opacity-50"
+          >
+            Refresh
+          </button>
+        </div>
+      </div>
+    </details>
+  );
+}
+
 export function SettingsView() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const initialLoadRef = useRef(true);
@@ -935,6 +1045,9 @@ export function SettingsView() {
           />
         </SettingRow>
       </section>
+
+      {/* Hook Status */}
+      <HookStatus />
 
       {/* Reference (collapsed by default) */}
       <details className="rounded-lg bg-white/5 border border-white/10 px-3 py-2">

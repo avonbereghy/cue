@@ -162,18 +162,19 @@ fn detect_wsl_distros() -> Vec<String> {
 ///
 /// Covers all Claude Code lifecycle events. Must stay aligned with
 /// the manual instructions in OnboardingWizard.tsx.
-const HOOK_EVENTS: &[(&str, &str)] = &[
+pub const HOOK_EVENTS: &[(&str, &str)] = &[
     ("SessionStart", "idle"),
     ("PreToolUse", "working"),
     ("PostToolUse", "working"),
-    ("UserPromptSubmit", "working"),
+    ("UserPromptSubmit", "thinking"),
     ("PermissionRequest", "waiting"),
     ("PostToolUseFailure", "error"),
     ("SubagentStart", "subagent"),
     ("SubagentStop", "subagent_stop"),
-    ("Stop", "done"),
+    ("Stop", "idle"),
     ("TaskCompleted", "done"),
     ("Notification", "done"),
+    ("PreCompact", "compacting"),
     ("SessionEnd", "remove"),
 ];
 
@@ -325,6 +326,148 @@ pub fn configure_hooks(hook_path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Install cue hooks into `~/.claude/settings.json`.
+///
+/// Finds the cue-hook script and hook-runner, then adds entries for all
+/// lifecycle events using the hook-runner wrapper pattern with 5s timeouts.
+/// Idempotent — safe to call repeatedly.
+pub fn install_hooks() -> Result<(), String> {
+    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+    let settings_path = home.join(".claude/settings.json");
+
+    // Find the cue-hook script
+    let hook_candidates = [
+        home.join(".claude/symphony-root/cue/hooks/cue-hook"),
+        home.join(".claude/hooks/cue-hook"),
+    ];
+    let hook_path = hook_candidates
+        .iter()
+        .find(|p| p.exists())
+        .ok_or("cue-hook script not found")?;
+
+    // Find hook-runner.sh
+    let runner = home.join(".claude/hooks/hook-runner.sh");
+    if !runner.exists() {
+        return Err("hook-runner.sh not found".to_string());
+    }
+
+    let runner_str = runner.to_string_lossy();
+    let hook_str = hook_path.to_string_lossy();
+
+    // Read existing settings
+    let mut settings: serde_json::Value = if settings_path.exists() {
+        let content = std::fs::read_to_string(&settings_path)
+            .map_err(|e| format!("Failed to read settings: {}", e))?;
+        serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse settings: {}", e))?
+    } else {
+        serde_json::json!({})
+    };
+
+    if !settings.get("hooks").is_some_and(|h| h.is_object()) {
+        settings["hooks"] = serde_json::json!({});
+    }
+    let hooks = settings["hooks"].as_object_mut().unwrap();
+
+    for (event, state) in HOOK_EVENTS {
+        let command = format!("{} cue-hook {} {}", runner_str, hook_str, state);
+        let new_entry = serde_json::json!({
+            "hooks": [{
+                "type": "command",
+                "command": command,
+                "timeout": 5000
+            }]
+        });
+
+        if !hooks.contains_key(*event) {
+            hooks.insert(event.to_string(), serde_json::json!([]));
+        }
+
+        let event_hooks = hooks.get_mut(*event).unwrap();
+        let arr = event_hooks.as_array_mut().ok_or("hooks entry is not an array")?;
+
+        // Remove any existing cue-hook entries first (clean reinstall)
+        arr.retain(|entry| {
+            !entry_contains_cue_hook(entry)
+        });
+
+        // Insert cue-hook as the first entry so state updates happen before
+        // slower hooks (retenir, symphony-audit, etc.)
+        arr.insert(0, new_entry);
+    }
+
+    let content = serde_json::to_string_pretty(&settings)
+        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+
+    if let Some(parent) = settings_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+
+    security::atomic_write(&settings_path, content.as_bytes())
+        .map_err(|e| format!("Failed to write settings: {}", e))?;
+
+    // Remove .disabled file if present
+    let disabled = home.join(".claude/hooks/cue-hook.disabled");
+    let _ = std::fs::remove_file(disabled);
+
+    Ok(())
+}
+
+/// Remove all cue hooks from `~/.claude/settings.json`.
+///
+/// Strips every hook entry containing "cue-hook" from all events.
+/// Also clears sessions.json so the dashboard shows a clean state.
+pub fn uninstall_hooks() -> Result<(), String> {
+    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+    let settings_path = home.join(".claude/settings.json");
+
+    if !settings_path.exists() {
+        return Ok(()); // Nothing to uninstall
+    }
+
+    let content = std::fs::read_to_string(&settings_path)
+        .map_err(|e| format!("Failed to read settings: {}", e))?;
+    let mut settings: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse settings: {}", e))?;
+
+    if let Some(hooks) = settings.get_mut("hooks").and_then(|h| h.as_object_mut()) {
+        for (_event, entries) in hooks.iter_mut() {
+            if let Some(arr) = entries.as_array_mut() {
+                arr.retain(|entry| !entry_contains_cue_hook(entry));
+            }
+        }
+    }
+
+    let out = serde_json::to_string_pretty(&settings)
+        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+
+    security::atomic_write(&settings_path, out.as_bytes())
+        .map_err(|e| format!("Failed to write settings: {}", e))?;
+
+    // Clear sessions.json
+    let sessions_path = crate::paths::sessions_json_path();
+    if sessions_path.exists() {
+        security::atomic_write(&sessions_path, b"{\"sessions\":{}}")
+            .map_err(|e| format!("Failed to clear sessions: {}", e))?;
+    }
+
+    Ok(())
+}
+
+/// Check if a hook entry contains a cue-hook command.
+fn entry_contains_cue_hook(entry: &serde_json::Value) -> bool {
+    entry.get("hooks")
+        .and_then(|h| h.as_array())
+        .map(|arr| arr.iter().any(|h| {
+            h.get("command")
+                .and_then(|c| c.as_str())
+                .map(|c| c.contains("cue-hook"))
+                .unwrap_or(false)
+        }))
+        .unwrap_or(false)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -423,7 +566,7 @@ mod tests {
 
     #[test]
     fn test_hook_events_count() {
-        assert_eq!(HOOK_EVENTS.len(), 12);
+        assert_eq!(HOOK_EVENTS.len(), 13);
     }
 
     #[test]
@@ -434,14 +577,15 @@ mod tests {
         assert_eq!(events["SessionStart"], "idle");
         assert_eq!(events["PreToolUse"], "working");
         assert_eq!(events["PostToolUse"], "working");
-        assert_eq!(events["UserPromptSubmit"], "working");
+        assert_eq!(events["UserPromptSubmit"], "thinking");
         assert_eq!(events["PermissionRequest"], "waiting");
         assert_eq!(events["PostToolUseFailure"], "error");
         assert_eq!(events["SubagentStart"], "subagent");
         assert_eq!(events["SubagentStop"], "subagent_stop");
-        assert_eq!(events["Stop"], "done");
+        assert_eq!(events["Stop"], "idle");
         assert_eq!(events["TaskCompleted"], "done");
         assert_eq!(events["Notification"], "done");
+        assert_eq!(events["PreCompact"], "compacting");
         assert_eq!(events["SessionEnd"], "remove");
     }
 
@@ -465,9 +609,9 @@ mod tests {
             hooks.insert(event.to_string(), serde_json::json!([entry]));
         }
 
-        // Verify all 12 events were configured
+        // Verify all events were configured
         let hooks_obj = settings["hooks"].as_object().unwrap();
-        assert_eq!(hooks_obj.len(), 12);
+        assert_eq!(hooks_obj.len(), HOOK_EVENTS.len());
 
         // Verify key event commands
         let check = |event: &str, expected_state: &str| {
@@ -479,7 +623,7 @@ mod tests {
         check("PreToolUse", "working");
         check("PostToolUse", "working");
         check("PermissionRequest", "waiting");
-        check("Stop", "done");
+        check("Stop", "idle");
         check("SessionEnd", "remove");
     }
 

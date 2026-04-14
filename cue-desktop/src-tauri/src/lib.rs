@@ -720,6 +720,207 @@ fn spawn_terminal_with_resume(_session_id: &str, _workspace: &str) -> Result<(),
 }
 
 // ---------------------------------------------------------------------------
+// Hook Install / Uninstall
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn install_cue_hooks() -> Result<(), String> {
+    env_detect::install_hooks()
+}
+
+#[tauri::command]
+fn uninstall_cue_hooks() -> Result<(), String> {
+    env_detect::uninstall_hooks()
+}
+
+// ---------------------------------------------------------------------------
+// Hook Status Diagnostics
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HookStatusCheck {
+    label: String,
+    ok: bool,
+    detail: String,
+}
+
+#[tauri::command]
+fn get_hook_status() -> Vec<HookStatusCheck> {
+    let home = dirs::home_dir().unwrap_or_default();
+    let mut checks = Vec::new();
+
+    // 1. Claude Code installed
+    let claude_dir = home.join(".claude");
+    checks.push(HookStatusCheck {
+        label: "Claude Code".into(),
+        ok: claude_dir.exists(),
+        detail: if claude_dir.exists() { "~/.claude found".into() } else { "~/.claude not found".into() },
+    });
+
+    // 2. Hook runner
+    let runner = home.join(".claude/hooks/hook-runner.sh");
+    let runner_ok = runner.exists() && is_executable(&runner);
+    checks.push(HookStatusCheck {
+        label: "Hook Runner".into(),
+        ok: runner_ok,
+        detail: if !runner.exists() {
+            "~/.claude/hooks/hook-runner.sh not found".into()
+        } else if !is_executable(&runner) {
+            "hook-runner.sh not executable".into()
+        } else {
+            "hook-runner.sh OK".into()
+        },
+    });
+
+    // 3. Cue hook script — check both possible locations
+    let hook_paths = [
+        home.join(".claude/symphony-root/cue/hooks/cue-hook"),
+        home.join(".claude/hooks/cue-hook"),
+    ];
+    let hook_found = hook_paths.iter().find(|p| p.exists());
+    let hook_ok = hook_found.map(|p| is_executable(p)).unwrap_or(false);
+    checks.push(HookStatusCheck {
+        label: "Cue Hook Script".into(),
+        ok: hook_ok,
+        detail: match hook_found {
+            Some(p) if is_executable(p) => format!("{}", p.display()),
+            Some(p) => format!("{} (not executable)", p.display()),
+            None => "cue-hook not found".into(),
+        },
+    });
+
+    // 4. Hook disabled toggle
+    let disabled_file = home.join(".claude/hooks/cue-hook.disabled");
+    let not_disabled = !disabled_file.exists();
+    checks.push(HookStatusCheck {
+        label: "Hook Enabled".into(),
+        ok: not_disabled,
+        detail: if not_disabled {
+            "No .disabled file".into()
+        } else {
+            "cue-hook.disabled exists — hook is OFF".into()
+        },
+    });
+
+    // 5. sessions.json exists + freshness
+    let sessions_path = paths::sessions_json_path();
+    let sessions_age = sessions_path.metadata()
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| std::time::SystemTime::now().duration_since(t).ok())
+        .map(|d| d.as_secs());
+    let sessions_ok = sessions_age.map(|a| a < 300).unwrap_or(false); // updated in last 5 min
+    checks.push(HookStatusCheck {
+        label: "sessions.json".into(),
+        ok: sessions_ok,
+        detail: match sessions_age {
+            Some(age) if age < 60 => "Updated just now".into(),
+            Some(age) if age < 300 => format!("Updated {}m ago", age / 60),
+            Some(age) => format!("Stale — last update {}m ago", age / 60),
+            None => "File not found".into(),
+        },
+    });
+
+    // 6. Settings hooks — check all required events are registered
+    let settings_path = home.join(".claude/settings.json");
+    let (hooks_registered, hooks_with_timeout, total_expected) = check_settings_hooks(&settings_path);
+    let hooks_ok = hooks_registered == total_expected;
+    let timeouts_ok = hooks_with_timeout == hooks_registered;
+    checks.push(HookStatusCheck {
+        label: "Hook Events".into(),
+        ok: hooks_ok,
+        detail: format!("{}/{} events registered", hooks_registered, total_expected),
+    });
+    checks.push(HookStatusCheck {
+        label: "Hook Timeouts".into(),
+        ok: timeouts_ok,
+        detail: if timeouts_ok {
+            format!("All {} hooks have timeouts", hooks_with_timeout)
+        } else {
+            format!("{}/{} hooks have timeouts", hooks_with_timeout, hooks_registered)
+        },
+    });
+
+    checks
+}
+
+fn is_executable(path: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        path.metadata()
+            .map(|m| m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        path.exists()
+    }
+}
+
+/// Check settings.json for cue-hook registration across all expected events.
+/// Returns (registered_count, with_timeout_count, total_expected).
+fn check_settings_hooks(settings_path: &std::path::Path) -> (usize, usize, usize) {
+    let total = env_detect::HOOK_EVENTS.len();
+    let settings: serde_json::Value = match std::fs::read_to_string(settings_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+    {
+        Some(v) => v,
+        None => return (0, 0, total),
+    };
+
+    let hooks = match settings.get("hooks").and_then(|h| h.as_object()) {
+        Some(h) => h,
+        None => return (0, 0, total),
+    };
+
+    let mut registered = 0;
+    let mut with_timeout = 0;
+
+    for (event, _state) in env_detect::HOOK_EVENTS {
+        if let Some(entries) = hooks.get(*event).and_then(|v| v.as_array()) {
+            let has_cue = entries.iter().any(|entry| {
+                entry.get("hooks")
+                    .and_then(|h| h.as_array())
+                    .map(|arr| arr.iter().any(|h| {
+                        h.get("command")
+                            .and_then(|c| c.as_str())
+                            .map(|c| c.contains("cue-hook"))
+                            .unwrap_or(false)
+                    }))
+                    .unwrap_or(false)
+            });
+            if has_cue {
+                registered += 1;
+                // Check if any cue-hook entry has a timeout
+                let has_timeout = entries.iter().any(|entry| {
+                    let is_cue = entry.get("hooks")
+                        .and_then(|h| h.as_array())
+                        .map(|arr| arr.iter().any(|h| {
+                            h.get("command")
+                                .and_then(|c| c.as_str())
+                                .map(|c| c.contains("cue-hook"))
+                                .unwrap_or(false)
+                        }))
+                        .unwrap_or(false);
+                    is_cue && entry.get("hooks")
+                        .and_then(|h| h.as_array())
+                        .map(|arr| arr.iter().any(|h| h.get("timeout").is_some()))
+                        .unwrap_or(false)
+                });
+                if has_timeout {
+                    with_timeout += 1;
+                }
+            }
+        }
+    }
+
+    (registered, with_timeout, total)
+}
+
+// ---------------------------------------------------------------------------
 // Live Audio (Beta)
 // ---------------------------------------------------------------------------
 
@@ -874,6 +1075,9 @@ pub fn run() {
             start_live_audio,
             stop_live_audio,
             get_live_audio_status,
+            get_hook_status,
+            install_cue_hooks,
+            uninstall_cue_hooks,
         ])
         .on_window_event(|window, event| {
             match event {
