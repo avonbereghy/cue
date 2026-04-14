@@ -451,7 +451,7 @@ def main():
             # stay "clearing" until cleaned up here on the next hook call.
             stale_clearing = [
                 sid for sid, entry in status["sessions"].items()
-                if entry.get("state") in ("clearing", "compacting")
+                if entry.get("state") == "clearing"
                 and sid != session_id  # Don't clean up the session being updated
                 and time.time() - entry.get("lastActivity", 0) > 30
             ]
@@ -559,12 +559,6 @@ def main():
                 elif action == "subagent_stop":
                     active_subs = max(0, active_subs - 1)
                     action = "subagent" if active_subs > 0 else "working"
-
-                # While clearing, keep the clearing state visible — don't let
-                # working/thinking from internal clear operations overwrite it.
-                # Only done/idle (from Stop) or user action can end clearing.
-                if existing.get("state") == "clearing" and action in ("working", "thinking"):
-                    action = "clearing"
 
                 # While subagents are active, override "working"/"thinking" to show
                 # subagent state. Waiting and error are NOT overridden.
