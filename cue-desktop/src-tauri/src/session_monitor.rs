@@ -150,6 +150,32 @@ impl SessionMonitorState {
             deduped
         };
 
+        // Promote team agent sessions from "idle" to "done" if inactive for 30s.
+        // Team agents don't wait for user input — idle means they finished.
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        let active: Vec<_> = {
+            let cache = self.metrics_cache.lock().unwrap();
+            active
+                .into_iter()
+                .map(|mut s| {
+                    if s.state == "idle" {
+                        let metrics = cache.get(&s.id);
+                        // Only promote teammates (have teamName on entries), not the
+                        // team lead which only has agentName via agent-name entry.
+                        let is_teammate = s.team_name.is_some()
+                            || metrics.map_or(false, |m| m.team_name.is_some());
+                        if is_teammate && (now_secs - s.last_activity) > 30.0 {
+                            s.state = "done".to_string();
+                        }
+                    }
+                    s
+                })
+                .collect()
+        };
+
         let enriched: Vec<_> = {
             let cache = self.metrics_cache.lock().unwrap();
             let rate_limits = self.rate_limits.lock().unwrap().clone();
@@ -519,6 +545,8 @@ mod tests {
             hook_model: String::new(),
             active_subagents: 0,
             subprocess: None,
+            team_name: None,
+            agent_name: None,
         }
     }
 

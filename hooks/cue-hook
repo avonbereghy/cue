@@ -144,7 +144,8 @@ def _validate_sessions(data):
 
 
 def _quick_state_write(session_id, workspace, source, subprocess_label,
-                       last_tokens, hook_start_time):
+                       last_tokens, hook_start_time,
+                       team_name=None, agent_name=None):
     """Write 'waiting' state to sessions.json immediately (before blocking HTTP).
 
     This is a fast-path write so the dashboard shows 'waiting' while the
@@ -181,6 +182,12 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
                 sub = existing.get("subprocess") or subprocess_label
                 if sub:
                     entry["subprocess"] = sub
+                tn = existing.get("teamName") or team_name
+                an = existing.get("agentName") or agent_name
+                if tn:
+                    entry["teamName"] = tn
+                if an:
+                    entry["agentName"] = an
                 if last_tokens:
                     entry["inputTokens"] = last_tokens["inputTokens"]
                     entry["outputTokens"] = last_tokens["outputTokens"]
@@ -307,6 +314,15 @@ def _detect_subprocess():
     return None
 
 
+def _detect_team():
+    """Return (team_name, agent_name) if this is a team-spawned agent, else (None, None)."""
+    team = os.environ.get("CLAUDE_CODE_TEAM_NAME")
+    agent = os.environ.get("CLAUDE_CODE_AGENT_NAME")
+    if team:
+        return team, agent
+    return None, None
+
+
 def _last_tool_was_ask_question(transcript_path):
     """Return True if the last assistant message ended with an AskUserQuestion tool call.
 
@@ -412,6 +428,7 @@ def main():
     workspace = hook_data.get("cwd", os.getcwd())
     source = _detect_source()
     subprocess_label = _detect_subprocess()
+    team_name, agent_name = _detect_team()
 
     ignored_session = _should_ignore_session(hook_data)
 
@@ -426,7 +443,8 @@ def main():
     # time the user is looking at the permission prompt.
     if action == "waiting":
         _quick_state_write(session_id, workspace, source, subprocess_label,
-                           last_tokens, hook_start_time)
+                           last_tokens, hook_start_time,
+                           team_name=team_name, agent_name=agent_name)
 
     # Forward permission requests to the dashboard for user decision.
     # PermissionRequest hooks have tool_name in the payload and action="waiting".
@@ -564,6 +582,13 @@ def main():
                 sub = existing.get("subprocess") or subprocess_label
                 if sub:
                     entry["subprocess"] = sub
+                # Propagate team agent metadata (stable across events)
+                tn = existing.get("teamName") or team_name
+                an = existing.get("agentName") or agent_name
+                if tn:
+                    entry["teamName"] = tn
+                if an:
+                    entry["agentName"] = an
                 if last_tokens:
                     entry["inputTokens"] = last_tokens["inputTokens"]
                     entry["outputTokens"] = last_tokens["outputTokens"]

@@ -432,7 +432,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 {session.displayTitle}
               </span>
             )}
-            {metrics.customTitle && (
+            {metrics.customTitle && session.displayTitle !== session.workspaceName && (
               <span className="text-xs text-white/40 truncate min-w-0 shrink">
                 {session.workspaceName}
               </span>
@@ -493,6 +493,22 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             </span>
             )}
           </div>
+
+          {/* Agent subtitle — team agents (from JSONL or hook) or sessions with a custom title */}
+          {(() => {
+            const teamName = info.teamName || metrics.teamName;
+            const agentName = info.agentName || metrics.agentName;
+            const subtitle = teamName
+              ? `${agentName || "team agent"} · ${teamName}`
+              : metrics.customTitle || null;
+            return subtitle ? (
+              <div style={{ position: "relative", height: 0, overflow: "visible", paddingLeft: "calc(20px + 0.5rem)", marginTop: "-0.5rem" }}>
+                <span style={{ fontSize: "0.65rem", color: titleHex, opacity: 0.55, fontWeight: 400, whiteSpace: "nowrap" }}>
+                  {subtitle}
+                </span>
+              </div>
+            ) : null;
+          })()}
 
           {/* Rows 2-3 hidden in compact and slim mode */}
           {!effectiveCompact && !effectiveSlim && (<>
@@ -579,14 +595,12 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           {effectiveSlim && !effectiveCompact && <div className="flex-1" />}
 
           {/* Model name + context bar — grouped tightly */}
-          {!effectiveCompact && (session.modelDisplayName !== "\u2014" || (contextThreshold !== "never" && contextMeetsThreshold)) && (
+          {!effectiveCompact && (
             <div className="flex flex-col gap-0.5">
-          {session.modelDisplayName !== "\u2014" && (
-            <span className={`text-[0.625rem] font-mono self-end ${isGlass ? "text-white/55" : "text-white/30"}`}>
-              {session.modelDisplayName}
+          <span className={`text-[0.625rem] font-mono self-end ${isGlass ? "text-white/55" : "text-white/30"}`} style={{ visibility: session.modelDisplayName !== "\u2014" ? "visible" : "hidden" }}>
+              {session.modelDisplayName !== "\u2014" ? session.modelDisplayName : "\u00A0"}
               {session.provider && <span className={isGlass ? "text-white/40" : "text-white/20"}> ({session.provider})</span>}
             </span>
-          )}
 
           {/* Row 4: Context usage — right-aligned to match timer position */}
           {contextThreshold !== "never" && contextMeetsThreshold && (
