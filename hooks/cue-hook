@@ -451,7 +451,7 @@ def main():
             # stay "clearing" until cleaned up here on the next hook call.
             stale_clearing = [
                 sid for sid, entry in status["sessions"].items()
-                if entry.get("state") == "clearing"
+                if entry.get("state") in ("clearing", "compacting")
                 and sid != session_id  # Don't clean up the session being updated
                 and time.time() - entry.get("lastActivity", 0) > 30
             ]
@@ -492,7 +492,11 @@ def main():
                 # until the stale cleanup below removes them after 30s.
                 existing_entry = status["sessions"].get(session_id)
                 if existing_entry:
-                    existing_entry["state"] = "clearing"
+                    # Don't override "compacting" — /compact fires SessionEnd
+                    # internally, and if we change to "clearing" the subsequent
+                    # SessionStart misdetects it as /clear and gets stuck.
+                    if existing_entry.get("state") != "compacting":
+                        existing_entry["state"] = "clearing"
                     existing_entry["lastActivity"] = now
             else:
                 # Update or create session
@@ -505,7 +509,9 @@ def main():
                 event_name = hook_data.get("hook_event_name", "")
                 if action == "idle" and event_name == "SessionStart":
                     existing_state = existing.get("state", "")
-                    if existing_state == "clearing":
+                    if existing_state == "compacting":
+                        pass  # compact finished — normal restart, not /clear
+                    elif existing_state == "clearing":
                         action = "clearing"
                         is_clear = True
                     else:
