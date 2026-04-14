@@ -111,8 +111,9 @@ impl SessionMonitorState {
 
 
         // Deduplicate sessions sharing the same workspace that started within
-        // 30s of each other. Collapses phantom sessions (e.g. from agent teams)
-        // that create a second short-lived process on startup.
+        // 3s of each other. Collapses phantom sessions (e.g. from agent teams)
+        // that create a second short-lived process on startup. Kept tight to
+        // avoid merging real sessions in the same project.
         let active = {
             let state_priority = |s: &str| -> u8 {
                 match s {
@@ -126,7 +127,7 @@ impl SessionMonitorState {
             for session in active {
                 if let Some(existing) = deduped.iter_mut().find(|s| {
                     s.workspace == session.workspace
-                        && (s.started_at - session.started_at).abs() < 30.0
+                        && (s.started_at - session.started_at).abs() < 3.0
                 }) {
                     if state_priority(&session.state) > state_priority(&existing.state)
                         || (state_priority(&session.state)
