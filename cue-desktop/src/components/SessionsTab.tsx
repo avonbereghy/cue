@@ -949,38 +949,222 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   }, [testMode, sandboxSelectedIdx, sandboxEditingTitle, makeSandboxSession, setAllSandboxState, cycleSandboxModel, cycleSandboxSource, cycleSandboxBranch, randomizeSandboxTokens, cycleSandboxSubagents, cycleSandboxTodos, cycleSandboxTool, cycleSandboxProvider, adjustSandboxContext, adjustSandboxDuration, loadSandboxPreset]);
 
   // ---------------------------------------------------------------------------
-  // Auto-reorder: active sessions (not idle/done) float to the top, sorted by
-  // most recent lastActivity. Idle/done sessions sink to the bottom, sorted by
-  // startedAt. Multiple sessions activating/deactivating in the same poll cycle
-  // are handled naturally — each gets sorted by its own lastActivity timestamp.
+  // Auto-reorder: two-tier sorting system.
+  //
+  // IMMEDIATE: When a session becomes active (working/thinking/waiting/error/
+  // subagent/compacting), it bubbles above all "settled" sessions (idle/done
+  // for 5+ seconds). Active sessions keep their relative order. Settled
+  // sessions keep their relative order. Only the active↔settled boundary moves.
+  //
+  // DEFERRED: When ALL sessions have been idle/done for 5+ seconds, a full
+  // priority sort runs (waiting > error > working > idle) with FLIP animation.
   // ---------------------------------------------------------------------------
 
+  const SETTLE_MS = 5000;
+
+  // The "desired" fully-sorted order (used by the deferred full rearrange)
   const reorderPriority = useCallback((s: EnrichedSession) => {
     const st = s.info.state;
-    return (st === "idle" || st === "done") ? 1 : 0;
+    if (st === "waiting") return 0;
+    if (st === "error") return 1;
+    if (st === "working" || st === "subagent") return 2;
+    return 3;
   }, []);
 
+  // Track the committed display order (list of session IDs).
+  // This only changes when a reorder animation is triggered.
+  const committedOrderRef = useRef<string[]>([]);
+  const quiesceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isAnimatingRef = useRef(false);
-  const animationGenRef = useRef(0);
+  const animationGenRef = useRef(0); // incremented each animation; stale chains check this
+  const isQuiescenceReorderRef = useRef(false);
+  // Sessions spawned within the last 300ms — forced to bottom until timer fires
+  const newSpawnsRef = useRef<Map<string, number>>(new Map());
+  const newSpawnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Per-session "settled since" timestamps. A session is "settled" when it
+  // has been idle/done for ≥ SETTLE_MS. Active sessions are removed from this map.
+  const settledSinceRef = useRef<Map<string, number>>(new Map());
+
+  const isQuiescent = useCallback((st: string) => st === "idle" || st === "done", []);
+
+  // Check whether ALL sessions are settled (idle/done for 5s+)
+  const allSettled = useCallback((list: EnrichedSession[], now: number) => {
+    return list.every((s) => {
+      if (!isQuiescent(s.info.state)) return false;
+      const since = settledSinceRef.current.get(s.info.id);
+      return since !== undefined && (now - since) >= SETTLE_MS;
+    });
+  }, [isQuiescent]);
 
   // Build the active (non-ended) session list
   const activeSessions = sessions.filter((s) => s.info.state !== "ended");
 
-  // Sorted display order
-  const sortedSessions = (() => {
-    const all = [...activeSessions];
-    if (!autoReorder) {
-      return all.sort((a, b) => a.info.startedAt - b.info.startedAt);
+  // Update settled-since timestamps
+  const now = Date.now();
+  for (const s of activeSessions) {
+    if (isQuiescent(s.info.state)) {
+      // Record when it first became idle/done (if not already tracked)
+      if (!settledSinceRef.current.has(s.info.id)) {
+        settledSinceRef.current.set(s.info.id, now);
+      }
+    } else {
+      // Active — clear any settled timestamp
+      settledSinceRef.current.delete(s.info.id);
     }
-    // Active (not idle/done) at top by most recent activity, idle/done at bottom by startedAt
-    return all.sort((a, b) => {
-      const pa = reorderPriority(a);
-      const pb = reorderPriority(b);
-      if (pa !== pb) return pa - pb;
-      // Both groups: most recent lastActivity first
-      return b.info.lastActivity - a.info.lastActivity;
-    });
+  }
+  // Prune sessions that no longer exist
+  const activeIdSet = new Set(activeSessions.map((s) => s.info.id));
+  for (const id of settledSinceRef.current.keys()) {
+    if (!activeIdSet.has(id)) settledSinceRef.current.delete(id);
+  }
+
+  // Compute fully-sorted desired order (for deferred full rearrange)
+  const desiredOrder = (() => {
+    const all = [...activeSessions];
+    if (autoReorder) {
+      all.sort((a, b) => {
+        const pa = reorderPriority(a);
+        const pb = reorderPriority(b);
+        if (pa !== pb) return pa - pb;
+        return b.info.lastActivity - a.info.lastActivity;
+      });
+    } else {
+      all.sort((a, b) => a.info.startedAt - b.info.startedAt);
+    }
+    return all.map((s) => s.info.id);
   })();
+
+  // The actual display order: partitions committed order into
+  // non-settled (top) and settled (bottom), preserving relative order within each.
+  const sortedSessions = (() => {
+    if (!autoReorder) {
+      const sorted = [...activeSessions].sort((a, b) => a.info.startedAt - b.info.startedAt);
+      committedOrderRef.current = sorted.map((s) => s.info.id);
+      return sorted;
+    }
+
+    const committed = committedOrderRef.current;
+    const sessionMap = new Map(activeSessions.map((s) => [s.info.id, s]));
+
+    // Bootstrap if no committed order yet
+    if (committed.length === 0 || !committed.some((id) => activeIdSet.has(id))) {
+      committedOrderRef.current = desiredOrder;
+      return desiredOrder.map((id) => sessionMap.get(id)!).filter(Boolean);
+    }
+
+    // Build ordered list from committed, adding new sessions
+    const ordered: EnrichedSession[] = [];
+    const used = new Set<string>();
+    const justSpawned: EnrichedSession[] = [];
+    for (const id of committed) {
+      if (sessionMap.has(id)) {
+        ordered.push(sessionMap.get(id)!);
+        used.add(id);
+      }
+    }
+    for (const id of desiredOrder) {
+      if (!used.has(id) && sessionMap.has(id)) {
+        const s = sessionMap.get(id)!;
+        // Track newly seen sessions — hold at bottom for 300ms
+        if (!newSpawnsRef.current.has(id)) {
+          newSpawnsRef.current.set(id, now);
+        }
+        ordered.push(s);
+      }
+    }
+
+    // Partition: newly spawned (bottom), non-settled (top), settled (middle)
+    const nonSettled: EnrichedSession[] = [];
+    const settled: EnrichedSession[] = [];
+    for (const s of ordered) {
+      const spawnTime = newSpawnsRef.current.get(s.info.id);
+      if (spawnTime !== undefined && now - spawnTime < 300) {
+        justSpawned.push(s);
+        continue;
+      }
+      // Clear expired spawn tracking
+      if (spawnTime !== undefined) {
+        newSpawnsRef.current.delete(s.info.id);
+      }
+      const since = settledSinceRef.current.get(s.info.id);
+      const isSettled = since !== undefined && (now - since) >= SETTLE_MS;
+      if (isSettled) {
+        settled.push(s);
+      } else {
+        nonSettled.push(s);
+      }
+    }
+
+    // Schedule reorder after spawn hold expires — reschedule to latest expiry
+    // so all spawned sessions are released together.
+    if (justSpawned.length > 0) {
+      const latestSpawn = Math.max(
+        ...justSpawned.map((s) => newSpawnsRef.current.get(s.info.id) ?? 0),
+      );
+      const remaining = Math.max(50, latestSpawn + 320 - now);
+      if (newSpawnTimerRef.current) clearTimeout(newSpawnTimerRef.current);
+      newSpawnTimerRef.current = setTimeout(() => {
+        newSpawnTimerRef.current = null;
+        if (!isAnimatingRef.current) {
+          setReorderTick((t) => t + 1);
+        }
+      }, remaining);
+    }
+
+    const result = [...nonSettled, ...settled, ...justSpawned];
+    // Don't overwrite committed order during an in-flight animation —
+    // the animation owns the position snapshot and will update on completion.
+    if (!isAnimatingRef.current) {
+      committedOrderRef.current = result.map((s) => s.info.id);
+    }
+    return result;
+  })();
+
+  // Keep refs to latest values so the timer callback can re-check
+  const activeSessionsRef = useRef(activeSessions);
+  activeSessionsRef.current = activeSessions;
+  const desiredOrderRef = useRef(desiredOrder);
+  desiredOrderRef.current = desiredOrder;
+
+  // Quiescence timer: when ALL sessions have been settled for 5s,
+  // do the full priority rearrange.
+  useEffect(() => {
+    if (!autoReorder) {
+      if (quiesceTimerRef.current) {
+        clearTimeout(quiesceTimerRef.current);
+        quiesceTimerRef.current = null;
+      }
+      return;
+    }
+
+    const currentOrderKey = sortedSessions.map((s) => s.info.id).join(",");
+    const desiredOrderKey = desiredOrder.join(",");
+    const orderAlreadyCorrect = currentOrderKey === desiredOrderKey;
+
+    if (allSettled(activeSessions, now) && !orderAlreadyCorrect && !isAnimatingRef.current) {
+      // All settled and order differs — start countdown for full rearrange
+      if (!quiesceTimerRef.current) {
+        quiesceTimerRef.current = setTimeout(() => {
+          quiesceTimerRef.current = null;
+          if (isAnimatingRef.current) return; // don't fire into a live animation
+          const fireTime = Date.now();
+          if (!allSettled(activeSessionsRef.current, fireTime)) return;
+          committedOrderRef.current = desiredOrderRef.current;
+          isQuiescenceReorderRef.current = true;
+          setReorderTick((t) => t + 1);
+        }, 1000); // short delay — sessions are already 5s settled, just debounce
+      }
+    } else {
+      if (quiesceTimerRef.current) {
+        clearTimeout(quiesceTimerRef.current);
+        quiesceTimerRef.current = null;
+      }
+    }
+  });
+
+  // State to force re-render when committed order changes via timer
+  const [reorderTick, setReorderTick] = useState(0);
 
   // Keys for FLIP animation tracking
   const sortKey = sortedSessions.map((s) => s.info.id).join(",");
@@ -1034,7 +1218,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     });
 
     if (movers.length === 0) {
-      // No movement — just snapshot
+      // No movement — just snapshot and clear any stale flags
       const allCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
       const positions = new Map<string, DOMRect>();
       allCards.forEach((el) => {
@@ -1042,17 +1226,25 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         positions.set(id, el.getBoundingClientRect());
       });
       cardPositions.current = positions;
-      isAnimatingRef.current = false;
+      isQuiescenceReorderRef.current = false;
+      isAnimatingRef.current = false; // safety: clear stuck flag
       return;
     }
 
     isAnimatingRef.current = true;
-    const gen = ++animationGenRef.current;
+    const gen = ++animationGenRef.current; // cancellation token
 
-    const DURATION = 500;
-    const EASING = "cubic-bezier(0.2, 0, 0, 1)";
+    // ─── Unified WAAPI FLIP animation ───
+    // All cards animate simultaneously from old position to new.
+    // The hero (biggest upward mover) ducks under with brightness + scale.
+    // Pure WAAPI — no CSS transitions, no transitionend, no setTimeout chains.
 
-    // Identify hero: biggest upward mover (duck-under target)
+    isQuiescenceReorderRef.current = false;
+
+    const DURATION = 500; // ms — all cards move together
+    const EASING = "cubic-bezier(0.2, 0, 0, 1)"; // Material standard
+
+    // Identify hero: biggest upward mover (or biggest mover if none go up)
     const upwardMovers = movers.filter((m) => m.dy < 0);
     const hero =
       upwardMovers.length > 0
@@ -1063,6 +1255,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             Math.abs(b.dy) > Math.abs(a.dy) ? b : a,
           );
 
+    // Set up z-index so hero ducks under other cards
     const isLight = document.documentElement.dataset.theme === "light";
     const duckBrightness = isLight ? 0.82 : 0.55;
     cards.forEach((el) => {
@@ -1071,10 +1264,13 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     });
     hero.el.style.zIndex = "1";
 
+    // Track running animations for cleanup
     const animations: Animation[] = [];
 
+    // Animate every mover with WAAPI
     for (const { el, dy } of movers) {
       if (!el.isConnected || Math.abs(dy) < 1) continue;
+
       const anim = el.animate(
         [
           { transform: `translateY(${dy}px)` },
@@ -1085,6 +1281,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       animations.push(anim);
     }
 
+    // Hero duck effect: darken + slight scale through the middle, surface at end
     const heroCard = hero.el.querySelector<HTMLElement>(".session-card");
     if (heroCard) {
       const duckAnim = heroCard.animate(
@@ -1099,26 +1296,32 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       animations.push(duckAnim);
     }
 
+    // Snapshot and clean up when all animations finish
     Promise.all(animations.map((a) => a.finished)).then(() => {
       if (animationGenRef.current !== gen) return;
       isAnimatingRef.current = false;
       const allCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
       const positions = new Map<string, DOMRect>();
+      const ids: string[] = [];
       allCards.forEach((c) => {
         const cid = c.dataset.sessionId!;
         positions.set(cid, c.getBoundingClientRect());
+        ids.push(cid);
         c.style.zIndex = "";
         c.style.position = "";
       });
       cardPositions.current = positions;
+      committedOrderRef.current = ids;
+      setReorderTick((t) => t + 1);
     }).catch(() => {
+      // Animation cancelled (new reorder started) — just clear flag
       if (animationGenRef.current === gen) {
         isAnimatingRef.current = false;
       }
     });
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortKey, autoReorder]);
+  }, [sortKey, autoReorder, reorderTick]);
 
   // Keyboard animation handler — listens for Tauri events from keyboard window
   useEffect(() => {
@@ -1295,6 +1498,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       return all.sort((a, b) => a.info.startedAt - b.info.startedAt);
     })();
 
+
     // Map sorted sessions back to their original indices for selection highlighting
     const selectedId = sandboxSelectedIdx >= 0 && sandboxSelectedIdx < sandboxSessions.length
       ? sandboxSessions[sandboxSelectedIdx].info.id
@@ -1361,7 +1565,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                     return sorted;
                   });
                 }}
-                title="Sort: active (newest first) above idle/done"
+                title="Sort by priority (waiting > error > working > idle)"
                 className="px-2 py-0.5 rounded text-[0.6rem] font-medium bg-blue-500/15 text-blue-400/50 hover:bg-blue-500/25 hover:text-blue-400 transition-colors"
               >
                 Sort
