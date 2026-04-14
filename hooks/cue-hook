@@ -383,7 +383,7 @@ def main():
         return
 
     action = sys.argv[1]
-    valid_actions = {"idle", "working", "thinking", "waiting", "done", "remove", "error", "subagent", "subagent_stop", "compacting", "clearing"}
+    valid_actions = {"idle", "working", "thinking", "waiting", "done", "remove", "error", "subagent", "subagent_stop", "compacting"}
     if action not in valid_actions:
         return  # Silently ignore unknown actions
 
@@ -445,19 +445,6 @@ def main():
             # Task 4: Schema validation
             status = _validate_sessions(status)
 
-            # Clean up stale "clearing" sessions (>30s old) — these are set
-            # by SessionEnd. For /clear, the next hook event (working/thinking)
-            # overwrites the state within seconds. Real exits (terminal closed)
-            # stay "clearing" until cleaned up here on the next hook call.
-            stale_clearing = [
-                sid for sid, entry in status["sessions"].items()
-                if entry.get("state") == "clearing"
-                and sid != session_id  # Don't clean up the session being updated
-                and time.time() - entry.get("lastActivity", 0) > 30
-            ]
-            for sid in stale_clearing:
-                del status["sessions"][sid]
-
             if ignored_session:
                 # Best-effort cleanup for already-recorded subprocess ghosts.
                 if status["sessions"].pop(session_id, None) is None:
@@ -483,21 +470,11 @@ def main():
             now = time.time()
 
             if action == "remove":
-                # Set "clearing" instead of deleting — /clear fires SessionEnd
-                # but NOT SessionStart, so the card would disappear with no way
-                # to recreate it. By keeping it as "clearing", the card stays
-                # visible during the clear process and naturally transitions to
-                # whatever state the next hook event brings (working, idle, etc.).
-                # Truly ended sessions (user closed terminal) stay "clearing"
-                # until the stale cleanup below removes them after 30s.
-                existing_entry = status["sessions"].get(session_id)
-                if existing_entry:
-                    # Don't override "compacting" — /compact fires SessionEnd
-                    # internally, and if we change to "clearing" the subsequent
-                    # SessionStart misdetects it as /clear and gets stuck.
-                    if existing_entry.get("state") != "compacting":
-                        existing_entry["state"] = "clearing"
-                    existing_entry["lastActivity"] = now
+                # Delete the session. For /clear and /compact, SessionStart
+                # fires immediately after SessionEnd and recreates the entry.
+                # The has_prior transcript check on SessionStart detects /clear
+                # and resets startedAt.
+                status["sessions"].pop(session_id, None)
             else:
                 # Update or create session
                 existing = status["sessions"].get(session_id, {})
@@ -508,22 +485,17 @@ def main():
                 is_clear = False
                 event_name = hook_data.get("hook_event_name", "")
                 if action == "idle" and event_name == "SessionStart":
-                    existing_state = existing.get("state", "")
-                    if existing_state == "compacting":
-                        pass  # compact finished — normal restart, not /clear
-                    elif existing_state == "clearing":
-                        action = "clearing"
+                    # Detect /clear or /compact: if the transcript already has
+                    # content, this is a context reset, not a fresh session.
+                    # Reset startedAt so the timer starts fresh.
+                    has_prior = False
+                    if transcript_path:
+                        try:
+                            has_prior = os.path.getsize(transcript_path) > 100
+                        except OSError:
+                            pass
+                    if has_prior:
                         is_clear = True
-                    else:
-                        has_prior = False
-                        if transcript_path:
-                            try:
-                                has_prior = os.path.getsize(transcript_path) > 100
-                            except OSError:
-                                pass
-                        if has_prior:
-                            action = "clearing"
-                            is_clear = True
 
                 # Guard against stale "waiting" writes: PermissionRequest hooks
                 # are slow (HTTP request) and can finish after PostToolUse
