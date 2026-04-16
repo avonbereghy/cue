@@ -358,6 +358,11 @@ fn extract_user_prompt_text(obj: &serde_json::Map<String, Value>) -> Option<Stri
                 }
             }
         }
+        // Skip ANSI-formatted messages injected by the harness (e.g. "\x1b[2mCompacted ...")
+        // Real user input never contains ANSI escape sequences.
+        if trimmed_s.starts_with('\x1b') {
+            return None;
+        }
         s.to_string()
     } else if let Some(arr) = content.as_array() {
         // Find the first text block
@@ -374,8 +379,10 @@ fn extract_user_prompt_text(obj: &serde_json::Map<String, Value>) -> Option<Stri
         return None;
     };
 
+    // Strip ANSI escape sequences (e.g. \x1b[2m for dim text)
+    let stripped = strip_ansi_escapes(&raw);
     // Strip XML-like tags and trim
-    let stripped = strip_xml_tags(&raw);
+    let stripped = strip_xml_tags(&stripped);
     // Also strip bracket-style markers like [Image source: ...] and [Image #N]
     let stripped = strip_bracket_markers(&stripped);
     let trimmed = stripped.trim();
@@ -384,6 +391,40 @@ fn extract_user_prompt_text(obj: &serde_json::Map<String, Value>) -> Option<Stri
     }
 
     Some(trimmed.to_string())
+}
+
+/// Strip ANSI escape sequences (CSI sequences like \x1b[...m and OSC sequences).
+fn strip_ansi_escapes(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            // Consume the escape sequence
+            if let Some(next) = chars.next() {
+                if next == '[' {
+                    // CSI sequence: consume until a letter (@ through ~)
+                    for c in chars.by_ref() {
+                        if c.is_ascii_alphabetic() || c == '~' || c == '@' {
+                            break;
+                        }
+                    }
+                } else if next == ']' {
+                    // OSC sequence: consume until ST (\x1b\\) or BEL (\x07)
+                    let mut prev = '\0';
+                    for c in chars.by_ref() {
+                        if c == '\x07' || (prev == '\x1b' && c == '\\') {
+                            break;
+                        }
+                        prev = c;
+                    }
+                }
+                // Other escape types (e.g. \x1b followed by single char): already consumed
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
 }
 
 /// Strip XML/HTML-like tags from a string.

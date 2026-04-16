@@ -46,6 +46,10 @@ pub struct SessionMonitorState {
     output_speed_cache: Mutex<HashMap<String, (i64, f64)>>, // session_id → (prev_output_tokens, prev_timestamp)
     /// Cached sysinfo::System instance to avoid re-allocation every poll
     sysinfo_system: Mutex<sysinfo::System>,
+    /// Per-session timestamp (unix secs) when the session entered an active state
+    /// (working/thinking/waiting/error/subagent). Cleared on idle/done/compacting.
+    /// Used to compute the "active duration" timer shown on session cards.
+    active_since: Mutex<HashMap<String, f64>>,
     /// Cue's launch timestamp (seconds since UNIX epoch) — only sessions
     /// with activity after this are shown. Starts empty, reads forwards only.
     launched_at: f64,
@@ -69,6 +73,7 @@ impl Default for SessionMonitorState {
             config_counts_cache: Mutex::new(HashMap::new()),
             output_speed_cache: Mutex::new(HashMap::new()),
             sysinfo_system: Mutex::new(sysinfo::System::new()),
+            active_since: Mutex::new(HashMap::new()),
             launched_at,
         }
     }
@@ -123,10 +128,23 @@ impl SessionMonitorState {
                     _ => 0, // done, error
                 }
             };
+            // Collect team session IDs so we never merge them
+            let team_ids: std::collections::HashSet<String> = {
+                let cache = self.metrics_cache.lock().unwrap();
+                active.iter().filter(|s| {
+                    s.team_name.is_some()
+                        || cache.get(&s.id).map_or(false, |m| m.team_name.is_some())
+                }).map(|s| s.id.clone()).collect()
+            };
             let mut deduped: Vec<SessionInfo> = Vec::new();
             for session in active {
-                if let Some(existing) = deduped.iter_mut().find(|s| {
-                    s.workspace == session.workspace
+                // Never deduplicate team agent sessions — they are real
+                // parallel agents, not phantom startup duplicates.
+                if team_ids.contains(&session.id) {
+                    deduped.push(session);
+                } else if let Some(existing) = deduped.iter_mut().find(|s| {
+                    !team_ids.contains(&s.id)
+                        && s.workspace == session.workspace
                         && (s.started_at - session.started_at).abs() < 3.0
                 }) {
                     if state_priority(&session.state) > state_priority(&existing.state)
@@ -134,11 +152,6 @@ impl SessionMonitorState {
                             == state_priority(&existing.state)
                             && session.last_activity > existing.last_activity)
                     {
-                        // Keep the original session's ID so the frontend sees a
-                        // stable identity. Without this, the winner's ID flips
-                        // on every poll (parent vs subagent) whenever
-                        // last_activity alternates, causing the UI to reorder
-                        // cards continuously.
                         let stable_id = existing.id.clone();
                         *existing = session;
                         existing.id = stable_id;
@@ -176,6 +189,28 @@ impl SessionMonitorState {
                 .collect()
         };
 
+        // Update active-since timestamps: track when each session entered an
+        // active state (working/thinking/waiting/error/subagent). Reset on
+        // idle/done/compacting/clearing. Used for the "active duration" timer.
+        let active_since_snapshot = {
+            let mut active_since = self.active_since.lock().unwrap();
+            let is_active_state = |st: &str| -> bool {
+                matches!(st, "working" | "thinking" | "waiting" | "error" | "subagent")
+            };
+            let current_ids: std::collections::HashSet<&str> =
+                active.iter().map(|s| s.id.as_str()).collect();
+            // Prune sessions that no longer exist
+            active_since.retain(|id, _| current_ids.contains(id.as_str()));
+            for s in &active {
+                if is_active_state(&s.state) {
+                    active_since.entry(s.id.clone()).or_insert(now_secs);
+                } else {
+                    active_since.remove(&s.id);
+                }
+            }
+            active_since.clone()
+        };
+
         let enriched: Vec<_> = {
             let cache = self.metrics_cache.lock().unwrap();
             let rate_limits = self.rate_limits.lock().unwrap().clone();
@@ -193,6 +228,7 @@ impl SessionMonitorState {
                         .get(&session.id)
                         .cloned()
                         .unwrap_or((0, 0.0));
+                    let active_since_ts = active_since_snapshot.get(&session.id).copied();
                     let supplemental = SupplementalData {
                         git_status: git_cache.get(&session.workspace).map(|(s, _)| s.clone()),
                         config_counts: config_cache.get(&session.workspace).map(|(c, _)| c.clone()),
@@ -201,6 +237,7 @@ impl SessionMonitorState {
                         claude_version: claude_version.clone(),
                         prev_output_tokens: prev_output,
                         prev_timestamp: prev_ts,
+                        active_since: active_since_ts,
                     };
                     EnrichedSession::from_info_and_metrics(session, metrics, &supplemental)
                 })
