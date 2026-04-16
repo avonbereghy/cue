@@ -16,9 +16,10 @@ import { STATE_HEX, STATE_HEX_LIGHT, STATE_DOT_HEX, STATE_DOT_HEX_LIGHT, STATE_B
 import { formatTokens, formatDuration } from "@/lib/format";
 import { SignalString } from "./SignalString";
 import type { StrikePulse } from "./SignalString";
+import { DriftEffect } from "./DriftEffect";
 import { StatusDot } from "./StatusDot";
 
-interface SessionCardProps {
+export interface SessionCardProps {
   session: EnrichedSession;
   titleAnimation?: string;
   animationSpeed?: number;
@@ -387,6 +388,9 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
 
       {/* Signal String / Sand — renders behind all content */}
       {signalString && (revived || info.state !== "ended") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={signalEffect} sandEnabled={sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} sessionId={info.id} contentRef={contentRef} keyReleaseSpeed={keyReleaseSpeed} />}
+
+      {/* Drift effect — flowing ribbons behind done-state cards */}
+      {displayState === "done" && <DriftEffect color={signalColorDark} />}
 
       <div ref={contentRef} className={`${effectiveCompact ? "space-y-0" : "space-y-2.5"} ${effectiveSlim && !effectiveCompact ? "flex flex-col flex-1" : ""}`} style={{ position: "relative", zIndex: 10 }}>
           {/* Row 1: Status dot + state badge + title + prompt pill + duration
