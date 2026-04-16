@@ -880,10 +880,12 @@ mod tests {
         let mut info = make_test_info("test-123", "/home/user/my-project", "working");
         info.last_activity = now;
         info.started_at = now - 100.0;
+        let mut supplemental = SupplementalData::default();
+        supplemental.active_since = Some(now - 50.0); // active for 50s
         let sessions = vec![EnrichedSession::from_info_and_metrics(
             info,
             SessionMetrics::default(),
-            &SupplementalData::default(),
+            &supplemental,
         )];
 
         assert_eq!(sessions[0].workspace_name, "my-project");

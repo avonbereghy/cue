@@ -113,6 +113,9 @@ pub struct SupplementalData {
     pub prev_output_tokens: i64,
     /// Timestamp of previous measurement
     pub prev_timestamp: f64,
+    /// When this session entered an active state (working/thinking/etc.),
+    /// or None if idle/done/compacting. Used for active-duration timer.
+    pub active_since: Option<f64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -327,7 +330,12 @@ impl EnrichedSession {
         }
         .to_string();
 
-        let duration_secs = now - info.last_activity;
+        // duration_secs = active working time (since last idle/done/compacting).
+        // Falls back to 0 for inactive sessions.
+        let duration_secs = supplemental
+            .active_since
+            .map(|ts| now - ts)
+            .unwrap_or(0.0);
         let total_duration_secs = now - info.started_at;
 
         // Prefer hook-sourced token counts (written at hook time from JSONL)

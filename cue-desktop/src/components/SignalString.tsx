@@ -100,6 +100,9 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   const sandBlendRef = useRef(state === "thinking" ? 1.0 : 0.0);
 
   const stateIsActive = state === "working" || state === "subagent" || state === "thinking";
+  // Strings should stay deployed (no retract) for error/waiting — those are
+  // transient pauses, not a return to idle. Only idle/done/compacting retract.
+  const stringsStayDeployed = state === "error" || state === "waiting";
   // Track whether we deactivated from thinking (sand-only) — strings should not retract
   const deactivatedFromThinkingRef = useRef(false);
   // Delayed deactivation: keep strings active while the audio fades out,
@@ -120,6 +123,15 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       deactivatedFromThinkingRef.current = false;
       return;
     }
+    // Working → error/waiting: keep strings deployed, just fade the drive
+    if (stringsStayDeployed) {
+      fadingRef.current = true;
+      fadeStartRef.current = performance.now();
+      const timer = setTimeout(() => {
+        fadingRef.current = false;
+      }, FADE_DURATION * 1000);
+      return () => clearTimeout(timer);
+    }
     // Track whether we're deactivating from thinking — strings should stay hidden
     deactivatedFromThinkingRef.current = stateRef.current === "thinking" || sandBlendRef.current > 0.5;
     // State left working/subagent — begin fade, then deactivate after fade completes
@@ -130,7 +142,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       fadingRef.current = false;
     }, FADE_DURATION * 1000);
     return () => clearTimeout(timer);
-  }, [stateIsActive]);
+  }, [stateIsActive, stringsStayDeployed]);
 
   const isAudio = signalMode === "preset" || signalMode === "audio" || signalMode === "live";
   // Track when session became inactive for decay timing

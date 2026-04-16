@@ -7,6 +7,8 @@ import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, setGate as 
 // import { formatTokens } from "@/lib/format";
 // import { StatBadge } from "./StatBadge";
 import { SessionCard } from "./SessionCard";
+import { BranchView } from "./BranchView";
+import type { CardSettings } from "./BranchView";
 import { PermissionPrompt } from "./PermissionPrompt";
 import { PermissionHistory } from "./PermissionHistory";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -100,6 +102,14 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // Per-session expand level in compact mode: 0=compact, 1=slim, 2=full. Undefined = follow global.
   const [expandOverrides, setExpandOverrides] = useState<Record<string, number>>({});
   const [autoReorder, setAutoReorder] = useState(false);
+  // Branch view: horizontal tree layout when window is wide (>60% of screen)
+  const [branchView, setBranchView] = useState(false);
+  useEffect(() => {
+    const check = () => setBranchView(window.innerWidth >= 960);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
   // Ref to current sessions so keyboard handler reads latest value
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
@@ -341,6 +351,31 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     }).then((fn) => { unlisten = fn; });
     return () => { unlisten?.(); };
   }, [applySettings]);
+
+  // Global keyboard shortcuts (Cmd+/- for font scaling)
+  useEffect(() => {
+    const STEP = 0.05;
+    const MIN = 0.75;
+    const MAX = 1.5;
+    const handleZoom = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      let delta = 0;
+      if (e.key === "=" || e.key === "+") delta = STEP;
+      else if (e.key === "-") delta = -STEP;
+      else if (e.key === "0") delta = 0; // reset
+      else return;
+      e.preventDefault();
+      invoke<Settings>("get_settings").then((s) => {
+        const current = s.fontScale ?? 1.0;
+        const next = e.key === "0" ? 1.0 : Math.round(Math.min(MAX, Math.max(MIN, current + delta)) * 100) / 100;
+        if (next === current) return;
+        document.documentElement.style.setProperty("--font-scale", String(next));
+        invoke("update_settings", { newSettings: { ...s, fontScale: next } });
+      });
+    };
+    window.addEventListener("keydown", handleZoom);
+    return () => window.removeEventListener("keydown", handleZoom);
+  }, []);
 
   // Auto-load active preset on launch when preset mode is configured
   useEffect(() => {
@@ -986,6 +1021,11 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // has been idle/done for ≥ SETTLE_MS. Active sessions are removed from this map.
   const settledSinceRef = useRef<Map<string, number>>(new Map());
 
+  // Per-session "active since" timestamps. Records when a session first entered
+  // working/thinking/subagent state since its last idle/done period. Used to sort
+  // active sessions so the longest-working session stays on top.
+  const activeSinceRef = useRef<Map<string, number>>(new Map());
+
   const isQuiescent = useCallback((st: string) => st === "idle" || st === "done", []);
 
   // Check whether ALL sessions are settled (idle/done for 5s+)
@@ -997,10 +1037,19 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     });
   }, [isQuiescent]);
 
-  // Build the active (non-ended) session list
-  const activeSessions = sessions.filter((s) => s.info.state !== "ended");
+  // Build the active (non-ended) session list.
+  // Team children (spawned via TeamCreate) are separated so they don't
+  // participate in the sort algorithm — they follow their parent's position
+  // and are spliced back in after sorting.
+  const allActiveSessions = sessions.filter((s) => s.info.state !== "ended");
+  const isTeamChild = useCallback(
+    (s: EnrichedSession) => !!(s.info.teamName || s.metrics.teamName),
+    [],
+  );
+  const activeSessions = allActiveSessions.filter((s) => !isTeamChild(s));
+  const teamChildren = allActiveSessions.filter(isTeamChild);
 
-  // Update settled-since timestamps
+  // Update settled-since and active-since timestamps
   const now = Date.now();
   for (const s of activeSessions) {
     if (isQuiescent(s.info.state)) {
@@ -1008,15 +1057,24 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       if (!settledSinceRef.current.has(s.info.id)) {
         settledSinceRef.current.set(s.info.id, now);
       }
+      // No longer active — clear active-since
+      activeSinceRef.current.delete(s.info.id);
     } else {
       // Active — clear any settled timestamp
       settledSinceRef.current.delete(s.info.id);
+      // Record when it first became active (if not already tracked)
+      if (!activeSinceRef.current.has(s.info.id)) {
+        activeSinceRef.current.set(s.info.id, now);
+      }
     }
   }
   // Prune sessions that no longer exist
   const activeIdSet = new Set(activeSessions.map((s) => s.info.id));
   for (const id of settledSinceRef.current.keys()) {
     if (!activeIdSet.has(id)) settledSinceRef.current.delete(id);
+  }
+  for (const id of activeSinceRef.current.keys()) {
+    if (!activeIdSet.has(id)) activeSinceRef.current.delete(id);
   }
 
   // Compute fully-sorted desired order (for deferred full rearrange)
@@ -1027,10 +1085,28 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         const pa = reorderPriority(a);
         const pb = reorderPriority(b);
         if (pa !== pb) return pa - pb;
-        return b.info.lastActivity - a.info.lastActivity;
+        // Within the same priority: longest-active session first.
+        // activeSince is set when a session enters working/thinking;
+        // lower value = been active longer = should sort first.
+        const aa = activeSinceRef.current.get(a.info.id) ?? Infinity;
+        const ba = activeSinceRef.current.get(b.info.id) ?? Infinity;
+        if (aa !== ba) return aa - ba;
+        return a.info.startedAt - b.info.startedAt;
       });
     } else {
-      all.sort((a, b) => a.info.startedAt - b.info.startedAt);
+      all.sort((a, b) => {
+        // Active sessions (working/thinking/subagent) sort before idle/done,
+        // longest-active first. Idle/done sessions keep startedAt order.
+        const aActive = !isQuiescent(a.info.state);
+        const bActive = !isQuiescent(b.info.state);
+        if (aActive !== bActive) return aActive ? -1 : 1;
+        if (aActive) {
+          const aa = activeSinceRef.current.get(a.info.id) ?? Infinity;
+          const ba = activeSinceRef.current.get(b.info.id) ?? Infinity;
+          if (aa !== ba) return aa - ba;
+        }
+        return a.info.startedAt - b.info.startedAt;
+      });
     }
     return all.map((s) => s.info.id);
   })();
@@ -1039,7 +1115,17 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // non-settled (top) and settled (bottom), preserving relative order within each.
   const sortedSessions = (() => {
     if (!autoReorder) {
-      const sorted = [...activeSessions].sort((a, b) => a.info.startedAt - b.info.startedAt);
+      const sorted = [...activeSessions].sort((a, b) => {
+        const aActive = !isQuiescent(a.info.state);
+        const bActive = !isQuiescent(b.info.state);
+        if (aActive !== bActive) return aActive ? -1 : 1;
+        if (aActive) {
+          const aa = activeSinceRef.current.get(a.info.id) ?? Infinity;
+          const ba = activeSinceRef.current.get(b.info.id) ?? Infinity;
+          if (aa !== ba) return aa - ba;
+        }
+        return a.info.startedAt - b.info.startedAt;
+      });
       committedOrderRef.current = sorted.map((s) => s.info.id);
       return sorted;
     }
@@ -1118,6 +1204,51 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     if (!isAnimatingRef.current) {
       committedOrderRef.current = result.map((s) => s.info.id);
     }
+    return result;
+  })();
+
+  // Splice team children back into sortedSessions after their parent.
+  // Children follow the parent that has activeSubagents in the same workspace.
+  // If no unique parent is found, children go at the end.
+  const sortedWithChildren = (() => {
+    if (teamChildren.length === 0) return sortedSessions;
+    // Build workspace→parent index (only parents with active subagents)
+    const parentByWs = new Map<string, { id: string; count: number }>();
+    for (const p of sortedSessions) {
+      if ((p.info.activeSubagents ?? 0) > 0 || p.hasSubagents) {
+        const entry = parentByWs.get(p.info.workspace);
+        if (entry) {
+          entry.count++; // multiple parents — ambiguous
+        } else {
+          parentByWs.set(p.info.workspace, { id: p.info.id, count: 1 });
+        }
+      }
+    }
+    // Assign children to parents
+    const childrenByParent = new Map<string, EnrichedSession[]>();
+    const orphans: EnrichedSession[] = [];
+    for (const child of teamChildren) {
+      const cw = child.info.workspace;
+      let assigned = false;
+      for (const [pw, entry] of parentByWs) {
+        if (entry.count === 1 && (cw === pw || cw.startsWith(pw + "/"))) {
+          const list = childrenByParent.get(entry.id) ?? [];
+          list.push(child);
+          childrenByParent.set(entry.id, list);
+          assigned = true;
+          break;
+        }
+      }
+      if (!assigned) orphans.push(child);
+    }
+    // Build final list: insert children right after their parent
+    const result: EnrichedSession[] = [];
+    for (const s of sortedSessions) {
+      result.push(s);
+      const kids = childrenByParent.get(s.info.id);
+      if (kids) result.push(...kids);
+    }
+    result.push(...orphans);
     return result;
   })();
 
@@ -1792,6 +1923,28 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   }
 
   // ---------------------------------------------------------------------------
+  // Branch view: show side-by-side layout when window is wide enough and
+  // team children exist.
+  // ---------------------------------------------------------------------------
+  const hasTeamChildren = teamChildren.length > 0;
+  const showBranchView = branchView && hasTeamChildren && !compactMode;
+
+  // Collect card settings for BranchView passthrough
+  const cardSettings: CardSettings = {
+    titleAnimation, animationSpeed, randomAnimation,
+    signalString: lowPower ? false : signalString,
+    signalFrequency, signalMode, signalAlpha, signalAmplitude, signalEcho,
+    signalBass, signalMids, signalTreble, signalColorDark, signalColorLight,
+    signalOffset, signalEffect: lowPower ? "string" : signalEffect,
+    sandEnabled: lowPower ? false : sandEnabled,
+    sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize,
+    sandTurbulence, sandAlpha, cordRetractDelay, cordDeployForce,
+    cordRetractForce, stringSpread, keyPressSpeed, keyReleaseSpeed,
+    compactMode, slimMode, contextThreshold, contextDisplay,
+    showToolPills, showCurrentTool, showConfigCounts, timerDisplay,
+  };
+
+  // ---------------------------------------------------------------------------
   // Normal mode render
   // ---------------------------------------------------------------------------
   return (
@@ -1826,17 +1979,32 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
               <span className="text-sm text-white/40">Sessions will appear here when Claude Code is running</span>
             </div>
           )}
-          {/* Active sessions */}
-          {(() => {
+          {/* Active sessions — branch view or vertical stack */}
+          {showBranchView ? (
+            <BranchView
+              sessions={sortedWithChildren}
+              cardSettings={cardSettings}
+              compactMode={compactMode}
+              expandOverrides={expandOverrides}
+              onExpandCycle={(id) => {
+                setExpandOverrides((prev) => {
+                  const current = prev[id] ?? 0;
+                  const next = (current + 1) % 3;
+                  if (next === 0) { const copy = { ...prev }; delete copy[id]; return copy; }
+                  return { ...prev, [id]: next };
+                });
+              }}
+            />
+          ) : (() => {
             // Compute which displayTitles appear more than once
             const titleCounts = new Map<string, number>();
-            for (const s of sortedSessions) {
+            for (const s of sortedWithChildren) {
               titleCounts.set(s.displayTitle, (titleCounts.get(s.displayTitle) ?? 0) + 1);
             }
             const duplicateTitles = new Set(
               [...titleCounts.entries()].filter(([, count]) => count > 1).map(([title]) => title)
             );
-            return sortedSessions.map((session, idx) => {
+            return sortedWithChildren.map((session, idx) => {
             const pending = pendingBySession[session.info.id] ?? [];
             const history = permissionHistory[session.info.id] ?? [];
             const hasPermissionActivity = pending.length > 0 || history.length > 0;

@@ -182,12 +182,10 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
                 sub = existing.get("subprocess") or subprocess_label
                 if sub:
                     entry["subprocess"] = sub
-                tn = existing.get("teamName") or team_name
-                an = existing.get("agentName") or agent_name
-                if tn:
-                    entry["teamName"] = tn
-                if an:
-                    entry["agentName"] = an
+                if team_name:
+                    entry["teamName"] = team_name
+                if agent_name:
+                    entry["agentName"] = agent_name
                 if last_tokens:
                     entry["inputTokens"] = last_tokens["inputTokens"]
                     entry["outputTokens"] = last_tokens["outputTokens"]
@@ -314,23 +312,47 @@ def _detect_subprocess():
     return None
 
 
-def _detect_team():
-    """Return (team_name, agent_name) if this is a team-spawned agent, else (None, None)."""
+def _detect_team(transcript_path=None):
+    """Return (team_name, agent_name) if this is a team-spawned agent, else (None, None).
+
+    Checks env vars first, then falls back to reading the JSONL transcript
+    (Claude Code passes --team-name as a CLI arg, not an env var, but the
+    JSONL entries carry teamName/agentName on every entry).
+    """
     team = os.environ.get("CLAUDE_CODE_TEAM_NAME")
     agent = os.environ.get("CLAUDE_CODE_AGENT_NAME")
     if team:
         return team, agent
+    # Fallback: check only the first few JSONL entries (session metadata).
+    # Team agent sessions have teamName on every entry from the start.
+    # Parent sessions do NOT — later entries may have teamName from spawned
+    # agents, so we must NOT scan the whole file.
+    if transcript_path:
+        try:
+            with open(transcript_path, "r") as f:
+                for i, line in enumerate(f):
+                    if i >= 5:
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    tn = obj.get("teamName")
+                    an = obj.get("agentName")
+                    if tn:
+                        return tn, an
+        except Exception:
+            pass
     return None, None
 
 
-def _last_tool_was_ask_question(transcript_path):
-    """Return True if the last assistant message ended with an AskUserQuestion tool call.
-
-    Used to detect when Claude's turn ended by asking the user a question —
-    in that case we want to show 'waiting' rather than 'idle'/'done'.
-    """
+def _read_last_assistant(transcript_path):
+    """Return the last assistant message dict from the JSONL transcript, or None."""
     if not transcript_path:
-        return False
+        return None
     try:
         with open(transcript_path, "rb") as f:
             f.seek(0, 2)
@@ -345,21 +367,45 @@ def _last_tool_was_ask_question(transcript_path):
                 obj = json.loads(line)
             except Exception:
                 continue
-            if obj.get("type") != "assistant":
-                continue
-            msg = obj.get("message", {})
-            content = msg.get("content", [])
-            if not isinstance(content, list):
-                return False
-            # Check if any content block is a tool_use for AskUserQuestion
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "tool_use":
-                    if block.get("name") == "AskUserQuestion":
-                        return True
-            return False  # Found the last assistant message — no AskUserQuestion
+            if obj.get("type") == "assistant":
+                return obj
     except Exception:
         pass
+    return None
+
+
+def _last_tool_was_ask_question(transcript_path):
+    """Return True if the last assistant message ended with an AskUserQuestion tool call.
+
+    Used to detect when Claude's turn ended by asking the user a question —
+    in that case we want to show 'waiting' rather than 'idle'/'done'.
+    """
+    obj = _read_last_assistant(transcript_path)
+    if not obj:
+        return False
+    msg = obj.get("message", {})
+    content = msg.get("content", [])
+    if not isinstance(content, list):
+        return False
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "tool_use":
+            if block.get("name") == "AskUserQuestion":
+                return True
     return False
+
+
+def _turn_has_finished(transcript_path):
+    """Return True if the main session's turn has ended (stop_reason is end_turn).
+
+    Used by SubagentStop to detect when Stop already fired while subagents
+    were still running — so the last subagent finishing should go to idle,
+    not working.
+    """
+    obj = _read_last_assistant(transcript_path)
+    if not obj:
+        return False
+    stop_reason = (obj.get("message", {}).get("stop_reason"))
+    return stop_reason == "end_turn"
 
 
 def _read_last_tokens(transcript_path):
@@ -428,12 +474,12 @@ def main():
     workspace = hook_data.get("cwd", os.getcwd())
     source = _detect_source()
     subprocess_label = _detect_subprocess()
-    team_name, agent_name = _detect_team()
-
     ignored_session = _should_ignore_session(hook_data)
 
     # Read latest token usage directly from the JSONL transcript
     transcript_path = hook_data.get("transcript_path", "")
+
+    team_name, agent_name = _detect_team(transcript_path)
     last_tokens = _read_last_tokens(transcript_path)
 
     os.makedirs(STATUS_DIR, exist_ok=True)
@@ -498,11 +544,14 @@ def main():
             now = time.time()
 
             if action == "remove":
-                # Delete the session. For /clear and /compact, SessionStart
-                # fires immediately after SessionEnd and recreates the entry.
-                # The has_prior transcript check on SessionStart detects /clear
-                # and resets startedAt.
-                status["sessions"].pop(session_id, None)
+                # Mark session as ended instead of deleting. This keeps the
+                # card visible in Cue (frontend filters ended sessions into a
+                # "revived" section). For /clear and /compact, SessionStart
+                # fires immediately after SessionEnd and overwrites the entry.
+                existing = status["sessions"].get(session_id, {})
+                if existing:
+                    existing["state"] = "ended"
+                    status["sessions"][session_id] = existing
             else:
                 # Update or create session
                 existing = status["sessions"].get(session_id, {})
@@ -558,7 +607,13 @@ def main():
                     active_subs += 1
                 elif action == "subagent_stop":
                     active_subs = max(0, active_subs - 1)
-                    action = "subagent" if active_subs > 0 else "working"
+                    if active_subs > 0:
+                        action = "subagent"
+                    else:
+                        # If the main turn already ended (Stop fired while
+                        # subagents were still running and was overridden to
+                        # "subagent"), go straight to idle.
+                        action = "idle" if _turn_has_finished(transcript_path) else "working"
 
                 # While subagents are active, override "working"/"thinking" to show
                 # subagent state. Waiting and error are NOT overridden.
@@ -582,13 +637,13 @@ def main():
                 sub = existing.get("subprocess") or subprocess_label
                 if sub:
                     entry["subprocess"] = sub
-                # Propagate team agent metadata (stable across events)
-                tn = existing.get("teamName") or team_name
-                an = existing.get("agentName") or agent_name
-                if tn:
-                    entry["teamName"] = tn
-                if an:
-                    entry["agentName"] = an
+                # Team agent metadata: only set if positively detected.
+                # Don't propagate existing values — avoids stale tags on
+                # parent sessions that were incorrectly tagged as children.
+                if team_name:
+                    entry["teamName"] = team_name
+                if agent_name:
+                    entry["agentName"] = agent_name
                 if last_tokens:
                     entry["inputTokens"] = last_tokens["inputTokens"]
                     entry["outputTokens"] = last_tokens["outputTokens"]
