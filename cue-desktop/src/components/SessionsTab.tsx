@@ -73,13 +73,20 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [signalOffset, setSignalOffset] = useState(0.5);
   const [signalEffect, setSignalEffect] = useState("string");
   const [sandEnabled, setSandEnabled] = useState(true);
-  const [sandIntensity, setSandIntensity] = useState(1.51);
-  const [sandDirection, setSandDirection] = useState(0);
-  const [sandDensity, setSandDensity] = useState(8.0);
-  const [sandSpeed, setSandSpeed] = useState(3.0);
+  const [sandIntensity, setSandIntensity] = useState(0.8);
+  const [sandDirection, setSandDirection] = useState(-40);
+  const [sandDensity, setSandDensity] = useState(2.5);
+  const [sandSpeed, setSandSpeed] = useState(0.7);
   const [sandGrainSize, setSandGrainSize] = useState(0.5);
-  const [sandTurbulence, setSandTurbulence] = useState(0.4);
-  const [sandAlpha, setSandAlpha] = useState(0.9);
+  const [sandTurbulence, setSandTurbulence] = useState(0.2);
+  const [sandAlpha, setSandAlpha] = useState(0.75);
+  const [fluxEnabled, setFluxEnabled] = useState(true);
+  const [fluxAlpha, setFluxAlpha] = useState(0.9);
+  const [fluxIntensity, setFluxIntensity] = useState(1.5);
+  const [fluxDensity, setFluxDensity] = useState(1.0);
+  const [fluxSpeed, setFluxSpeed] = useState(1.0);
+  const [fluxLineLength, setFluxLineLength] = useState(0.55);
+  const [fluxTurbulence, setFluxTurbulence] = useState(1.0);
   const [cordRetractDelay, setCordRetractDelay] = useState(0.2);
   const [cordDeployForce, setCordDeployForce] = useState(1.5);
   const [cordRetractForce, setCordRetractForce] = useState(1.5);
@@ -309,13 +316,20 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setSignalOffset(s.signalOffset ?? 0.5);
     setSignalEffect(s.signalEffect ?? "string");
     setSandEnabled(s.sandEnabled ?? true);
-    setSandIntensity(s.sandIntensity ?? 1.51);
-    setSandDirection(s.sandDirection ?? 0);
-    setSandDensity(s.sandDensity ?? 8.0);
-    setSandSpeed(s.sandSpeed ?? 3.0);
+    setSandIntensity(s.sandIntensity ?? 0.8);
+    setSandDirection(s.sandDirection ?? -40);
+    setSandDensity(s.sandDensity ?? 2.5);
+    setSandSpeed(s.sandSpeed ?? 0.7);
     setSandGrainSize(s.sandGrainSize ?? 0.5);
-    setSandTurbulence(s.sandTurbulence ?? 0.4);
-    setSandAlpha(s.sandAlpha ?? 0.9);
+    setSandTurbulence(s.sandTurbulence ?? 0.2);
+    setSandAlpha(s.sandAlpha ?? 0.75);
+    setFluxEnabled(s.fluxEnabled ?? true);
+    setFluxAlpha(s.fluxAlpha ?? 0.9);
+    setFluxIntensity(s.fluxIntensity ?? 1.5);
+    setFluxDensity(s.fluxDensity ?? 1.0);
+    setFluxSpeed(s.fluxSpeed ?? 1.0);
+    setFluxLineLength(s.fluxLineLength ?? 0.55);
+    setFluxTurbulence(s.fluxTurbulence ?? 1.0);
     setCordRetractDelay(s.cordRetractDelay ?? 0.2);
     setCordDeployForce(s.cordDeployForce ?? 1.5);
     setCordRetractForce(s.cordRetractForce ?? 1.5);
@@ -1372,8 +1386,11 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
     isQuiescenceReorderRef.current = false;
 
-    const DURATION = 500; // ms — all cards move together
-    const EASING = "cubic-bezier(0.2, 0, 0, 1)"; // Material standard
+    const DURATION = 1250; // ms — all cards move together
+    // Very gentle wind-up (y1=0.01 with x1=0.62 → ~20% of time covers ~1% of
+    // displacement), smooth deceleration to target. Heavier "falling into
+    // place" feel — cards drift before committing to the move.
+    const EASING = "cubic-bezier(0.62, 0.01, 0.3, 1)";
 
     // Identify hero: biggest upward mover (or biggest mover if none go up)
     const upwardMovers = movers.filter((m) => m.dy < 0);
@@ -1412,15 +1429,19 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       animations.push(anim);
     }
 
-    // Hero duck effect: darken + slight scale through the middle, surface at end
+    // Hero duck effect: darken + slight scale through the middle, surface at end.
+    // Envelope shaped with soft corners (entry/exit eased instead of stepping)
+    // so the depression rolls in and rolls out with the slower overall motion.
     const heroCard = hero.el.querySelector<HTMLElement>(".session-card");
     if (heroCard) {
       const duckAnim = heroCard.animate(
         [
-          { filter: "brightness(1)", transform: "scale(1)" },
-          { filter: `brightness(${duckBrightness})`, transform: "scale(0.97)", offset: 0.15 },
-          { filter: `brightness(${duckBrightness})`, transform: "scale(0.97)", offset: 0.75 },
-          { filter: "brightness(1)", transform: "scale(1)" },
+          { filter: "brightness(1)", transform: "scale(1)", offset: 0 },
+          { filter: `brightness(${(1 + parseFloat(duckBrightness.toFixed(2))) / 2})`, transform: "scale(0.993)", offset: 0.12 },
+          { filter: `brightness(${duckBrightness})`, transform: "scale(0.985)", offset: 0.28 },
+          { filter: `brightness(${duckBrightness})`, transform: "scale(0.985)", offset: 0.72 },
+          { filter: `brightness(${(1 + parseFloat(duckBrightness.toFixed(2))) / 2})`, transform: "scale(0.993)", offset: 0.88 },
+          { filter: "brightness(1)", transform: "scale(1)", offset: 1 },
         ],
         { duration: DURATION, easing: EASING },
       );
@@ -1938,7 +1959,10 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     signalOffset, signalEffect: lowPower ? "string" : signalEffect,
     sandEnabled: lowPower ? false : sandEnabled,
     sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize,
-    sandTurbulence, sandAlpha, cordRetractDelay, cordDeployForce,
+    sandTurbulence, sandAlpha,
+    fluxEnabled: lowPower ? false : fluxEnabled,
+    fluxAlpha, fluxIntensity, fluxDensity, fluxSpeed, fluxLineLength, fluxTurbulence,
+    cordRetractDelay, cordDeployForce,
     cordRetractForce, stringSpread, keyPressSpeed, keyReleaseSpeed,
     compactMode, slimMode, contextThreshold, contextDisplay,
     showToolPills, showCurrentTool, showConfigCounts, timerDisplay,

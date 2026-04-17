@@ -44,6 +44,13 @@ pub struct ParsedEntry {
     pub task_status_updates: Vec<(String, String)>,
     /// Extracted text from user messages (first text content block, truncated)
     pub user_prompt_text: Option<String>,
+    /// If this user message is a `/effort X` slash-command, the raw argument
+    /// (e.g. "high", "auto", "max"). Pass-through string so new level names
+    /// Anthropic introduces surface automatically.
+    pub effort_command: Option<String>,
+    /// Timestamp (unix secs) of the effort command, if any — used to compare
+    /// against the global settings.json mtime so the fresher source wins.
+    pub effort_command_ts: Option<f64>,
     /// Session ID from JSONL metadata (permission-mode header entry)
     pub jsonl_session_id: Option<String>,
     /// Team name from JSONL (team agent sessions)
@@ -126,6 +133,10 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
     if entry_type == "user" {
         entry.is_user_message = true;
         entry.user_prompt_text = extract_user_prompt_text(obj);
+        entry.effort_command = extract_effort_command(obj);
+        if entry.effort_command.is_some() {
+            entry.effort_command_ts = entry.timestamp;
+        }
     }
 
     // Parse assistant messages for tokens and tool usage
@@ -391,6 +402,46 @@ fn extract_user_prompt_text(obj: &serde_json::Map<String, Value>) -> Option<Stri
     }
 
     Some(trimmed.to_string())
+}
+
+/// Extract the `/effort X` argument from a user message, if present.
+///
+/// Claude Code represents slash commands in the JSONL as raw XML tags inside
+/// the user-role message content, e.g.:
+///   `<command-name>/effort</command-name><command-args>high</command-args>`
+/// We parse the raw content (before XML stripping) so the args survive.
+fn extract_effort_command(obj: &serde_json::Map<String, Value>) -> Option<String> {
+    let message = obj.get("message")?.as_object()?;
+    let content = message.get("content")?;
+
+    let raw = if let Some(s) = content.as_str() {
+        s.to_string()
+    } else if let Some(arr) = content.as_array() {
+        arr.iter().find_map(|block| {
+            let obj = block.as_object()?;
+            if obj.get("type")?.as_str()? == "text" {
+                obj.get("text")?.as_str().map(String::from)
+            } else {
+                None
+            }
+        })?
+    } else {
+        return None;
+    };
+
+    if !raw.contains("<command-name>/effort</command-name>") {
+        return None;
+    }
+    let start_tag = "<command-args>";
+    let end_tag = "</command-args>";
+    let start = raw.find(start_tag)? + start_tag.len();
+    let rest = &raw[start..];
+    let end_rel = rest.find(end_tag)?;
+    let args = rest[..end_rel].trim();
+    if args.is_empty() {
+        return None;
+    }
+    Some(args.to_lowercase())
 }
 
 /// Strip ANSI escape sequences (CSI sequences like \x1b[...m and OSC sequences).
@@ -679,6 +730,11 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
             if let Some(ref text) = entry.user_prompt_text {
                 m.last_prompt = Some(text.clone());
             }
+            // Last /effort command wins
+            if let Some(ref eff) = entry.effort_command {
+                m.effort_level = Some(eff.clone());
+                m.effort_level_ts = entry.effort_command_ts;
+            }
         }
 
         if entry.is_assistant_message {
@@ -843,6 +899,51 @@ mod tests {
             entries[0].git_branch.as_deref(),
             Some("feat/dashboard")
         );
+    }
+
+    #[test]
+    fn test_parse_effort_command_string_content() {
+        let line = r#"{"type":"user","timestamp":1710000010.0,"message":{"role":"user","content":"<command-name>/effort</command-name>\n<command-message>effort</command-message>\n<command-args>xhigh</command-args>"}}"#;
+        let entries = parse_jsonl_content(line);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].effort_command.as_deref(), Some("xhigh"));
+    }
+
+    #[test]
+    fn test_parse_effort_command_array_content() {
+        let line = r#"{"type":"user","timestamp":1710000010.0,"message":{"role":"user","content":[{"type":"text","text":"<command-name>/effort</command-name><command-args>auto</command-args>"}]}}"#;
+        let entries = parse_jsonl_content(line);
+        assert_eq!(entries[0].effort_command.as_deref(), Some("auto"));
+    }
+
+    #[test]
+    fn test_effort_command_future_level_passes_through() {
+        // Unknown future level names survive unchanged.
+        let line = r#"{"type":"user","timestamp":1.0,"message":{"role":"user","content":"<command-name>/effort</command-name><command-args>ultra</command-args>"}}"#;
+        let entries = parse_jsonl_content(line);
+        assert_eq!(entries[0].effort_command.as_deref(), Some("ultra"));
+    }
+
+    #[test]
+    fn test_non_effort_command_ignored() {
+        let line = r#"{"type":"user","timestamp":1.0,"message":{"role":"user","content":"<command-name>/title</command-name><command-args>my title</command-args>"}}"#;
+        let entries = parse_jsonl_content(line);
+        assert!(entries[0].effort_command.is_none());
+    }
+
+    #[test]
+    fn test_effort_aggregates_latest_wins() {
+        let lines = [
+            r#"{"type":"user","timestamp":1.0,"message":{"role":"user","content":"<command-name>/effort</command-name><command-args>low</command-args>"}}"#,
+            r#"{"type":"user","timestamp":2.0,"message":{"role":"user","content":"hi"}}"#,
+            r#"{"type":"user","timestamp":3.0,"message":{"role":"user","content":"<command-name>/effort</command-name><command-args>high</command-args>"}}"#,
+        ].join("\n");
+        let tmp = std::env::temp_dir()
+            .join(format!("cue_effort_test_{}.jsonl", std::process::id()));
+        std::fs::write(&tmp, lines).unwrap();
+        let m = parse_jsonl_to_session_metrics(&tmp).unwrap();
+        let _ = std::fs::remove_file(&tmp);
+        assert_eq!(m.effort_level.as_deref(), Some("high"));
     }
 
     #[test]

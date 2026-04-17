@@ -574,12 +574,19 @@ export function SettingsView() {
       signalEffect: "string",
       sandEnabled: true,
       sandIntensity: 1.51,
-      sandDirection: 0,
-      sandDensity: 8.0,
-      sandSpeed: 3.0,
-      sandGrainSize: 0.5,
-      sandTurbulence: 0.4,
-      sandAlpha: 0.9,
+      sandDirection: -60,
+      sandDensity: 2.0,
+      sandSpeed: 0.26,
+      sandGrainSize: 0.4,
+      sandTurbulence: 0.9,
+      sandAlpha: 0.7,
+      fluxEnabled: true,
+      fluxAlpha: 0.9,
+      fluxIntensity: 1.5,
+      fluxDensity: 1.0,
+      fluxSpeed: 1.0,
+      fluxLineLength: 0.55,
+      fluxTurbulence: 1.0,
       cordRetractDelay: 0.2,
       cordDeployForce: 1.5,
       cordRetractForce: 1.5,
@@ -736,6 +743,7 @@ export function SettingsView() {
             { id: "tokens", label: "Tokens" },
             { id: "remaining", label: "Remaining" },
             { id: "both", label: "Both" },
+            { id: "compact", label: "Compact" },
           ]} onChange={(v) => setSettings({ ...settings, contextDisplay: v })} />
         </SettingRow>
         <SettingRow label="Timer Display" description="How session duration is shown on cards" onReset={(settings.timerDisplay ?? "seconds") !== "seconds" ? () => setSettings({ ...settings, timerDisplay: "seconds" }) : undefined}>
@@ -750,7 +758,7 @@ export function SettingsView() {
 
       {/* Special Effects */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
-        <SettingRow label="Special Effects" description="Strings animate during working, sand during thinking" onReset={!settings.signalString ? () => setSettings({ ...settings, signalString: true }) : undefined}>
+        <SettingRow label="Special Effects" description="Strings on working, sand on idle, flux streamlines on thinking" onReset={!settings.signalString ? () => setSettings({ ...settings, signalString: true }) : undefined}>
           <Toggle checked={settings.signalString} onChange={() => setSettings({ ...settings, signalString: !settings.signalString })} label="Special effects" />
         </SettingRow>
 
@@ -787,10 +795,10 @@ export function SettingsView() {
               <Slider value={settings.stringSpread ?? 0.02} min={0} max={0.5} step={0.01} defaultValue={0.02} format={formatMul} onChange={(v) => setSettings({ ...settings, stringSpread: v })} />
             </SettingRow>
 
-            {/* ── Sand settings (active during thinking state) ── */}
+            {/* ── Sand settings (active during idle state) ── */}
             <div className="flex items-center gap-2 py-2.5 px-1">
               <span className="text-xs font-semibold text-white/70 uppercase tracking-wider">Sand</span>
-              <span className="text-xs text-white/40">Thinking state</span>
+              <span className="text-xs text-white/40">Idle state</span>
             </div>
 
             <SettingRow label="Intensity" description="How strongly energy drives the sandstorm">
@@ -814,6 +822,42 @@ export function SettingsView() {
             <SettingRow label="Opacity" description="Brightness of sand grains">
               <Slider value={settings.sandAlpha ?? 0.9} min={0.05} max={1.0} step={0.01} defaultValue={0.9} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, sandAlpha: v })} />
             </SettingRow>
+
+            {/* ── Flux settings (active during thinking state) ── */}
+            <div className="flex items-center gap-2 py-2.5 px-1">
+              <span className="text-xs font-semibold text-white/70 uppercase tracking-wider">Flux</span>
+              <span className="text-xs text-white/40">Thinking state</span>
+              <span className="ml-auto">
+                <Toggle
+                  checked={settings.fluxEnabled ?? true}
+                  onChange={() => setSettings({ ...settings, fluxEnabled: !(settings.fluxEnabled ?? true) })}
+                  label="Flux enabled"
+                />
+              </span>
+            </div>
+
+            {(settings.fluxEnabled ?? true) && (
+              <>
+                <SettingRow label="Opacity" description="Overall streamline transparency">
+                  <Slider value={settings.fluxAlpha ?? 0.9} min={0.05} max={1.0} step={0.01} defaultValue={0.9} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, fluxAlpha: v })} />
+                </SettingRow>
+                <SettingRow label="Audio Drive" description="How strongly audio energy speeds up the flow (lines stay fixed-length)">
+                  <Slider value={settings.fluxIntensity ?? 1.5} min={0} max={6.0} step={0.01} defaultValue={1.5} format={formatMul} onChange={(v) => setSettings({ ...settings, fluxIntensity: v })} />
+                </SettingRow>
+                <SettingRow label="Density" description="Streamline count — higher packs more lines across the card">
+                  <Slider value={settings.fluxDensity ?? 1.0} min={0.3} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, fluxDensity: v })} />
+                </SettingRow>
+                <SettingRow label="Base Speed" description="Field evolution rate when no audio is playing">
+                  <Slider value={settings.fluxSpeed ?? 1.0} min={0.1} max={4.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, fluxSpeed: v })} />
+                </SettingRow>
+                <SettingRow label="Line Length" description="Fixed height of each streamline (multiplier on the base ~36px)">
+                  <Slider value={settings.fluxLineLength ?? 0.55} min={0.2} max={2.0} step={0.01} defaultValue={0.55} format={formatMul} onChange={(v) => setSettings({ ...settings, fluxLineLength: v })} />
+                </SettingRow>
+                <SettingRow label="Turbulence" description="How many swirls fit across the card (0.3 = wide eddies, 3 = tight curls)">
+                  <Slider value={settings.fluxTurbulence ?? 1.0} min={0.3} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, fluxTurbulence: v })} />
+                </SettingRow>
+              </>
+            )}
           </>
         )}
       </section>

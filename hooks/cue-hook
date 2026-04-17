@@ -178,6 +178,7 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
                     "startedAt": existing.get("startedAt", now),
                     "source": existing.get("source", source),
                     "activeSubagents": existing.get("activeSubagents", 0),
+                    "pid": os.getppid(),
                 }
                 sub = existing.get("subprocess") or subprocess_label
                 if sub:
@@ -585,8 +586,9 @@ def main():
                         return  # A newer hook already wrote — don't clobber it
 
                 # Subagent counter: increment on start, decrement on stop.
-                # Leaked counters (denied agent, crash, missed SubagentStop)
-                # are handled by the Rust backend's 90s stale-session timeout.
+                # Leaked counters (denied agent, crash, missed SubagentStop) are
+                # handled by the Rust backend's process-liveness check: if the
+                # owning Claude Code PID dies, the session is demoted to idle.
                 active_subs = existing.get("activeSubagents", 0)
                 if action in ("done", "idle"):
                     # Guard: don't let done/idle overwrite "waiting" state.
@@ -632,6 +634,7 @@ def main():
                     "startedAt": now if is_clear else existing.get("startedAt", now),
                     "source": existing.get("source", source),
                     "activeSubagents": active_subs,
+                    "pid": os.getppid(),
                 }
                 # Propagate subprocess label if detected (stable across events)
                 sub = existing.get("subprocess") or subprocess_label

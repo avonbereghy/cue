@@ -644,6 +644,7 @@ mod tests {
             subprocess: None,
             team_name: None,
             agent_name: None,
+            pid: None,
         }
     }
 
