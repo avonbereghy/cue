@@ -1,0 +1,18 @@
+[advisories]
+ignore = [
+    # Unsoundness in `rand::rng()` when combined with a custom logger.
+    # Pulled transitively by phf_generator (0.8 and 0.10), which is a
+    # BUILD-TIME proc-macro dependency of tauri-utils via kuchikiki/cssparser.
+    # The unsound path requires constructing a custom logger and calling
+    # rand::rng() — neither of which occurs in build-time HTML/CSS parsing.
+    # Not reachable from our runtime binary. Awaiting a Tauri release that
+    # bumps phf_generator past the affected rand range.
+    "RUSTSEC-2026-0097",
+
+    # Unsoundness in glib::VariantStrIter Iterator impls.
+    # Pulled transitively by the GTK/webkit2gtk stack (Linux-only path in
+    # Tauri). Not compiled into macOS or Windows builds. We do not use
+    # VariantStrIter anywhere in our code, so the unsound path is not
+    # reachable. Awaiting upstream gtk-rs 0.19+ propagation into Tauri.
+    "RUSTSEC-2024-0429",
+]
