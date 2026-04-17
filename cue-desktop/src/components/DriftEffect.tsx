@@ -31,8 +31,11 @@ void main() {
 }
 `;
 
-// macOS Drift screensaver recreation — bright flowing light ribbons
-// Uses domain warping + sinusoidal bands for distinct luminous streams
+// macOS Drift screensaver recreation — dense parallel strokes flowing along
+// a smoothly varying vector field. Each pixel finds the local flow direction
+// from noise, then samples stripe phase along the perpendicular axis. Colors
+// come from a slow painterly palette sampled independently of the strokes —
+// which gives the "fabric with shifting hues" quality instead of neon ribbons.
 const FRAG = `
 precision highp float;
 
@@ -90,58 +93,64 @@ float snoise(vec3 v) {
   return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
 }
 
-// Thin bright ribbon from sinusoidal band — sharp falloff creates light trail
-float ribbon(float x, float width) {
-  return pow(max(1.0 - abs(x) / width, 0.0), 3.0);
-}
-
 void main() {
   vec2 uv = v_uv;
-  float t = u_time * 0.035;
+  float t = u_time * 0.04;
 
-  // Domain warping: warp UV coordinates with noise for fluid flow
-  vec2 warp1 = vec2(
-    snoise(vec3(uv * 1.5, t * 0.4)),
-    snoise(vec3(uv * 1.5 + 7.0, t * 0.4 + 3.0))
-  );
-  vec2 warp2 = vec2(
-    snoise(vec3((uv + warp1 * 0.3) * 2.0, t * 0.3 + 10.0)),
-    snoise(vec3((uv + warp1 * 0.3) * 2.0 + 5.0, t * 0.3 + 13.0))
-  );
-  vec2 warped = uv + warp1 * 0.25 + warp2 * 0.15;
+  // Local flow direction: smooth angular field from noise, plus a slow global
+  // rotation so the pattern isn't frozen when the scene is still.
+  float angle =
+    snoise(vec3(uv * 1.1, t * 0.25)) * 3.14159
+    + snoise(vec3(uv * 0.5 + 13.0, t * 0.15)) * 1.5
+    + t * 0.15;
+  vec2 flow = vec2(cos(angle), sin(angle));
+  vec2 perp = vec2(-flow.y, flow.x);
 
-  // Create multiple ribbon streams at different angles and speeds
-  float r1 = ribbon(sin(warped.x * 4.0 + warped.y * 2.0 + t * 1.2), 0.12);
-  float r2 = ribbon(sin(warped.x * 3.0 - warped.y * 3.5 + t * 0.9 + 2.0), 0.10);
-  float r3 = ribbon(sin(warped.y * 5.0 + warped.x * 1.5 - t * 0.7 + 4.5), 0.08);
-  float r4 = ribbon(sin((warped.x + warped.y) * 3.5 + t * 1.1 + 1.0), 0.14);
-  float r5 = ribbon(sin(warped.x * 6.0 - warped.y * 2.0 - t * 0.5 + 3.0), 0.06);
+  // Perpendicular coordinate drives stroke phase; high frequency → fine
+  // fur-like density. Low-freq jitter breaks perfectly regular spacing.
+  float across = dot(uv, perp) * 260.0;
+  float jitter = snoise(vec3(uv * 2.2, t * 0.3)) * 3.2;
+  float phase  = across + jitter;
 
-  // Color palette — shift hue around the base theme color
-  // Rotate through warm/cool/saturated variants
-  vec3 c1 = u_color * 1.4;                           // bright base
-  vec3 c2 = u_color * vec3(0.5, 0.9, 1.5) * 1.3;   // cool shift
-  vec3 c3 = u_color * vec3(1.5, 0.7, 0.9) * 1.2;   // warm shift
-  vec3 c4 = u_color * vec3(0.8, 1.3, 0.6) * 1.1;   // green shift
-  vec3 c5 = u_color * vec3(1.3, 0.5, 1.4) * 1.2;   // purple shift
+  // Two sampling layers at slightly different frequencies, summed and
+  // re-sharpened — this gives the dense, interleaved hair look instead of a
+  // single set of stripes.
+  float s1 = sin(phase);
+  float s2 = sin(phase * 1.37 + jitter * 0.5);
+  float mask = (max(s1, 0.0) * 0.65 + max(s2, 0.0) * 0.45);
+  float stroke = pow(mask, 2.2);
 
-  // Combine ribbons with distinct colors — additive for glow
-  vec3 col = vec3(0.0);
-  col += c1 * r1;
-  col += c2 * r2;
-  col += c3 * r3;
-  col += c4 * r4;
-  col += c5 * r5;
+  // Painterly palette — four hues, each driven by an independent low-freq
+  // noise, then blended. Theme color acts as a subtle tint, not a hard
+  // multiplier, so the pattern keeps its own chroma.
+  vec3 tint = u_color;
+  vec3 c1 = mix(vec3(1.10, 0.30, 0.85), tint, 0.35); // magenta
+  vec3 c2 = mix(vec3(0.30, 0.75, 1.30), tint, 0.35); // cold blue
+  vec3 c3 = mix(vec3(1.25, 0.85, 0.40), tint, 0.30); // warm gold
+  vec3 c4 = mix(vec3(0.45, 1.05, 0.75), tint, 0.30); // mint green
 
-  // Boost brightness and add bloom-like glow on bright spots
-  col += col * col * 0.8;
+  float p1 = smoothstep(-1.0, 1.0, snoise(vec3(uv * 1.30, t * 0.20)));
+  float p2 = smoothstep(-1.0, 1.0, snoise(vec3(uv * 1.05 + 7.0, t * 0.17)));
+  float p3 = smoothstep(-1.0, 1.0, snoise(vec3(uv * 0.85 + 13.0, t * 0.13)));
 
-  // Overall intensity for alpha
-  float intensity = max(max(r1, r2), max(max(r3, r4), r5));
-  // Add a subtle ambient glow from the warped field
-  float ambient = smoothstep(-0.3, 0.8, snoise(vec3(warped * 2.0, t * 0.5))) * 0.08;
+  vec3 palette = mix(c1, c2, p1);
+  palette = mix(palette, c3, p2 * 0.65);
+  palette = mix(palette, c4, p3 * 0.45);
 
-  float a = (intensity + ambient) * u_alpha;
+  // Highlight sheen on the crest of each stroke — adds a bright edge without
+  // widening the stroke (keeps the fine weave look).
+  float sheen = pow(max(s1, 0.0), 8.0) * 0.6;
+  vec3 col = palette * (stroke * 1.15) + palette * sheen;
+
+  // Very faint ambient wash between strokes so gaps aren't pure black —
+  // mimics the soft substrate the Drift strokes are painted onto.
+  float ambient = smoothstep(-0.4, 0.9, snoise(vec3(uv * 1.8, t * 0.25))) * 0.03;
+  col += palette * ambient;
+
+  // Coverage for alpha. Strokes are thin; raise the floor slightly so the
+  // card surface picks up a tint across the whole surface.
+  float coverage = clamp(stroke + ambient * 1.5, 0.0, 1.0);
+  float a = coverage * u_alpha;
 
   gl_FragColor = vec4(col * u_alpha, a);
 }

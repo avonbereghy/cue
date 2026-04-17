@@ -501,18 +501,13 @@ html[data-theme="light"]:not([data-glass]) .session-card--pressed {
     0 6px 20px rgba(246, 165, 96, 0.04),
     inset 0 0 30px rgba(246, 165, 96, 0.06);
 }
+/* Top-bar sweep intentionally disabled during thinking — the flux streamline
+   overlay now carries the "active thinking" visual, so the blinking border
+   read as redundant noise. Keep the keyframe + selector in case it's wanted
+   back later. */
 .session-card--thinking::before {
-  opacity: 1;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(246, 165, 96, 0.45) 40%,
-    rgba(246, 165, 96, 0.65) 50%,
-    rgba(246, 165, 96, 0.45) 60%,
-    transparent 100%
-  );
-  background-size: 300% 100%;
-  animation: thinking-bar-sweep 3s ease-in-out infinite;
+  opacity: 0;
+  animation: none;
 }
 html[data-theme="light"]:not([data-glass]) .session-card--thinking {
   background-color: rgba(234, 88, 12, 0.06);

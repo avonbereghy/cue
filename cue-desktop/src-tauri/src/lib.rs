@@ -20,6 +20,7 @@ pub mod git_status;
 pub mod config_counter;
 pub mod live_audio;
 pub mod system_info;
+pub mod model_context;
 
 use models::{EnrichedSession, Settings};
 use session_monitor::SessionMonitorState;

@@ -11,12 +11,29 @@ function charHash(i: number, title: string): number {
 function bellFromHash(hash: number): number {
   return ((hash & 0xFF) / 255 + ((hash >> 8) & 0xFF) / 255 + ((hash >> 16) & 0xFF) / 255) / 3;
 }
+
+/**
+ * Tailwind classes for the effort-level pill.
+ * Ramps cool → warm with intensity. Unknown future values fall back to neutral,
+ * so new level names Anthropic adds still render (just without a bespoke color).
+ */
+function effortPillClass(level: string): string {
+  switch (level.toLowerCase()) {
+    case "auto":   return "bg-white/10 text-white/60";
+    case "low":    return "bg-sky-500/20 text-sky-300";
+    case "medium": return "bg-emerald-500/20 text-emerald-300";
+    case "high":   return "bg-amber-500/25 text-amber-300";
+    case "xhigh":  return "bg-orange-500/25 text-orange-300";
+    case "max":    return "bg-rose-500/30 text-rose-300";
+    default:       return "bg-white/10 text-white/60";
+  }
+}
 import type { EnrichedSession } from "@/lib/types";
 import { STATE_HEX, STATE_HEX_LIGHT, STATE_DOT_HEX, STATE_DOT_HEX_LIGHT, STATE_BADGE_HEX, STATE_BADGE_HEX_LIGHT } from "@/lib/types";
 import { formatTokens, formatDuration } from "@/lib/format";
 import { SignalString } from "./SignalString";
 import type { StrikePulse } from "./SignalString";
-import { DriftEffect } from "./DriftEffect";
+import { FluxEffect, FLUX_EXIT_MS } from "./FluxEffect";
 import { StatusDot } from "./StatusDot";
 
 export interface SessionCardProps {
@@ -45,6 +62,14 @@ export interface SessionCardProps {
   sandGrainSize?: number;
   sandTurbulence?: number;
   sandAlpha?: number;
+  /** Flux effect (thinking state) */
+  fluxEnabled?: boolean;
+  fluxAlpha?: number;
+  fluxIntensity?: number;
+  fluxDensity?: number;
+  fluxSpeed?: number;
+  fluxLineLength?: number;
+  fluxTurbulence?: number;
   cordRetractDelay?: number;
   cordDeployForce?: number;
   cordRetractForce?: number;
@@ -147,7 +172,7 @@ function PromptPopup({ text, onClose, isDark }: {
   );
 }
 
-function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, stringSpread = 0.15, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "percent", showToolPills = false, showCurrentTool = false, showConfigCounts = false, timerDisplay = "seconds", expandOverride, onExpandCycle, isDuplicate = false }: SessionCardProps) {
+function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, fluxEnabled = true, fluxAlpha = 0.9, fluxIntensity = 1.5, fluxDensity = 1.0, fluxSpeed = 1.0, fluxLineLength = 0.55, fluxTurbulence = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, stringSpread = 0.15, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "percent", showToolPills = false, showCurrentTool = false, showConfigCounts = false, timerDisplay = "seconds", expandOverride, onExpandCycle, isDuplicate = false }: SessionCardProps) {
   // Effective display mode: expandOverride takes precedence over global compact/slim
   const effectiveCompact = expandOverride !== undefined ? expandOverride === 0 : compactMode;
   const effectiveSlim = expandOverride !== undefined ? expandOverride <= 1 : slimMode;
@@ -161,31 +186,153 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
 
   // Sticky state: hold error/waiting states for a minimum duration before fading out
   const STICKY_HOLD_MS = 3500;
+  // Two pieces of state diverge briefly during the thinking → working handoff:
+  //   displayState — "physical" state: drives press-down, flux tint, ember border
+  //   labelState   — "semantic" state: drives badge text, StatusDot icon, title color
+  // On any other transition they track together.
   const [displayState, setDisplayState] = useState(info.state);
+  const [labelState, setLabelState] = useState(info.state);
   const stickyUntilRef = useRef(0);
 
+  // Thinking → working/subagent handoff staging. The commit (label + press-down
+  // + flux retract) is driven by the SignalString's onStringsConnected callback
+  // firing when all three bands have landed (clipFraction ≥ 0.98). After that
+  // we wait HANDOFF_POST_CONNECT_MS so the third band's arrival is fully
+  // registered, then flip both states at once. A fallback timer guards against
+  // the connected signal never arriving (e.g., reduced-motion or a stalled
+  // rAF loop).
+  const HANDOFF_POST_CONNECT_MS = 200;
+  const HANDOFF_FALLBACK_MS = 2200;
+  const handoffCommitTimerRef = useRef<number | null>(null);
+
+  // Flux linger: keep the FluxEffect mounted while thinking AND for a short
+  // tail after thinking ends, so the per-line retract animation can play out
+  // before the component unmounts. `fluxActive` drives the growth gate
+  // (true → grow to full, false → retract toward zero).
+  //
+  // The string sweep + reveal hold now happen BEFORE displayState flips out
+  // of thinking (see handoff choreography above), so flux active flips false
+  // in lock-step with the press-down. No extra sweep delay here.
+  const [fluxMounted, setFluxMounted] = useState(displayState === "thinking");
+  const [fluxActive, setFluxActive] = useState(displayState === "thinking");
+  const fluxUnmountTimerRef = useRef<number | null>(null);
   useEffect(() => {
+    const isThinking = displayState === "thinking";
+    const clearTimers = () => {
+      if (fluxUnmountTimerRef.current !== null) {
+        window.clearTimeout(fluxUnmountTimerRef.current);
+        fluxUnmountTimerRef.current = null;
+      }
+    };
+    if (isThinking) {
+      clearTimers();
+      setFluxMounted(true);
+      setFluxActive(true);
+    } else if (fluxMounted) {
+      // displayState just left thinking → begin retract immediately.
+      // The strings have already finished their sweep during Phase A/B.
+      setFluxActive(false);
+      fluxUnmountTimerRef.current = window.setTimeout(() => {
+        setFluxMounted(false);
+        fluxUnmountTimerRef.current = null;
+      }, FLUX_EXIT_MS + 80);
+    }
+    return clearTimers;
+  }, [displayState, fluxMounted]);
+
+  // Unmount-only cleanup for the handoff timer.
+  useEffect(() => {
+    return () => {
+      if (handoffCommitTimerRef.current !== null) window.clearTimeout(handoffCommitTimerRef.current);
+    };
+  }, []);
+
+  const commitHandoff = useCallback((delayMs: number) => {
+    if (handoffCommitTimerRef.current !== null) {
+      window.clearTimeout(handoffCommitTimerRef.current);
+    }
+    const target = info.state;
+    handoffCommitTimerRef.current = window.setTimeout(() => {
+      setLabelState(target);
+      setDisplayState(target);
+      handoffCommitTimerRef.current = null;
+    }, delayMs);
+  }, [info.state]);
+
+  // SignalString fires this once per deploy cycle when all three bands have
+  // fully landed. That's our cue to commit the working-state swap after a
+  // short grace window — so the label/press-down/flux-retract only happen
+  // after the third string has connected, never before.
+  const handleStringsConnected = useCallback(() => {
+    const targetIsHandoffable = info.state === "working" || info.state === "subagent";
+    if (!targetIsHandoffable) return;
+    if (displayState !== "thinking") return;
+    // Replace the fallback timer (or any stale commit) with the short
+    // post-connect commit. If no commit is pending (race condition), start
+    // one anyway — we've confirmed strings are connected.
+    commitHandoff(HANDOFF_POST_CONNECT_MS);
+  }, [info.state, displayState, commitHandoff]);
+
+  useEffect(() => {
+    const clearHandoff = () => {
+      if (handoffCommitTimerRef.current !== null) {
+        window.clearTimeout(handoffCommitTimerRef.current);
+        handoffCommitTimerRef.current = null;
+      }
+    };
+
     const now = Date.now();
-    const isSticky = displayState === "error" || displayState === "waiting";
 
-    if (info.state === displayState) return;
-
-    // Entering a sticky state — record hold deadline
-    if (info.state === "error" || info.state === "waiting") {
-      stickyUntilRef.current = now + STICKY_HOLD_MS;
-      setDisplayState(info.state);
+    // Everything already synced to info.state — nothing to do.
+    if (info.state === displayState && info.state === labelState) {
+      clearHandoff();
       return;
     }
 
-    // Leaving a sticky state — delay if hold hasn't expired
+    const targetIsHandoffable = info.state === "working" || info.state === "subagent";
+
+    // Mid-handoff pass-through: a pending commit will finish the transition.
+    // Only interfere if info.state has diverged from the handoff target.
+    if (handoffCommitTimerRef.current !== null && targetIsHandoffable) return;
+
+    // Pending commit with a now-irrelevant target gets aborted; the branches
+    // below re-stage as needed.
+    clearHandoff();
+
+    const isSticky = displayState === "error" || displayState === "waiting";
+
+    // Entering a sticky state — record hold deadline, sync both immediately.
+    if (info.state === "error" || info.state === "waiting") {
+      stickyUntilRef.current = now + STICKY_HOLD_MS;
+      setDisplayState(info.state);
+      setLabelState(info.state);
+      return;
+    }
+
+    // Leaving a sticky state — delay if hold hasn't expired.
     if (isSticky && now < stickyUntilRef.current) {
       const remaining = stickyUntilRef.current - now;
-      const timer = setTimeout(() => setDisplayState(info.state), remaining);
+      const timer = setTimeout(() => {
+        setDisplayState(info.state);
+        setLabelState(info.state);
+      }, remaining);
       return () => clearTimeout(timer);
     }
 
+    // Thinking → working/subagent: don't touch either state yet. Strings start
+    // redeploying (driven inside SignalString off info.state); when all three
+    // land the onStringsConnected callback replaces this fallback with a
+    // 200ms commit. The fallback is a safety net so state never hangs if the
+    // connected signal never fires (reduced motion, stalled rAF, etc.).
+    if (displayState === "thinking" && labelState === "thinking" && targetIsHandoffable) {
+      commitHandoff(HANDOFF_FALLBACK_MS);
+      return;
+    }
+
+    // Default — sync both immediately.
     setDisplayState(info.state);
-  }, [info.state, displayState]);
+    setLabelState(info.state);
+  }, [info.state, displayState, labelState, commitHandoff]);
 
   // Strike detection refs for piano string physics
   const cardRef = useRef<HTMLDivElement>(null);
@@ -313,15 +460,21 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     subagent: "Subagent", compacting: "Compacting", clearing: "Clearing", idle: "Idle", done: "Done", ended: "Ended",
   };
 
-  // Dot color follows displayState so it transitions smoothly with the badge
-  const dotHex = (isDark ? STATE_DOT_HEX : STATE_DOT_HEX_LIGHT)[displayState] ?? (isDark ? "#a8a29e" : "#78716c");
+  // Two color streams during the handoff:
+  //   labelHex — semantic (StatusDot, visible labels). Follows labelState so
+  //              the icon and dot color swap mid-transition along with text.
+  //   fluxTintHex — physical (flux streamline tint). Follows displayState so
+  //                 the flux stays in the prior state's color (e.g. orange
+  //                 thinking) while the label already reads "Working".
+  const labelHex = (isDark ? STATE_DOT_HEX : STATE_DOT_HEX_LIGHT)[labelState] ?? (isDark ? "#a8a29e" : "#78716c");
+  const fluxTintHex = (isDark ? STATE_DOT_HEX : STATE_DOT_HEX_LIGHT)[displayState] ?? (isDark ? "#a8a29e" : "#78716c");
 
-  const badgeHex = (isDark ? STATE_BADGE_HEX : STATE_BADGE_HEX_LIGHT)[displayState] ?? { bg: isDark ? "rgba(168,162,158,0.15)" : "rgba(120,113,108,0.12)", text: isDark ? "#a8a29e" : "#78716c" };
-  const titleHex = (isDark ? STATE_HEX : STATE_HEX_LIGHT)[displayState] ?? (isDark ? "#a8a29e" : "#78716c");
+  const badgeHex = (isDark ? STATE_BADGE_HEX : STATE_BADGE_HEX_LIGHT)[labelState] ?? { bg: isDark ? "rgba(168,162,158,0.15)" : "rgba(120,113,108,0.12)", text: isDark ? "#a8a29e" : "#78716c" };
+  const titleHex = (isDark ? STATE_HEX : STATE_HEX_LIGHT)[labelState] ?? (isDark ? "#a8a29e" : "#78716c");
   const activeSubs = info.activeSubagents ?? 0;
-  const displayStateName = displayState === "subagent" && activeSubs > 0
+  const displayStateName = labelState === "subagent" && activeSubs > 0
     ? `Subagents(${activeSubs})`
-    : STATE_DISPLAY_NAME[displayState] ?? session.stateDisplayName;
+    : STATE_DISPLAY_NAME[labelState] ?? session.stateDisplayName;
 
   const stateTransition = "color 600ms ease, background-color 600ms ease";
 
@@ -387,16 +540,36 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     >
 
       {/* Signal String / Sand — renders behind all content */}
-      {signalString && (revived || info.state !== "ended") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={signalEffect} sandEnabled={sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} sessionId={info.id} contentRef={contentRef} keyReleaseSpeed={keyReleaseSpeed} />}
+      {signalString && (revived || info.state !== "ended") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={signalEffect} sandEnabled={sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} sessionId={info.id} contentRef={contentRef} keyReleaseSpeed={keyReleaseSpeed} onStringsConnected={handleStringsConnected} />}
 
-      {/* Drift effect — flowing ribbons behind done-state cards */}
-      {displayState === "done" && <DriftEffect color={signalColorDark} />}
+      {/* Flux streamline overlay on thinking cards, tinted by the state color.
+          Mounted by a linger timer: stays while thinking is active, lingers
+          briefly after exit so the shader's per-line retract can play out
+          before the component unmounts. `active={fluxActive}` drives the
+          enter/exit growth ramp; sibling cards get different stagger phases
+          via their session id seed. */}
+      {signalString && fluxEnabled && fluxMounted && (
+        <FluxEffect
+          color={fluxTintHex}
+          seed={info.id}
+          active={fluxActive}
+          alpha={fluxAlpha}
+          intensity={fluxIntensity}
+          density={fluxDensity}
+          speed={fluxSpeed}
+          lineLength={fluxLineLength}
+          turbulence={fluxTurbulence}
+          bass={signalBass}
+          mids={signalMids}
+          treble={signalTreble}
+        />
+      )}
 
       <div ref={contentRef} className={`${effectiveCompact ? "space-y-0" : "space-y-2.5"} ${effectiveSlim && !effectiveCompact ? "flex flex-col flex-1" : ""}`} style={{ position: "relative", zIndex: 10 }}>
           {/* Row 1: Status dot + state badge + title + prompt pill + duration
               Shrink priority: prompt pill first (shrinks → hides), timer second, title last */}
           <div className="relative flex items-center gap-2 min-w-0 overflow-hidden">
-            <StatusDot state={displayState} color={dotHex} />
+            <StatusDot state={labelState} color={labelHex} />
             <span className="text-xs px-2 py-0.5 rounded-full text-center shrink-0" style={{ backgroundColor: badgeHex.bg, color: badgeHex.text, transition: stateTransition, minWidth: "8.5em" }}>
               {displayStateName}
             </span>
@@ -601,72 +774,117 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           {/* Model name + context bar — grouped tightly */}
           {!effectiveCompact && (
             <div className="flex flex-col gap-0.5">
-          <span className={`text-[0.625rem] font-mono self-end ${isGlass ? "text-white/55" : "text-white/30"}`} style={{ visibility: session.modelDisplayName !== "\u2014" ? "visible" : "hidden" }}>
+          <span className={`text-[0.625rem] font-mono self-end flex items-center gap-1.5 ${isGlass ? "text-white/55" : "text-white/30"}`} style={{ visibility: session.modelDisplayName !== "\u2014" || session.effortLevel ? "visible" : "hidden" }}>
               {session.modelDisplayName !== "\u2014" ? session.modelDisplayName : "\u00A0"}
               {session.provider && <span className={isGlass ? "text-white/40" : "text-white/20"}> ({session.provider})</span>}
+              {session.effortLevel && (
+                <span
+                  className={`px-1.5 py-[0.0625rem] rounded-full text-[0.5625rem] font-medium leading-tight ${effortPillClass(session.effortLevel)}`}
+                  title={`Effort level: ${session.effortLevel}`}
+                >
+                  {session.effortLevel}
+                </span>
+              )}
             </span>
 
           {/* Row 4: Context usage — right-aligned to match timer position */}
-          {contextThreshold !== "never" && contextMeetsThreshold && (
-            <div className="relative flex items-center gap-1.5">
-              <span className={`text-[0.625rem] shrink-0 ${isGlass ? "text-white/65" : "text-white/40"}`}>Context</span>
-              {metrics.lastInputTokens === 0 ? (
-                /* Loading state — no token data yet */
-                <>
-                  <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden" />
-                  <svg className="w-3 h-3 animate-spin shrink-0" viewBox="0 0 16 16" fill="none">
-                    <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.2" strokeWidth="2" />
-                    <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeOpacity="0.5" strokeWidth="2" strokeLinecap="round" />
-                  </svg>
-                </>
-              ) : (
-                <>
-                  <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden">
-                    <div
-                      className="absolute left-0 top-0 bottom-0 rounded-full transition-all duration-500"
-                      style={{
-                        width: `${Math.min(session.contextUsagePercent * 100, 100)}%`,
-                        background: (() => {
-                          const tok = metrics.lastInputTokens;
-                          if (tok >= 400000) return "#ef4444";
-                          if (tok >= 200000) {
-                            const t = (tok - 200000) / 200000;
-                            const r = Math.round(245 + (239 - 245) * t);
-                            const g = Math.round(158 - 158 * t + 68 * t);
-                            const b = Math.round(11 + (68 - 11) * t);
-                            return `rgb(${r},${g},${b})`;
-                          }
-                          const t = tok / 200000;
-                          const r = Math.round(34 + (245 - 34) * t);
-                          const g = Math.round(197 + (158 - 197) * t);
-                          const b = Math.round(94 + (11 - 94) * t);
-                          return `rgb(${r},${g},${b})`;
-                        })(),
-                        opacity: 0.25,
-                      }}
-                    />
+          {contextThreshold !== "never" && contextMeetsThreshold && (() => {
+            const barColor = (() => {
+              const tok = metrics.lastInputTokens;
+              if (tok >= 400000) return "#ef4444";
+              if (tok >= 200000) {
+                const t = (tok - 200000) / 200000;
+                const r = Math.round(245 + (239 - 245) * t);
+                const g = Math.round(158 - 158 * t + 68 * t);
+                const b = Math.round(11 + (68 - 11) * t);
+                return `rgb(${r},${g},${b})`;
+              }
+              const t = tok / 200000;
+              const r = Math.round(34 + (245 - 34) * t);
+              const g = Math.round(197 + (158 - 197) * t);
+              const b = Math.round(94 + (11 - 94) * t);
+              return `rgb(${r},${g},${b})`;
+            })();
+            const pct = Math.round(session.contextUsagePercent * 100);
+            const tokStr = `${formatTokens(metrics.lastInputTokens)} / ${formatTokens(session.contextLimit)}`;
+
+            if (contextDisplay === "compact") {
+              return (
+                <div className="flex flex-col items-end gap-0.5 self-end">
+                  <div className="flex items-center gap-1.5" style={{ width: "140px" }}>
+                    {metrics.lastInputTokens === 0 ? (
+                      <>
+                        <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden" />
+                        <svg className="w-3 h-3 animate-spin shrink-0" viewBox="0 0 16 16" fill="none">
+                          <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.2" strokeWidth="2" />
+                          <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeOpacity="0.5" strokeWidth="2" strokeLinecap="round" />
+                        </svg>
+                      </>
+                    ) : (
+                      <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden">
+                        <div
+                          className="absolute left-0 top-0 bottom-0 rounded-full transition-all duration-500"
+                          style={{
+                            width: `${Math.min(session.contextUsagePercent * 100, 100)}%`,
+                            background: barColor,
+                            opacity: 0.25,
+                          }}
+                        />
+                      </div>
+                    )}
                   </div>
-                  <span className={`text-[0.625rem] mono-nums shrink-0 ${isGlass ? "text-white/75" : "text-white/50"}`}>
-                    {(() => {
-                      const pct = Math.round(session.contextUsagePercent * 100);
-                      const tok = `${formatTokens(metrics.lastInputTokens)} / ${formatTokens(session.contextLimit)}`;
-                      switch (contextDisplay) {
-                        case "tokens": return tok;
-                        case "remaining": return `${100 - pct}% free`;
-                        case "both": return `${pct}% (${tok})`;
-                        default: return `${pct}%`;
-                      }
-                    })()}
-                  </span>
-                  {contextDisplay !== "tokens" && contextDisplay !== "both" && (
-                    <span className={`text-[0.625rem] mono-nums shrink-0 ${isGlass ? "text-white/55" : "text-white/30"}`}>
-                      {formatTokens(metrics.lastInputTokens)} / {formatTokens(session.contextLimit)}
+                  {metrics.lastInputTokens > 0 && (
+                    <span className={`text-[0.625rem] mono-nums ${isGlass ? "text-white/55" : "text-white/30"}`}>
+                      {tokStr}
                     </span>
                   )}
-                </>
-              )}
-            </div>
-          )}
+                </div>
+              );
+            }
+
+            return (
+              <div className="relative flex items-center gap-1.5">
+                <span className={`text-[0.625rem] shrink-0 ${isGlass ? "text-white/65" : "text-white/40"}`}>Context</span>
+                {metrics.lastInputTokens === 0 ? (
+                  <>
+                    <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden" />
+                    <svg className="w-3 h-3 animate-spin shrink-0" viewBox="0 0 16 16" fill="none">
+                      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.2" strokeWidth="2" />
+                      <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeOpacity="0.5" strokeWidth="2" strokeLinecap="round" />
+                    </svg>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden">
+                      <div
+                        className="absolute left-0 top-0 bottom-0 rounded-full transition-all duration-500"
+                        style={{
+                          width: `${Math.min(session.contextUsagePercent * 100, 100)}%`,
+                          background: barColor,
+                          opacity: 0.25,
+                        }}
+                      />
+                    </div>
+                    <span className={`text-[0.625rem] mono-nums shrink-0 ${isGlass ? "text-white/75" : "text-white/50"}`}>
+                      {(() => {
+                        switch (contextDisplay) {
+                          case "tokens": return tokStr;
+                          case "remaining": return `${100 - pct}% free`;
+                          case "both": return `${pct}% (${tokStr})`;
+                          default: return `${pct}%`;
+                        }
+                      })()}
+                    </span>
+                    {contextDisplay !== "tokens" && contextDisplay !== "both" && (
+                      <span className={`text-[0.625rem] mono-nums shrink-0 ${isGlass ? "text-white/55" : "text-white/30"}`}>
+                        {tokStr}
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })()}
             </div>
           )}
 
