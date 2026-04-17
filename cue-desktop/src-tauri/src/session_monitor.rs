@@ -40,12 +40,23 @@ pub struct SessionMonitorState {
     rate_limits: Mutex<Option<RateLimitInfo>>,
     pub system_memory: Mutex<SystemMemory>,
     pub claude_version: Mutex<Option<String>>,
+    /// Global default effort level from `~/.claude/settings.json`.
+    pub claude_default_effort: Mutex<Option<String>>,
+    /// `~/.claude/settings.json` mtime (unix secs). Used to resolve which is
+    /// fresher: a session's last `/effort` command or the global default.
+    pub claude_default_effort_ts: Mutex<Option<f64>>,
     git_status_cache: Mutex<HashMap<String, (GitStatus, SystemTime)>>,
     config_counts_cache: Mutex<HashMap<String, (ConfigCounts, SystemTime)>>,
     /// Tracks previous output_tokens per session for speed calculation
     output_speed_cache: Mutex<HashMap<String, (i64, f64)>>, // session_id → (prev_output_tokens, prev_timestamp)
     /// Cached sysinfo::System instance to avoid re-allocation every poll
     sysinfo_system: Mutex<sysinfo::System>,
+    /// Per-session cached `(pid, process_start_time_secs)` used to detect
+    /// when the owning Claude Code process has died. Captured from sysinfo on
+    /// first sight of a session; on later polls, a missing or start-time-
+    /// mismatched process demotes the session out of any active state.
+    /// `start_time` guards against PID reuse on long-lived machines.
+    process_identity: Mutex<HashMap<String, (u32, u64)>>,
     /// Per-session timestamp (unix secs) when the session entered an active state
     /// (working/thinking/waiting/error/subagent). Cleared on idle/done/compacting.
     /// Used to compute the "active duration" timer shown on session cards.
@@ -69,10 +80,13 @@ impl Default for SessionMonitorState {
             rate_limits: Mutex::new(None),
             system_memory: Mutex::new(SystemMemory::default()),
             claude_version: Mutex::new(None),
+            claude_default_effort: Mutex::new(None),
+            claude_default_effort_ts: Mutex::new(None),
             git_status_cache: Mutex::new(HashMap::new()),
             config_counts_cache: Mutex::new(HashMap::new()),
             output_speed_cache: Mutex::new(HashMap::new()),
             sysinfo_system: Mutex::new(sysinfo::System::new()),
+            process_identity: Mutex::new(HashMap::new()),
             active_since: Mutex::new(HashMap::new()),
             launched_at,
         }
@@ -189,6 +203,59 @@ impl SessionMonitorState {
                 .collect()
         };
 
+        // Liveness check: demote sessions whose owning Claude Code process has
+        // died. This catches hooks that never fired a resolving event — e.g.
+        // a crash during a tool call or an interrupted /compact leaves the
+        // session stuck in "working" forever. The hook writes `pid` = parent
+        // pid on every event; we verify the process still exists, comparing
+        // start_time to the cached value so a recycled PID doesn't look alive.
+        let active: Vec<_> = {
+            let active_ids: std::collections::HashSet<String> =
+                active.iter().map(|s| s.id.clone()).collect();
+            let pids_to_check: Vec<sysinfo::Pid> = active
+                .iter()
+                .filter(|s| is_liveness_sensitive(&s.state))
+                .filter_map(|s| s.pid.map(sysinfo::Pid::from_u32))
+                .collect();
+            let mut sys = self.sysinfo_system.lock().unwrap();
+            if !pids_to_check.is_empty() {
+                sys.refresh_processes(
+                    sysinfo::ProcessesToUpdate::Some(&pids_to_check),
+                    false,
+                );
+            }
+            let mut identity = self.process_identity.lock().unwrap();
+            // Drop cache entries for sessions no longer present.
+            identity.retain(|id, _| active_ids.contains(id));
+
+            active
+                .into_iter()
+                .map(|mut s| {
+                    if !is_liveness_sensitive(&s.state) {
+                        return s;
+                    }
+                    let Some(pid) = s.pid else {
+                        return s; // no pid recorded (old entries) — can't check
+                    };
+                    let live_start = sys
+                        .process(sysinfo::Pid::from_u32(pid))
+                        .map(|p| p.start_time());
+                    let cached = identity.get(&s.id).copied();
+                    match resolve_liveness(pid, live_start, cached) {
+                        LivenessOutcome::Alive { cache } => {
+                            identity.insert(s.id.clone(), cache);
+                        }
+                        LivenessOutcome::Dead => {
+                            identity.remove(&s.id);
+                            s.state = "idle".to_string();
+                            s.active_subagents = 0;
+                        }
+                    }
+                    s
+                })
+                .collect()
+        };
+
         // Update active-since timestamps: track when each session entered an
         // active state (working/thinking/waiting/error/subagent). Reset on
         // idle/done/compacting/clearing. Used for the "active duration" timer.
@@ -216,6 +283,8 @@ impl SessionMonitorState {
             let rate_limits = self.rate_limits.lock().unwrap().clone();
             let system_memory = self.system_memory.lock().unwrap().clone();
             let claude_version = self.claude_version.lock().unwrap().clone();
+            let claude_default_effort = self.claude_default_effort.lock().unwrap().clone();
+            let claude_default_effort_ts = *self.claude_default_effort_ts.lock().unwrap();
             let git_cache = self.git_status_cache.lock().unwrap();
             let config_cache = self.config_counts_cache.lock().unwrap();
             let speed_cache = self.output_speed_cache.lock().unwrap();
@@ -235,6 +304,8 @@ impl SessionMonitorState {
                         rate_limits: rate_limits.clone(),
                         system_memory: system_memory.clone(),
                         claude_version: claude_version.clone(),
+                        claude_default_effort: claude_default_effort.clone(),
+                        claude_default_effort_ts,
                         prev_output_tokens: prev_output,
                         prev_timestamp: prev_ts,
                         active_since: active_since_ts,
@@ -352,6 +423,13 @@ impl SessionMonitorState {
         {
             let mut sys = self.sysinfo_system.lock().unwrap();
             *self.system_memory.lock().unwrap() = system_info::get_system_memory_with(&mut sys);
+        }
+
+        // Global default effort from ~/.claude/settings.json (cheap read, no subprocess)
+        {
+            let (level, ts) = system_info::get_claude_default_effort();
+            *self.claude_default_effort.lock().unwrap() = level;
+            *self.claude_default_effort_ts.lock().unwrap() = ts;
         }
 
         // Git status and config counts per workspace (with staleness caching)
@@ -481,6 +559,59 @@ pub fn encode_workspace_path(workspace: &str) -> String {
     workspace.replace('/', "-")
 }
 
+/// States that indicate the owning Claude Code process should still be alive.
+/// Terminal states (idle, done, error, ended) and states the user is explicitly
+/// interacting with (waiting) are excluded — the former don't claim activity,
+/// the latter stay put until the user responds.
+fn is_liveness_sensitive(state: &str) -> bool {
+    matches!(
+        state,
+        "working" | "thinking" | "subagent" | "compacting" | "clearing"
+    )
+}
+
+/// Result of comparing a session's recorded pid against live process state.
+enum LivenessOutcome {
+    /// Process is alive and matches the expected identity (or we're capturing
+    /// it for the first time). The attached `(pid, start_time)` is what the
+    /// caller should cache.
+    Alive { cache: (u32, u64) },
+    /// Process is gone, or the PID is now held by a different process. Caller
+    /// should demote the session out of its active state.
+    Dead,
+}
+
+/// Decide whether a session with the given recorded PID is still owned by a
+/// live Claude Code process. Pure, so it's unit-testable without spawning
+/// real processes. `live_start` is the `start_time` reported by sysinfo for
+/// the recorded pid (or None if no process currently holds that pid).
+/// `cached` is the `(pid, start_time)` we recorded on a previous poll, if any.
+fn resolve_liveness(
+    pid: u32,
+    live_start: Option<u64>,
+    cached: Option<(u32, u64)>,
+) -> LivenessOutcome {
+    match (live_start, cached) {
+        // First sight — capture identity.
+        (Some(start), None) => LivenessOutcome::Alive {
+            cache: (pid, start),
+        },
+        // Same PID, same start time — definitely the same process.
+        (Some(start), Some((cached_pid, cached_start)))
+            if cached_pid == pid && cached_start == start =>
+        {
+            LivenessOutcome::Alive {
+                cache: (pid, start),
+            }
+        }
+        // PID held by some process, but start_time or pid diverges from cache:
+        // the original process died and its PID got reused. Treat as dead.
+        (Some(_), Some(_)) => LivenessOutcome::Dead,
+        // No process at that PID at all — dead.
+        (None, _) => LivenessOutcome::Dead,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -516,6 +647,62 @@ mod tests {
     #[test]
     fn test_encode_workspace_path_root() {
         assert_eq!(encode_workspace_path("/"), "-");
+    }
+
+    #[test]
+    fn test_liveness_first_sight_captures_identity() {
+        match resolve_liveness(1234, Some(5000), None) {
+            LivenessOutcome::Alive { cache } => assert_eq!(cache, (1234, 5000)),
+            LivenessOutcome::Dead => panic!("expected Alive on first sight"),
+        }
+    }
+
+    #[test]
+    fn test_liveness_matching_cache_stays_alive() {
+        match resolve_liveness(1234, Some(5000), Some((1234, 5000))) {
+            LivenessOutcome::Alive { cache } => assert_eq!(cache, (1234, 5000)),
+            LivenessOutcome::Dead => panic!("expected Alive when cache matches"),
+        }
+    }
+
+    #[test]
+    fn test_liveness_process_gone_is_dead() {
+        assert!(matches!(
+            resolve_liveness(1234, None, Some((1234, 5000))),
+            LivenessOutcome::Dead
+        ));
+    }
+
+    #[test]
+    fn test_liveness_never_alive_is_dead() {
+        // Hook wrote a PID but there's no process at that pid and we never
+        // cached one. Means it died before we ever polled — still dead.
+        assert!(matches!(
+            resolve_liveness(1234, None, None),
+            LivenessOutcome::Dead
+        ));
+    }
+
+    #[test]
+    fn test_liveness_pid_reuse_different_start_time_is_dead() {
+        // Same pid, but a different process now holds it (different start time).
+        assert!(matches!(
+            resolve_liveness(1234, Some(9999), Some((1234, 5000))),
+            LivenessOutcome::Dead
+        ));
+    }
+
+    #[test]
+    fn test_liveness_sensitive_states() {
+        assert!(is_liveness_sensitive("working"));
+        assert!(is_liveness_sensitive("thinking"));
+        assert!(is_liveness_sensitive("subagent"));
+        assert!(is_liveness_sensitive("compacting"));
+        assert!(is_liveness_sensitive("clearing"));
+        assert!(!is_liveness_sensitive("idle"));
+        assert!(!is_liveness_sensitive("done"));
+        assert!(!is_liveness_sensitive("waiting"));
+        assert!(!is_liveness_sensitive("error"));
     }
 
     #[test]
@@ -584,6 +771,7 @@ mod tests {
             subprocess: None,
             team_name: None,
             agent_name: None,
+            pid: None,
         }
     }
 

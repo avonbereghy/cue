@@ -6,18 +6,50 @@ use crate::models::Settings;
 use crate::paths;
 use crate::security;
 
-/// Load settings from disk, returning defaults if not found.
+/// Current settings schema version. Bump when defaults change in a way that
+/// should override existing user customizations (e.g. sand particle defaults).
+/// Migrations in `apply_migrations` run for each version below this.
+pub const CURRENT_SETTINGS_VERSION: u32 = 2;
+
+/// Load settings from disk, returning defaults if not found. Runs one-shot
+/// migrations when the stored `settings_version` lags behind CURRENT.
 pub fn load_settings() -> Settings {
     let path = paths::settings_path();
 
     match std::fs::read_to_string(&path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+        Ok(content) => {
+            let mut loaded: Settings = serde_json::from_str(&content).unwrap_or_default();
+            if loaded.settings_version < CURRENT_SETTINGS_VERSION {
+                apply_migrations(&mut loaded);
+                loaded.settings_version = CURRENT_SETTINGS_VERSION;
+                let _ = save_settings(&loaded);
+            }
+            loaded
+        }
         Err(_) => {
             let defaults = Settings::default();
             // Write defaults on first load
             let _ = save_settings(&defaults);
             defaults
         }
+    }
+}
+
+/// Apply migrations for each version upgrade.
+fn apply_migrations(s: &mut Settings) {
+    // v0/v1 → v2: sand particle defaults changed. Wipe saved per-theme
+    // customizations so every theme picks up the new SAND_OFF baseline and
+    // reset the top-level sand fields to the new defaults.
+    if s.settings_version < 2 {
+        s.theme_customizations.clear();
+        let d = Settings::default();
+        s.sand_intensity = d.sand_intensity;
+        s.sand_direction = d.sand_direction;
+        s.sand_density = d.sand_density;
+        s.sand_speed = d.sand_speed;
+        s.sand_grain_size = d.sand_grain_size;
+        s.sand_turbulence = d.sand_turbulence;
+        s.sand_alpha = d.sand_alpha;
     }
 }
 
@@ -80,6 +112,50 @@ mod tests {
         assert!(loaded.permissions_enabled);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_migration_v1_to_v2_clears_theme_customizations_and_resets_sand() {
+        use crate::models::ThemeCustomization;
+        let mut s = Settings {
+            settings_version: 1,
+            sand_intensity: 0.8,
+            sand_direction: -40.0,
+            sand_density: 2.5,
+            sand_speed: 0.7,
+            sand_grain_size: 0.5,
+            sand_turbulence: 0.2,
+            sand_alpha: 0.75,
+            ..Default::default()
+        };
+        s.theme_customizations.insert(
+            "neon".to_string(),
+            ThemeCustomization { sand_intensity: 0.8, ..Default::default() },
+        );
+        apply_migrations(&mut s);
+        assert!(s.theme_customizations.is_empty());
+        let d = Settings::default();
+        assert!((s.sand_intensity - d.sand_intensity).abs() < f64::EPSILON);
+        assert!((s.sand_direction - d.sand_direction).abs() < f64::EPSILON);
+        assert!((s.sand_turbulence - d.sand_turbulence).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_migration_skipped_when_version_current() {
+        use crate::models::ThemeCustomization;
+        let mut s = Settings {
+            settings_version: CURRENT_SETTINGS_VERSION,
+            sand_intensity: 9.99, // deliberately non-default
+            ..Default::default()
+        };
+        s.theme_customizations.insert(
+            "neon".to_string(),
+            ThemeCustomization::default(),
+        );
+        apply_migrations(&mut s);
+        // Nothing should have changed: both customizations and sand value retained.
+        assert!(!s.theme_customizations.is_empty());
+        assert!((s.sand_intensity - 9.99).abs() < f64::EPSILON);
     }
 
     #[test]

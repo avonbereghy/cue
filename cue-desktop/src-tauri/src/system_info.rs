@@ -48,6 +48,25 @@ pub fn get_claude_version() -> Option<String> {
         })
 }
 
+/// Read the global default effort level from `~/.claude/settings.json` along
+/// with the file's modification timestamp (unix secs). The mtime is used to
+/// decide whether a per-session `/effort` entry or the global default is fresher.
+pub fn get_claude_default_effort() -> (Option<String>, Option<f64>) {
+    let Some(home) = dirs::home_dir() else { return (None, None) };
+    let path = home.join(".claude/settings.json");
+    let mtime = std::fs::metadata(&path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64());
+    let level = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+        .and_then(|v| v.get("effortLevel")?.as_str().map(|s| s.trim().to_lowercase()))
+        .filter(|s| !s.is_empty());
+    (level, mtime)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

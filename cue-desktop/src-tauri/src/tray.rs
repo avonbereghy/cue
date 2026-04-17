@@ -338,6 +338,7 @@ mod tests {
             subprocess: None,
             team_name: None,
             agent_name: None,
+            pid: None,
         };
         EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default())
     }

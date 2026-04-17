@@ -17,6 +17,8 @@ export interface SessionInfo {
   teamName?: string;
   /** Agent name within the team (e.g. "code-reviewer"). */
   agentName?: string;
+  /** PID of the owning Claude Code process — used by backend liveness check. */
+  pid?: number;
 }
 
 export interface SubagentMetrics {
@@ -139,6 +141,9 @@ export interface EnrichedSession {
   systemMemory: SystemMemory;
   /** Claude Code version */
   claudeVersion?: string;
+  /** Current effort level ("low" | "medium" | "high" | "xhigh" | "max" | "auto" | future values).
+   *  Passed through verbatim from Claude Code so new level names surface without a Cue update. */
+  effortLevel?: string;
 }
 
 export interface Settings {
@@ -173,6 +178,14 @@ export interface Settings {
   sandGrainSize: number;
   sandTurbulence: number;
   sandAlpha: number;
+  /** Flux streamline effect (thinking state) */
+  fluxEnabled: boolean;
+  fluxAlpha: number;
+  fluxIntensity: number;
+  fluxDensity: number;
+  fluxSpeed: number;
+  fluxLineLength: number;
+  fluxTurbulence: number;
   cordRetractDelay: number;
   cordDeployForce: number;
   cordRetractForce: number;
@@ -217,6 +230,13 @@ export interface ThemeCustomization {
   sandGrainSize: number;
   sandTurbulence: number;
   sandAlpha: number;
+  fluxEnabled?: boolean;
+  fluxAlpha?: number;
+  fluxIntensity?: number;
+  fluxDensity?: number;
+  fluxSpeed?: number;
+  fluxLineLength?: number;
+  fluxTurbulence?: number;
 }
 
 export interface SignalPreset {
@@ -292,8 +312,10 @@ const DARK_SURFACES = {
   surfaceBorder: "rgba(255,255,255,0.10)",
 };
 
-// Sand defaults per-theme: effect, enabled, intensity, direction, density, speed, grainSize, turbulence, alpha
-const SAND_OFF = { signalEffect: "string" as const, sandEnabled: false, sandIntensity: 1.51, sandDirection: 0, sandDensity: 6.07, sandSpeed: 4.0, sandGrainSize: 0.4, sandTurbulence: 0.4, sandAlpha: 0.75 };
+// Sand defaults per-theme: effect, enabled, intensity, direction, density, speed, grainSize, turbulence, alpha.
+// Direction -60° → wind points down-left at a steeper angle; moderate
+// turbulence gives the grain paths a swirling feel while still biased downward.
+const SAND_OFF = { signalEffect: "string" as const, sandEnabled: false, sandIntensity: 1.51, sandDirection: -60, sandDensity: 2.0, sandSpeed: 0.26, sandGrainSize: 0.4, sandTurbulence: 0.9, sandAlpha: 0.7 };
 const SAND_ON  = (overrides: Partial<typeof SAND_OFF> = {}) => ({ ...SAND_OFF, signalEffect: "string" as const, sandEnabled: true, ...overrides });
 
 export const SIGNAL_THEMES: SignalTheme[] = [
@@ -309,7 +331,7 @@ export const SIGNAL_THEMES: SignalTheme[] = [
   // --- Vivid ---
   { id: "neon",     label: "Neon",     accent: "#00e5ff",
     colorDark: "#00e5ff", colorLight: "#0097a7", alpha: 0.75, amplitude: 0.4, echo: 1.8,
-    ...SAND_ON({ sandIntensity: 1.5, sandSpeed: 1.5, sandDensity: 2.0, sandAlpha: 0.9 }),
+    ...SAND_ON(),
     appBg: "#060d10", appText: "#e0f7fa",
     cardFloatBg: "rgba(0,229,255,0.06)", cardFloatBorder: "rgba(0,229,255,0.15)",
     cardFloatShadow: "0 2px 8px rgba(0,0,0,0.4), 0 8px 24px rgba(0,229,255,0.08), 0 0 0 0.5px rgba(0,229,255,0.12)",
@@ -319,7 +341,7 @@ export const SIGNAL_THEMES: SignalTheme[] = [
     accentColor: "#00e5ff", accentBg: "rgba(0,229,255,0.15)" },
   { id: "ember",    label: "Ember",    accent: "#ffab00",
     colorDark: "#ffab00", colorLight: "#e65100", alpha: 0.75, amplitude: 0.3, echo: 1.2,
-    ...SAND_ON({ sandIntensity: 1.2, sandSpeed: 0.7, sandDensity: 3.0, sandDirection: 30, sandAlpha: 0.8 }),
+    ...SAND_ON(),
     appBg: "#100a04", appText: "#fff3e0",
     cardFloatBg: "rgba(255,171,0,0.05)", cardFloatBorder: "rgba(255,171,0,0.12)",
     cardFloatShadow: "0 2px 6px rgba(0,0,0,0.4), 0 6px 20px rgba(255,171,0,0.06), 0 0 0 0.5px rgba(255,171,0,0.10)",
@@ -329,7 +351,7 @@ export const SIGNAL_THEMES: SignalTheme[] = [
     accentColor: "#ffab00", accentBg: "rgba(255,171,0,0.15)" },
   { id: "pulse",    label: "Pulse",    accent: "#ff4081",
     colorDark: "#ff4081", colorLight: "#c2185b", alpha: 0.75, amplitude: 0.6, echo: 0.6,
-    ...SAND_ON({ sandIntensity: 2.0, sandSpeed: 2.5, sandDensity: 1.5, sandTurbulence: 1.2, sandAlpha: 1.0 }),
+    ...SAND_ON(),
     appBg: "#0e060a", appText: "#fce4ec",
     cardFloatBg: "rgba(255,64,129,0.05)", cardFloatBorder: "rgba(255,64,129,0.14)",
     cardFloatShadow: "0 2px 6px rgba(0,0,0,0.4), 0 6px 20px rgba(255,64,129,0.06), 0 0 0 0.5px rgba(255,64,129,0.10)",
@@ -339,7 +361,7 @@ export const SIGNAL_THEMES: SignalTheme[] = [
     accentColor: "#ff4081", accentBg: "rgba(255,64,129,0.15)" },
   { id: "aurora",   label: "Aurora",   accent: "#00e676",
     colorDark: "#00e676", colorLight: "#2e7d32", alpha: 0.75, amplitude: 0.35, echo: 2.0,
-    ...SAND_ON({ sandIntensity: 0.8, sandSpeed: 0.8, sandDensity: 1.2, sandTurbulence: 0.8, sandAlpha: 0.7 }),
+    ...SAND_ON(),
     appBg: "#040e08", appText: "#e8f5e9",
     cardFloatBg: "rgba(0,230,118,0.05)", cardFloatBorder: "rgba(0,230,118,0.12)",
     cardFloatShadow: "0 2px 6px rgba(0,0,0,0.4), 0 6px 20px rgba(0,230,118,0.06), 0 0 0 0.5px rgba(0,230,118,0.10)",
@@ -350,7 +372,7 @@ export const SIGNAL_THEMES: SignalTheme[] = [
   // --- Mood ---
   { id: "ghost",    label: "Ghost",    accent: "#b388ff",
     colorDark: "#b388ff", colorLight: "#7b1fa2", alpha: 0.65, amplitude: 0.5, echo: 2.5,
-    ...SAND_ON({ sandIntensity: 0.6, sandSpeed: 0.5, sandDensity: 0.5, sandTurbulence: 1.5, sandGrainSize: 0.7, sandAlpha: 0.4 }),
+    ...SAND_ON(),
     appBg: "#0a060e", appText: "#ede7f6",
     cardFloatBg: "rgba(179,136,255,0.04)", cardFloatBorder: "rgba(179,136,255,0.10)",
     cardFloatShadow: "0 2px 6px rgba(0,0,0,0.4), 0 6px 20px rgba(179,136,255,0.05), 0 0 0 0.5px rgba(179,136,255,0.08)",
@@ -360,7 +382,7 @@ export const SIGNAL_THEMES: SignalTheme[] = [
     accentColor: "#b388ff", accentBg: "rgba(179,136,255,0.15)" },
   { id: "midnight", label: "Midnight", accent: "#448aff",
     colorDark: "#448aff", colorLight: "#1a237e", alpha: 0.75, amplitude: 0.3, echo: 1.8,
-    ...SAND_ON({ sandIntensity: 0.8, sandSpeed: 0.6, sandDensity: 0.8, sandDirection: -15, sandAlpha: 0.6 }),
+    ...SAND_ON(),
     appBg: "#060810", appText: "#e8eaf6",
     cardFloatBg: "rgba(68,138,255,0.05)", cardFloatBorder: "rgba(68,138,255,0.12)",
     cardFloatShadow: "0 2px 6px rgba(0,0,0,0.4), 0 6px 20px rgba(68,138,255,0.06), 0 0 0 0.5px rgba(68,138,255,0.10)",
@@ -370,7 +392,7 @@ export const SIGNAL_THEMES: SignalTheme[] = [
     accentColor: "#448aff", accentBg: "rgba(68,138,255,0.15)" },
   { id: "crimson",  label: "Crimson",  accent: "#ff1744",
     colorDark: "#ff1744", colorLight: "#b71c1c", alpha: 0.75, amplitude: 0.45, echo: 0.8,
-    ...SAND_ON({ sandIntensity: 1.8, sandSpeed: 1.8, sandDensity: 2.5, sandDirection: 10, sandAlpha: 0.9 }),
+    ...SAND_ON(),
     appBg: "#0e0406", appText: "#ffebee",
     cardFloatBg: "rgba(255,23,68,0.05)", cardFloatBorder: "rgba(255,23,68,0.14)",
     cardFloatShadow: "0 2px 6px rgba(0,0,0,0.4), 0 6px 20px rgba(255,23,68,0.06), 0 0 0 0.5px rgba(255,23,68,0.10)",
@@ -380,7 +402,7 @@ export const SIGNAL_THEMES: SignalTheme[] = [
     accentColor: "#ff1744", accentBg: "rgba(255,23,68,0.15)" },
   { id: "solar",    label: "Solar",    accent: "#ffd740",
     colorDark: "#ffd740", colorLight: "#f57f17", alpha: 0.75, amplitude: 0.35, echo: 1.4,
-    ...SAND_ON({ sandIntensity: 1.2, sandSpeed: 1.2, sandDensity: 1.8, sandDirection: 20, sandAlpha: 0.85 }),
+    ...SAND_ON(),
     appBg: "#0e0c04", appText: "#fffde7",
     cardFloatBg: "rgba(255,215,64,0.04)", cardFloatBorder: "rgba(255,215,64,0.12)",
     cardFloatShadow: "0 2px 6px rgba(0,0,0,0.4), 0 6px 20px rgba(255,215,64,0.06), 0 0 0 0.5px rgba(255,215,64,0.10)",
@@ -390,7 +412,7 @@ export const SIGNAL_THEMES: SignalTheme[] = [
     accentColor: "#ffd740", accentBg: "rgba(255,215,64,0.15)" },
   { id: "arctic",   label: "Arctic",   accent: "#b3e5fc",
     colorDark: "#b3e5fc", colorLight: "#01579b", alpha: 0.65, amplitude: 0.2, echo: 1.8,
-    ...SAND_ON({ sandIntensity: 0.5, sandSpeed: 0.4, sandDensity: 0.6, sandTurbulence: 1.0, sandGrainSize: 0.6, sandAlpha: 0.5 }),
+    ...SAND_ON(),
     appBg: "#060a0e", appText: "#e1f5fe",
     cardFloatBg: "rgba(179,229,252,0.04)", cardFloatBorder: "rgba(179,229,252,0.10)",
     cardFloatShadow: "0 2px 6px rgba(0,0,0,0.4), 0 6px 20px rgba(179,229,252,0.05), 0 0 0 0.5px rgba(179,229,252,0.08)",

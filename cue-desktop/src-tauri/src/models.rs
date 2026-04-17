@@ -42,6 +42,11 @@ pub struct SessionInfo {
     /// Agent name within the team (e.g. "code-reviewer", "test-runner").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
+    /// PID of the Claude Code process that owns this session (parent pid of
+    /// the hook at write time). Used by the backend to detect stale sessions
+    /// whose owning process has died.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +114,12 @@ pub struct SupplementalData {
     pub rate_limits: Option<RateLimitInfo>,
     pub system_memory: SystemMemory,
     pub claude_version: Option<String>,
+    /// Global default effort level from `~/.claude/settings.json` (lowercased).
+    /// Used as a fallback when the session's JSONL has no `/effort` command.
+    pub claude_default_effort: Option<String>,
+    /// Unix timestamp when `~/.claude/settings.json` was last modified.
+    /// Compared against per-session `/effort` timestamps so the fresher source wins.
+    pub claude_default_effort_ts: Option<f64>,
     /// Previous output_tokens for this session (for speed calculation)
     pub prev_output_tokens: i64,
     /// Timestamp of previous measurement
@@ -194,6 +205,15 @@ pub struct SessionMetrics {
     /// Agent name from JSONL (team agent sessions)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
+    /// Latest in-session `/effort` command argument (e.g. "high", "auto").
+    /// Stored as-is so new level names added by Anthropic propagate without a code change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort_level: Option<String>,
+    /// Timestamp of the latest `/effort` command. Compared against
+    /// settings.json mtime so the fresher source wins (handles the case where
+    /// another session's `/effort high` updates the global default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort_level_ts: Option<f64>,
 }
 
 impl SessionMetrics {
@@ -277,6 +297,10 @@ pub struct EnrichedSession {
     /// Claude Code version string
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claude_version: Option<String>,
+    /// Effective effort level for this session (session `/effort` or global default).
+    /// Passed through as-is; frontend title-cases for display.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort_level: Option<String>,
 }
 
 impl EnrichedSession {
@@ -352,14 +376,7 @@ impl EnrichedSession {
             metrics.model.clone()
         };
 
-        let context_limit = {
-            let m = effective_model.to_lowercase();
-            if m.contains("4-6") || m.contains("4.6") || m.contains("4-5") || m.contains("4.5") || m == "<synthetic>" {
-                1_000_000
-            } else {
-                200_000
-            }
-        };
+        let context_limit = crate::model_context::context_limit_for(&effective_model);
 
         let context_usage_percent = if effective_input_tokens > 0 {
             (effective_input_tokens as f64 / context_limit as f64).min(1.0)
@@ -402,6 +419,32 @@ impl EnrichedSession {
             .find(|t| t.status == "in_progress" || t.status == "running")
             .map(|t| truncate_string(&t.content, 60));
 
+        // Effective effort: fresher of (last session `/effort` command, global
+        // ~/.claude/settings.json mtime) wins. Falls back to "auto" — Claude Code's
+        // implicit default when no effortLevel is set anywhere. This correctly handles:
+        //   (a) session-only levels like `max`/`auto` that don't persist globally,
+        //   (b) another session changing the global default while this session has
+        //       a stale `/effort` entry in its JSONL,
+        //   (c) brand-new sessions with no effort history on a system that never ran `/effort`.
+        let effort_level = {
+            let session_eff = metrics.effort_level.clone();
+            let session_ts = metrics.effort_level_ts.unwrap_or(0.0);
+            let global_eff = supplemental.claude_default_effort.clone();
+            let global_ts = supplemental.claude_default_effort_ts.unwrap_or(0.0);
+            let resolved = match (session_eff, global_eff) {
+                (Some(s), Some(g)) => Some(if session_ts >= global_ts { s } else { g }),
+                (Some(s), None) => {
+                    // Session /effort exists but global is cleared — session wins
+                    // only if it's newer than the global-clear event, otherwise
+                    // the clear implies "revert to auto".
+                    if session_ts >= global_ts { Some(s) } else { None }
+                }
+                (None, Some(g)) => Some(g),
+                (None, None) => None,
+            };
+            Some(resolved.unwrap_or_else(|| "auto".to_string()))
+        };
+
         Self {
             info,
             running_tool_name: metrics.running_tool_name.clone(),
@@ -429,6 +472,7 @@ impl EnrichedSession {
             todo_current,
             system_memory: supplemental.system_memory.clone(),
             claude_version: supplemental.claude_version.clone(),
+            effort_level,
         }
     }
 }
@@ -578,19 +622,19 @@ pub struct Settings {
     #[serde(default)]
     pub sand_enabled: bool,
     /// Sand intensity multiplier (0.1 = subtle, 1.0 = normal, 3.0 = intense)
-    #[serde(default = "default_one")]
+    #[serde(default = "default_sand_intensity")]
     pub sand_intensity: f64,
     /// Sand wind direction in degrees (0 = right, 90 = down, 180 = left, -90 = up)
-    #[serde(default)]
+    #[serde(default = "default_sand_direction")]
     pub sand_direction: f64,
     /// Sand grain spawn density multiplier
-    #[serde(default = "default_one")]
+    #[serde(default = "default_sand_density")]
     pub sand_density: f64,
     /// Sand grain travel speed multiplier
-    #[serde(default = "default_one")]
+    #[serde(default = "default_sand_speed")]
     pub sand_speed: f64,
     /// Sand grain size multiplier (0.5 = fine, 1.0 = normal, 3.0 = coarse)
-    #[serde(default = "default_one")]
+    #[serde(default = "default_sand_grain_size")]
     pub sand_grain_size: f64,
     /// Sand turbulence / scatter intensity (0 = straight, 2.0 = chaotic)
     #[serde(default = "default_sand_turbulence")]
@@ -658,6 +702,11 @@ pub struct Settings {
     /// Per-theme appearance customizations saved by the user, keyed by theme ID
     #[serde(default)]
     pub theme_customizations: HashMap<String, ThemeCustomization>,
+    /// Settings schema version. Bumped when defaults change in a way that
+    /// requires wiping stale user customizations. `load_settings` runs
+    /// migrations on load when the stored value is below `CURRENT_SETTINGS_VERSION`.
+    #[serde(default)]
+    pub settings_version: u32,
 }
 
 /// Appearance fields saved when a user customizes a theme.
@@ -729,13 +778,13 @@ fn default_signal_effect() -> String {
     "string".to_string()
 }
 
-fn default_sand_turbulence() -> f64 {
-    0.6
-}
-
-fn default_sand_alpha() -> f64 {
-    0.75
-}
+fn default_sand_intensity() -> f64 { 1.51 }
+fn default_sand_direction() -> f64 { -60.0 }
+fn default_sand_density() -> f64 { 2.0 }
+fn default_sand_speed() -> f64 { 0.26 }
+fn default_sand_grain_size() -> f64 { 0.4 }
+fn default_sand_turbulence() -> f64 { 0.9 }
+fn default_sand_alpha() -> f64 { 0.7 }
 
 fn default_key_press_speed() -> f64 {
     0.35
@@ -804,13 +853,13 @@ impl Default for Settings {
             signal_offset: 0.5,
             signal_effect: "string".to_string(),
             sand_enabled: false,
-            sand_intensity: 3.0,
-            sand_direction: 0.0,
-            sand_density: 4.0,
-            sand_speed: 3.0,
-            sand_grain_size: 0.5,
-            sand_turbulence: 0.6,
-            sand_alpha: 0.75,
+            sand_intensity: 1.51,
+            sand_direction: -60.0,
+            sand_density: 2.0,
+            sand_speed: 0.26,
+            sand_grain_size: 0.4,
+            sand_turbulence: 0.9,
+            sand_alpha: 0.7,
             key_press_speed: 0.35,
             key_release_speed: 0.4,
             auto_reorder: false,
@@ -831,6 +880,7 @@ impl Default for Settings {
             show_config_counts: false,
             timer_display: "seconds".to_string(),
             theme_customizations: HashMap::new(),
+            settings_version: crate::settings::CURRENT_SETTINGS_VERSION,
         }
     }
 }
@@ -963,6 +1013,7 @@ mod tests {
             subprocess: None,
             team_name: None,
             agent_name: None,
+            pid: None,
         }
     }
 
