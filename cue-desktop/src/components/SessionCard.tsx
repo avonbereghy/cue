@@ -13,19 +13,20 @@ function bellFromHash(hash: number): number {
 }
 
 /**
- * Tailwind classes for the effort-level pill.
- * Ramps cool → warm with intensity. Unknown future values fall back to neutral,
- * so new level names Anthropic adds still render (just without a bespoke color).
+ * Tailwind text color for the effort-level word, rendered inline after the
+ * model name with an em-dash separator. Ramps cool → warm with intensity.
+ * Unknown future values fall back to neutral so new level names Anthropic
+ * adds still render (just without a bespoke color).
  */
-function effortPillClass(level: string): string {
+function effortTextClass(level: string): string {
   switch (level.toLowerCase()) {
-    case "auto":   return "bg-white/10 text-white/60";
-    case "low":    return "bg-sky-500/20 text-sky-300";
-    case "medium": return "bg-emerald-500/20 text-emerald-300";
-    case "high":   return "bg-amber-500/25 text-amber-300";
-    case "xhigh":  return "bg-orange-500/25 text-orange-300";
-    case "max":    return "bg-rose-500/30 text-rose-300";
-    default:       return "bg-white/10 text-white/60";
+    case "auto":   return "text-white/55";
+    case "low":    return "text-sky-300/90";
+    case "medium": return "text-emerald-300/90";
+    case "high":   return "text-amber-300/90";
+    case "xhigh":  return "text-orange-300/90";
+    case "max":    return "text-rose-300/90";
+    default:       return "text-white/55";
   }
 }
 import type { EnrichedSession } from "@/lib/types";
@@ -35,6 +36,13 @@ import { SignalString } from "./SignalString";
 import type { StrikePulse } from "./SignalString";
 import { FluxEffect, FLUX_EXIT_MS } from "./FluxEffect";
 import { StatusDot } from "./StatusDot";
+import { CompactTankEffect } from "./CompactTankEffect";
+
+/** Assumed duration of a /compact run. Drain fills the tank left→empty over
+ *  this window; a faster second phase plays when the state actually exits. */
+const COMPACT_DRAIN_MS = 120_000;
+/** Duration of the accelerated fast-drain once state leaves "compacting". */
+const COMPACT_EXIT_MS = 250;
 
 export interface SessionCardProps {
   session: EnrichedSession;
@@ -201,7 +209,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   // registered, then flip both states at once. A fallback timer guards against
   // the connected signal never arriving (e.g., reduced-motion or a stalled
   // rAF loop).
-  const HANDOFF_POST_CONNECT_MS = 200;
+  const HANDOFF_POST_CONNECT_MS = 450;
   const HANDOFF_FALLBACK_MS = 2200;
   const handoffCommitTimerRef = useRef<number | null>(null);
 
@@ -247,15 +255,141 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     };
   }, []);
 
+  // Compacting drain: fillRef is read every frame by both the tank canvas and
+  // the pulsing bar (via a DOM style write). Two phases — a slow linear drain
+  // while state === "compacting" (assumed 2min window), then a short fast
+  // drain to 0 when state transitions out. tankMounted is true iff fill > 0.
+  const compactFillRef = useRef(1);
+  const compactPhaseRef = useRef<"idle" | "draining" | "exiting">("idle");
+  const compactStartRef = useRef(0);
+  const compactExitStartRef = useRef(0);
+  const compactExitFromRef = useRef(0);
+  const compactRafRef = useRef<number | null>(null);
+  const [tankMounted, setTankMounted] = useState(false);
+
+  useEffect(() => {
+    const tick = () => {
+      compactRafRef.current = null;
+      const now = performance.now();
+      if (compactPhaseRef.current === "draining") {
+        const f = Math.max(0, 1 - (now - compactStartRef.current) / COMPACT_DRAIN_MS);
+        compactFillRef.current = f;
+      } else if (compactPhaseRef.current === "exiting") {
+        const t = Math.min(1, (now - compactExitStartRef.current) / COMPACT_EXIT_MS);
+        compactFillRef.current = compactExitFromRef.current * (1 - t);
+        if (t >= 1) {
+          compactPhaseRef.current = "idle";
+          compactFillRef.current = 0;
+        }
+      }
+      if (compactPhaseRef.current !== "idle") {
+        compactRafRef.current = requestAnimationFrame(tick);
+      } else {
+        setTankMounted(false);
+      }
+    };
+
+    if (displayState === "compacting") {
+      // Enter / re-enter drain. A fresh entry (phase was idle) starts full;
+      // otherwise we resume from wherever fill currently sits so a brief
+      // flicker out of compacting doesn't reset the tank visually.
+      if (compactPhaseRef.current === "idle") {
+        compactFillRef.current = 1;
+      }
+      compactStartRef.current = performance.now() - (1 - compactFillRef.current) * COMPACT_DRAIN_MS;
+      compactPhaseRef.current = "draining";
+      setTankMounted(true);
+    } else if (compactPhaseRef.current === "draining") {
+      // State left compacting — accelerate to empty.
+      compactPhaseRef.current = "exiting";
+      compactExitStartRef.current = performance.now();
+      compactExitFromRef.current = compactFillRef.current;
+    }
+    // Always re-schedule rAF if a phase is active. Without this, if the
+    // effect re-runs mid-exit (e.g., displayState transitions exiting→done→idle
+    // in quick succession), the cleanup cancels rAF but no new frame is
+    // scheduled, and the tank gets stuck at a non-zero fill — visible as a
+    // periwinkle sliver on the card's left edge in idle.
+    if (compactPhaseRef.current !== "idle" && compactRafRef.current === null) {
+      compactRafRef.current = requestAnimationFrame(tick);
+    }
+
+    return () => {
+      if (compactRafRef.current !== null) {
+        cancelAnimationFrame(compactRafRef.current);
+        compactRafRef.current = null;
+      }
+    };
+  }, [displayState]);
+
+  // One-shot smooth-exit window applied during the thinking→working commit.
+  // Flips .session-card--smooth-exit on simultaneously with the label/display
+  // flip so the resulting CSS property changes interpolate over the longer
+  // outExpo duration. Cleared after the transition settles.
+  const [smoothExit, setSmoothExit] = useState(false);
+  const smoothExitTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (smoothExitTimerRef.current !== null) window.clearTimeout(smoothExitTimerRef.current);
+    };
+  }, []);
+
+  // One-shot entry animation — fires a single CSS keyframe when the card
+  // enters a state that benefits from a moment of attention (error, done,
+  // waiting). The class is cleared after the keyframe runs so the animation
+  // replays on every fresh entry rather than sticking.
+  const [entryAnim, setEntryAnim] = useState<"error" | "done" | "waiting" | null>(null);
+  const entryAnimTimerRef = useRef<number | null>(null);
+  const prevDisplayStateRef = useRef(displayState);
+  useEffect(() => {
+    const prev = prevDisplayStateRef.current;
+    prevDisplayStateRef.current = displayState;
+    if (prev === displayState) return;
+    let anim: "error" | "done" | "waiting" | null = null;
+    let duration = 0;
+    if (displayState === "error" && prev !== "error") {
+      anim = "error"; duration = 420;
+    } else if (
+      displayState === "done" &&
+      (prev === "working" || prev === "subagent" || prev === "thinking" || prev === "waiting")
+    ) {
+      anim = "done"; duration = 720;
+    } else if (displayState === "waiting" && prev !== "waiting") {
+      anim = "waiting"; duration = 1000;
+    }
+    if (!anim) return;
+    if (entryAnimTimerRef.current !== null) window.clearTimeout(entryAnimTimerRef.current);
+    setEntryAnim(anim);
+    entryAnimTimerRef.current = window.setTimeout(() => {
+      setEntryAnim(null);
+      entryAnimTimerRef.current = null;
+    }, duration);
+  }, [displayState]);
+  useEffect(() => {
+    return () => {
+      if (entryAnimTimerRef.current !== null) window.clearTimeout(entryAnimTimerRef.current);
+    };
+  }, []);
+
   const commitHandoff = useCallback((delayMs: number) => {
     if (handoffCommitTimerRef.current !== null) {
       window.clearTimeout(handoffCommitTimerRef.current);
     }
     const target = info.state;
     handoffCommitTimerRef.current = window.setTimeout(() => {
+      if (smoothExitTimerRef.current !== null) window.clearTimeout(smoothExitTimerRef.current);
+      setSmoothExit(true);
       setLabelState(target);
       setDisplayState(target);
       handoffCommitTimerRef.current = null;
+      // Clear a hair after the longest transition (border/shadow = 850ms)
+      // so the class keeps the slower easing in effect until everything lands.
+      // Outlast the slower flux retract (FLUX_EXIT_MS = 2500ms) so the
+      // card's easing class stays on through the needles' full decay.
+      smoothExitTimerRef.current = window.setTimeout(() => {
+        setSmoothExit(false);
+        smoothExitTimerRef.current = null;
+      }, 2700);
     }, delayMs);
   }, [info.state]);
 
@@ -327,6 +461,22 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     if (displayState === "thinking" && labelState === "thinking" && targetIsHandoffable) {
       commitHandoff(HANDOFF_FALLBACK_MS);
       return;
+    }
+
+    // Subagent ↔ working — same ambient-active group but different tint and
+    // status icon. Turn on smoothExit briefly so the tint morph rides the
+    // outExpo curve instead of snapping. Shorter window than the full
+    // thinking→working handoff since no flux retract is involved.
+    const isActiveMorph =
+      (displayState === "subagent" && info.state === "working") ||
+      (displayState === "working" && info.state === "subagent");
+    if (isActiveMorph) {
+      if (smoothExitTimerRef.current !== null) window.clearTimeout(smoothExitTimerRef.current);
+      setSmoothExit(true);
+      smoothExitTimerRef.current = window.setTimeout(() => {
+        setSmoothExit(false);
+        smoothExitTimerRef.current = null;
+      }, 900);
     }
 
     // Default — sync both immediately.
@@ -463,11 +613,13 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   // Two color streams during the handoff:
   //   labelHex — semantic (StatusDot, visible labels). Follows labelState so
   //              the icon and dot color swap mid-transition along with text.
-  //   fluxTintHex — physical (flux streamline tint). Follows displayState so
-  //                 the flux stays in the prior state's color (e.g. orange
-  //                 thinking) while the label already reads "Working".
+  //   fluxTintHex — physical (flux streamline tint). While the flux is
+  //                 retracting (fluxActive=false), lock to the thinking color
+  //                 so the needles don't shift hue mid-retract — the retract
+  //                 reads as a single decaying orange rather than a color-flip.
   const labelHex = (isDark ? STATE_DOT_HEX : STATE_DOT_HEX_LIGHT)[labelState] ?? (isDark ? "#a8a29e" : "#78716c");
-  const fluxTintHex = (isDark ? STATE_DOT_HEX : STATE_DOT_HEX_LIGHT)[displayState] ?? (isDark ? "#a8a29e" : "#78716c");
+  const fluxTintStateKey = fluxActive ? displayState : "thinking";
+  const fluxTintHex = (isDark ? STATE_DOT_HEX : STATE_DOT_HEX_LIGHT)[fluxTintStateKey] ?? (isDark ? "#a8a29e" : "#78716c");
 
   const badgeHex = (isDark ? STATE_BADGE_HEX : STATE_BADGE_HEX_LIGHT)[labelState] ?? { bg: isDark ? "rgba(168,162,158,0.15)" : "rgba(120,113,108,0.12)", text: isDark ? "#a8a29e" : "#78716c" };
   const titleHex = (isDark ? STATE_HEX : STATE_HEX_LIGHT)[labelState] ?? (isDark ? "#a8a29e" : "#78716c");
@@ -476,7 +628,11 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     ? `Subagents(${activeSubs})`
     : STATE_DISPLAY_NAME[labelState] ?? session.stateDisplayName;
 
-  const stateTransition = "color 600ms ease, background-color 600ms ease";
+  // During the smooth-exit window, text/background colors stretch longer and
+  // use the same outExpo curve as the card to keep the whole retract in sync.
+  const stateTransition = smoothExit
+    ? "color 2500ms cubic-bezier(0.16, 1, 0.3, 1), background-color 2500ms cubic-bezier(0.16, 1, 0.3, 1)"
+    : "color 600ms ease, background-color 600ms ease";
 
   const subagents = metrics.subagents ?? [];
   const hasSubagents = session.hasSubagents;
@@ -520,8 +676,12 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       } ${
         isWaiting ? "session-card--waiting" : isError ? "session-card--error" : displayState === "thinking" ? "session-card--thinking" : displayState === "compacting" ? "session-card--compacting" : displayState === "clearing" ? "session-card--clearing" : ""
       } ${
+        smoothExit ? "session-card--smooth-exit" : ""
+      } ${
+        entryAnim ? `session-card--enter-${entryAnim}` : ""
+      } ${
         effectiveCompact ? "px-2.5 py-1.5 space-y-0"
-        : signalString && (signalMode === "preset" || signalMode === "audio" || signalMode === "live") ? "px-4 pt-4 pb-5 space-y-4" : "px-3 pt-2 pb-1 space-y-2"
+        : signalString && (signalMode === "preset" || signalMode === "audio" || signalMode === "live") ? "px-4 pt-4 pb-2 space-y-4" : "px-3 pt-2 pb-1 space-y-2"
       } ${effectiveSlim && !effectiveCompact ? "flex flex-col" : ""} ${
         compactMode ? "cursor-pointer" : ""
       }`}
@@ -565,19 +725,43 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
         />
       )}
 
+      {/* Compacting tank — periwinkle water that drains right-to-left over
+          the assumed 2min compact window, then fast-empties on state exit. */}
+      {tankMounted && <CompactTankEffect fillRef={compactFillRef} />}
+
       <div ref={contentRef} className={`${effectiveCompact ? "space-y-0" : "space-y-2.5"} ${effectiveSlim && !effectiveCompact ? "flex flex-col flex-1" : ""}`} style={{ position: "relative", zIndex: 10 }}>
           {/* Row 1: Status dot + state badge + title + prompt pill + duration
               Shrink priority: prompt pill first (shrinks → hides), timer second, title last */}
           <div className="relative flex items-center gap-2 min-w-0 overflow-hidden">
             <StatusDot state={labelState} color={labelHex} />
-            <span className="text-xs px-2 py-0.5 rounded-full text-center shrink-0" style={{ backgroundColor: badgeHex.bg, color: badgeHex.text, transition: stateTransition, minWidth: "8.5em" }}>
+            <span
+              className="text-xs px-2 py-0.5 rounded-full text-center shrink-0"
+              style={{
+                // Layer the tinted bg over an opaque base so flux/sand behind
+                // the card can't bleed through the pill. linear-gradient serves
+                // as a uniform overlay of the 18%-alpha tint on top of a solid
+                // app-bg base.
+                background: `linear-gradient(${badgeHex.bg}, ${badgeHex.bg}), ${isDark ? "#0e0e0e" : "#f5f5f5"}`,
+                color: badgeHex.text,
+                transition: stateTransition,
+                minWidth: "8.5em",
+              }}
+            >
               {displayStateName}
             </span>
             {(info.state === "working" || info.state === "thinking" || info.state === "subagent") && titleAnimation !== "none" ? (
               <span
                 ref={titleContainerRef}
                 className={`font-semibold anim-${titleAnimation} whitespace-nowrap overflow-hidden shrink-0`}
-                style={{ color: titleHex, transition: stateTransition }}
+                style={{
+                  color: titleHex,
+                  transition: stateTransition,
+                  // Halo matches card bg so flux streamlines can't bleed
+                  // through glyph gaps and muddy the title.
+                  textShadow: isDark
+                    ? "0 0 6px rgba(14,14,14,0.9), 0 0 3px rgba(14,14,14,0.9)"
+                    : "0 0 6px rgba(245,245,245,0.9), 0 0 3px rgba(245,245,245,0.9)",
+                }}
                 aria-label={session.displayTitle}
               >
                 {[...session.displayTitle].map((ch, i) => {
@@ -605,7 +789,16 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 })}
               </span>
             ) : (
-              <span className="font-semibold whitespace-nowrap shrink-0" style={{ color: titleHex, transition: stateTransition }}>
+              <span
+                className="font-semibold whitespace-nowrap shrink-0"
+                style={{
+                  color: titleHex,
+                  transition: stateTransition,
+                  textShadow: isDark
+                    ? "0 0 6px rgba(14,14,14,0.9), 0 0 3px rgba(14,14,14,0.9)"
+                    : "0 0 6px rgba(245,245,245,0.9), 0 0 3px rgba(245,245,245,0.9)",
+                }}
+              >
                 {session.displayTitle}
               </span>
             )}
@@ -772,56 +965,87 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           {effectiveSlim && !effectiveCompact && <div className="flex-1" />}
 
           {/* Model name + context bar — grouped tightly */}
-          {!effectiveCompact && (
-            <div className="flex flex-col gap-0.5">
-          <span className={`text-[0.625rem] font-mono self-end flex items-center gap-1.5 ${isGlass ? "text-white/55" : "text-white/30"}`} style={{ visibility: session.modelDisplayName !== "\u2014" || session.effortLevel ? "visible" : "hidden" }}>
-              {session.modelDisplayName !== "\u2014" ? session.modelDisplayName : "\u00A0"}
-              {session.provider && <span className={isGlass ? "text-white/40" : "text-white/20"}> ({session.provider})</span>}
-              {session.effortLevel && (
-                <span
-                  className={`px-1.5 py-[0.0625rem] rounded-full text-[0.5625rem] font-medium leading-tight ${effortPillClass(session.effortLevel)}`}
-                  title={`Effort level: ${session.effortLevel}`}
-                >
-                  {session.effortLevel}
-                </span>
-              )}
-            </span>
+          {!effectiveCompact && (() => {
+            const showContext = contextThreshold !== "never" && contextMeetsThreshold;
+            const isCompactCtx = contextDisplay === "compact";
+            const modelSpanInner = (
+              <span
+                className={`text-[0.625rem] font-mono flex items-center gap-1 ${isGlass ? "text-white/55" : "text-white/30"}`}
+                style={{ visibility: session.modelDisplayName !== "\u2014" || session.effortLevel ? "visible" : "hidden" }}
+              >
+                {session.modelDisplayName !== "\u2014" ? session.modelDisplayName : "\u00A0"}
+                {session.provider && <span className={isGlass ? "text-white/40" : "text-white/20"}> ({session.provider})</span>}
+                {session.effortLevel && (
+                  <>
+                    <span className={isGlass ? "text-white/35" : "text-white/20"}>{"\u2014"}</span>
+                    <span
+                      className={`font-medium ${effortTextClass(session.effortLevel)}`}
+                      title={`Effort level: ${session.effortLevel}`}
+                    >
+                      {session.effortLevel}
+                    </span>
+                  </>
+                )}
+              </span>
+            );
+            return (
+            <div className="flex flex-col gap-1">
+          {/* In compact-context mode the model row is rendered inside the
+              grouped block below so the bar can share its width. Otherwise
+              render it here, right-aligned. */}
+          {!(isCompactCtx && showContext) && (
+            <div className="self-end">{modelSpanInner}</div>
+          )}
 
           {/* Row 4: Context usage — right-aligned to match timer position */}
-          {contextThreshold !== "never" && contextMeetsThreshold && (() => {
+          {showContext && (() => {
             const barColor = (() => {
-              const tok = metrics.lastInputTokens;
-              if (tok >= 400000) return "#ef4444";
-              if (tok >= 200000) {
-                const t = (tok - 200000) / 200000;
-                const r = Math.round(245 + (239 - 245) * t);
-                const g = Math.round(158 - 158 * t + 68 * t);
-                const b = Math.round(11 + (68 - 11) * t);
-                return `rgb(${r},${g},${b})`;
-              }
-              const t = tok / 200000;
-              const r = Math.round(34 + (245 - 34) * t);
-              const g = Math.round(197 + (158 - 197) * t);
-              const b = Math.round(94 + (11 - 94) * t);
-              return `rgb(${r},${g},${b})`;
+              const p = Math.min(Math.max(session.contextUsagePercent, 0), 1);
+              const green = [34, 197, 94];
+              const yellow = [245, 158, 11];
+              const red = [239, 68, 68];
+              const [a, b, t] = p < 0.5
+                ? [green, yellow, p / 0.5]
+                : [yellow, red, (p - 0.5) / 0.5];
+              const r = Math.round(a[0] + (b[0] - a[0]) * t);
+              const g = Math.round(a[1] + (b[1] - a[1]) * t);
+              const bl = Math.round(a[2] + (b[2] - a[2]) * t);
+              return `rgb(${r},${g},${bl})`;
             })();
             const pct = Math.round(session.contextUsagePercent * 100);
             const tokStr = `${formatTokens(metrics.lastInputTokens)} / ${formatTokens(session.contextLimit)}`;
+            // While Claude is compacting, token counts aren't updating. Show
+            // the existing loading spinner so the card keeps its shape (no
+            // missing rows) and communicates "waiting for fresh data". Once
+            // compacting ends we immediately show stale X/Max counts — the
+            // real reading arrives with the next user prompt.
+            const isCompactingUI = displayState === "compacting";
+            const isLoading = isCompactingUI || metrics.lastInputTokens === 0;
 
             if (contextDisplay === "compact") {
               return (
-                <div className="flex flex-col items-end gap-0.5 self-end">
-                  <div className="flex items-center gap-1.5" style={{ width: "140px" }}>
-                    {metrics.lastInputTokens === 0 ? (
-                      <>
-                        <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden" />
-                        <svg className="w-3 h-3 animate-spin shrink-0" viewBox="0 0 16 16" fill="none">
-                          <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.2" strokeWidth="2" />
-                          <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeOpacity="0.5" strokeWidth="2" strokeLinecap="round" />
-                        </svg>
-                      </>
-                    ) : (
-                      <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden">
+                <div
+                  style={{
+                    // fit-content + marginLeft: auto = shrink to widest child
+                    // (the model row) and right-align within the flex-col
+                    // parent. Stretch makes the bar row fill to match.
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "stretch",
+                    width: "fit-content",
+                    marginLeft: "auto",
+                    rowGap: "4px",
+                    minWidth: "90px",
+                  }}
+                >
+                  {modelSpanInner}
+                  {/* Progress bar row — always rendered. During compacting
+                      it's empty (no fill); stale fill shows after. Keeping
+                      this row present prevents the card from changing height
+                      when the state toggles. */}
+                  <div className="flex items-center gap-1.5">
+                    <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden">
+                      {!isLoading && (
                         <div
                           className="absolute left-0 top-0 bottom-0 rounded-full transition-all duration-500"
                           style={{
@@ -830,11 +1054,23 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                             opacity: 0.25,
                           }}
                         />
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
-                  {metrics.lastInputTokens > 0 && (
-                    <span className={`text-[0.625rem] mono-nums ${isGlass ? "text-white/55" : "text-white/30"}`}>
+                  {/* Third row: spinner when loading, stale/live tokens
+                      otherwise. Always present so height stays constant. */}
+                  {isLoading ? (
+                    <div className="flex items-center justify-end" style={{ minHeight: "0.9rem" }}>
+                      <svg className={`w-3 h-3 animate-spin shrink-0 ${isGlass ? "text-white/55" : "text-white/35"}`} viewBox="0 0 16 16" fill="none">
+                        <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.2" strokeWidth="2" />
+                        <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeOpacity="0.5" strokeWidth="2" strokeLinecap="round" />
+                      </svg>
+                    </div>
+                  ) : (
+                    <span
+                      className={`text-[0.625rem] mono-nums ${isGlass ? "text-white/55" : "text-white/30"}`}
+                      style={{ textAlign: "right", minHeight: "0.9rem" }}
+                    >
                       {tokStr}
                     </span>
                   )}
@@ -845,7 +1081,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             return (
               <div className="relative flex items-center gap-1.5">
                 <span className={`text-[0.625rem] shrink-0 ${isGlass ? "text-white/65" : "text-white/40"}`}>Context</span>
-                {metrics.lastInputTokens === 0 ? (
+                {isLoading ? (
                   <>
                     <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden" />
                     <svg className="w-3 h-3 animate-spin shrink-0" viewBox="0 0 16 16" fill="none">
@@ -886,7 +1122,8 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             );
           })()}
             </div>
-          )}
+            );
+          })()}
 
           {/* Token breakdown — detail mode only, when context >= 85% */}
           {!effectiveCompact && !effectiveSlim && session.contextUsagePercent >= 0.85 && (

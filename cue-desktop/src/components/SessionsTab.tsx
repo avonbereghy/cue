@@ -998,15 +998,24 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   }, [testMode, sandboxSelectedIdx, sandboxEditingTitle, makeSandboxSession, setAllSandboxState, cycleSandboxModel, cycleSandboxSource, cycleSandboxBranch, randomizeSandboxTokens, cycleSandboxSubagents, cycleSandboxTodos, cycleSandboxTool, cycleSandboxProvider, adjustSandboxContext, adjustSandboxDuration, loadSandboxPreset]);
 
   // ---------------------------------------------------------------------------
-  // Auto-reorder: two-tier sorting system.
+  // Auto-reorder: gated reorder model.
   //
-  // IMMEDIATE: When a session becomes active (working/thinking/waiting/error/
-  // subagent/compacting), it bubbles above all "settled" sessions (idle/done
-  // for 5+ seconds). Active sessions keep their relative order. Settled
-  // sessions keep their relative order. Only the active↔settled boundary moves.
+  // The display order is sticky: once a session occupies a slot, it stays
+  // there across state changes. New sessions always appear at the bottom.
+  // The order only changes ("shuffle up") when a reorder trigger fires:
   //
-  // DEFERRED: When ALL sessions have been idle/done for 5+ seconds, a full
-  // priority sort runs (waiting > error > working > idle) with FLIP animation.
+  //   • TURN END — any active session transitions to idle/done. Debounced
+  //     200ms so near-simultaneous ends collapse into one animation.
+  //   • INVARIANT — if any active session ends up below a settled one in
+  //     the display (e.g. a new session spawns active at the bottom, or a
+  //     session starts a turn below idles), the debounced reorder fires so
+  //     actives bubble above settled.
+  //   • QUIESCENCE — all sessions have been idle/done for 5+ seconds, full
+  //     priority resort with FLIP animation.
+  //
+  // Between triggers, state changes that don't break the invariant
+  // (working→waiting, idle→working while already on top, etc.) do NOT
+  // cause reorders — the session just updates in place.
   // ---------------------------------------------------------------------------
 
   const SETTLE_MS = 5000;
@@ -1027,9 +1036,11 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const isAnimatingRef = useRef(false);
   const animationGenRef = useRef(0); // incremented each animation; stale chains check this
   const isQuiescenceReorderRef = useRef(false);
-  // Sessions spawned within the last 300ms — forced to bottom until timer fires
-  const newSpawnsRef = useRef<Map<string, number>>(new Map());
-  const newSpawnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tracks previous state per session so we can detect turn-end transitions
+  // (non-quiescent → quiescent) and fire a gated reorder.
+  const prevStatesRef = useRef<Map<string, string>>(new Map());
+  // Debounce timer that coalesces near-simultaneous turn ends into one reorder.
+  const turnEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Per-session "settled since" timestamps. A session is "settled" when it
   // has been idle/done for ≥ SETTLE_MS. Active sessions are removed from this map.
@@ -1063,10 +1074,19 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const activeSessions = allActiveSessions.filter((s) => !isTeamChild(s));
   const teamChildren = allActiveSessions.filter(isTeamChild);
 
-  // Update settled-since and active-since timestamps
+  // Update settled-since and active-since timestamps, and detect turn ends
+  // (any non-quiescent → quiescent transition) to fire the gated reorder.
   const now = Date.now();
+  let turnEndDetected = false;
   for (const s of activeSessions) {
-    if (isQuiescent(s.info.state)) {
+    const prev = prevStatesRef.current.get(s.info.id);
+    const curr = s.info.state;
+    if (prev !== undefined && !isQuiescent(prev) && isQuiescent(curr)) {
+      turnEndDetected = true;
+    }
+    prevStatesRef.current.set(s.info.id, curr);
+
+    if (isQuiescent(curr)) {
       // Record when it first became idle/done (if not already tracked)
       if (!settledSinceRef.current.has(s.info.id)) {
         settledSinceRef.current.set(s.info.id, now);
@@ -1089,6 +1109,9 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   }
   for (const id of activeSinceRef.current.keys()) {
     if (!activeIdSet.has(id)) activeSinceRef.current.delete(id);
+  }
+  for (const id of prevStatesRef.current.keys()) {
+    if (!activeIdSet.has(id)) prevStatesRef.current.delete(id);
   }
 
   // Compute fully-sorted desired order (for deferred full rearrange)
@@ -1125,8 +1148,9 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     return all.map((s) => s.info.id);
   })();
 
-  // The actual display order: partitions committed order into
-  // non-settled (top) and settled (bottom), preserving relative order within each.
+  // Display order is sticky: existing sessions keep their committed slot,
+  // new sessions are appended at the bottom. Order only mutates when a
+  // reorder trigger (turn end / quiescence) sets committedOrderRef.
   const sortedSessions = (() => {
     if (!autoReorder) {
       const sorted = [...activeSessions].sort((a, b) => {
@@ -1153,72 +1177,29 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       return desiredOrder.map((id) => sessionMap.get(id)!).filter(Boolean);
     }
 
-    // Build ordered list from committed, adding new sessions
     const ordered: EnrichedSession[] = [];
     const used = new Set<string>();
-    const justSpawned: EnrichedSession[] = [];
+    // Existing sessions keep their committed slot (even across state changes)
     for (const id of committed) {
       if (sessionMap.has(id)) {
         ordered.push(sessionMap.get(id)!);
         used.add(id);
       }
     }
+    // New sessions always land at the bottom, in desiredOrder among themselves
     for (const id of desiredOrder) {
       if (!used.has(id) && sessionMap.has(id)) {
-        const s = sessionMap.get(id)!;
-        // Track newly seen sessions — hold at bottom for 300ms
-        if (!newSpawnsRef.current.has(id)) {
-          newSpawnsRef.current.set(id, now);
-        }
-        ordered.push(s);
+        ordered.push(sessionMap.get(id)!);
+        used.add(id);
       }
     }
 
-    // Partition: newly spawned (bottom), non-settled (top), settled (middle)
-    const nonSettled: EnrichedSession[] = [];
-    const settled: EnrichedSession[] = [];
-    for (const s of ordered) {
-      const spawnTime = newSpawnsRef.current.get(s.info.id);
-      if (spawnTime !== undefined && now - spawnTime < 300) {
-        justSpawned.push(s);
-        continue;
-      }
-      // Clear expired spawn tracking
-      if (spawnTime !== undefined) {
-        newSpawnsRef.current.delete(s.info.id);
-      }
-      const since = settledSinceRef.current.get(s.info.id);
-      const isSettled = since !== undefined && (now - since) >= SETTLE_MS;
-      if (isSettled) {
-        settled.push(s);
-      } else {
-        nonSettled.push(s);
-      }
-    }
-
-    // Schedule reorder after spawn hold expires — reschedule to latest expiry
-    // so all spawned sessions are released together.
-    if (justSpawned.length > 0) {
-      const latestSpawn = Math.max(
-        ...justSpawned.map((s) => newSpawnsRef.current.get(s.info.id) ?? 0),
-      );
-      const remaining = Math.max(50, latestSpawn + 320 - now);
-      if (newSpawnTimerRef.current) clearTimeout(newSpawnTimerRef.current);
-      newSpawnTimerRef.current = setTimeout(() => {
-        newSpawnTimerRef.current = null;
-        if (!isAnimatingRef.current) {
-          setReorderTick((t) => t + 1);
-        }
-      }, remaining);
-    }
-
-    const result = [...nonSettled, ...settled, ...justSpawned];
     // Don't overwrite committed order during an in-flight animation —
     // the animation owns the position snapshot and will update on completion.
     if (!isAnimatingRef.current) {
-      committedOrderRef.current = result.map((s) => s.info.id);
+      committedOrderRef.current = ordered.map((s) => s.info.id);
     }
-    return result;
+    return ordered;
   })();
 
   // Splice team children back into sortedSessions after their parent.
@@ -1271,6 +1252,42 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   activeSessionsRef.current = activeSessions;
   const desiredOrderRef = useRef(desiredOrder);
   desiredOrderRef.current = desiredOrder;
+
+  // Invariant check: no active (non-quiescent) session should sit below a
+  // settled (quiescent) session in the committed order. Violated when a
+  // session starts a turn while below settled ones — or when a new session
+  // lands at the bottom already active. Treated as a reorder trigger so
+  // actives always bubble above settled.
+  let invariantViolated = false;
+  {
+    let sawSettled = false;
+    for (const s of sortedSessions) {
+      if (isQuiescent(s.info.state)) {
+        sawSettled = true;
+      } else if (sawSettled) {
+        invariantViolated = true;
+        break;
+      }
+    }
+  }
+
+  // Reorder trigger: fires on turn end OR invariant violation. Debounced
+  // 200ms so near-simultaneous transitions collapse into one FLIP animation.
+  // Uses `turnEndTimerRef.current === null` as the coalescing guard so we
+  // don't endlessly reschedule while the invariant keeps being true each
+  // render — the first detection schedules, subsequent renders no-op until
+  // the timer fires. Between triggers, the display stays pinned.
+  if ((turnEndDetected || invariantViolated) && autoReorder && turnEndTimerRef.current === null) {
+    turnEndTimerRef.current = setTimeout(() => {
+      turnEndTimerRef.current = null;
+      if (isAnimatingRef.current) return;
+      const curKey = committedOrderRef.current.join(",");
+      const desKey = desiredOrderRef.current.join(",");
+      if (curKey === desKey) return;
+      committedOrderRef.current = [...desiredOrderRef.current];
+      setReorderTick((t) => t + 1);
+    }, 200);
+  }
 
   // Quiescence timer: when ALL sessions have been settled for 5s,
   // do the full priority rearrange.
@@ -1403,17 +1420,24 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             Math.abs(b.dy) > Math.abs(a.dy) ? b : a,
           );
 
-    // Set up z-index so hero ducks under other cards
+    // Set up z-index so hero ducks under other cards. `will-change: transform`
+    // pre-promotes each mover to its own compositor layer so child canvases
+    // (flux / signal-string / sand) keep rendering through the translate —
+    // without this, the browser may rasterize the card and freeze the
+    // effect's canvas content during the shuffle.
     const isLight = document.documentElement.dataset.theme === "light";
     const duckBrightness = isLight ? 0.82 : 0.55;
     cards.forEach((el) => {
       el.style.position = "relative";
       el.style.zIndex = "2";
+      el.style.willChange = "transform";
     });
     hero.el.style.zIndex = "1";
 
     // Track running animations for cleanup
     const animations: Animation[] = [];
+    // Overlay element stashed for removal in cleanup phase.
+    let duckOverlay: HTMLDivElement | null = null;
 
     // Animate every mover with WAAPI
     for (const { el, dy } of movers) {
@@ -1429,27 +1453,54 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       animations.push(anim);
     }
 
-    // Hero duck effect: darken + slight scale through the middle, surface at end.
-    // Envelope shaped with soft corners (entry/exit eased instead of stepping)
-    // so the depression rolls in and rolls out with the slower overall motion.
+    // Hero duck effect: scale + dimming overlay through the middle, surface at end.
+    // The dim is rendered as a sibling overlay (fading opacity on a black div)
+    // rather than `filter: brightness(...)` on the card. A CSS filter on the
+    // card would force the compositor to rasterize the card's subtree on every
+    // frame of the filter interpolation, which freezes WebGL / canvas effects
+    // (flux streamlines, signal strings, sand) inside the card for the duration
+    // of the duck. The overlay approach keeps the canvases rendering normally.
     const heroCard = hero.el.querySelector<HTMLElement>(".session-card");
     if (heroCard) {
       const duckAnim = heroCard.animate(
         [
-          { filter: "brightness(1)", transform: "scale(1)", offset: 0 },
-          { filter: `brightness(${(1 + parseFloat(duckBrightness.toFixed(2))) / 2})`, transform: "scale(0.993)", offset: 0.12 },
-          { filter: `brightness(${duckBrightness})`, transform: "scale(0.985)", offset: 0.28 },
-          { filter: `brightness(${duckBrightness})`, transform: "scale(0.985)", offset: 0.72 },
-          { filter: `brightness(${(1 + parseFloat(duckBrightness.toFixed(2))) / 2})`, transform: "scale(0.993)", offset: 0.88 },
-          { filter: "brightness(1)", transform: "scale(1)", offset: 1 },
+          { transform: "scale(1)", offset: 0 },
+          { transform: "scale(0.993)", offset: 0.12 },
+          { transform: "scale(0.985)", offset: 0.28 },
+          { transform: "scale(0.985)", offset: 0.72 },
+          { transform: "scale(0.993)", offset: 0.88 },
+          { transform: "scale(1)", offset: 1 },
         ],
         { duration: DURATION, easing: EASING },
       );
       animations.push(duckAnim);
+
+      const peakOpacity = 1 - duckBrightness;
+      const midOpacity = peakOpacity * 0.5;
+      duckOverlay = document.createElement("div");
+      duckOverlay.style.cssText =
+        "position:absolute;inset:0;background:#000;opacity:0;" +
+        "pointer-events:none;border-radius:inherit;z-index:1000;";
+      heroCard.appendChild(duckOverlay);
+      const dimAnim = duckOverlay.animate(
+        [
+          { opacity: 0, offset: 0 },
+          { opacity: midOpacity, offset: 0.12 },
+          { opacity: peakOpacity, offset: 0.28 },
+          { opacity: peakOpacity, offset: 0.72 },
+          { opacity: midOpacity, offset: 0.88 },
+          { opacity: 0, offset: 1 },
+        ],
+        { duration: DURATION, easing: EASING },
+      );
+      animations.push(dimAnim);
     }
 
     // Snapshot and clean up when all animations finish
     Promise.all(animations.map((a) => a.finished)).then(() => {
+      if (duckOverlay && duckOverlay.parentNode) {
+        duckOverlay.parentNode.removeChild(duckOverlay);
+      }
       if (animationGenRef.current !== gen) return;
       isAnimatingRef.current = false;
       const allCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
@@ -1461,12 +1512,16 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         ids.push(cid);
         c.style.zIndex = "";
         c.style.position = "";
+        c.style.willChange = "";
       });
       cardPositions.current = positions;
       committedOrderRef.current = ids;
       setReorderTick((t) => t + 1);
     }).catch(() => {
       // Animation cancelled (new reorder started) — just clear flag
+      if (duckOverlay && duckOverlay.parentNode) {
+        duckOverlay.parentNode.removeChild(duckOverlay);
+      }
       if (animationGenRef.current === gen) {
         isAnimatingRef.current = false;
       }
