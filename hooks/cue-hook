@@ -611,6 +611,10 @@ def main():
                     active_subs = max(0, active_subs - 1)
                     if active_subs > 0:
                         action = "subagent"
+                    elif existing.get("state") == "waiting":
+                        # Main session is waiting for user — don't clobber it
+                        # when the last subagent stops.
+                        return
                     else:
                         # If the main turn already ended (Stop fired while
                         # subagents were still running and was overridden to
