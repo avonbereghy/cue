@@ -300,7 +300,11 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       // Enter / re-enter drain. A fresh entry (phase was idle) starts full;
       // otherwise we resume from wherever fill currently sits so a brief
       // flicker out of compacting doesn't reset the tank visually.
-      if (compactPhaseRef.current === "idle") {
+      // Special case: if we were already in the accelerated exit phase, the
+      // fill has been draining at ~250ms pace and is probably near zero —
+      // that's NOT a brief flicker, it's a real re-entry, so reset to full
+      // instead of carrying a near-empty tank back into "compacting".
+      if (compactPhaseRef.current === "idle" || compactPhaseRef.current === "exiting") {
         compactFillRef.current = 1;
         preCompactTokensRef.current = metrics.lastInputTokens;
       }

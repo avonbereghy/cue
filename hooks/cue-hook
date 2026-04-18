@@ -512,10 +512,22 @@ def main():
         lock.seek(0)
         _lock(lock)
         try:
-            # Read existing sessions
+            # Read existing sessions. If the file is present but malformed
+            # (partial write, disk corruption), rename it aside instead of
+            # silently resetting — that's data loss affecting every tracked
+            # session on next hook.
             try:
                 with open(STATUS_FILE, "r", encoding="utf-8") as f:
                     status = json.load(f)
+            except FileNotFoundError:
+                status = {"sessions": {}}
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                try:
+                    corrupt_path = f"{STATUS_FILE}.corrupt-{int(time.time())}"
+                    os.replace(STATUS_FILE, corrupt_path)
+                except OSError:
+                    pass
+                status = {"sessions": {}}
             except Exception:
                 status = {"sessions": {}}
 
