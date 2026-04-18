@@ -94,12 +94,13 @@ export function ThemePickerPage() {
 
   useEffect(() => {
     loadSettings();
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
     listen<Settings>("settings-changed", (e) => {
       setSettings(e.payload);
       setActiveId(e.payload.activeThemeId ?? "default");
-    }).then((fn) => { unlisten = fn; });
-    return () => { unlisten?.(); };
+    }).then((fn) => { if (cancelled) fn(); else unlisten = fn; });
+    return () => { cancelled = true; unlisten?.(); };
   }, [loadSettings]);
 
   const selectTheme = (theme: SignalTheme) => {
