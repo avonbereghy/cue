@@ -182,6 +182,12 @@ pub struct SessionMetrics {
     /// Used to infer "waiting" state from the JSONL when the hook doesn't fire.
     #[serde(default)]
     pub pending_tool_use: bool,
+    /// True if the latest assistant message contains a non-empty `text` content
+    /// block — i.e., user-visible response prose has begun streaming. Used to
+    /// promote `thinking` → `working` for text-only responses where neither
+    /// PreToolUse nor PostToolUse fires.
+    #[serde(default)]
+    pub last_assistant_has_text: bool,
     /// Name of the currently running tool (from last pending tool_use)
     #[serde(default)]
     pub running_tool_name: Option<String>,
@@ -317,6 +323,17 @@ impl EnrichedSession {
         }
         if info.agent_name.is_none() {
             info.agent_name = metrics.agent_name.clone();
+        }
+
+        // Promote thinking → working when user-visible response prose has begun.
+        // Claude Code only fires PreToolUse → working hooks on tool calls; for
+        // text-only responses the card would otherwise sit on `thinking` until
+        // Stop fires and snaps it to `idle`. We detect the transition via the
+        // last assistant message's `text` content block (extended-thinking
+        // tokens land in `thinking` blocks, so output_tokens alone would
+        // false-positive during a still-thinking response).
+        if info.state == "thinking" && metrics.last_assistant_has_text {
+            info.state = "working".to_string();
         }
         let workspace_name = std::path::Path::new(&info.workspace)
             .file_name()
@@ -1055,6 +1072,65 @@ mod tests {
         info.started_at = now - 600.0;
         let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default());
         assert_eq!(es.info.state, "done");
+    }
+
+    #[test]
+    fn test_thinking_promoted_to_working_when_text_present() {
+        // Card sat on `thinking` waiting for Claude Code's PreToolUse hook to
+        // fire — but text-only responses never trigger it. JSONL polling
+        // detects the `text` content block and promotes the displayed state.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        let mut info = make_test_info("s", "/tmp", "thinking");
+        info.last_activity = now;
+        info.started_at = now - 10.0;
+        let metrics = SessionMetrics {
+            last_assistant_has_text: true,
+            ..Default::default()
+        };
+        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        assert_eq!(es.info.state, "working");
+        assert_eq!(es.state_display_name, "Working");
+    }
+
+    #[test]
+    fn test_thinking_stays_when_only_thinking_blocks() {
+        // Pure extended-thinking response (no text yet) must NOT promote.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        let mut info = make_test_info("s", "/tmp", "thinking");
+        info.last_activity = now;
+        info.started_at = now - 10.0;
+        let metrics = SessionMetrics {
+            last_assistant_has_text: false,
+            output_tokens: 5000, // thinking tokens — would false-positive on token count
+            ..Default::default()
+        };
+        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        assert_eq!(es.info.state, "thinking");
+    }
+
+    #[test]
+    fn test_text_present_does_not_override_non_thinking_states() {
+        // The promotion rule is scoped to `thinking` only — never overrides
+        // working/waiting/idle/etc.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        let mut info = make_test_info("s", "/tmp", "waiting");
+        info.last_activity = now;
+        info.started_at = now - 10.0;
+        let metrics = SessionMetrics {
+            last_assistant_has_text: true,
+            ..Default::default()
+        };
+        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        assert_eq!(es.info.state, "waiting");
     }
 
     #[test]
