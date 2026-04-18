@@ -206,8 +206,11 @@ fn set_vibrancy(app: tauri::AppHandle, enabled: bool) {
 fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
     use std::io::Write;
 
-    let mut f = std::fs::OpenOptions::new().create(true).append(true)
-        .open("/tmp/cue-vibrancy.log").unwrap();
+    let mut f = match std::fs::OpenOptions::new().create(true).append(true)
+        .open("/tmp/cue-vibrancy.log") {
+        Ok(f) => f,
+        Err(_) => return, // log is debug-only; skip toggle if /tmp is unwritable
+    };
     let _ = writeln!(f, "toggle_vibrancy called, enabled={}", enabled);
 
     #[cfg(target_os = "macos")]
@@ -272,7 +275,7 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                         let _ = writeln!(f, "Wrapped contentView in NSVisualEffectView OK");
 
                         // Now make the WKWebView layer AND its HTML content transparent
-                        let f2 = f.try_clone().unwrap();
+                        let f2 = f.try_clone().ok();
                         let w = window.clone();
                         tauri::async_runtime::spawn(async move {
                             use std::io::Write;
@@ -292,7 +295,9 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                                      document.documentElement.style.background='transparent';\
                                      document.body.style.background='transparent';"
                                 );
-                                let _ = writeln!(f, "  applied transparency at {}ms", delay_ms);
+                                if let Some(f) = f.as_mut() {
+                                    let _ = writeln!(f, "  applied transparency at {}ms", delay_ms);
+                                }
                             }
                         });
                     } else {
