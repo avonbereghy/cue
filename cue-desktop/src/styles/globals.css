@@ -383,6 +383,77 @@ html[data-theme="light"]:not([data-glass]) .session-card--compact.session-card--
    floating(0) ↔ pressed(3px) ↔ waiting(-2px) ↔ error(-2px) ↔ compacting(3px)
    No keyframe animations needed — transitions handle interruption gracefully. */
 
+/* Smooth-exit — one-shot class applied for the thinking→working handoff.
+   Stretches the card's border/shadow/background/transform transitions and
+   swaps the curve for a softer outExpo tail so the retract doesn't snap.
+   Cleared ~2700ms after commit by the card's smoothExit timer — long enough
+   to outlast the 2500ms flux retract so both finish together. */
+.session-card.session-card--smooth-exit {
+  transition:
+    box-shadow 2.5s cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 2.5s cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 2.5s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 2.5s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 300ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-card.session-card--smooth-exit { transition: none; }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   One-shot state-entry animations. Applied as a class for the keyframe's
+   duration, then cleared by the parent's entryAnim timer so the animation
+   replays on every fresh entry instead of sticking.
+
+   `filter: drop-shadow` is used (not box-shadow) so the colored bloom stacks
+   cleanly on top of whatever the state's base box-shadow happens to be
+   without overriding it. Drop-shadow is GPU-composited on macOS so the pulse
+   doesn't cost layout or paint.
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* Error — quick red bloom to grab attention on first entry */
+@keyframes card-enter-error {
+  0%   { filter: drop-shadow(0 0 0 rgba(255, 69, 58, 0)); }
+  30%  { filter: drop-shadow(0 0 18px rgba(255, 69, 58, 0.65)); }
+  100% { filter: drop-shadow(0 0 0 rgba(255, 69, 58, 0)); }
+}
+.session-card--enter-error {
+  animation: card-enter-error 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Done — celebratory green bloom on successful completion. Longer decay
+   than error so it reads as a settle rather than an alert. */
+@keyframes card-enter-done {
+  0%   { filter: drop-shadow(0 0 0 rgba(34, 197, 94, 0)); }
+  28%  { filter: drop-shadow(0 0 22px rgba(34, 197, 94, 0.55)); }
+  100% { filter: drop-shadow(0 0 0 rgba(34, 197, 94, 0)); }
+}
+.session-card--enter-done {
+  animation: card-enter-done 720ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Waiting — double-pulse amber glow (two rises, one decay) so the eye is
+   drawn without ambiguity that input is needed. Pairs with the status dot's
+   own diamond flash and the card's waiting construction-tape stripes. */
+@keyframes card-enter-waiting {
+  0%   { filter: drop-shadow(0 0 0 rgba(234, 179, 8, 0)); }
+  25%  { filter: drop-shadow(0 0 20px rgba(234, 179, 8, 0.55)); }
+  50%  { filter: drop-shadow(0 0 2px rgba(234, 179, 8, 0.15)); }
+  72%  { filter: drop-shadow(0 0 14px rgba(234, 179, 8, 0.40)); }
+  100% { filter: drop-shadow(0 0 0 rgba(234, 179, 8, 0)); }
+}
+.session-card--enter-waiting {
+  animation: card-enter-waiting 1000ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-card--enter-error,
+  .session-card--enter-done,
+  .session-card--enter-waiting {
+    animation: none;
+  }
+}
+
 /* During slide-to-top: hold floating appearance, suppress state transitions */
 .session-card--sliding {
   transition: none !important;
@@ -519,11 +590,9 @@ html[data-theme="light"]:not([data-glass]) .session-card--thinking {
     inset 0 0 40px rgba(234, 88, 12, 0.10);
 }
 
-/* Compacting state — periwinkle border glow + slow sweep bar */
-@keyframes compacting-bar-sweep {
-  0%   { background-position: -100% 0; }
-  100% { background-position: 200% 0; }
-}
+/* Compacting state — periwinkle border glow. The draining water tank
+   (CompactTankEffect canvas) carries the motion now; the legacy horizontal
+   sweep bar was removed so the two effects don't compete. */
 .session-card--compacting {
   border-color: rgba(139, 159, 212, 0.35);
   box-shadow:
@@ -532,15 +601,29 @@ html[data-theme="light"]:not([data-glass]) .session-card--thinking {
     0 0 24px rgba(139, 159, 212, 0.07);
 }
 .session-card--compacting::before {
-  opacity: 1;
-  background: linear-gradient(90deg,
-    transparent 0%,
-    rgba(139, 159, 212, 0.35) 40%,
-    rgba(139, 159, 212, 0.55) 50%,
-    rgba(139, 159, 212, 0.35) 60%,
-    transparent 100%);
-  background-size: 300% 100%;
-  animation: compacting-bar-sweep 2.8s ease-in-out infinite;
+  opacity: 0;
+  animation: none;
+}
+
+/* Pulsing blue bar that stands in for the context bar during compacting.
+   The drain (transform: scaleX) is driven by the parent's rAF; the pulse is
+   a pure opacity breathe. Reduced motion keeps the bar visible at mid-opacity
+   so the drain is still readable but the breathe stops. */
+@keyframes compact-bar-pulse {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 0.95; }
+}
+.session-card__compact-bar {
+  opacity: 0.75;
+  animation: compact-bar-pulse 1.6s ease-in-out infinite;
+  will-change: transform, opacity;
+  box-shadow: 0 0 6px rgba(96, 165, 250, 0.35);
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-card__compact-bar {
+    animation: none;
+    opacity: 0.7;
+  }
 }
 html[data-theme="light"]:not([data-glass]) .session-card--compacting {
   background-color: rgba(74, 95, 160, 0.04);
