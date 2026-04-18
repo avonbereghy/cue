@@ -313,6 +313,76 @@ mod tests {
         assert!(p.to_string_lossy().contains("my-app"));
     }
 
+    #[test]
+    fn test_sanitize_workspace_path_rejects_shell_metacharacters() {
+        // Every one of these, if accepted, would allow injection in
+        // AppleScript or cmd.exe string contexts downstream.
+        let bad = [
+            "/tmp/x\"y",   // double quote
+            "/tmp/x'y",   // single quote
+            "/tmp/x`y",   // backtick
+            "/tmp/x$y",   // dollar
+            "/tmp/x;y",   // semicolon
+            "/tmp/x|y",   // pipe
+            "/tmp/x&y",   // ampersand
+            "/tmp/x\\y",  // backslash
+            "/tmp/x\ny",  // newline
+        ];
+        for p in bad {
+            let result = sanitize_workspace_path(p);
+            assert!(result.is_err(), "expected {:?} to be rejected", p);
+        }
+    }
+
+    #[test]
+    fn test_sanitize_workspace_path_rejects_null_byte() {
+        let result = sanitize_workspace_path("/tmp/x\0y");
+        assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_atomic_write_refuses_symlink_at_tmp_path() {
+        // Attacker pre-creates a symlink at the deterministic-ish tmp path
+        // pointing at a victim file. atomic_write must refuse to follow it.
+        use std::os::unix::fs::symlink;
+
+        let dir = std::env::temp_dir().join("cue_test_atomic_symlink");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let target = dir.join("sessions.json");
+        let victim = dir.join("victim");
+        fs::write(&victim, "original victim content").unwrap();
+
+        // Force collision by writing once so we know the directory + target
+        // exist, then pre-seed a symlink named exactly like a fresh tmp file
+        // would be — atomic_write must use a fresh nanos suffix, so even if
+        // we seed an old collision, the new write uses a different name.
+        // The bigger test: if we somehow manage to collide, create_new fails.
+        let fake_tmp = dir.join(format!(
+            "{}.tmp.{}.0",
+            target.file_name().unwrap().to_string_lossy(),
+            std::process::id(),
+        ));
+        symlink(&victim, &fake_tmp).unwrap();
+
+        // First write may or may not collide with our seeded tmp; repeat a
+        // few times to raise the chance. In all cases the victim file must
+        // remain untouched.
+        for _ in 0..5 {
+            let _ = atomic_write(&target, b"cue payload");
+        }
+
+        let victim_after = fs::read_to_string(&victim).unwrap();
+        assert_eq!(
+            victim_after, "original victim content",
+            "symlink target must not be overwritten",
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[cfg(unix)]
     #[test]
     fn test_atomic_write_content_and_permissions() {
