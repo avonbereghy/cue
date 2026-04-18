@@ -266,6 +266,13 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   const compactExitFromRef = useRef(0);
   const compactRafRef = useRef<number | null>(null);
   const [tankMounted, setTankMounted] = useState(false);
+  // Snapshot of lastInputTokens at compact start. While the post-compact
+  // reading still matches this value, the bar would show the pre-compact
+  // size (e.g. 381K / 1M) which is misleading — the new conversation has
+  // actually been shrunk to a summary. Stay on the spinner until a fresh
+  // API call updates the token count.
+  const preCompactTokensRef = useRef<number | null>(null);
+  const [staleAfterCompact, setStaleAfterCompact] = useState(false);
 
   useEffect(() => {
     const tick = () => {
@@ -295,10 +302,12 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       // flicker out of compacting doesn't reset the tank visually.
       if (compactPhaseRef.current === "idle") {
         compactFillRef.current = 1;
+        preCompactTokensRef.current = metrics.lastInputTokens;
       }
       compactStartRef.current = performance.now() - (1 - compactFillRef.current) * COMPACT_DRAIN_MS;
       compactPhaseRef.current = "draining";
       setTankMounted(true);
+      setStaleAfterCompact(true);
     } else if (compactPhaseRef.current === "draining") {
       // State left compacting — accelerate to empty.
       compactPhaseRef.current = "exiting";
@@ -320,7 +329,19 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
         compactRafRef.current = null;
       }
     };
-  }, [displayState]);
+  }, [displayState, metrics.lastInputTokens]);
+
+  // Clear the stale flag once a fresh API reading lands. lastInputTokens
+  // changes when the first post-compact request completes, which is the
+  // signal that the shown percentage reflects the new conversation.
+  useEffect(() => {
+    if (!staleAfterCompact) return;
+    if (preCompactTokensRef.current === null) return;
+    if (metrics.lastInputTokens !== preCompactTokensRef.current) {
+      setStaleAfterCompact(false);
+      preCompactTokensRef.current = null;
+    }
+  }, [metrics.lastInputTokens, staleAfterCompact]);
 
   // One-shot smooth-exit window applied during the thinking→working commit.
   // Flips .session-card--smooth-exit on simultaneously with the label/display
@@ -1019,13 +1040,12 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             })();
             const pct = Math.round(session.contextUsagePercent * 100);
             const tokStr = `${formatTokens(metrics.lastInputTokens)} / ${formatTokens(session.contextLimit)}`;
-            // While Claude is compacting, token counts aren't updating. Show
-            // the existing loading spinner so the card keeps its shape (no
-            // missing rows) and communicates "waiting for fresh data". Once
-            // compacting ends we immediately show stale X/Max counts — the
-            // real reading arrives with the next user prompt.
+            // While Claude is compacting or the post-compact token count
+            // hasn't refreshed yet, show the spinner instead of a misleading
+            // pre-compact size. Once a fresh API reading lands the stale
+            // flag clears and the bar/text swap in.
             const isCompactingUI = displayState === "compacting";
-            const isLoading = isCompactingUI || metrics.lastInputTokens === 0;
+            const isLoading = isCompactingUI || staleAfterCompact || metrics.lastInputTokens === 0;
 
             if (contextDisplay === "compact") {
               return (
