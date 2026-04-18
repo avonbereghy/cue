@@ -280,10 +280,13 @@ mod tests {
 
     #[test]
     fn test_hann_window() {
-        let w = hann_window(4);
-        assert!((w[0] - 0.0).abs() < 0.001);
-        assert!((w[2] - 0.0).abs() < 0.001);
-        assert!((w[1] - 1.0).abs() < 0.001);
+        // Hann: 0.5 * (1 - cos(2πi / (N-1))).
+        // For N=5: endpoints 0.0, peak 1.0 at the midpoint, symmetric.
+        let w = hann_window(5);
+        assert!((w[0] - 0.0).abs() < 0.001, "w[0] = {}", w[0]);
+        assert!((w[4] - 0.0).abs() < 0.001, "w[4] = {}", w[4]);
+        assert!((w[2] - 1.0).abs() < 0.001, "w[2] = {}", w[2]);
+        assert!((w[1] - w[3]).abs() < 0.001, "window should be symmetric");
     }
 
     #[test]
