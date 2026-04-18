@@ -441,7 +441,15 @@ fn extract_effort_command(obj: &serde_json::Map<String, Value>) -> Option<String
     if args.is_empty() {
         return None;
     }
-    Some(args.to_lowercase())
+    let lowered = args.to_lowercase();
+    // Accept any 3+ char lowercase-alpha word so future levels (ultra, xhigh,
+    // whatever Anthropic adds next) still pass. Reject typos/stray chars like
+    // a single "x" or "3" — those would otherwise render as a literal pill
+    // value and misrepresent what the model is actually running at.
+    if lowered.len() < 3 || !lowered.chars().all(|c| c.is_ascii_lowercase()) {
+        return None;
+    }
+    Some(lowered)
 }
 
 /// Strip ANSI escape sequences (CSI sequences like \x1b[...m and OSC sequences).
@@ -922,6 +930,23 @@ mod tests {
         let line = r#"{"type":"user","timestamp":1.0,"message":{"role":"user","content":"<command-name>/effort</command-name><command-args>ultra</command-args>"}}"#;
         let entries = parse_jsonl_content(line);
         assert_eq!(entries[0].effort_command.as_deref(), Some("ultra"));
+    }
+
+    #[test]
+    fn test_effort_command_rejects_single_char_arg() {
+        // `/effort X` (user typo) would previously render as a literal "x" pill
+        // misrepresenting the actual effort level — now rejected so the
+        // backend falls back to the global/auto default.
+        let line = r#"{"type":"user","timestamp":1.0,"message":{"role":"user","content":"<command-name>/effort</command-name><command-args>X</command-args>"}}"#;
+        let entries = parse_jsonl_content(line);
+        assert!(entries[0].effort_command.is_none());
+    }
+
+    #[test]
+    fn test_effort_command_rejects_numeric_arg() {
+        let line = r#"{"type":"user","timestamp":1.0,"message":{"role":"user","content":"<command-name>/effort</command-name><command-args>3</command-args>"}}"#;
+        let entries = parse_jsonl_content(line);
+        assert!(entries[0].effort_command.is_none());
     }
 
     #[test]

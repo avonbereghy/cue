@@ -39,7 +39,7 @@ interface FluxEffectProps {
 /** How long the enter/exit growth ramp takes. Parent should delay unmount
  *  at least EXIT_MS after flipping active→false so the retract plays out. */
 export const FLUX_ENTER_MS = 500;
-export const FLUX_EXIT_MS = 400;
+export const FLUX_EXIT_MS = 2500;
 
 function hexToRgb(hex: string): [number, number, number] {
   const h = hex.replace("#", "");
@@ -68,11 +68,16 @@ function hexToRgb(hex: string): [number, number, number] {
 
 // Stream-function sum. psi(x, y, t) = Σ A·sin(kx·x + ky·y + ω·t + φ).
 // Velocity = 2D curl = (∂ψ/∂y, -∂ψ/∂x). Closed-form derivatives below.
+//
+// Angular frequencies (w) are chosen to be mutually incommensurate — no
+// small-integer ratios — so the four components don't beat against each
+// other and produce metronomic sweeps. Overall rate is ~60% of the earlier
+// preset; that's what controls how fast the flow breathes past the needles.
 const FLOW_COMPONENTS = [
-  { A: 1.00, kx:  0.0100, ky:  0.0070, w: 0.30, p: 0.0 },
-  { A: 0.65, kx: -0.0140, ky:  0.0160, w: 0.40, p: 1.7 },
-  { A: 0.45, kx:  0.0220, ky: -0.0130, w: 0.24, p: 3.1 },
-  { A: 0.32, kx:  0.0150, ky:  0.0240, w: 0.18, p: 5.0 },
+  { A: 1.00, kx:  0.0100, ky:  0.0070, w: 0.173, p: 0.0 },
+  { A: 0.65, kx: -0.0140, ky:  0.0160, w: 0.241, p: 1.7 },
+  { A: 0.45, kx:  0.0220, ky: -0.0130, w: 0.109, p: 3.1 },
+  { A: 0.32, kx:  0.0150, ky:  0.0240, w: 0.067, p: 5.0 },
 ];
 
 function sampleField(
@@ -179,8 +184,12 @@ void main() {
   float growth = smoothstep(appearT, appearT + 0.5, u_growth);
 
   float halfW = u_width * (0.35 + 0.65 * wb);
+  // Only the LENGTH (tan direction) shrinks with growth — width stays full so
+  // the line reads as a needle smoothly retracting to its basepoint instead of
+  // fading into a sub-pixel ghost. The fragment shader handles the final
+  // alpha cutoff near growth=0 so degenerate quads don't leave a lingering dot.
   vec2 offset = tan * (extY * len * growth)
-              + nrm * ((a_quad.x - 0.5) * halfW * 2.0 * growth);
+              + nrm * ((a_quad.x - 0.5) * halfW * 2.0);
   vec2 pos = a_base + offset;
 
   vec2 ndc = (pos / u_res) * 2.0 - 1.0;
@@ -215,9 +224,12 @@ void main() {
   // Tail-to-head alpha fade (Flux line.frag's smoothstep(offset, 1, y)).
   float taper = smoothstep(0.0, 0.6, v_uv.y);
 
-  // Fold growth into alpha so sub-pixel-short stubs don't read as slivers
-  // during enter/exit — they fade with their length.
-  float a = edge * taper * v_widthBoost * u_alpha * v_growth;
+  // Keep alpha full through most of the retract — a sharp cutoff only near
+  // growth=0 clears the degenerate quad. This makes the needles hold their
+  // brightness while the tip retracts toward the base, instead of fading into
+  // invisibility early in the window.
+  float aFade = smoothstep(0.0, 0.12, v_growth);
+  float a = edge * taper * v_widthBoost * u_alpha * aFade;
   gl_FragColor = vec4(v_color * (0.65 + 0.35 * v_widthBoost), a);
 }
 `;
@@ -556,7 +568,12 @@ export function FluxEffect({
         const vx = curLines[k + 4];
         const vy = curLines[k + 5];
 
-        const [fx, fy] = sampleField(bx, by, tField, seedRef.current, turb);
+        // Per-line temporal offset — a smooth 2D wave over the card adds ~±2.2s
+        // of phase spread between neighboring lines. Breaks the card-wide
+        // synchronized sweep (every line sampling the same t) without making
+        // adjacent lines point in unrelated directions. Cheap (2 sin calls).
+        const tLocal = tField + Math.sin(bx * 0.013 + by * 0.019) * 2.2;
+        const [fx, fy] = sampleField(bx, by, tLocal, seedRef.current, turb);
         let tx = lineLen * fx;
         let ty = lineLen * fy;
 

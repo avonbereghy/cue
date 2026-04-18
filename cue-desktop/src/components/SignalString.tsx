@@ -399,19 +399,20 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         return;
       }
 
-      // State-aware target color: thinking=orange, idle=warm tan (sand lives
-      // on idle now, so it picks up the idle badge color), waiting=yellow,
-      // error=red, default=configured color.
-      const targetColor = state === "thinking"
-        ? (isDark ? { r: 246, g: 165, b: 96 } : { r: 194, g: 65, b: 12 })  // thinking orange
-        : state === "subagent"
-        ? (isDark ? { r: 96, g: 165, b: 250 } : { r: 37, g: 99, b: 235 })  // subagent blue
-        : state === "idle"
-        ? (isDark ? { r: 212, g: 165, b: 116 } : { r: 168, g: 162, b: 158 }) // idle tan / gray
+      // State-aware target color. Attention states (error, waiting) win over
+      // everything else — if the user needs to respond, the string color must
+      // communicate that even when subagents are stacked on top. Priority:
+      //   error > waiting > thinking > subagent > idle > configured default
+      const targetColor = state === "error"
+        ? (isDark ? { r: 239, g: 68, b: 68 } : { r: 185, g: 28, b: 28 })     // red
         : state === "waiting"
-        ? { r: 234, g: 179, b: 8 }   // amber/yellow
-        : state === "error"
-        ? { r: 239, g: 68, b: 68 }    // red
+        ? (isDark ? { r: 234, g: 179, b: 8 } : { r: 161, g: 98, b: 7 })       // amber/yellow
+        : state === "thinking"
+        ? (isDark ? { r: 246, g: 165, b: 96 } : { r: 194, g: 65, b: 12 })     // thinking orange
+        : state === "subagent"
+        ? (isDark ? { r: 96, g: 165, b: 250 } : { r: 37, g: 99, b: 235 })     // subagent blue
+        : state === "idle"
+        ? (isDark ? { r: 212, g: 165, b: 116 } : { r: 168, g: 162, b: 158 })  // idle tan / gray
         : defaultColor;
 
       // Initialize on first frame
@@ -498,7 +499,13 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         // leading edge. FluxEffect reads these by session id and pushes
         // nearby line targets radially outward — so strings physically
         // displace the flux as they arrive, instead of popping on top of it.
-        if (sessionId) {
+        //
+        // Skip while state === "thinking": strings are invisibly deploying
+        // in the background (stateIsActive covers thinking so physics stay
+        // primed for the thinking→working redeploy), but we don't want that
+        // invisible sweep to bulge the flux field. The ripple should only
+        // read on the thinking→working transition when strings are visible.
+        if (sessionId && stateRef.current !== "thinking") {
           const list: FluxDisturbance[] = [];
           // Three bands stacked vertically; exact y doesn't matter much
           // given the generous push radius, just needs to cover the card.
@@ -523,6 +530,10 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           } else {
             clearDisturbances(sessionId);
           }
+        } else if (sessionId && stateRef.current === "thinking") {
+          // Keep the registry clean during thinking so any lingering entry
+          // from a prior state doesn't keep pushing flux lines around.
+          clearDisturbances(sessionId);
         }
 
         // Fully retracted — nothing to draw, just keep the loop alive
