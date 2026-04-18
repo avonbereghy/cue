@@ -509,6 +509,19 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       }, 900);
     }
 
+    // Thinking → non-handoffable (typically idle or done): route through the
+    // same commitHandoff delay + smoothExit path as thinking→working. A short
+    // settle window (250ms) lets the animating title's per-char keyframes
+    // ease toward rest before unmounting, and smoothExit stretches the
+    // border/background/shadow/tint morph over 2.5s so it rides in lock-step
+    // with the flux-needle retract (FLUX_EXIT_MS). Without this, the card's
+    // CSS properties snap in 0.4s while flux keeps retracting — the mid-
+    // retract snap reads as a visible flash.
+    if (displayState === "thinking" && !targetIsHandoffable) {
+      commitHandoff(250);
+      return;
+    }
+
     // Default — sync both immediately.
     setDisplayState(info.state);
     setLabelState(info.state);
