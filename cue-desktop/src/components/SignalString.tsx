@@ -216,11 +216,12 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   const liveDataRef = useRef<{ bass: number; mids: number; treble: number }>({ bass: 0, mids: 0, treble: 0 });
   useEffect(() => {
     if (signalMode !== "live") return;
+    let cancelled = false;
     let unlisten: (() => void) | null = null;
     listen<{ bass: number; mids: number; treble: number }>("live-audio-data", (event) => {
       liveDataRef.current = event.payload;
-    }).then((fn) => { unlisten = fn; });
-    return () => { unlisten?.(); };
+    }).then((fn) => { if (cancelled) fn(); else unlisten = fn; });
+    return () => { cancelled = true; unlisten?.(); };
   }, [signalMode]);
 
   useEffect(() => {

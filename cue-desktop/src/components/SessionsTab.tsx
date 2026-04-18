@@ -341,12 +341,15 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   useEffect(() => {
     // Load settings on mount
     invoke<Settings>("get_settings").then(applySettings).catch(() => {});
-    // Listen for settings changes from any window (replaces 2s polling)
+    // Listen for settings changes from any window (replaces 2s polling).
+    // `cancelled` handles the unmount-before-subscribe race: if unmount fires
+    // before listen() resolves, we detach immediately instead of leaking.
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
     listen<Settings>("settings-changed", (event) => {
       applySettings(event.payload);
-    }).then((fn) => { unlisten = fn; });
-    return () => { unlisten?.(); };
+    }).then((fn) => { if (cancelled) fn(); else unlisten = fn; });
+    return () => { cancelled = true; unlisten?.(); };
   }, [applySettings]);
 
   // Global keyboard shortcuts (Cmd+/- for font scaling)
@@ -1661,11 +1664,12 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       }
     };
 
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
     listen<{ animation: string }>("keyboard-animation", (event) => {
       handler(event.payload);
-    }).then((fn) => { unlisten = fn; });
-    return () => { unlisten?.(); };
+    }).then((fn) => { if (cancelled) fn(); else unlisten = fn; });
+    return () => { cancelled = true; unlisten?.(); };
   }, []);
 
   // Helper to update a setting and persist immediately

@@ -157,7 +157,7 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
             _lock(lock)
             try:
                 try:
-                    with open(STATUS_FILE, "r") as f:
+                    with open(STATUS_FILE, "r", encoding="utf-8") as f:
                         status = json.load(f)
                 except Exception:
                     status = {"sessions": {}}
@@ -201,13 +201,15 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
 
                 fd, tmp = tempfile.mkstemp(dir=STATUS_DIR, suffix=".json.tmp")
                 try:
-                    with os.fdopen(fd, "w") as f:
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
                         json.dump(status, f, indent=2)
                         f.flush()
                         os.fsync(f.fileno())
-                    os.replace(tmp, STATUS_FILE)
+                    # chmod before the rename so the target file is never
+                    # world-readable between replace and chmod.
                     if sys.platform != "win32":
-                        os.chmod(STATUS_FILE, 0o600)
+                        os.chmod(tmp, 0o600)
+                    os.replace(tmp, STATUS_FILE)
                 except Exception:
                     try:
                         os.unlink(tmp)
@@ -330,7 +332,7 @@ def _detect_team(transcript_path=None):
     # agents, so we must NOT scan the whole file.
     if transcript_path:
         try:
-            with open(transcript_path, "r") as f:
+            with open(transcript_path, "r", encoding="utf-8", errors="replace") as f:
                 for i, line in enumerate(f):
                     if i >= 5:
                         break
@@ -512,7 +514,7 @@ def main():
         try:
             # Read existing sessions
             try:
-                with open(STATUS_FILE, "r") as f:
+                with open(STATUS_FILE, "r", encoding="utf-8") as f:
                     status = json.load(f)
             except Exception:
                 status = {"sessions": {}}
@@ -527,13 +529,13 @@ def main():
 
                 fd, tmp = tempfile.mkstemp(dir=STATUS_DIR, suffix=".json.tmp")
                 try:
-                    with os.fdopen(fd, "w") as f:
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
                         json.dump(status, f, indent=2)
                         f.flush()
                         os.fsync(f.fileno())
-                    os.replace(tmp, STATUS_FILE)
                     if sys.platform != "win32":
-                        os.chmod(STATUS_FILE, 0o600)
+                        os.chmod(tmp, 0o600)
+                    os.replace(tmp, STATUS_FILE)
                 except Exception:
                     try:
                         os.unlink(tmp)
@@ -666,16 +668,17 @@ def main():
             # Atomic write with unique temp file to avoid collisions
             fd, tmp = tempfile.mkstemp(dir=STATUS_DIR, suffix=".json.tmp")
             try:
-                with os.fdopen(fd, "w") as f:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(status, f, indent=2)
                     # Task 2: Flush and fsync before replace to prevent data loss
                     f.flush()
                     os.fsync(f.fileno())
+                # chmod the temp file before rename so the target is never
+                # briefly world-readable between replace and chmod.
+                if sys.platform != "win32":
+                    os.chmod(tmp, 0o600)
                 # Task 1: os.replace() is atomic on all platforms
                 os.replace(tmp, STATUS_FILE)
-                # Task 3: Restrict permissions on Unix
-                if sys.platform != "win32":
-                    os.chmod(STATUS_FILE, 0o600)
             except Exception:
                 try:
                     os.unlink(tmp)

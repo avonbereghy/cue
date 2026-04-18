@@ -21,21 +21,23 @@ export function Dashboard() {
       setCompactMode(s.compactMode ?? false);
       setSlimMode(s.slimMode ?? false);
     }).catch(() => {});
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
     listen<Settings>("settings-changed", (e) => {
       setCompactMode(e.payload.compactMode ?? false);
       setSlimMode(e.payload.slimMode ?? false);
-    }).then((fn) => { unlisten = fn; });
-    return () => { unlisten?.(); };
+    }).then((fn) => { if (cancelled) fn(); else unlisten = fn; });
+    return () => { cancelled = true; unlisten?.(); };
   }, []);
 
   // Listen for frameless restore from tray menu
   useEffect(() => {
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
     listen<boolean>("frameless-changed", (e) => {
       setFrameless(e.payload);
-    }).then((fn) => { unlisten = fn; });
-    return () => { unlisten?.(); };
+    }).then((fn) => { if (cancelled) fn(); else unlisten = fn; });
+    return () => { cancelled = true; unlisten?.(); };
   }, []);
 
 

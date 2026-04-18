@@ -50,6 +50,18 @@ impl Default for LiveAudioState {
     }
 }
 
+impl Drop for LiveAudioState {
+    fn drop(&mut self) {
+        // Kill+reap any running sidecar so app shutdown doesn't orphan it.
+        // On Unix, Child's default drop neither kills nor waits — the tap
+        // would keep running and the zombie would persist until init reaps.
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 fn hann_window(size: usize) -> Vec<f32> {
     (0..size)
         .map(|i| {
