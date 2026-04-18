@@ -1438,7 +1438,11 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     // Overlay element stashed for removal in cleanup phase.
     let duckOverlay: HTMLDivElement | null = null;
 
-    // Animate every mover with WAAPI
+    // Animate every mover with WAAPI. `fill: "backwards"` holds the start
+    // keyframe (translateY(dy)) during WAAPI's play-pending state so the
+    // browser never paints a single frame at the new DOM position with no
+    // offset applied — that frame, combined with the gentle wind-up easing,
+    // is what reads as a "jump" at the start of the shuffle.
     for (const { el, dy } of movers) {
       if (!el.isConnected || Math.abs(dy) < 1) continue;
 
@@ -1447,7 +1451,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           { transform: `translateY(${dy}px)` },
           { transform: "translateY(0)" },
         ],
-        { duration: DURATION, easing: EASING },
+        { duration: DURATION, easing: EASING, fill: "backwards" },
       );
       animations.push(anim);
     }
@@ -1470,7 +1474,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           { transform: "scale(0.993)", offset: 0.88 },
           { transform: "scale(1)", offset: 1 },
         ],
-        { duration: DURATION, easing: EASING },
+        { duration: DURATION, easing: EASING, fill: "backwards" },
       );
       animations.push(duckAnim);
 
@@ -1490,12 +1494,17 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           { opacity: midOpacity, offset: 0.88 },
           { opacity: 0, offset: 1 },
         ],
-        { duration: DURATION, easing: EASING },
+        { duration: DURATION, easing: EASING, fill: "backwards" },
       );
       animations.push(dimAnim);
     }
 
-    // Snapshot and clean up when all animations finish
+    // Snapshot and clean up when all animations finish.
+    // Layer-style cleanup (will-change/position/zIndex) is deferred one frame:
+    // tearing down the compositor layer in the same frame the animation ends
+    // forces a re-rasterization that can subpixel-snap the card by ~1px,
+    // which reads as the "jump at end of shuffle". Letting one paint happen
+    // at the final position with the layer still alive eliminates that.
     Promise.all(animations.map((a) => a.finished)).then(() => {
       if (duckOverlay && duckOverlay.parentNode) {
         duckOverlay.parentNode.removeChild(duckOverlay);
@@ -1509,12 +1518,17 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         const cid = c.dataset.sessionId!;
         positions.set(cid, c.getBoundingClientRect());
         ids.push(cid);
-        c.style.zIndex = "";
-        c.style.position = "";
-        c.style.willChange = "";
       });
       cardPositions.current = positions;
       committedOrderRef.current = ids;
+      requestAnimationFrame(() => {
+        if (animationGenRef.current !== gen) return;
+        allCards.forEach((c) => {
+          c.style.zIndex = "";
+          c.style.position = "";
+          c.style.willChange = "";
+        });
+      });
       setReorderTick((t) => t + 1);
     }).catch(() => {
       // Animation cancelled (new reorder started) — just clear flag
