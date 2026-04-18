@@ -371,13 +371,18 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     };
   }, []);
 
+  // Track latest info.state so the delayed commit reads the current value at
+  // fire time instead of the value captured when commitHandoff was called.
+  const latestStateRef = useRef(info.state);
+  latestStateRef.current = info.state;
+
   const commitHandoff = useCallback((delayMs: number) => {
     if (handoffCommitTimerRef.current !== null) {
       window.clearTimeout(handoffCommitTimerRef.current);
     }
-    const target = info.state;
     handoffCommitTimerRef.current = window.setTimeout(() => {
       if (smoothExitTimerRef.current !== null) window.clearTimeout(smoothExitTimerRef.current);
+      const target = latestStateRef.current;
       setSmoothExit(true);
       setLabelState(target);
       setDisplayState(target);
@@ -391,7 +396,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
         smoothExitTimerRef.current = null;
       }, 2700);
     }, delayMs);
-  }, [info.state]);
+  }, []);
 
   // SignalString fires this once per deploy cycle when all three bands have
   // fully landed. That's our cue to commit the working-state swap after a

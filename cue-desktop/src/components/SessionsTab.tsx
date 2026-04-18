@@ -1025,6 +1025,19 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // Debounce timer that coalesces near-simultaneous turn ends into one reorder.
   const turnEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Clear any pending reorder timers on unmount so callbacks don't fire into
+  // a dead component and attempt setState.
+  useEffect(() => () => {
+    if (turnEndTimerRef.current) {
+      clearTimeout(turnEndTimerRef.current);
+      turnEndTimerRef.current = null;
+    }
+    if (quiesceTimerRef.current) {
+      clearTimeout(quiesceTimerRef.current);
+      quiesceTimerRef.current = null;
+    }
+  }, []);
+
   // Per-session "settled since" timestamps. A session is "settled" when it
   // has been idle/done for ≥ SETTLE_MS. Active sessions are removed from this map.
   const settledSinceRef = useRef<Map<string, number>>(new Map());
