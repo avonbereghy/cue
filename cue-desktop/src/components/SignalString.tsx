@@ -249,8 +249,12 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         const delay = 850 + bandStaggerMs[i];
         deployTimersRef.current[i] = window.setTimeout(() => {
           deployReadyRef.current[i] = true;
-          // Initial nudge — first band gets a stronger push to come out faster
-          clipVelsRef.current[i] = Math.max(clipVelsRef.current[i], bandNudge[i] * cordDeployForce);
+          // Initial nudge — first band gets a stronger push to come out faster.
+          // Read force from configRef so slider changes mid-deploy apply.
+          clipVelsRef.current[i] = Math.max(
+            clipVelsRef.current[i],
+            bandNudge[i] * configRef.current.cordDeployForce,
+          );
           deployTimersRef.current[i] = null;
         }, delay);
       }
