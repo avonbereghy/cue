@@ -132,7 +132,6 @@ attribute float a_seed;      // per-line offset [0..1] — breaks color lockstep
 uniform vec2 u_res;          // CSS width/height
 uniform float u_width;       // base line width in CSS px
 uniform vec3 u_tint;         // theme color — blended into palette
-uniform float u_audio;       // audio drive factor, 1 at rest, >1 on peaks
 uniform float u_growth;      // global growth [0, 1]; 0 = zero-length, 1 = full
 
 varying vec2 v_uv;
@@ -171,9 +170,8 @@ void main() {
 
   // Quad extrusion: y goes from basepoint (0) to endpoint (1) along tangent,
   // x from -halfW (0) to +halfW (1) along perpendicular. Lines are a fixed
-  // short height — audio no longer extends the tip; it drives the field's
-  // evolution speed instead (CPU side). Keeps u_audio in the uniform list for
-  // future ideas but unused in geometry.
+  // short height — the field's evolution speed (CPU side) responds to audio
+  // instead of geometry stretching.
   float extY = a_quad.y;
 
   // Enter/exit growth: each line has an appear window inside the global
@@ -283,9 +281,8 @@ export function FluxEffect({
     width: WebGLUniformLocation | null;
     tint: WebGLUniformLocation | null;
     alpha: WebGLUniformLocation | null;
-    audio: WebGLUniformLocation | null;
     growth: WebGLUniformLocation | null;
-  }>({ res: null, width: null, tint: null, alpha: null, audio: null, growth: null });
+  }>({ res: null, width: null, tint: null, alpha: null, growth: null });
   const attribsRef = useRef<{
     quad: number;
     base: number;
@@ -432,7 +429,6 @@ export function FluxEffect({
       width:  gl.getUniformLocation(prog, "u_width"),
       tint:   gl.getUniformLocation(prog, "u_tint"),
       alpha:  gl.getUniformLocation(prog, "u_alpha"),
-      audio:  gl.getUniformLocation(prog, "u_audio"),
       growth: gl.getUniformLocation(prog, "u_growth"),
     };
 
@@ -674,7 +670,6 @@ export function FluxEffect({
       const [tr, tg, tb] = hexToRgb(colorRef.current);
       gl.uniform3f(u.tint, tr, tg, tb);
       gl.uniform1f(u.alpha, alphaRef.current * fadeRef.current);
-      gl.uniform1f(u.audio, audioDrive);
       gl.uniform1f(u.growth, growthRef.current);
 
       gl.clearColor(0, 0, 0, 0);
