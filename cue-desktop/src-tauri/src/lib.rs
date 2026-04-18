@@ -533,6 +533,9 @@ fn take_window_screenshot(app: AppHandle) -> Result<String, String> {
     let pos = window.outer_position().map_err(|e| e.to_string())?;
     let size = window.outer_size().map_err(|e| e.to_string())?;
     let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    if !(scale > 0.0) {
+        return Err(format!("Invalid scale factor: {}", scale));
+    }
 
     let lx = (pos.x as f64 / scale).round() as i32;
     let ly = (pos.y as f64 / scale).round() as i32;
