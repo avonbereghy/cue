@@ -57,6 +57,11 @@ pub struct ParsedEntry {
     pub team_name: Option<String>,
     /// Agent name from JSONL (team agent sessions)
     pub agent_name: Option<String>,
+    /// True if this assistant message has at least one non-empty `text`
+    /// content block — i.e., user-visible response prose has begun. Distinct
+    /// from `thinking` blocks (extended thinking) which also count as
+    /// output tokens but should not promote the card from thinking→working.
+    pub has_text_content: bool,
 }
 
 /// Parse a JSONL file into a list of entries.
@@ -173,7 +178,15 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
             if let Some(content) = message.get("content").and_then(|v| v.as_array()) {
                 for block in content {
                     if let Some(block_obj) = block.as_object() {
-                        if block_obj.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                        let block_type = block_obj.get("type").and_then(|v| v.as_str());
+                        if block_type == Some("text") {
+                            if let Some(text) = block_obj.get("text").and_then(|v| v.as_str()) {
+                                if !text.trim().is_empty() {
+                                    entry.has_text_content = true;
+                                }
+                            }
+                        }
+                        if block_type == Some("tool_use") {
                             if let Some(name) = block_obj.get("name").and_then(|v| v.as_str()) {
                                 *entry.tool_counts.entry(name.to_string()).or_insert(0) += 1;
 
@@ -680,6 +693,9 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
                 entry.input_tokens + entry.cache_creation_tokens + entry.cache_read_tokens
                 + entry.output_tokens;
 
+            // Latest assistant entry's text-content status wins.
+            m.last_assistant_has_text = entry.has_text_content;
+
             for (tool, count) in &entry.tool_counts {
                 *m.tool_counts.entry(tool.clone()).or_insert(0) += count;
             }
@@ -1030,6 +1046,57 @@ mod tests {
     fn test_shorten_path_simple() {
         let short = shorten_path("main.rs");
         assert_eq!(short, "main.rs");
+    }
+
+    #[test]
+    fn test_text_content_block_detected() {
+        let line = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":20},"content":[{"type":"text","text":"Hello, world!"}]}}"#;
+        let entries = parse_jsonl_content(line);
+        assert!(entries[0].has_text_content);
+    }
+
+    #[test]
+    fn test_thinking_only_block_does_not_count_as_text() {
+        // Extended-thinking tokens land in a `thinking` block — must NOT
+        // be treated as user-visible text. Otherwise we'd false-positive
+        // promote thinking → working while the model is still thinking.
+        let line = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":2000},"content":[{"type":"thinking","thinking":"Let me reason about this..."}]}}"#;
+        let entries = parse_jsonl_content(line);
+        assert!(!entries[0].has_text_content);
+    }
+
+    #[test]
+    fn test_empty_text_block_does_not_count() {
+        let line = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":20},"content":[{"type":"text","text":"   "}]}}"#;
+        let entries = parse_jsonl_content(line);
+        assert!(!entries[0].has_text_content);
+    }
+
+    #[test]
+    fn test_thinking_then_text_counts_as_text() {
+        // A real response: thinking block followed by text block. Both present.
+        let line = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":50},"content":[{"type":"thinking","thinking":"reasoning..."},{"type":"text","text":"Here is my answer."}]}}"#;
+        let entries = parse_jsonl_content(line);
+        assert!(entries[0].has_text_content);
+    }
+
+    #[test]
+    fn test_session_metrics_last_assistant_text_status() {
+        // Two assistant entries: first has only thinking, second has text.
+        // The latest one's status should win.
+        let thinking_only = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":1000},"content":[{"type":"thinking","thinking":"..."}]}}"#;
+        let with_text = r#"{"type":"assistant","timestamp":2.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":50},"content":[{"type":"text","text":"answer"}]}}"#;
+
+        let dir = std::env::temp_dir().join("cue_test_last_text");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.jsonl");
+        std::fs::write(&path, format!("{}\n{}", thinking_only, with_text)).unwrap();
+
+        let m = parse_jsonl_to_session_metrics(&path).unwrap();
+        assert!(m.last_assistant_has_text);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
