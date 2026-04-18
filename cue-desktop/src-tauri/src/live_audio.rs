@@ -168,21 +168,32 @@ pub fn start(app: &AppHandle, state: &Arc<Mutex<LiveAudioState>>) -> Result<(), 
         let window = hann_window(FFT_SIZE);
         let mut sample_buf: Vec<f32> = Vec::with_capacity(FFT_SIZE * 2);
         let mut raw_buf = [0u8; 4096]; // 1024 samples worth
+        // Carry bytes from reads that ended mid-sample (n % 4 != 0). Without
+        // this, subsequent reads are byte-misaligned and every f32 is garbage.
+        let mut carry: Vec<u8> = Vec::with_capacity(4);
         let mut emit_count: u64 = 0;
 
         loop {
             match reader.read(&mut raw_buf) {
                 Ok(0) => break, // EOF — sidecar exited
                 Ok(n) => {
-                    // Convert bytes to f32 samples
-                    let sample_count = n / 4;
+                    // Prepend any leftover bytes from the previous read, then
+                    // decode as many complete f32 samples as we can.
+                    let total = carry.len() + n;
+                    let sample_count = total / 4;
+                    let consumed = sample_count * 4;
                     for i in 0..sample_count {
                         let offset = i * 4;
-                        if offset + 4 <= n {
-                            let bytes = [raw_buf[offset], raw_buf[offset+1], raw_buf[offset+2], raw_buf[offset+3]];
-                            sample_buf.push(f32::from_le_bytes(bytes));
-                        }
+                        let b = |k: usize| {
+                            if offset + k < carry.len() { carry[offset + k] }
+                            else { raw_buf[offset + k - carry.len()] }
+                        };
+                        let bytes = [b(0), b(1), b(2), b(3)];
+                        sample_buf.push(f32::from_le_bytes(bytes));
                     }
+                    // Stash remainder for the next read.
+                    let new_carry_start = consumed.saturating_sub(carry.len());
+                    carry = raw_buf[new_carry_start..n].to_vec();
 
                     // Process when we have enough samples
                     while sample_buf.len() >= FFT_SIZE {

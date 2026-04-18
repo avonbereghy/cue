@@ -32,7 +32,7 @@ function App() {
       .finally(() => {
         setLoading(false);
       });
-  }, [isSignalSettings]);
+  }, [isSignalSettings, isKeyboard, isThemePicker]);
 
   if (loading) {
     return (
