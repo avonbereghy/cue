@@ -362,12 +362,19 @@ impl EnrichedSession {
             .unwrap_or(0.0);
         let total_duration_secs = now - info.started_at;
 
-        // Prefer hook-sourced token counts (written at hook time from JSONL)
-        // over the background-polled metrics, as they're fresher.
-        let effective_input_tokens = if info.hook_input_tokens > 0 {
-            info.hook_input_tokens
-        } else {
-            metrics.last_input_tokens
+        // Token source selection: the hook and the poll both read the
+        // last assistant entry from JSONL. After /compact the JSONL resets
+        // to a summary, and the hook's UserPromptSubmit read can miss the
+        // new last-assistant entry (falls back to the stale cached value),
+        // while the poll-derived metrics.last_input_tokens reflects the
+        // compacted state correctly. If hook > metrics, prefer the smaller
+        // (fresher) value — a compact resets the count downward, never
+        // upward, so min() picks the post-compact number as soon as metrics
+        // catches up. When they agree, behavior is unchanged.
+        let effective_input_tokens = match (info.hook_input_tokens, metrics.last_input_tokens) {
+            (0, m) => m,
+            (h, 0) => h,
+            (h, m) => h.min(m),
         };
 
         let effective_model = if !info.hook_model.is_empty() {
