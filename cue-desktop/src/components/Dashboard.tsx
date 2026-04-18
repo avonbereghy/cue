@@ -79,14 +79,11 @@ export function Dashboard() {
 
       {/* Tab bar — hidden in frameless mode */}
       {!frameless && (
-        <div
-          className="flex items-center px-4 py-2 border-b"
-          style={{ backgroundColor: "var(--surface-bg)", borderColor: "var(--surface-border)" }}
-        >
+        <div className="flex items-center px-4 pt-2 pb-0">
           {tab === "Settings" && (
             <button
               onClick={() => setTab("Sessions")}
-              className="flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors text-white/50 hover:text-white/70"
+              className="flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors text-white/50 hover:text-white/80 hover:bg-white/10"
               title="Back to Sessions"
             >
               &larr;
@@ -98,7 +95,7 @@ export function Dashboard() {
                 setFrameless(true);
                 invoke("set_frameless", { frameless: true }).catch(() => {});
               }}
-              className="flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors text-white/50 hover:text-white/70"
+              className="flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors text-white/50 hover:text-white/80 hover:bg-white/10"
               title="Hide Title Bar (restore via tray menu)"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -117,7 +114,7 @@ export function Dashboard() {
                 }).catch(() => {});
               }}
               className={`flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors ${
-                compactMode ? "text-white" : "text-white/50 hover:text-white/70"
+                compactMode ? "text-white" : "text-white/50 hover:text-white/80 hover:bg-white/10"
               }`}
               style={compactMode ? { backgroundColor: "var(--accent-bg)" } : undefined}
               title={compactMode ? "Exit Compact Mode" : "Compact Mode"}
@@ -139,7 +136,7 @@ export function Dashboard() {
               }}
               className={`flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors ${
                 compactMode ? "text-white/15 cursor-not-allowed"
-                : !slimMode ? "text-white" : "text-white/50 hover:text-white/70"
+                : !slimMode ? "text-white" : "text-white/50 hover:text-white/80 hover:bg-white/10"
               }`}
               style={!compactMode && !slimMode ? { backgroundColor: "var(--accent-bg)" } : undefined}
               title={compactMode ? "Details unavailable in compact mode" : slimMode ? "Show Details" : "Hide Details"}
@@ -153,7 +150,7 @@ export function Dashboard() {
             </button>
             <button
               onClick={() => invoke("open_keyboard").catch(() => {})}
-              className="flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors text-white/50 hover:text-white/70"
+              className="flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors text-white/50 hover:text-white/80 hover:bg-white/10"
               title="Animation Keyboard"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -162,7 +159,7 @@ export function Dashboard() {
             </button>
             <button
               onClick={() => invoke("open_theme_picker").catch(() => {})}
-              className="flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors text-white/50 hover:text-white/70"
+              className="flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors text-white/50 hover:text-white/80 hover:bg-white/10"
               title="Theme Picker"
             >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -176,7 +173,7 @@ export function Dashboard() {
             <button
               onClick={() => setTab(tab === "Settings" ? "Sessions" : "Settings")}
               className={`flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors ${
-                tab === "Settings" ? "text-white" : "text-white/50 hover:text-white/70"
+                tab === "Settings" ? "text-white" : "text-white/50 hover:text-white/80 hover:bg-white/10"
               }`}
               style={tab === "Settings" ? { backgroundColor: "var(--accent-bg)" } : undefined}
               title="Settings"
