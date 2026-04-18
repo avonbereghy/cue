@@ -8,25 +8,44 @@ use std::path::{Path, PathBuf};
 const STALE_TMP_AGE_SECS: u64 = 3600;
 
 /// Atomically write `contents` to `target`: write to temp, fsync, rename.
+///
+/// The temp file name is randomized (nanos + pid) so a local attacker can't
+/// pre-create the path as a symlink, and on Unix we open with O_NOFOLLOW
+/// plus create_new so a symlink at that path fails the open instead of
+/// redirecting the write to the symlink's target.
 pub fn atomic_write(target: &Path, contents: &[u8]) -> io::Result<()> {
     let parent = target.parent().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "target has no parent directory")
     })?;
     fs::create_dir_all(parent)?;
 
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
     let tmp_name = format!(
-        "{}.tmp.{}",
+        "{}.tmp.{}.{}",
         target
             .file_name()
             .unwrap_or_default()
             .to_string_lossy(),
-        std::process::id()
+        std::process::id(),
+        nanos,
     );
     let tmp_path = parent.join(&tmp_name);
 
-    // Write to temp file
+    // Write to temp file. create_new refuses to open if the path already
+    // exists (including as a symlink); O_NOFOLLOW on Unix also rejects a
+    // symlink even if the attacker races us to create it.
     {
-        let mut file = fs::File::create(&tmp_path)?;
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.custom_flags(libc::O_NOFOLLOW);
+        }
+        let mut file = opts.open(&tmp_path)?;
         file.write_all(contents)?;
         file.sync_all()?; // fsync
     }
@@ -60,8 +79,31 @@ pub fn set_owner_only_permissions(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Sanitize a workspace path: reject `..` traversal components, resolve symlinks, normalize.
+/// Sanitize a workspace path: reject `..` traversal components, resolve symlinks,
+/// reject control chars / NUL / shell metacharacters, and normalize.
+///
+/// The metacharacter reject list is what makes this function safe to interpolate
+/// into AppleScript / cmd.exe / sh downstream — callers still SHOULD escape for
+/// their specific sink, but a clean return guarantees no injection primitives
+/// (`"`, `'`, `` ` ``, `$`, `;`, `|`, `&`, `\`, newline, NUL) are present.
 pub fn sanitize_workspace_path(path: &str) -> io::Result<PathBuf> {
+    // Reject NUL, control chars, and shell/applescript metacharacters that
+    // cannot be safely interpolated into command strings anywhere downstream.
+    for ch in path.chars() {
+        if ch == '\0' || ch.is_control() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "path contains control characters",
+            ));
+        }
+        if matches!(ch, '"' | '\'' | '`' | '$' | ';' | '|' | '&' | '\\' | '\n' | '\r') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "path contains disallowed metacharacter",
+            ));
+        }
+    }
+
     let p = PathBuf::from(path);
 
     // Reject path traversal at the component level (allows names like "my..project")

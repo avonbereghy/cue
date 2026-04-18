@@ -462,11 +462,15 @@ fn write_sandbox_sessions(sessions: Vec<SandboxSessionPayload>) -> Result<(), St
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    // Validate all IDs start with "sandbox-"
+    // Validate all IDs start with "sandbox-" and workspaces are shell-safe.
+    // Without workspace validation, an attacker who reaches this command (e.g.
+    // via a compromised webview) could plant a path with shell metacharacters
+    // that later flows into revive_session's spawn_terminal_with_resume.
     for s in &sessions {
         if !s.id.starts_with("sandbox-") {
             return Err(format!("Sandbox session ID must start with 'sandbox-': {}", s.id));
         }
+        security::sanitize_workspace_path(&s.workspace).map_err(|e| e.to_string())?;
     }
 
     // Read existing sessions.json, strip old sandbox entries, merge new ones
@@ -1262,6 +1266,27 @@ async fn handle_permission_connection(
     let parts: Vec<&str> = first_line.split_whitespace().collect();
     let method = parts.first().copied().unwrap_or("");
     let path = parts.get(1).copied().unwrap_or("");
+
+    // DNS-rebinding defense: only accept requests whose Host header names the
+    // loopback address or localhost. A webpage that rebinds attacker.example to
+    // 127.0.0.1 would reach the socket, but browsers always send the original
+    // hostname in Host:, so this blocks cross-origin loopback abuse.
+    // Reject any Origin header too — the legit Python hook sends none.
+    let host_ok = header_str.lines().any(|line| {
+        let lower = line.to_lowercase();
+        if !lower.starts_with("host:") { return false; }
+        let val = lower.split(':').skip(1).collect::<Vec<_>>().join(":");
+        let val = val.trim();
+        val.starts_with("127.0.0.1") || val.starts_with("localhost")
+    });
+    let has_origin = header_str.lines().any(|line| {
+        line.to_lowercase().starts_with("origin:")
+    });
+    if !host_ok || has_origin {
+        let response = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let _ = stream.write_all(response.as_bytes()).await;
+        return Ok(());
+    }
 
     match (method, path) {
         ("GET", "/health") => {
