@@ -4,8 +4,6 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import type { EnrichedSession, Settings, SignalPreset } from "@/lib/types";
 import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, setGate as setGateEngine } from "@/lib/presetEngine";
-// import { formatTokens } from "@/lib/format";
-// import { StatBadge } from "./StatBadge";
 import { SessionCard } from "./SessionCard";
 import { BranchView } from "./BranchView";
 import type { CardSettings } from "./BranchView";
@@ -272,16 +270,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     saveRevivedSessions([]);
   }, [revivedSessions]);
 
-  // const totalMessages = sessions.reduce((sum, s) => sum + s.metrics.messageCount, 0);
-  // const totalTokens = sessions.reduce(
-  //   (sum, s) => {
-  //     const subTokens = (s.metrics.subagents ?? []).reduce(
-  //       (sub, a) => sub + a.inputTokens + a.outputTokens, 0,
-  //     );
-  //     return sum + s.metrics.inputTokens + s.metrics.outputTokens + subTokens;
-  //   },
-  //   0,
-  // );
   const {
     pendingBySession,
     permissionHistory,
@@ -289,11 +277,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     denyPermission,
     refreshHistory,
   } = usePermissions();
-
-  // const totalPending = Object.values(pendingBySession).reduce(
-  //   (sum, reqs) => sum + reqs.length,
-  //   0,
-  // );
 
   // Load settings and poll for changes (so Signal Settings window edits sync)
   const applySettings = useCallback((s: Settings) => {
@@ -2028,19 +2011,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // ---------------------------------------------------------------------------
   return (
     <div className={compactMode ? "flex flex-col" : "flex flex-col flex-1 min-h-0"}>
-      {/* Stats header — commented out for now
-      {!compactMode && (
-      <div className="flex items-center gap-6 px-4 py-3 bg-white/5 border-b border-white/10">
-        <StatBadge icon="●" label="Sessions" value={`${sessions.length}`} color="text-green-500" />
-        <StatBadge icon="💬" label="Messages" value={`${totalMessages}`} color="text-blue-400" />
-        <StatBadge icon="⇅" label="Tokens" value={formatTokens(totalTokens)} color="text-purple-400" />
-        {totalPending > 0 && (
-          <StatBadge icon="⏸" label="Pending" value={`${totalPending}`} color="text-yellow-400" />
-        )}
-      </div>
-      )}
-      */}
-
       {/* Session list or empty state */}
       {sessions.length === 0 && revivedSessions.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center text-white/60 gap-2">
