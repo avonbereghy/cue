@@ -644,11 +644,26 @@ def main():
                 # the card title from flipping when tools cd into subdirs.
                 stable_workspace = existing.get("workspace", workspace)
 
+                # stateChangedAt: timestamp of the last actual state transition.
+                # The Rust poller (1Hz) can miss brief intermediate states like
+                # working→compacting→working, leaving the active-duration timer
+                # accumulating since before the compact. Writing this from the
+                # hook — which sees every event — gives the timer an authoritative
+                # reset point. Carry forward when the action matches existing state.
+                prev_state = existing.get("state", "")
+                prev_changed = existing.get("stateChangedAt")
+                state_changed_at = (
+                    prev_changed
+                    if (prev_state == action and isinstance(prev_changed, (int, float)))
+                    else now
+                )
+
                 entry = {
                     "id": session_id,
                     "workspace": stable_workspace,
                     "state": action,
                     "lastActivity": now,
+                    "stateChangedAt": state_changed_at,
                     "startedAt": now if is_clear else existing.get("startedAt", now),
                     "source": existing.get("source", source),
                     "activeSubagents": active_subs,

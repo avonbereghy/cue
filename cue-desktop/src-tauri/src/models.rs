@@ -18,6 +18,13 @@ pub struct SessionInfo {
     pub state: String,
     pub last_activity: f64,
     pub started_at: f64,
+    /// Unix timestamp of the last actual state transition, written by the hook.
+    /// The 1 Hz poller can miss brief intermediate states (e.g. working→compacting→working
+    /// during a /compact), so we let the hook — which sees every event — supply
+    /// the authoritative reset point for the active-duration timer.
+    /// Optional for back-compat with entries written by older hooks.
+    #[serde(default)]
+    pub state_changed_at: Option<f64>,
     /// Client that launched the session: "vscode", "cursor", "iterm", "terminal", etc.
     #[serde(default)]
     pub source: Option<String>,
@@ -1082,6 +1089,7 @@ mod tests {
             state: state.to_string(),
             last_activity: now,
             started_at: now - 60.0,
+            state_changed_at: None,
             source: None,
             hook_input_tokens: 0,
             hook_output_tokens: 0,

@@ -636,6 +636,7 @@ mod tests {
             state: state.to_string(),
             last_activity: 0.0,
             started_at: 0.0,
+            state_changed_at: None,
             source: None,
             hook_input_tokens: 0,
             hook_output_tokens: 0,
