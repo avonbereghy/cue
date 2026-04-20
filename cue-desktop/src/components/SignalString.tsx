@@ -224,13 +224,15 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   const sandBlendRef = useRef(state === "idle" ? 1.0 : 0.0);
 
   // Base strings deploy during working and subagent only. Thinking does not
-  // deploy strings — on working→thinking the deactivate effect below fires
-  // the staggered retract; on thinking→working the handoff below sweeps them
-  // back in from zero.
+  // deploy strings on its own — but if a turn already deployed them (working
+  // → thinking), they stay deployed via the stringsStayDeployed branch below.
+  // The thinking→working handoff sweeps in any not-yet-deployed bands.
   const stateIsActive = state === "working" || state === "subagent";
-  // Strings should stay deployed (no retract) for error/waiting — those are
-  // transient pauses, not a return to idle. Only idle/done/compacting retract.
-  const stringsStayDeployed = state === "error" || state === "waiting";
+  // Strings should stay deployed (no retract) mid-turn. Thinking is part of
+  // an ongoing turn (working↔thinking cycles); error/waiting are transient
+  // pauses. Only idle/done/compacting/clearing/ended end the turn and retract.
+  const stringsStayDeployed =
+    state === "error" || state === "waiting" || state === "thinking";
   // Track whether we deactivated from thinking (sand-only) — strings should not retract
   const deactivatedFromThinkingRef = useRef(false);
   // Delayed deactivation: keep strings active while the audio fades out,
@@ -1607,8 +1609,15 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
               return;
             }
 
-            // Skip drawing if invisible.
-            if (!drawStrings || st.clipFraction <= 0.001) return;
+            // Skip drawing if invisible. Extra bands (subagents, working
+            // strings 4-5) have an independent lifecycle from the base bands,
+            // so the base-band suppression branch of `drawStrings` doesn't
+            // apply — when a session enters `subagent` directly from idle,
+            // base bands stay suppressed, but the subagent line should still
+            // render. Gate on the conditions that genuinely apply to extras:
+            // sand not covering the card, and the band has clip to draw.
+            const sandCoveringExtras = sandBlendRef.current >= 0.99;
+            if (sandCoveringExtras || st.clipFraction <= 0.001) return;
 
             // Resolve axis in pixel space.
             const sx = st.spec.axisStart.xFrac * w;

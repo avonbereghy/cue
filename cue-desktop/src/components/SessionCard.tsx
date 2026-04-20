@@ -1012,7 +1012,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
         entryAnim ? `session-card--enter-${entryAnim}` : ""
       } ${
         effectiveCompact ? "px-2.5 py-1.5 space-y-0"
-        : signalString && (signalMode === "preset" || signalMode === "audio" || signalMode === "live") ? "px-4 pt-4 pb-2 space-y-4" : "px-3 pt-2 pb-1 space-y-2"
+        : signalString && (signalMode === "preset" || signalMode === "audio" || signalMode === "live") ? "px-4 pt-3 pb-1 space-y-4" : "px-3 pt-2 pb-0.5 space-y-2"
       } ${effectiveSlim && !effectiveCompact ? "flex flex-col" : ""} ${
         compactMode ? "cursor-pointer" : ""
       }`}
@@ -1060,7 +1060,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           {/* Row 1: Status dot + state badge + title + prompt pill + duration
               Shrink priority: prompt pill first (shrinks → hides), timer second, title last */}
           <div className="relative flex items-center gap-2 min-w-0 overflow-hidden">
-            <StatusDot state={labelState} color={labelHex} />
+            <span className="self-center flex"><StatusDot state={labelState} color={labelHex} /></span>
             <span
               className="text-xs px-2 py-1 rounded-full text-center shrink-0 leading-none"
               style={{
@@ -1086,11 +1086,6 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 style={{
                   color: titleHex,
                   transition: stateTransition,
-                  // Halo matches card bg so flux streamlines can't bleed
-                  // through glyph gaps and muddy the title.
-                  textShadow: isDark
-                    ? "0 0 6px rgba(14,14,14,0.9), 0 0 3px rgba(14,14,14,0.9)"
-                    : "0 0 6px rgba(245,245,245,0.9), 0 0 3px rgba(245,245,245,0.9)",
                 }}
                 aria-label={session.displayTitle}
               >
@@ -1124,9 +1119,6 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 style={{
                   color: titleHex,
                   transition: stateTransition,
-                  textShadow: isDark
-                    ? "0 0 6px rgba(14,14,14,0.9), 0 0 3px rgba(14,14,14,0.9)"
-                    : "0 0 6px rgba(245,245,245,0.9), 0 0 3px rgba(245,245,245,0.9)",
                 }}
               >
                 {session.displayTitle}
@@ -1150,9 +1142,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 ? (metrics.lastAssistantText as string)
                 : metrics.lastPrompt;
               if (!text) return null;
-              const bodyColor = preferAssistant
-                ? badgeHex.text
-                : (isDark ? "rgba(245,245,245,0.62)" : "rgba(30,30,30,0.70)");
+              const bodyColor = badgeHex.text;
               const glyphColor = labelHex;
               const fadeMask = "linear-gradient(to right, #000 0%, #000 72%, transparent 100%)";
               return (
@@ -1201,17 +1191,17 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
               );
             })()}
             {activeSubs > 0 && displayState !== "subagent" && (
-              <span className="text-xs px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: "rgba(139,92,246,0.25)", color: "#c4b5fd" }}>
+              <span className="self-center text-xs px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: "rgba(139,92,246,0.25)", color: "#c4b5fd" }}>
                 {activeSubs} subprocess{activeSubs !== 1 ? "es" : ""}
               </span>
             )}
             {info.subprocess && (
-              <span className="text-xs px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: "rgba(139,92,246,0.25)", color: "#c4b5fd" }}>
+              <span className="self-center text-xs px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: "rgba(139,92,246,0.25)", color: "#c4b5fd" }}>
                 via {info.subprocess}
               </span>
             )}
             {showCurrentTool && !effectiveCompact && !effectiveSlim && session.runningToolName && (
-              <span className="inline-block text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/50 truncate w-[200px] shrink-0 overflow-hidden whitespace-nowrap" title={session.runningToolTarget || session.runningToolName}>
+              <span className="self-center inline-block text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/50 truncate w-[200px] shrink-0 overflow-hidden whitespace-nowrap" title={session.runningToolTarget || session.runningToolName}>
                 {session.runningToolName}
                 {session.runningToolTarget && <span className="text-white/30"> {session.runningToolTarget}</span>}
               </span>
@@ -1230,12 +1220,33 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 {(session.gitStatus?.behind ?? 0) > 0 && <span className="text-red-500/60">{"\u2193"}{session.gitStatus!.behind}</span>}
               </span>
             )}
-            {!hideTimer && !effectiveCompact && timerDisplay !== "off" && (
-            <span className={`ml-auto text-[0.625rem] font-mono mono-nums shrink-0 ${isGlass ? "text-white/65" : "text-white/40"}`}>
-              {timerDisplay === "minutes"
-                ? formatDuration(session.durationSecs).slice(0, 5)
-                : formatDuration(session.durationSecs)}
-            </span>
+            {!effectiveCompact && (session.modelDisplayName !== "\u2014" || session.effortLevel || (!hideTimer && timerDisplay !== "off")) && (
+            <div className="ml-auto self-center flex items-center gap-1.5 shrink-0">
+              {session.modelDisplayName !== "\u2014" && (
+                <span className={`text-[0.625rem] font-mono flex items-center gap-1 ${isGlass ? "text-white/55" : "text-white/30"}`}>
+                  {session.modelDisplayName}
+                  {session.provider && <span className={isGlass ? "text-white/40" : "text-white/20"}> ({session.provider})</span>}
+                  {session.effortLevel && (
+                    <>
+                      <span className={isGlass ? "text-white/35" : "text-white/20"}>{"\u2014"}</span>
+                      <span
+                        className={`font-medium ${effortTextClass(session.effortLevel)}`}
+                        title={`Effort level: ${session.effortLevel}`}
+                      >
+                        {session.effortLevel}
+                      </span>
+                    </>
+                  )}
+                </span>
+              )}
+              {!hideTimer && timerDisplay !== "off" && !effectiveSlim && (
+                <span className={`text-[0.625rem] font-mono mono-nums ${isGlass ? "text-white/65" : "text-white/40"}`}>
+                  {timerDisplay === "minutes"
+                    ? formatDuration(session.durationSecs).slice(0, 5)
+                    : formatDuration(session.durationSecs)}
+                </span>
+              )}
+            </div>
             )}
           </div>
 
@@ -1340,38 +1351,11 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           {/* Spacer pushes context bar to bottom in slim mode */}
           {effectiveSlim && !effectiveCompact && <div className="flex-1" />}
 
-          {/* Model name + context bar — grouped tightly */}
+          {/* Context bar */}
           {!effectiveCompact && (() => {
             const showContext = contextThreshold !== "never" && contextMeetsThreshold;
-            const isCompactCtx = contextDisplay === "compact";
-            const modelSpanInner = (
-              <span
-                className={`text-[0.625rem] font-mono flex items-center gap-1 ${isGlass ? "text-white/55" : "text-white/30"}`}
-                style={{ visibility: session.modelDisplayName !== "\u2014" || session.effortLevel ? "visible" : "hidden" }}
-              >
-                {session.modelDisplayName !== "\u2014" ? session.modelDisplayName : "\u00A0"}
-                {session.provider && <span className={isGlass ? "text-white/40" : "text-white/20"}> ({session.provider})</span>}
-                {session.effortLevel && (
-                  <>
-                    <span className={isGlass ? "text-white/35" : "text-white/20"}>{"\u2014"}</span>
-                    <span
-                      className={`font-medium ${effortTextClass(session.effortLevel)}`}
-                      title={`Effort level: ${session.effortLevel}`}
-                    >
-                      {session.effortLevel}
-                    </span>
-                  </>
-                )}
-              </span>
-            );
             return (
             <div className="flex flex-col gap-1">
-          {/* In compact-context mode the model row is rendered inside the
-              grouped block below so the bar can share its width. Otherwise
-              render it here, right-aligned. */}
-          {!(isCompactCtx && showContext) && (
-            <div className="self-end">{modelSpanInner}</div>
-          )}
 
           {/* Row 4: Context usage — right-aligned to match timer position */}
           {showContext && (() => {
@@ -1401,34 +1385,28 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             const isLoadingRaw = isCompactingUI || staleAfterCompact || metrics.lastInputTokens === 0;
             // After 30s of a non-compacting load that never resolves, stop
             // showing the spinner — fall through to whatever data we have.
-            const isLoading = isLoadingRaw && !(contextLoadingGaveUp && !isCompactingUI);
+            // Exception: staleAfterCompact waits indefinitely for a fresh
+            // reading rather than showing the misleading pre-compact value.
+            const isLoading = isLoadingRaw && !(contextLoadingGaveUp && !isCompactingUI && !staleAfterCompact);
 
             if (contextDisplay === "compact") {
               return (
                 <div
                   style={{
-                    // Fixed width sized to the "Opus 4.7 — high" model+effort
-                    // row, so the bar never stretches when model or effort
-                    // labels change. Previously used fit-content which let
-                    // the widest child govern width; then 170px, which was
-                    // too wide. 130px tightly matches the longest realistic
-                    // model+effort string and right-aligns in the flex-col.
                     display: "flex",
                     flexDirection: "column",
                     alignItems: "stretch",
                     width: "130px",
                     marginLeft: "auto",
-                    rowGap: "4px",
+                    rowGap: "2px",
                   }}
                 >
-                  {modelSpanInner}
                   {/* Progress bar row — always rendered. During compacting
-                      it's empty (no fill); stale fill shows after. Keeping
-                      this row present prevents the card from changing height
-                      when the state toggles. */}
+                      or while stale post-compact, show empty bar so the old
+                      fill doesn't show alongside the loading spinner. */}
                   <div className="flex items-center gap-1.5">
                     <SpoolContextBar
-                      fillPercent={session.contextUsagePercent}
+                      fillPercent={staleAfterCompact && !isCompactingUI ? 0 : session.contextUsagePercent}
                       isCompacting={isCompactingUI}
                       compactFillRef={compactFillRef}
                       isDark={isDark}

@@ -1269,9 +1269,24 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
   const SETTLE_MS = 5000;
 
+  // Compacting and clearing are ordering-transparent — entering one of these
+  // states should not move the session in the list. We track the most recent
+  // non-neutral state per session so the sort/invariant logic can treat a
+  // compacting session as if it were still in its prior state.
+  const isOrderingNeutral = useCallback(
+    (st: string) => st === "compacting" || st === "clearing",
+    [],
+  );
+  const orderingStateRef = useRef<Map<string, string>>(new Map());
+  const effectiveState = useCallback((s: EnrichedSession) => {
+    const st = s.info.state;
+    if (!isOrderingNeutral(st)) return st;
+    return orderingStateRef.current.get(s.info.id) ?? st;
+  }, [isOrderingNeutral]);
+
   // The "desired" fully-sorted order (used by the deferred full rearrange)
   const reorderPriority = useCallback((s: EnrichedSession) => {
-    const st = s.info.state;
+    const st = effectiveState(s);
     if (st === "waiting") return 0;
     if (st === "error") return 1;
     if (
@@ -1284,7 +1299,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       return 2;
     }
     return 3;
-  }, []);
+  }, [effectiveState]);
 
   // Track the committed display order (list of session IDs).
   // This only changes when a reorder animation is triggered.
@@ -1326,11 +1341,11 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // Check whether ALL sessions are settled (idle/done for 5s+)
   const allSettled = useCallback((list: EnrichedSession[], now: number) => {
     return list.every((s) => {
-      if (!isQuiescent(s.info.state)) return false;
+      if (!isQuiescent(effectiveState(s))) return false;
       const since = settledSinceRef.current.get(s.info.id);
       return since !== undefined && (now - since) >= SETTLE_MS;
     });
-  }, [isQuiescent]);
+  }, [isQuiescent, effectiveState]);
 
   // Build the active (non-ended) session list.
   // Team children (spawned via TeamCreate) are separated so they don't
@@ -1346,11 +1361,19 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
   // Update settled-since and active-since timestamps, and detect turn ends
   // (any non-quiescent → quiescent transition) to fire the gated reorder.
+  // Compacting/clearing are ordering-transparent: we record the prior
+  // non-neutral state so a session returning to that state from compacting
+  // doesn't look like a transition for ordering purposes.
   const now = Date.now();
   let turnEndDetected = false;
   for (const s of activeSessions) {
+    // Record the most recent non-neutral state so effectiveState resolves
+    // correctly for compacting/clearing entries.
+    if (!isOrderingNeutral(s.info.state)) {
+      orderingStateRef.current.set(s.info.id, s.info.state);
+    }
+    const curr = effectiveState(s);
     const prev = prevStatesRef.current.get(s.info.id);
-    const curr = s.info.state;
     if (prev !== undefined && !isQuiescent(prev) && isQuiescent(curr)) {
       turnEndDetected = true;
     }
@@ -1379,6 +1402,9 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   }
   for (const id of activeSinceRef.current.keys()) {
     if (!activeIdSet.has(id)) activeSinceRef.current.delete(id);
+  }
+  for (const id of orderingStateRef.current.keys()) {
+    if (!activeIdSet.has(id)) orderingStateRef.current.delete(id);
   }
   for (const id of prevStatesRef.current.keys()) {
     if (!activeIdSet.has(id)) prevStatesRef.current.delete(id);
@@ -1412,8 +1438,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     } else {
       all.sort((a, b) => {
         // Working set (active) sorts before idle/done.
-        const aActive = !isQuiescent(a.info.state);
-        const bActive = !isQuiescent(b.info.state);
+        const aActive = !isQuiescent(effectiveState(a));
+        const bActive = !isQuiescent(effectiveState(b));
         if (aActive !== bActive) return aActive ? -1 : 1;
         if (aActive) {
           const aa = activeSinceRef.current.get(a.info.id) ?? Infinity;
@@ -1434,8 +1460,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const sortedSessions = (() => {
     if (!autoReorder) {
       const sorted = [...activeSessions].sort((a, b) => {
-        const aActive = !isQuiescent(a.info.state);
-        const bActive = !isQuiescent(b.info.state);
+        const aActive = !isQuiescent(effectiveState(a));
+        const bActive = !isQuiescent(effectiveState(b));
         if (aActive !== bActive) return aActive ? -1 : 1;
         if (aActive) {
           const aa = activeSinceRef.current.get(a.info.id) ?? Infinity;
@@ -1588,7 +1614,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   {
     let sawSettled = false;
     for (const s of sortedSessions) {
-      if (isQuiescent(s.info.state)) {
+      if (isQuiescent(effectiveState(s))) {
         sawSettled = true;
       } else if (sawSettled) {
         invariantViolated = true;
@@ -1828,12 +1854,13 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       el.style.transform = `translateY(${dyById.get(id) ?? 0}px)`;
     }
 
-    // Swap motion config. Each pair gets a brief wind-up via spring-y ease
-    // so the card "leans" before it slides. Duration is short (sub-400ms)
-    // because consecutive swaps chain into a flowing walk when the same
-    // card climbs multiple rungs.
-    const SWAP_DUR = 340;
-    const SWAP_EASING = "cubic-bezier(0.32, 0.72, 0.28, 1)";
+    // Swap motion config. Two cards passing through each other use a true
+    // symmetric ease-in-out (S-curve): slow start, accelerate as they cross,
+    // decelerate to settle. Duration is long enough (~500ms) for the eye to
+    // track the trade without feeling sluggish; consecutive swaps still chain
+    // into a continuous walk when the same card climbs multiple rungs.
+    const SWAP_DUR = 520;
+    const SWAP_EASING = "cubic-bezier(0.65, 0, 0.35, 1)";
     const SWAP_GAP = 40; // ms beat between swaps so the pair reads as discrete
 
     const cleanupExistingTransforms = () => {
