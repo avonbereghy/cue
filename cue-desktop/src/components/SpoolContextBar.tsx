@@ -43,10 +43,10 @@ interface SpoolContextBarProps {
 
 /**
  * Dust particles emitted per second at the trailing edge while compacting.
- * The unwind itself is constant/linear — dust provides the living texture
- * so the drain doesn't read as a static shrinking rectangle.
+ * Higher rate + upward-biased velocities produce the "evaporating to dust"
+ * feel rather than a string unwind.
  */
-const DUST_EMIT_PER_SECOND = 12;
+const DUST_EMIT_PER_SECOND = 24;
 /** Duration of the "context grew" glow pulse at the silk's trailing edge. */
 const GROWTH_GLOW_MS = 650;
 
@@ -212,24 +212,30 @@ export function SpoolContextBar({
         const drain = compactFillRef?.current ?? 1;
         displayFill = targetPct * Math.max(0, Math.min(1, drain));
 
-        // Continuous dust emission at the trailing edge. Rate is framerate-
-        // independent via accumulator — any left-over fraction rolls forward.
+        // Continuous dust emission — evaporation/disintegration at the
+        // trailing edge. Particles scatter in all directions with upward bias
+        // so the bar reads as dissolving rather than unwinding a thread.
         dustAccum += DUST_EMIT_PER_SECOND * dt;
         const emit = Math.floor(dustAccum);
         dustAccum -= emit;
         if (emit > 0) {
           const edgePx = displayFill * cssW;
-          const cy = cssH / 2;
           for (let i = 0; i < emit; i++) {
-            const life = 0.55 + Math.random() * 0.55;
+            // Spawn zone: ±half-barHeight around the trailing edge, full bar height
+            const x = edgePx + (Math.random() - 0.6) * barHeight;
+            const spawnBarY = (cssH - Math.min(barHeight, cssH - 2)) / 2;
+            const y = spawnBarY + Math.random() * Math.min(barHeight, cssH - 2);
+            // Velocity: upward-biased scatter — evaporation rises, some drift sideways
+            const upSpeed = 6 + Math.random() * 18;
+            const sideSpeed = (Math.random() - 0.5) * 12;
+            const life = 0.35 + Math.random() * 0.60;
             dust.push({
-              x: edgePx + (Math.random() - 0.5) * 3,
-              y: cy + (Math.random() - 0.5) * (barHeight * 0.6),
-              vx: 10 + Math.random() * 22,
-              vy: -14 - Math.random() * 20,
+              x, y,
+              vx: sideSpeed,
+              vy: -upSpeed,
               life,
               life0: life,
-              size: 0.7 + Math.random() * 1.1,
+              size: 0.4 + Math.random() * 1.0,
             });
           }
         }
@@ -245,8 +251,8 @@ export function SpoolContextBar({
       // final burst still finish their arc after state transitions out.
       for (let i = dust.length - 1; i >= 0; i--) {
         const p = dust[i];
-        p.vy += 60 * dt; // soft gravity
-        const drag = Math.pow(0.94, dt * 60);
+        p.vy += 22 * dt; // light gravity — motes float, not arc
+        const drag = Math.pow(0.91, dt * 60);
         p.vx *= drag;
         p.vy *= drag;
         p.x += p.vx * dt;
@@ -344,33 +350,6 @@ export function SpoolContextBar({
         ctx.restore();
       }
 
-      // Loose strand while compacting — a short bezier kicking out from the
-      // trailing edge of the silk, continuously present. Length gently
-      // breathes via a slow sine so the peel reads as living thread rather
-      // than a static pennant.
-      if (compacting && !reduced && displayFill > 0.001) {
-        const edgePx = Math.max(0, Math.min(cssW - 1, displayFill * cssW));
-        const cy = barY + barH / 2;
-        const breath = 0.75 + 0.25 * Math.sin(now * 0.0045);
-        const len = breath * Math.min(14, barH * 1.1);
-        if (len > 1) {
-          const sway = Math.sin(now * 0.0075) * 1.5;
-          const endX = Math.min(cssW - 1, edgePx + len);
-          const endY = cy + len * 0.45 + sway;
-          const ctrlX = edgePx + len * 0.5;
-          const ctrlY = cy - 1 + sway * 0.5;
-          ctx.save();
-          ctx.strokeStyle = "rgba(190,220,252,0.55)";
-          ctx.lineWidth = 1.2;
-          ctx.lineCap = "round";
-          ctx.beginPath();
-          ctx.moveTo(edgePx, cy);
-          ctx.quadraticCurveTo(ctrlX, ctrlY, endX, endY);
-          ctx.stroke();
-          ctx.restore();
-        }
-      }
-
       // Growth pulse — soft radial glow at the trailing edge when the fill
       // level just increased. Rides on top of the silk so the tip feels like
       // it flared when new tokens landed; fades over GROWTH_GLOW_MS.
@@ -424,8 +403,8 @@ export function SpoolContextBar({
     };
   }, [barHeight, compactFillRef]);
 
-  // Canvas is slightly taller than the bar to give dust motes room above/below.
-  const canvasHeight = barHeight + 8;
+  // Canvas is taller than the bar to give rising dust motes room above.
+  const canvasHeight = barHeight + 16;
   return (
     <canvas
       ref={canvasRef}
