@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- 04c · Radial Gauge ─ the compacting wave curled into a ring.
+       Reads as a clock / progress dial, with the violet wave advancing counter-clockwise. -->
+  <defs>
+    <linearGradient id="bg4c" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b1820"/>
+      <stop offset="1" stop-color="#0f0e14"/>
+    </linearGradient>
+    <linearGradient id="ringTrack" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3a3548"/>
+      <stop offset="1" stop-color="#241f30"/>
+    </linearGradient>
+    <linearGradient id="ringFill" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#b288ff"/>
+      <stop offset="1" stop-color="#8a6df0"/>
+    </linearGradient>
+    <radialGradient id="core4c" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#2a2438"/>
+      <stop offset="1" stop-color="#15121e"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="96" ry="96" fill="url(#bg4c)"/>
+
+  <!-- outer track ring -->
+  <circle cx="256" cy="256" r="140" fill="none" stroke="url(#ringTrack)" stroke-width="36"/>
+
+  <!-- compacted arc: ~62% of the ring, wave-crested on the leading edge.
+       stroke-dasharray math: circumference = 2π·140 ≈ 879.6. 62% ≈ 545.3.
+       start angle at top (-90°), sweeping clockwise. -->
+  <circle cx="256" cy="256" r="140" fill="none"
+          stroke="url(#ringFill)" stroke-width="36" stroke-linecap="butt"
+          stroke-dasharray="545.3 879.6"
+          transform="rotate(-90 256 256)"/>
+
+  <!-- wave crest markers along the filled arc (subtle bumps at every 60° inside the fill)
+       each is a small amber-less circle sitting at r=140 on the ring, white-ish. -->
+  <g>
+    <circle cx="256" cy="116" r="3" fill="#e9dcff" opacity="0.85"/>
+    <circle cx="377" cy="186" r="3" fill="#e9dcff" opacity="0.7"/>
+    <circle cx="377" cy="326" r="3" fill="#e9dcff" opacity="0.55"/>
+    <circle cx="256" cy="396" r="3" fill="#e9dcff" opacity="0.4"/>
+  </g>
+
+  <!-- trailing particles: a couple of droplets just past the leading edge,
+       pointing toward where the fill is heading (counter-clockwise from top). -->
+  <g transform="rotate(-90 256 256)">
+    <g transform="rotate(223.3 256 256)">
+      <circle cx="396" cy="256" r="2.5" fill="#b288ff" opacity="0.75"/>
+      <circle cx="408" cy="250" r="1.8" fill="#b288ff" opacity="0.5"/>
+      <circle cx="416" cy="244" r="1.2" fill="#b288ff" opacity="0.3"/>
+    </g>
+  </g>
+
+  <!-- inner core -->
+  <circle cx="256" cy="256" r="104" fill="url(#core4c)"/>
+  <circle cx="256" cy="256" r="104" fill="none" stroke="#2e2a38" stroke-width="1"/>
+
+  <!-- center readout: a single dot (the session indicator) + label -->
+  <circle cx="256" cy="238" r="7" fill="#b288ff"/>
+  <circle cx="256" cy="238" r="14" fill="none" stroke="#b288ff" stroke-opacity="0.3" stroke-width="1"/>
+  <text x="256" y="286" text-anchor="middle"
+        font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+        font-size="13" letter-spacing="5" fill="#8a83a2">COMPACT</text>
+</svg>
