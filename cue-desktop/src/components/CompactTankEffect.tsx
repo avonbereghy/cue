@@ -1,26 +1,16 @@
 /**
- * CompactTankEffect — three stacked liquid-glass wave layers that sweep
- * right-to-left behind the session card while it is compacting. Each layer
- * has its own phase rate, amplitude, color shade, and fill-response factor,
- * which produces a parallax illusion: the rear layers move noticeably slower
- * than the front during the drain, the way distant ridges read against
- * foreground waves.
+ * CompactTankEffect — three vertical liquid-glass wave layers sweeping
+ * left→right across the card. As the compaction progresses (fill 0 → 1
+ * over ~2 min) the water boundary marches from the left edge toward
+ * the right, with a gently wavy vertical surface.
  *
- * Per layer, three SVG <path>s are updated each frame via setAttribute:
- *   • a closed body filled with a vertical depth gradient
- *   • plus a single open crest stroke on the front layer (specular highlight)
+ * Single <canvas> drives all three wave layers so we don't pay the DOM cost
+ * of per-frame SVG attribute writes.
  *
- * The leading-edge surface is built from three layered sines (slow swell +
- * main wave + micro-ripple) plus a slow horizontal bob, smoothed via
- * midpoint-quadratic Béziers. No noise library required.
- *
- * Percent-based viewBox (`0 0 100 100`) + `preserveAspectRatio="none"` lets
- * the shape stretch to the card's actual dimensions automatically.
- *
- * The parent (SessionCard) owns `fillRef` so the drain timer and the
- * pulsing bar stay in sync without React re-renders per frame.
+ * The parent (SessionCard) owns `fillRef` so the drain timer and the pulsing
+ * bar stay in sync without React re-renders per frame.
  */
-import { useEffect, useId, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 interface CompactTankEffectProps {
   /** Fill fraction in [0, 1] — read every frame. Owned by the parent. */
@@ -31,29 +21,36 @@ interface CompactTankEffectProps {
   alpha?: number;
 }
 
-// Each layer is a parallax slice of the liquid. Back layers (index 0) sit
-// further left, oscillate slower and lower amplitude, render dimmer/cooler.
-// Front layer (last) carries the bright crest highlight.
-//   offset       – static x shift in viewBox units (negative = behind)
-//   fillResponse – how much the layer tracks fill changes (back lags front)
-//   phaseRate    – wave time scale; differing rates desynchronize neighbors
-//   phaseSeed    – constant offset so layers don't crest at the same y
-//   ampScale     – amplitude multiplier on the layered-sine surface
-//   alphaScale   – multiplier applied to the gradient stop opacities
-//   brightness   – channel multiplier on `color` for the layer's fill
-//   hasCrest     – render the white specular crest stroke (front only)
+// Parallax layers. Back layer (index 0) sits further left (smaller base
+// width — starts as a thinner sliver on the left edge), smaller amplitude,
+// dimmer. Front layer (last) is the most prominent.
+//   baseWidth    – resting width of the layer's water column as fraction of
+//                  card width when fill=0. Front extends furthest right (0.32),
+//                  back is a thin strip (0.18).
+//   fillResponse – how aggressively the layer marches right with `fill`. Front
+//                  tracks most closely; back lags so the parallax reads.
+//   phaseRate    – wave time scale; differing rates desynchronize neighbors.
+//   phaseSeed    – constant offset so layers don't crest at the same y.
+//   ampScale     – amplitude multiplier on the layered-sine surface.
+//   alphaScale   – multiplier applied to the gradient stop opacities.
+//   brightness   – channel multiplier on `color` for the layer's fill.
 const LAYERS = [
-  { offset: -7,   fillResponse: 0.92, phaseRate: 0.65, phaseSeed: 0.0, ampScale: 0.55, alphaScale: 0.45, brightness: 0.65, hasCrest: false },
-  { offset: -3.5, fillResponse: 0.96, phaseRate: 0.85, phaseSeed: 1.7, ampScale: 0.78, alphaScale: 0.72, brightness: 0.82, hasCrest: false },
-  { offset: 0,    fillResponse: 1.0,  phaseRate: 1.05, phaseSeed: 3.4, ampScale: 1.0,  alphaScale: 1.0,  brightness: 1.0,  hasCrest: true  },
+  { baseWidth: 0.18, fillResponse: 0.92, phaseRate: 0.65, phaseSeed: 0.0, ampScale: 0.55, alphaScale: 0.45, brightness: 0.65 },
+  { baseWidth: 0.25, fillResponse: 0.96, phaseRate: 0.85, phaseSeed: 1.7, ampScale: 0.78, alphaScale: 0.72, brightness: 0.82 },
+  { baseWidth: 0.32, fillResponse: 1.0,  phaseRate: 1.05, phaseSeed: 3.4, ampScale: 1.0,  alphaScale: 1.0,  brightness: 1.0 },
 ] as const;
 
-function shadeHex(hex: string, factor: number): string {
+function hexToRgb(hex: string): [number, number, number] {
   const v = parseInt(hex.replace("#", ""), 16);
-  const r = Math.max(0, Math.min(255, Math.round(((v >> 16) & 255) * factor)));
-  const g = Math.max(0, Math.min(255, Math.round(((v >> 8) & 255) * factor)));
-  const b = Math.max(0, Math.min(255, Math.round((v & 255) * factor)));
-  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+}
+
+function shadeRgb(rgb: [number, number, number], factor: number): [number, number, number] {
+  return [
+    Math.max(0, Math.min(255, Math.round(rgb[0] * factor))),
+    Math.max(0, Math.min(255, Math.round(rgb[1] * factor))),
+    Math.max(0, Math.min(255, Math.round(rgb[2] * factor))),
+  ];
 }
 
 export function CompactTankEffect({
@@ -61,21 +58,19 @@ export function CompactTankEffect({
   color = "#8b9fd4",
   alpha = 0.28,
 }: CompactTankEffectProps) {
-  const bodyRefs = useRef<(SVGPathElement | null)[]>([]);
-  const crestRef = useRef<SVGPathElement>(null);
-  // useId can include `:` which is valid in SVG IDs but trips some
-  // tooling — strip them defensively for the gradient url() reference.
-  const idBase = `liquid-${useId().replace(/:/g, "")}`;
-  const gradientIds = useMemo(
-    () => LAYERS.map((_, i) => `${idBase}-${i}`),
-    [idBase],
-  );
-  const layerColors = useMemo(
-    () => LAYERS.map((l) => shadeHex(color, l.brightness)),
-    [color],
-  );
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  const layerRgb = useMemo(() => {
+    const base = hexToRgb(color);
+    return LAYERS.map((l) => shadeRgb(base, l.brightness));
+  }, [color]);
 
   useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d", { alpha: true });
+    if (!ctx) return;
+
     const mql = window.matchMedia("(prefers-reduced-motion: reduce)");
     let reduced = mql.matches;
     const onChange = () => { reduced = mql.matches; };
@@ -85,72 +80,102 @@ export function CompactTankEffect({
     let rafId = 0;
     let running = true;
 
-    // Multi-octave surface in viewBox units (0..100). Layered sines at
-    // different frequencies/phases produce organic-looking motion without
-    // a noise table. Amplitudes sum to ~4 units worst-case (front layer).
-    const AMP1 = 2.0;        // primary wave
-    const AMP2 = 0.7;        // micro-ripple (high freq)
-    const AMP3 = 1.4;        // slow swell (low freq)
-    const WAVE_K1 = (Math.PI * 2 * 0.9) / 100;  // ~0.9 wavelengths top-to-bottom
-    const WAVE_K2 = (Math.PI * 2 * 2.3) / 100;  // ~2.3 wavelengths
-    const WAVE_K3 = (Math.PI * 2 * 0.4) / 100;  // ~0.4 wavelengths (long swell)
-    const BOB_AMP = 0.5;     // horizontal "breathing" of the surface center
-    const BOB_FREQ = 0.6;
-    const STEP_Y = 4;        // dense enough that Bézier smoothing reads as a curve
-
-    const sampleCount = Math.floor(100 / STEP_Y) + 1;
-    const xs = new Float32Array(sampleCount);
-    const ys = new Float32Array(sampleCount);
-    for (let i = 0; i < sampleCount; i++) ys[i] = Math.min(100, i * STEP_Y);
-
-    const updateLayer = (layerIndex: number, fill: number, t: number) => {
-      const layer = LAYERS[layerIndex];
-      const phase = reduced ? layer.phaseSeed : t * layer.phaseRate + layer.phaseSeed;
-      const bob = reduced ? 0 : Math.sin(t * BOB_FREQ + layer.phaseSeed) * BOB_AMP;
-      const centerX = fill * 100 * layer.fillResponse + layer.offset + bob;
-
-      for (let i = 0; i < sampleCount; i++) {
-        const y = ys[i];
-        const w1 = Math.sin(y * WAVE_K1 + phase) * AMP1 * layer.ampScale;
-        const w2 = Math.sin(y * WAVE_K2 - phase * 1.4 + 1.7) * AMP2 * layer.ampScale;
-        const w3 = Math.sin(y * WAVE_K3 + phase * 0.55 + 3.1) * AMP3 * layer.ampScale;
-        xs[i] = centerX + w1 + w2 + w3;
-      }
-
-      // Build body (closed shape, fills the area west of the surface) and,
-      // on the front layer only, the open crest polyline. Midpoint-quadratic
-      // Béziers produce a continuous C1 curve through the sample points.
-      const x0 = xs[0].toFixed(2);
-      const y0 = ys[0];
-      let bodyD = `M0 0 L${x0} ${y0}`;
-      let crestD = layer.hasCrest ? `M${x0} ${y0}` : "";
-      for (let i = 1; i < sampleCount - 1; i++) {
-        const x1 = xs[i];
-        const y1 = ys[i];
-        const x2 = xs[i + 1];
-        const y2 = ys[i + 1];
-        const mx = ((x1 + x2) / 2).toFixed(2);
-        const my = ((y1 + y2) / 2).toFixed(0);
-        const seg = ` Q${x1.toFixed(2)} ${y1} ${mx} ${my}`;
-        bodyD += seg;
-        if (layer.hasCrest) crestD += seg;
-      }
-      const xL = xs[sampleCount - 1].toFixed(2);
-      const yL = ys[sampleCount - 1];
-      bodyD += ` L${xL} ${yL} L0 100 Z`;
-
-      bodyRefs.current[layerIndex]?.setAttribute("d", bodyD);
-      if (layer.hasCrest) {
-        crestD += ` L${xL} ${yL}`;
-        crestRef.current?.setAttribute("d", crestD);
-      }
-    };
+    // Multi-octave surface — amplitudes in pixels on the card's actual width.
+    // Kept subtle so the waves read as "gentle tide," not "stormy sea."
+    const AMP1 = 0.020;  // primary — 2.0% of card width
+    const AMP2 = 0.008;  // micro-ripple
+    const AMP3 = 0.012;  // long swell
+    const WAVE_K1 = (Math.PI * 2 * 0.9);    // ~0.9 wavelengths down the height
+    const WAVE_K2 = (Math.PI * 2 * 2.2);
+    const WAVE_K3 = (Math.PI * 2 * 0.4);
+    const BOB_AMP = 0.004;  // horizontal "breathing"
+    const BOB_FREQ = 0.5;
+    const STEP_Y = 4;       // sample spacing in pixels — Bézier smoothing fills the gaps
 
     const tick = () => {
       if (!running) return;
+      const rect = canvas.getBoundingClientRect();
+      const cssW = rect.width;
+      const cssH = rect.height;
+      if (cssW < 1 || cssH < 1) {
+        rafId = requestAnimationFrame(tick);
+        return;
+      }
+      const dpr = window.devicePixelRatio || 1;
+      const bw = Math.round(cssW * dpr);
+      const bh = Math.round(cssH * dpr);
+      if (canvas.width !== bw || canvas.height !== bh) {
+        canvas.width = bw;
+        canvas.height = bh;
+      }
+
       const fill = Math.max(0, Math.min(1, fillRef.current ?? 0));
-      const t = (performance.now() - startT) / 1000;
-      for (let i = 0; i < LAYERS.length; i++) updateLayer(i, fill, t);
+      const t = reduced ? 0 : (performance.now() - startT) / 1000;
+
+      ctx.save();
+      ctx.scale(dpr, dpr);
+      ctx.clearRect(0, 0, cssW, cssH);
+
+      const sampleCount = Math.ceil(cssH / STEP_Y) + 1;
+      const ys = new Float32Array(sampleCount);
+      const xs = new Float32Array(sampleCount);
+      for (let i = 0; i < sampleCount; i++) ys[i] = Math.min(cssH, i * STEP_Y);
+
+      for (let li = 0; li < LAYERS.length; li++) {
+        const layer = LAYERS[li];
+        const [lr, lg, lb] = layerRgb[li];
+        const phase = reduced ? layer.phaseSeed : t * layer.phaseRate + layer.phaseSeed;
+        const bob = reduced ? 0 : Math.sin(t * BOB_FREQ + layer.phaseSeed) * BOB_AMP * cssW;
+
+        // Resting water boundary at fill=0 sits at x = cssW * baseWidth —
+        // a thin sliver on the left edge. As fill rises to 1, the boundary
+        // marches rightward to x=cssW (fully covered).
+        const seaX =
+          (layer.baseWidth + layer.fillResponse * fill * (1 - layer.baseWidth)) * cssW
+          + bob;
+
+        const ampX1 = AMP1 * layer.ampScale * cssW;
+        const ampX2 = AMP2 * layer.ampScale * cssW;
+        const ampX3 = AMP3 * layer.ampScale * cssW;
+        const invH = cssH > 0 ? 1 / cssH : 0;
+
+        for (let i = 0; i < sampleCount; i++) {
+          const y = ys[i];
+          const u = y * invH;
+          const w1 = Math.sin(u * WAVE_K1 + phase) * ampX1;
+          const w2 = Math.sin(u * WAVE_K2 - phase * 1.4 + 1.7) * ampX2;
+          const w3 = Math.sin(u * WAVE_K3 + phase * 0.55 + 3.1) * ampX3;
+          xs[i] = seaX + w1 + w2 + w3;
+        }
+
+        // Horizontal gradient: soft near the surface (right edge of water),
+        // denser toward the far left edge.
+        const topAlpha = alpha * 0.55 * layer.alphaScale;
+        const midAlpha = alpha * 0.95 * layer.alphaScale;
+        const botAlpha = Math.min(1, alpha * 1.5 * layer.alphaScale);
+        const grad = ctx.createLinearGradient(seaX, 0, 0, 0);
+        grad.addColorStop(0,    `rgba(${lr}, ${lg}, ${lb}, ${topAlpha.toFixed(3)})`);
+        grad.addColorStop(0.32, `rgba(${lr}, ${lg}, ${lb}, ${midAlpha.toFixed(3)})`);
+        grad.addColorStop(1,    `rgba(${lr}, ${lg}, ${lb}, ${botAlpha.toFixed(3)})`);
+
+        // Polygon: top-right of water → wavy descent down the surface →
+        // bottom-right → bottom-left → top-left → close.
+        ctx.beginPath();
+        ctx.moveTo(xs[0], 0);
+        for (let i = 1; i < sampleCount - 1; i++) {
+          const my = (ys[i] + ys[i + 1]) * 0.5;
+          const mx = (xs[i] + xs[i + 1]) * 0.5;
+          ctx.quadraticCurveTo(xs[i], ys[i], mx, my);
+        }
+        ctx.lineTo(xs[sampleCount - 1], cssH);
+        ctx.lineTo(0, cssH);
+        ctx.lineTo(0, 0);
+        ctx.closePath();
+        ctx.fillStyle = grad;
+        ctx.fill();
+      }
+
+      ctx.restore();
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
@@ -160,49 +185,14 @@ export function CompactTankEffect({
       cancelAnimationFrame(rafId);
       mql.removeEventListener("change", onChange);
     };
-  }, [fillRef]);
-
-  // Gradient depth scales with the prop alpha. Top is more translucent
-  // (light penetrates the surface), bottom is denser. The crest is a bright
-  // meniscus highlight on the front layer only.
-  const topAlpha = alpha * 0.55;
-  const midAlpha = alpha * 0.95;
-  const bottomAlpha = Math.min(1, alpha * 1.5);
-  const crestAlpha = Math.min(1, alpha * 1.7);
+  }, [fillRef, color, alpha, layerRgb]);
 
   return (
-    <svg
+    <canvas
+      ref={canvasRef}
       className="absolute inset-0 pointer-events-none"
-      preserveAspectRatio="none"
-      viewBox="0 0 100 100"
-      style={{ zIndex: 1, width: "100%", height: "100%" }}
+      style={{ zIndex: 1, width: "100%", height: "100%", borderRadius: "inherit" }}
       aria-hidden
-    >
-      <defs>
-        {LAYERS.map((layer, i) => (
-          <linearGradient key={gradientIds[i]} id={gradientIds[i]} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={layerColors[i]} stopOpacity={topAlpha * layer.alphaScale} />
-            <stop offset="32%" stopColor={layerColors[i]} stopOpacity={midAlpha * layer.alphaScale} />
-            <stop offset="100%" stopColor={layerColors[i]} stopOpacity={Math.min(1, bottomAlpha * layer.alphaScale)} />
-          </linearGradient>
-        ))}
-      </defs>
-      {LAYERS.map((_, i) => (
-        <path
-          key={gradientIds[i]}
-          ref={(el) => { bodyRefs.current[i] = el; }}
-          fill={`url(#${gradientIds[i]})`}
-        />
-      ))}
-      <path
-        ref={crestRef}
-        fill="none"
-        stroke="#ffffff"
-        strokeOpacity={crestAlpha}
-        strokeWidth={1.2}
-        strokeLinecap="round"
-        vectorEffect="non-scaling-stroke"
-      />
-    </svg>
+    />
   );
 }
