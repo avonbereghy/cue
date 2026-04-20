@@ -36,7 +36,6 @@ import { SignalString } from "./SignalString";
 import type { StrikePulse, CometPulse, ExtraBandSpec } from "./SignalString";
 import { FluxEffect, FLUX_EXIT_MS } from "./FluxEffect";
 import { StatusDot } from "./StatusDot";
-import { CompactTankEffect } from "./CompactTankEffect";
 import { FlipNumber } from "./FlipNumber";
 import { SpoolContextBar } from "./SpoolContextBar";
 
@@ -45,6 +44,21 @@ import { SpoolContextBar } from "./SpoolContextBar";
 const COMPACT_DRAIN_MS = 120_000;
 /** Duration of the accelerated fast-drain once state leaves "compacting". */
 const COMPACT_EXIT_MS = 250;
+
+/** Human-facing display names for each session state (used in the state badge
+ *  and tooltips). Module-level so it isn't reallocated per render. */
+const STATE_DISPLAY_NAME: Record<string, string> = {
+  working: "Working", thinking: "Thinking", waiting: "Waiting", error: "Error",
+  subagent: "Subagent", compacting: "Compacting", clearing: "Clearing",
+  idle: "Idle", done: "Done", ended: "Ended",
+};
+
+/** States that represent a turn having ended. Used by the string-promotion
+ *  logic to decide when to reset counters. Module-level so the Set isn't
+ *  rebuilt each render. */
+const TURN_END_STATES: ReadonlySet<string> = new Set([
+  "idle", "done", "compacting", "clearing", "ended",
+]);
 
 export interface SessionCardProps {
   session: EnrichedSession;
@@ -260,14 +274,14 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   // Compacting drain: fillRef is read every frame by both the tank canvas and
   // the pulsing bar (via a DOM style write). Two phases — a slow linear drain
   // while state === "compacting" (assumed 2min window), then a short fast
-  // drain to 0 when state transitions out. tankMounted is true iff fill > 0.
+  // drain to 0 when state transitions out. Read by SpoolContextBar to drive
+  // the linear unwind over the compaction window.
   const compactFillRef = useRef(1);
   const compactPhaseRef = useRef<"idle" | "draining" | "exiting">("idle");
   const compactStartRef = useRef(0);
   const compactExitStartRef = useRef(0);
   const compactExitFromRef = useRef(0);
   const compactRafRef = useRef<number | null>(null);
-  const [tankMounted, setTankMounted] = useState(false);
   // Snapshot of lastInputTokens at compact start. While the post-compact
   // reading still matches this value, the bar would show the pre-compact
   // size (e.g. 381K / 1M) which is misleading — the new conversation has
@@ -293,8 +307,6 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       }
       if (compactPhaseRef.current !== "idle") {
         compactRafRef.current = requestAnimationFrame(tick);
-      } else {
-        setTankMounted(false);
       }
     };
 
@@ -312,7 +324,6 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       }
       compactStartRef.current = performance.now() - (1 - compactFillRef.current) * COMPACT_DRAIN_MS;
       compactPhaseRef.current = "draining";
-      setTankMounted(true);
       setStaleAfterCompact(true);
     } else if (compactPhaseRef.current === "draining") {
       // State left compacting — accelerate to empty.
@@ -699,11 +710,6 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   const isGlass = typeof document !== "undefined" && document.documentElement.hasAttribute("data-glass");
   const isDark = isGlass || (typeof document !== "undefined" ? document.documentElement.getAttribute("data-theme") !== "light" : true);
 
-  const STATE_DISPLAY_NAME: Record<string, string> = {
-    working: "Working", thinking: "Thinking", waiting: "Waiting", error: "Error",
-    subagent: "Subagent", compacting: "Compacting", clearing: "Clearing", idle: "Idle", done: "Done", ended: "Ended",
-  };
-
   // Two color streams during the handoff:
   //   labelHex — semantic (StatusDot, visible labels). Follows labelState so
   //              the icon and dot color swap mid-transition along with text.
@@ -847,10 +853,6 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   // Strings 1–3 gate the bass/mids/treble base bands (SignalString deploys
   // in priority [mids, bass, treble]). Strings 4–5 render as mids-physics
   // extra bands at wider vertical offsets.
-  const TURN_END_STATES: ReadonlySet<string> = useMemo(
-    () => new Set(["idle", "done", "compacting", "clearing", "ended"]),
-    [],
-  );
   const isTurnOngoing = !TURN_END_STATES.has(displayState);
   // Strings are visible (deployed) during working and subagent only. Thinking,
   // waiting, and error do not show strings — the counter is preserved through
@@ -905,7 +907,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     tick();
     const id = window.setInterval(tick, 500);
     return () => window.clearInterval(id);
-  }, [isTurnOngoing, isPromoting, TURN_END_STATES]);
+  }, [isTurnOngoing, isPromoting]);
 
   // When strings can't deploy (thinking / waiting / error / turn-end), pass
   // target 0 so SignalString retracts all base bands. During working/subagent
@@ -1049,11 +1051,6 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           treble={signalTreble}
         />
       )}
-
-      {/* Compacting tank — periwinkle water that drains right-to-left over
-          the assumed 2min compact window, then fast-empties on state exit.
-          TEMPORARILY DISABLED — restore by un-commenting the render below. */}
-      {false && tankMounted && <CompactTankEffect fillRef={compactFillRef} />}
 
       <div ref={contentRef} className={`${effectiveCompact ? "space-y-0" : "space-y-2.5"} ${effectiveSlim && !effectiveCompact ? "flex flex-col flex-1" : ""}`} style={{ position: "relative", zIndex: 10 }}>
           {/* Row 1: Status dot + state badge + title + prompt pill + duration
