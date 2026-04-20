@@ -415,7 +415,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         : state === "thinking"
         ? (isDark ? { r: 246, g: 165, b: 96 } : { r: 194, g: 65, b: 12 })     // thinking orange
         : state === "subagent"
-        ? (isDark ? { r: 96, g: 165, b: 250 } : { r: 37, g: 99, b: 235 })     // subagent blue
+        ? (isDark ? { r: 167, g: 139, b: 255 } : { r: 107, g: 78, b: 224 })   // subagent purple (#A78BFF / #6B4EE0)
         : state === "idle"
         ? (isDark ? { r: 212, g: 165, b: 116 } : { r: 168, g: 162, b: 158 })  // idle tan / gray
         : defaultColor;
