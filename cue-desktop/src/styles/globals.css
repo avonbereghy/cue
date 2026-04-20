@@ -80,11 +80,7 @@ html[data-theme="light"]:not([data-glass]) .dot-pulse {
 
 /* idle — hollow ring breathes slowly */
 .status-idle {
-  animation: status-idle-breathe 3.2s ease-in-out infinite;
-}
-@keyframes status-idle-breathe {
-  0%, 100% { opacity: 0.4; }
-  50%       { opacity: 1; }
+  opacity: 0.55;
 }
 
 /* thinking — three-dot wave (ember ellipsis) */
