@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { usePageVisible } from "@/hooks/usePageVisible";
 
@@ -31,12 +31,14 @@ function effortTextClass(level: string): string {
 }
 import type { EnrichedSession } from "@/lib/types";
 import { STATE_HEX, STATE_HEX_LIGHT, STATE_DOT_HEX, STATE_DOT_HEX_LIGHT, STATE_BADGE_HEX, STATE_BADGE_HEX_LIGHT } from "@/lib/types";
-import { formatTokens, formatDuration } from "@/lib/format";
+import { formatTokens, formatDuration, formatClockTime, formatElapsedCompact } from "@/lib/format";
 import { SignalString } from "./SignalString";
-import type { StrikePulse } from "./SignalString";
+import type { StrikePulse, CometPulse, ExtraBandSpec } from "./SignalString";
 import { FluxEffect, FLUX_EXIT_MS } from "./FluxEffect";
 import { StatusDot } from "./StatusDot";
 import { CompactTankEffect } from "./CompactTankEffect";
+import { FlipNumber } from "./FlipNumber";
+import { SpoolContextBar } from "./SpoolContextBar";
 
 /** Assumed duration of a /compact run. Drain fills the tank left→empty over
  *  this window; a faster second phase plays when the state actually exits. */
@@ -347,6 +349,23 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     }
   }, [metrics.lastInputTokens, staleAfterCompact]);
 
+  // Give up on the context-loading spinner after 30s. If we're not in
+  // compacting mode and lastInputTokens still hasn't landed, the session
+  // probably won't publish metrics at all (e.g., an old resumed session,
+  // hook silent). Drop the spinner so the card doesn't spin forever.
+  const contextLoadingCandidate =
+    displayState !== "compacting" &&
+    (staleAfterCompact || metrics.lastInputTokens === 0);
+  const [contextLoadingGaveUp, setContextLoadingGaveUp] = useState(false);
+  useEffect(() => {
+    if (!contextLoadingCandidate) {
+      setContextLoadingGaveUp(false);
+      return;
+    }
+    const id = window.setTimeout(() => setContextLoadingGaveUp(true), 30_000);
+    return () => window.clearTimeout(id);
+  }, [contextLoadingCandidate]);
+
   // One-shot smooth-exit window applied during the thinking→working commit.
   // Flips .session-card--smooth-exit on simultaneously with the label/display
   // flip so the resulting CSS property changes interpolate over the longer
@@ -522,6 +541,31 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       return;
     }
 
+    // Working/subagent → retract-target: strings are deployed and need
+    // physical retract time (cord physics + damping ≈ 1-2s). Hold displayState
+    // briefly so the retract visibly begins under the active label, then
+    // commit with smoothExit stretching the tint/border/shadow morph over
+    // 2.5s so the card's CSS eases in lockstep with the strings' decay.
+    //
+    // Retract targets are exactly the "strings retracted" group in
+    // SignalString: idle, done, compacting, clearing, ended. Explicitly NOT
+    // thinking (strings stay deployed through working↔thinking), and NOT
+    // error/waiting (sticky-deployed — handled by the sticky-entry branch
+    // above, which fires before this one).
+    const isRetractTarget =
+      info.state === "idle" ||
+      info.state === "done" ||
+      info.state === "compacting" ||
+      info.state === "clearing" ||
+      info.state === "ended";
+    const isActiveExit =
+      (displayState === "working" || displayState === "subagent") &&
+      isRetractTarget;
+    if (isActiveExit) {
+      commitHandoff(250);
+      return;
+    }
+
     // Default — sync both immediately.
     setDisplayState(info.state);
     setLabelState(info.state);
@@ -534,6 +578,13 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   const pulsesRef = useRef<StrikePulse[]>([]);
   const lastStrikeCycleRef = useRef<Map<number, number>>(new Map());
   const strikeRafRef = useRef<number>(0);
+
+  // Tool-call comets — one thin white tracer per tool call shot across the
+  // strings while the session is actively working/subagenting. `prevToolUsesRef`
+  // starts null so we seed on mount without emitting a burst for historical
+  // tool calls that were already logged before the card rendered.
+  const cometsRef = useRef<CometPulse[]>([]);
+  const prevToolUsesRef = useRef<number | null>(null);
 
   const [cardWidth, setCardWidth] = useState(9999);
   const isNarrow = cardWidth < 600;
@@ -671,11 +722,78 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     ? `Subagents(${activeSubs})`
     : STATE_DISPLAY_NAME[labelState] ?? session.stateDisplayName;
 
+  // ─── Subagent string lines ──────────────────────────────────────────────
+  // Track whether we entered the subagent state from working — that's what
+  // determines whether the 3 white base lines persist alongside the blue
+  // subagent lines, or are suppressed.
+  const wasWorkingBeforeSubagentRef = useRef(false);
+  useEffect(() => {
+    if (displayState === "working") {
+      wasWorkingBeforeSubagentRef.current = true;
+    } else if (displayState !== "subagent") {
+      // Any state that isn't subagent/working clears the latch.
+      wasWorkingBeforeSubagentRef.current = false;
+    }
+    // displayState === "subagent" preserves the existing latch.
+  }, [displayState]);
+  const suppressBaseBands = displayState === "subagent" && !wasWorkingBeforeSubagentRef.current;
+
+  // Build the extraBands list. One blue line per active subagent, identified
+  // by a stable slot id ("sub-0", "sub-1", …) so add/remove maps correctly to
+  // LIFO retract behavior in SignalString.
+  //
+  // Axis: each line runs roughly bottom-left → top-right with seeded jitter
+  // so siblings sit at slightly different angles. Seed = sessionId + slotIdx
+  // so each subagent slot has a stable axis across renders.
+  const subagentExtraBands = useMemo(() => {
+    if (displayState !== "subagent" || activeSubs <= 0) return [];
+    // Cyan / subagent blue (#7CC5FF) — same colour family the badge uses.
+    const color = isDark ? { r: 124, g: 197, b: 255 } : { r: 42, g: 139, b: 217 };
+    const kinds: ("bass" | "mids" | "treble")[] = ["mids", "treble", "bass"];
+    const seedHash = (s: string) => {
+      let h = 2166136261 >>> 0;
+      for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      return (h >>> 0) / 0xffffffff;
+    };
+    const out: { id: string; bandKind: "bass" | "mids" | "treble"; axisStart: { xFrac: number; yFrac: number }; axisEnd: { xFrac: number; yFrac: number }; color: { r: number; g: number; b: number }; phaseJitter: number }[] = [];
+    for (let i = 0; i < activeSubs; i++) {
+      const id = `${info.id}-sub-${i}`;
+      const r1 = seedHash(id + "@start");
+      const r2 = seedHash(id + "@end");
+      const r3 = seedHash(id + "@angle");
+      const r4 = seedHash(id + "@phase");
+      // Anchor both endpoints just outside the actual card walls so the
+      // strings appear to enter from off-screen edges rather than floating
+      // in the middle of the card. Only minor horizontal jitter (±3% past
+      // the wall) — vertical variance is what gives siblings distinct angles.
+      // Start near bottom-left wall: x in [-0.08, -0.02], y in [0.82, 1.05]
+      const startXFrac = -0.08 + r1 * 0.06;
+      const startYFrac = 0.82 + r2 * 0.23;
+      // End near top-right wall: x in [1.02, 1.08], y in [-0.05, 0.18]
+      const endXFrac = 1.02 + r3 * 0.06;
+      const endYFrac = -0.05 + ((r1 + r2) * 0.5) * 0.23;
+      out.push({
+        id,
+        bandKind: kinds[i % kinds.length],
+        axisStart: { xFrac: startXFrac, yFrac: startYFrac },
+        axisEnd: { xFrac: endXFrac, yFrac: endYFrac },
+        color,
+        phaseJitter: r4 * Math.PI * 2,
+      });
+    }
+    return out;
+  }, [displayState, activeSubs, info.id, isDark]);
+
   // During the smooth-exit window, text/background colors stretch longer and
   // use the same outExpo curve as the card to keep the whole retract in sync.
+  // Normal state changes decelerate with outCubic — state-badge color is a
+  // value arrival (new state reached), so it should ease out, not ease-in-out.
   const stateTransition = smoothExit
     ? "color 2500ms cubic-bezier(0.16, 1, 0.3, 1), background-color 2500ms cubic-bezier(0.16, 1, 0.3, 1)"
-    : "color 600ms ease, background-color 600ms ease";
+    : "color 450ms cubic-bezier(0.33, 1, 0.68, 1), background-color 450ms cubic-bezier(0.33, 1, 0.68, 1)";
 
   const subagents = metrics.subagents ?? [];
   const hasSubagents = session.hasSubagents;
@@ -685,6 +803,170 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   const aggregatedOutputTokens = metrics.outputTokens + subagents.reduce((s, a) => s + a.outputTokens, 0);
   const aggregatedToolUses = Object.values(metrics.toolCounts).reduce((a, b) => a + b, 0)
     + subagents.reduce((s, a) => s + Object.values(a.toolCounts).reduce((x, y) => x + y, 0), 0);
+
+  // Emit a white tracer comet each time the aggregated tool-use count ticks
+  // up while the session is actively working. Backend polling can land
+  // multiple new calls in one update, so a delta of N stages N comets with
+  // small offsets to avoid a synchronized volley. Seed the ref on first
+  // observation so mid-stream mounts don't flash every historical call.
+  useEffect(() => {
+    const prev = prevToolUsesRef.current;
+    if (prev === null) {
+      prevToolUsesRef.current = aggregatedToolUses;
+      return;
+    }
+    prevToolUsesRef.current = aggregatedToolUses;
+
+    const delta = aggregatedToolUses - prev;
+    if (delta <= 0) return;
+    if (info.state !== "working" && info.state !== "subagent") return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+
+    const now = performance.now();
+    const count = Math.min(delta, 8); // cap volley size on large bursts
+    for (let i = 0; i < count; i++) {
+      // Random Y in [0.25, 0.75] of card height — keeps comets inside the
+      // visual safe zone (between the top state row and bottom context row).
+      const yFrac = 0.25 + Math.random() * 0.50;
+      cometsRef.current.push({ startTime: now + i * 90, yFrac });
+    }
+    if (cometsRef.current.length > 40) {
+      cometsRef.current = cometsRef.current.slice(-40);
+    }
+  }, [aggregatedToolUses, info.state]);
+
+  // ─── Progressive working strings ──────────────────────────────────────
+  // One string deploys on entering a turn. A new string is added for every
+  // 10 seconds of active generation (working / thinking / subagent), up to
+  // a max of 5. Waiting / error pauses freeze the clock; the counter is
+  // preserved through them and resumes when active again. Turn-end states
+  // (idle / done / compacting / clearing / ended) reset the counter to 0.
+  //
+  //   count = min(5, 1 + floor(activeGenMs / 10_000))
+  //
+  // Strings 1–3 gate the bass/mids/treble base bands (SignalString deploys
+  // in priority [mids, bass, treble]). Strings 4–5 render as mids-physics
+  // extra bands at wider vertical offsets.
+  const TURN_END_STATES: ReadonlySet<string> = useMemo(
+    () => new Set(["idle", "done", "compacting", "clearing", "ended"]),
+    [],
+  );
+  const isTurnOngoing = !TURN_END_STATES.has(displayState);
+  // Strings are visible (deployed) during working and subagent only. Thinking,
+  // waiting, and error do not show strings — the counter is preserved through
+  // them, but the strings themselves retract.
+  const canDeployStrings = displayState === "working" || displayState === "subagent";
+  // The counter only promotes during *purely* working — subagent and thinking
+  // accumulate no active-generation time toward the next string.
+  const isPromoting = displayState === "working";
+  const [stringCount, setStringCount] = useState<number>(0);
+  // Cumulative time spent in purely-working state since turn start.
+  // Other mid-turn states freeze the clock; the counter is preserved but not
+  // promoted until we return to working.
+  const activeGenMsRef = useRef(0);
+  const lastTickMsRef = useRef<number | null>(null);
+  // Cumulative active-generation thresholds for strings 1..5. The first
+  // string now also gets a short warm-up so the card doesn't snap straight
+  // to a deployed state the instant work starts. Upper strings stretch so
+  // 4 and 5 read as increasingly rare.
+  //   1st string →  1s
+  //   2nd string → 30s
+  //   3rd string →  1:30
+  //   4th string →  5:00
+  //   5th string → 10:00
+  const STRING_THRESHOLDS_MS = [1_000, 30_000, 90_000, 300_000, 600_000];
+
+  useEffect(() => {
+    if (!isTurnOngoing) {
+      activeGenMsRef.current = 0;
+      lastTickMsRef.current = null;
+      setStringCount(c => (c === 0 ? c : 0));
+      return;
+    }
+    if (lastTickMsRef.current === null) {
+      lastTickMsRef.current = performance.now();
+    }
+    const tick = () => {
+      const now = performance.now();
+      const last = lastTickMsRef.current ?? now;
+      // Only bank time while purely working. Thinking / subagent / waiting /
+      // error just advance `last` so the delta when we resume is small.
+      if (isPromoting) {
+        activeGenMsRef.current += now - last;
+      }
+      lastTickMsRef.current = now;
+      const elapsed = activeGenMsRef.current;
+      let target = 0;
+      for (const ms of STRING_THRESHOLDS_MS) {
+        if (elapsed >= ms) target += 1;
+      }
+      setStringCount(c => (c < target ? target : c));
+    };
+    tick();
+    const id = window.setInterval(tick, 500);
+    return () => window.clearInterval(id);
+  }, [isTurnOngoing, isPromoting, TURN_END_STATES]);
+
+  // When strings can't deploy (thinking / waiting / error / turn-end), pass
+  // target 0 so SignalString retracts all base bands. During working/subagent
+  // we pass the current count (clamped to the 3-band ceiling; 4–5 handled via
+  // extraBands below). stringCount starts at 0 on turn entry and promotes to
+  // 1 after the 1s warm-up, so the base-band target follows naturally.
+  const baseBandsTarget = canDeployStrings ? Math.min(stringCount, 3) : 0;
+
+  // Strings 4 and 5 — extras that inherit the active signal theme color and
+  // each get their own phase jitter so they wobble out of lockstep with the
+  // base bands. String 4 follows mids physics; string 5 follows bass physics
+  // — giving them different audio drives is what makes them look distinct
+  // from each other, since phase jitter alone won't separate two bands fed by
+  // the same audio envelope. Positioned at widened vertical offsets above/
+  // below the base-band trio.
+  const workingExtraBands = useMemo(() => {
+    if (!canDeployStrings || stringCount <= 3) return [];
+    const hex = isDark ? signalColorDark : signalColorLight;
+    const cleaned = hex.replace("#", "");
+    const r = parseInt(cleaned.slice(0, 2), 16) || 255;
+    const g = parseInt(cleaned.slice(2, 4), 16) || 255;
+    const b = parseInt(cleaned.slice(4, 6), 16) || 255;
+    const color = { r, g, b };
+    const jitterSeed = (s: string) => {
+      let h = 2166136261 >>> 0;
+      for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      return ((h >>> 0) / 0xffffffff) * Math.PI * 2;
+    };
+    const yBelow = Math.min(0.92, 0.5 + stringSpread * 2.0);
+    const yAbove = Math.max(0.08, 0.5 - stringSpread * 2.0);
+    const bands: ExtraBandSpec[] = [];
+    if (stringCount >= 4) {
+      bands.push({
+        id: `${info.id}-work-4`,
+        bandKind: "mids",
+        axisStart: { xFrac: 0, yFrac: yBelow },
+        axisEnd:   { xFrac: 1, yFrac: yBelow },
+        color,
+        phaseJitter: jitterSeed(`${info.id}@work-4`),
+      });
+    }
+    if (stringCount >= 5) {
+      bands.push({
+        id: `${info.id}-work-5`,
+        bandKind: "bass",
+        axisStart: { xFrac: 0, yFrac: yAbove },
+        axisEnd:   { xFrac: 1, yFrac: yAbove },
+        color,
+        phaseJitter: jitterSeed(`${info.id}@work-5`),
+      });
+    }
+    return bands;
+  }, [canDeployStrings, stringCount, stringSpread, info.id, isDark, signalColorDark, signalColorLight]);
+
+  const combinedExtraBands = useMemo(
+    () => [...subagentExtraBands, ...workingExtraBands],
+    [subagentExtraBands, workingExtraBands],
+  );
 
   const maxTools = isNarrow ? 3 : 6;
   const topTools = Object.entries(metrics.toolCounts)
@@ -743,7 +1025,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     >
 
       {/* Signal String / Sand — renders behind all content */}
-      {signalString && (revived || info.state !== "ended") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={signalEffect} sandEnabled={sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} sessionId={info.id} contentRef={contentRef} keyReleaseSpeed={keyReleaseSpeed} onStringsConnected={handleStringsConnected} />}
+      {signalString && (revived || info.state !== "ended") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} comets={cometsRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={signalEffect} sandEnabled={sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} sessionId={info.id} contentRef={contentRef} keyReleaseSpeed={keyReleaseSpeed} onStringsConnected={handleStringsConnected} extraBands={combinedExtraBands} suppressBaseBands={suppressBaseBands} baseBandsTarget={baseBandsTarget} />}
 
       {/* Flux streamline overlay on thinking cards, tinted by the state color.
           Mounted by a linger timer: stays while thinking is active, lingers
@@ -751,7 +1033,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           before the component unmounts. `active={fluxActive}` drives the
           enter/exit growth ramp; sibling cards get different stagger phases
           via their session id seed. */}
-      {signalString && fluxEnabled && fluxMounted && (
+      {fluxEnabled && fluxMounted && (revived || info.state !== "ended") && (
         <FluxEffect
           color={fluxTintHex}
           seed={info.id}
@@ -769,8 +1051,9 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       )}
 
       {/* Compacting tank — periwinkle water that drains right-to-left over
-          the assumed 2min compact window, then fast-empties on state exit. */}
-      {tankMounted && <CompactTankEffect fillRef={compactFillRef} />}
+          the assumed 2min compact window, then fast-empties on state exit.
+          TEMPORARILY DISABLED — restore by un-commenting the render below. */}
+      {false && tankMounted && <CompactTankEffect fillRef={compactFillRef} />}
 
       <div ref={contentRef} className={`${effectiveCompact ? "space-y-0" : "space-y-2.5"} ${effectiveSlim && !effectiveCompact ? "flex flex-col flex-1" : ""}`} style={{ position: "relative", zIndex: 10 }}>
           {/* Row 1: Status dot + state badge + title + prompt pill + duration
@@ -778,7 +1061,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           <div className="relative flex items-center gap-2 min-w-0 overflow-hidden">
             <StatusDot state={labelState} color={labelHex} />
             <span
-              className="text-xs px-2 py-0.5 rounded-full text-center shrink-0"
+              className="text-xs px-2 py-1 rounded-full text-center shrink-0 leading-none"
               style={{
                 // Layer the tinted bg over an opaque base so flux/sand behind
                 // the card can't bleed through the pill. linear-gradient serves
@@ -788,6 +1071,9 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 color: badgeHex.text,
                 transition: stateTransition,
                 minWidth: "8.5em",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
               }}
             >
               {displayStateName}
@@ -795,7 +1081,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             {(info.state === "working" || info.state === "thinking" || info.state === "subagent") && titleAnimation !== "none" ? (
               <span
                 ref={titleContainerRef}
-                className={`font-semibold anim-${titleAnimation} whitespace-nowrap overflow-hidden shrink-0`}
+                className={`font-semibold anim-${titleAnimation} whitespace-nowrap overflow-hidden shrink-0 leading-none`}
                 style={{
                   color: titleHex,
                   transition: stateTransition,
@@ -833,7 +1119,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
               </span>
             ) : (
               <span
-                className="font-semibold whitespace-nowrap shrink-0"
+                className="font-semibold whitespace-nowrap shrink-0 leading-none"
                 style={{
                   color: titleHex,
                   transition: stateTransition,
@@ -850,24 +1136,69 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 {session.workspaceName}
               </span>
             )}
-            {!hidePromptPill && isDuplicate && !metrics.customTitle && metrics.lastPrompt && (!metrics.lastPromptSessionId || metrics.lastPromptSessionId === info.id) && (
-              <>
-                <span
-                  className="text-[0.65rem] px-1.5 py-0.5 rounded-full bg-white/10 text-white/55 italic overflow-hidden whitespace-nowrap text-ellipsis min-w-0 shrink border-0 cursor-pointer hover:bg-white/18 hover:text-white/75 transition-colors"
-                  style={{ maxWidth: "140px" }}
-                  onClick={(e) => { e.stopPropagation(); setPromptPopupOpen((v) => !v); }}
-                >
-                  {metrics.lastPrompt}
-                </span>
-                {promptPopupOpen && (
-                  <PromptPopup
-                    text={metrics.lastPrompt}
-                    onClose={() => setPromptPopupOpen(false)}
-                    isDark={isDark}
-                  />
-                )}
-              </>
-            )}
+            {(() => {
+              // Short transcript snippet inline next to the title — a typographic
+              // "›" line instead of a pill. State-tinted text with a right-edge
+              // mask-fade so it trails off rather than hitting a hard ellipsis.
+              // Gated to duplicate workspaces (disambiguation case); click opens
+              // the full PromptPopup.
+              if (hidePromptPill || !isDuplicate || metrics.customTitle) return null;
+              if (metrics.lastPromptSessionId && metrics.lastPromptSessionId !== info.id) return null;
+              const preferAssistant = info.state !== "thinking" && !!metrics.lastAssistantText;
+              const text = preferAssistant
+                ? (metrics.lastAssistantText as string)
+                : metrics.lastPrompt;
+              if (!text) return null;
+              const bodyColor = preferAssistant
+                ? badgeHex.text
+                : (isDark ? "rgba(245,245,245,0.62)" : "rgba(30,30,30,0.70)");
+              const glyphColor = labelHex;
+              const fadeMask = "linear-gradient(to right, #000 0%, #000 72%, transparent 100%)";
+              return (
+                <>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); setPromptPopupOpen((v) => !v); }}
+                    title={preferAssistant ? "Latest assistant message" : "Last prompt"}
+                    className="bg-transparent border-0 p-0 cursor-pointer shrink overflow-hidden whitespace-nowrap inline-flex items-center"
+                    style={{
+                      fontSize: "0.72rem",
+                      lineHeight: 1,
+                      letterSpacing: "-0.005em",
+                      color: bodyColor,
+                      fontStyle: preferAssistant ? "normal" : "italic",
+                      fontWeight: 400,
+                      opacity: 0.9,
+                      maxWidth: "180px",
+                      WebkitMaskImage: fadeMask,
+                      maskImage: fadeMask,
+                      transition: "color 200ms, opacity 200ms",
+                    }}
+                  >
+                    <span
+                      style={{
+                        color: glyphColor,
+                        opacity: 0.8,
+                        marginRight: "0.35em",
+                        fontStyle: "normal",
+                        fontWeight: 500,
+                      }}
+                      aria-hidden
+                    >
+                      {preferAssistant ? "›" : "»"}
+                    </span>
+                    {text}
+                  </button>
+                  {promptPopupOpen && (
+                    <PromptPopup
+                      text={text}
+                      onClose={() => setPromptPopupOpen(false)}
+                      isDark={isDark}
+                    />
+                  )}
+                </>
+              );
+            })()}
             {activeSubs > 0 && displayState !== "subagent" && (
               <span className="text-xs px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: "rgba(139,92,246,0.25)", color: "#c4b5fd" }}>
                 {activeSubs} subprocess{activeSubs !== 1 ? "es" : ""}
@@ -906,6 +1237,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             </span>
             )}
           </div>
+
 
           {/* Agent subtitle — team agents (from JSONL or hook) or sessions with a custom title */}
           {(() => {
@@ -1042,18 +1374,21 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
 
           {/* Row 4: Context usage — right-aligned to match timer position */}
           {showContext && (() => {
-            const barColor = (() => {
+            // Rest-state silk color — green→yellow→red ramp against context
+            // usage. The blue unwind palette only activates while compacting.
+            const restBarRgb = ((): [number, number, number] => {
               const p = Math.min(Math.max(session.contextUsagePercent, 0), 1);
-              const green = [34, 197, 94];
-              const yellow = [245, 158, 11];
-              const red = [239, 68, 68];
+              const green: [number, number, number] = [34, 197, 94];
+              const yellow: [number, number, number] = [245, 158, 11];
+              const red: [number, number, number] = [239, 68, 68];
               const [a, b, t] = p < 0.5
                 ? [green, yellow, p / 0.5]
                 : [yellow, red, (p - 0.5) / 0.5];
-              const r = Math.round(a[0] + (b[0] - a[0]) * t);
-              const g = Math.round(a[1] + (b[1] - a[1]) * t);
-              const bl = Math.round(a[2] + (b[2] - a[2]) * t);
-              return `rgb(${r},${g},${bl})`;
+              return [
+                Math.round(a[0] + (b[0] - a[0]) * t),
+                Math.round(a[1] + (b[1] - a[1]) * t),
+                Math.round(a[2] + (b[2] - a[2]) * t),
+              ];
             })();
             const pct = Math.round(session.contextUsagePercent * 100);
             const tokStr = `${formatTokens(metrics.lastInputTokens)} / ${formatTokens(session.contextLimit)}`;
@@ -1062,22 +1397,27 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             // pre-compact size. Once a fresh API reading lands the stale
             // flag clears and the bar/text swap in.
             const isCompactingUI = displayState === "compacting";
-            const isLoading = isCompactingUI || staleAfterCompact || metrics.lastInputTokens === 0;
+            const isLoadingRaw = isCompactingUI || staleAfterCompact || metrics.lastInputTokens === 0;
+            // After 30s of a non-compacting load that never resolves, stop
+            // showing the spinner — fall through to whatever data we have.
+            const isLoading = isLoadingRaw && !(contextLoadingGaveUp && !isCompactingUI);
 
             if (contextDisplay === "compact") {
               return (
                 <div
                   style={{
-                    // fit-content + marginLeft: auto = shrink to widest child
-                    // (the model row) and right-align within the flex-col
-                    // parent. Stretch makes the bar row fill to match.
+                    // Fixed width sized to the "Opus 4.7 — high" model+effort
+                    // row, so the bar never stretches when model or effort
+                    // labels change. Previously used fit-content which let
+                    // the widest child govern width; then 170px, which was
+                    // too wide. 130px tightly matches the longest realistic
+                    // model+effort string and right-aligns in the flex-col.
                     display: "flex",
                     flexDirection: "column",
                     alignItems: "stretch",
-                    width: "fit-content",
+                    width: "130px",
                     marginLeft: "auto",
                     rowGap: "4px",
-                    minWidth: "90px",
                   }}
                 >
                   {modelSpanInner}
@@ -1086,18 +1426,14 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                       this row present prevents the card from changing height
                       when the state toggles. */}
                   <div className="flex items-center gap-1.5">
-                    <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden">
-                      {!isLoading && (
-                        <div
-                          className="absolute left-0 top-0 bottom-0 rounded-full transition-all duration-500"
-                          style={{
-                            width: `${Math.min(session.contextUsagePercent * 100, 100)}%`,
-                            background: barColor,
-                            opacity: 0.25,
-                          }}
-                        />
-                      )}
-                    </div>
+                    <SpoolContextBar
+                      fillPercent={session.contextUsagePercent}
+                      isCompacting={isCompactingUI}
+                      compactFillRef={compactFillRef}
+                      isDark={isDark}
+                      barHeight={10}
+                      restColor={restBarRgb}
+                    />
                   </div>
                   {/* Third row: spinner when loading, stale/live tokens
                       otherwise. Always present so height stays constant. */}
@@ -1109,12 +1445,11 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                       </svg>
                     </div>
                   ) : (
-                    <span
+                    <FlipNumber
+                      value={tokStr}
                       className={`text-[0.625rem] mono-nums ${isGlass ? "text-white/55" : "text-white/30"}`}
                       style={{ textAlign: "right", minHeight: "0.9rem" }}
-                    >
-                      {tokStr}
-                    </span>
+                    />
                   )}
                 </div>
               );
@@ -1123,7 +1458,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             return (
               <div className="relative flex items-center gap-1.5">
                 <span className={`text-[0.625rem] shrink-0 ${isGlass ? "text-white/65" : "text-white/40"}`}>Context</span>
-                {isLoading ? (
+                {isLoading && !isCompactingUI ? (
                   <>
                     <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden" />
                     <svg className="w-3 h-3 animate-spin shrink-0" viewBox="0 0 16 16" fill="none">
@@ -1133,18 +1468,16 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                   </>
                 ) : (
                   <>
-                    <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden">
-                      <div
-                        className="absolute left-0 top-0 bottom-0 rounded-full transition-all duration-500"
-                        style={{
-                          width: `${Math.min(session.contextUsagePercent * 100, 100)}%`,
-                          background: barColor,
-                          opacity: 0.25,
-                        }}
-                      />
-                    </div>
-                    <span className={`text-[0.625rem] mono-nums shrink-0 ${isGlass ? "text-white/75" : "text-white/50"}`}>
-                      {(() => {
+                    <SpoolContextBar
+                      fillPercent={session.contextUsagePercent}
+                      isCompacting={isCompactingUI}
+                      compactFillRef={compactFillRef}
+                      isDark={isDark}
+                      barHeight={12}
+                      restColor={restBarRgb}
+                    />
+                    <FlipNumber
+                      value={(() => {
                         switch (contextDisplay) {
                           case "tokens": return tokStr;
                           case "remaining": return `${100 - pct}% free`;
@@ -1152,11 +1485,13 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                           default: return `${pct}%`;
                         }
                       })()}
-                    </span>
+                      className={`text-[0.625rem] mono-nums shrink-0 ${isGlass ? "text-white/75" : "text-white/50"}`}
+                    />
                     {contextDisplay !== "tokens" && contextDisplay !== "both" && (
-                      <span className={`text-[0.625rem] mono-nums shrink-0 ${isGlass ? "text-white/55" : "text-white/30"}`}>
-                        {tokStr}
-                      </span>
+                      <FlipNumber
+                        value={tokStr}
+                        className={`text-[0.625rem] mono-nums shrink-0 ${isGlass ? "text-white/55" : "text-white/30"}`}
+                      />
                     )}
                   </>
                 )}
@@ -1188,7 +1523,8 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             <div className="relative flex items-center gap-2 flex-wrap">
               <span className="text-[0.625rem] text-white/40 shrink-0 w-6">5h</span>
               <div className="flex-1 relative h-1 rounded-full bg-white/8 overflow-hidden min-w-[40px]">
-                <div className="absolute left-0 top-0 bottom-0 rounded-full transition-all duration-500" style={{
+                <div className="absolute left-0 top-0 bottom-0 rounded-full" style={{
+                  transition: "width 500ms cubic-bezier(0.33, 1, 0.68, 1), background-color 300ms cubic-bezier(0.33, 1, 0.68, 1)",
                   width: `${Math.min(session.rateLimits.fiveHourPercent, 100)}%`,
                   background: session.rateLimits.fiveHourPercent >= 90 ? "#ef4444" : session.rateLimits.fiveHourPercent >= 75 ? "#d946ef" : "#3b82f6",
                   opacity: 0.4,
@@ -1198,7 +1534,8 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
               {session.rateLimits.sevenDayPercent > 0 && (<>
                 <span className="text-[0.625rem] text-white/40 shrink-0 w-6">7d</span>
                 <div className="flex-1 relative h-1 rounded-full bg-white/8 overflow-hidden min-w-[40px]">
-                  <div className="absolute left-0 top-0 bottom-0 rounded-full transition-all duration-500" style={{
+                  <div className="absolute left-0 top-0 bottom-0 rounded-full" style={{
+                  transition: "width 500ms cubic-bezier(0.33, 1, 0.68, 1), background-color 300ms cubic-bezier(0.33, 1, 0.68, 1)",
                     width: `${Math.min(session.rateLimits.sevenDayPercent, 100)}%`,
                     background: session.rateLimits.sevenDayPercent >= 90 ? "#ef4444" : session.rateLimits.sevenDayPercent >= 75 ? "#d946ef" : "#3b82f6",
                     opacity: 0.4,
@@ -1239,7 +1576,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           return (
             <div key={agent.agentId || i} className="flex items-center gap-2 text-xs text-white/50">
               <span className="font-mono text-white/30 shrink-0">{prefix}</span>
-              <span className={`shrink-0 ${agent.isActive ? "text-blue-400/80" : "text-white/30"}`}>
+              <span className={`shrink-0 ${agent.isActive ? "text-[#7CC5FF]" : "text-white/30"}`}>
                 @{label}
               </span>
               {agent.description && (
@@ -1248,6 +1585,33 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 </span>
               )}
               <span className="ml-auto flex items-center gap-3 shrink-0 mono-nums">
+                {agent.startedAt != null && (
+                  <span
+                    className="text-[0.625rem] text-white/35"
+                    title={
+                      agent.isActive
+                        ? `started ${formatClockTime(agent.startedAt)} · live`
+                        : agent.endedAt != null
+                          ? `${formatClockTime(agent.startedAt)} \u2192 ${formatClockTime(agent.endedAt)}`
+                          : `started ${formatClockTime(agent.startedAt)}`
+                    }
+                  >
+                    {formatClockTime(agent.startedAt).slice(0, 5)}
+                    {" \u2192 "}
+                    {agent.isActive
+                      ? "\u25CF"
+                      : agent.endedAt != null
+                        ? formatClockTime(agent.endedAt).slice(0, 5)
+                        : "\u2014"}
+                    {agent.endedAt != null && agent.startedAt != null && (
+                      <span className="ml-1 text-white/25">
+                        {" ("}
+                        {formatElapsedCompact(agent.startedAt, agent.endedAt)}
+                        {")"}
+                      </span>
+                    )}
+                  </span>
+                )}
                 {agentToolUses > 0 && (
                   <span className="text-[0.625rem]">{agentToolUses} tools</span>
                 )}
@@ -1258,7 +1622,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
         };
 
         return (
-          <div className="pl-3 space-y-1 border-l-2 border-blue-400/20">
+          <div className="pl-3 space-y-1 border-l-2 border-[#7CC5FF]/25">
             {activeAgents.map((agent, i) => renderAgent(agent, i, activeAgents))}
             {completedAgents.length > 0 && (
               <details className="text-xs">

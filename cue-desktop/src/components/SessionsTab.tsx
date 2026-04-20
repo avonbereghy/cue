@@ -410,16 +410,17 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // ---------------------------------------------------------------------------
   // Sandbox mode — full keyboard-driven session designer for screenshots
   // ---------------------------------------------------------------------------
-  const SANDBOX_STATES = ["working", "thinking", "waiting", "error", "subagent", "idle", "done", "ended"] as const;
+  const SANDBOX_STATES = ["working", "thinking", "waiting", "error", "subagent", "compacting", "idle", "done", "ended"] as const;
   const SANDBOX_STATE_META: Record<string, { icon: string; display: string; key: string }> = {
-    working:  { icon: "\u27F3", display: "Working",  key: "W" },
-    thinking: { icon: "\uD83D\uDCAD", display: "Thinking", key: "T" },
-    waiting:  { icon: "\u23F8", display: "Waiting",  key: "P" },
-    error:    { icon: "\u2717", display: "Error",    key: "E" },
-    subagent: { icon: "\u2934", display: "Subagent", key: "A" },
-    idle:     { icon: "\u25CB", display: "Idle",     key: "I" },
-    done:     { icon: "\u2713", display: "Done",     key: "D" },
-    ended:    { icon: "\u2715", display: "Ended",    key: "X" },
+    working:    { icon: "\u27F3", display: "Working",    key: "W" },
+    thinking:   { icon: "\uD83D\uDCAD", display: "Thinking",   key: "T" },
+    waiting:    { icon: "\u23F8", display: "Waiting",    key: "P" },
+    error:      { icon: "\u2717", display: "Error",      key: "E" },
+    subagent:   { icon: "\u2934", display: "Subagent",   key: "A" },
+    compacting: { icon: "\u21CA", display: "Compacting", key: "C" },
+    idle:       { icon: "\u25CB", display: "Idle",       key: "I" },
+    done:       { icon: "\u2713", display: "Done",       key: "D" },
+    ended:      { icon: "\u2715", display: "Ended",      key: "X" },
   };
   const SANDBOX_MODELS = ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"] as const;
   const SANDBOX_SOURCES = ["terminal", "vscode", "cursor", "iterm"] as const;
@@ -447,6 +448,10 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   ];
 
   const sandboxCounterRef = useRef(0);
+  // Tracks when each sandbox session entered an "active" (working|subagent)
+  // state. Used by the simulation loop to schedule subagent auto-spawns and
+  // resets when the session leaves both active states.
+  const sandboxActiveStartRef = useRef<Map<string, number>>(new Map());
   const [sandboxSessions, setSandboxSessions] = useState<EnrichedSession[]>(() => _sandboxSessionsCache);
   const [sandboxSelectedIdx, setSandboxSelectedIdx] = useState<number>(() => _sandboxSelectedIdxCache);
   const [sandboxShowHelp, setSandboxShowHelp] = useState(false);
@@ -484,6 +489,185 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     }));
     invoke("write_sandbox_sessions", { sessions: payload }).catch(() => {});
   }, [testMode, sandboxSessions]);
+
+  // ─── Live simulation for sandbox sessions in working/subagent state ───
+  // Drives realistic token growth, tool-call chatter, and auto-spawned
+  // subagents so the UI animations (FlipNumber, context-bar glow, signal
+  // strings, comet tool-calls, +N cyan bands) actually have data to react
+  // to without anyone touching the keyboard.
+  //
+  //   - Each 500ms tick: for every active session, add output/input/cache
+  //     tokens proportional to a drifting outputTokensPerSec (5–80 t/s),
+  //     cap at 98% of contextLimit, fire a tool call on average every ~5s
+  //     (also injects a 200–4000 token context bump), and roll a new
+  //     runningToolName.
+  //   - Per-session active-work timer (tracked in sandboxActiveStartRef)
+  //     drives the "string count" escalation: at 15s/40s/80s/150s a new
+  //     auto subagent is spawned, which flips state to "subagent" and adds
+  //     one more diagonal band to the SignalString. Timer persists across
+  //     user-driven +Sub/-Sub because both working and subagent count as
+  //     "active" — it only resets when the session leaves both states.
+  useEffect(() => {
+    if (!testMode) {
+      sandboxActiveStartRef.current.clear();
+      return;
+    }
+    const TICK_MS = 500;
+    // Working-duration thresholds (seconds) at which an auto-subagent
+    // spawns. Keyed to feel like "short task = just working", "medium =
+    // one helper", "long = a small team" — matches the string count we
+    // want on screen the longer a session runs.
+    const SUB_THRESHOLDS_SEC = [15, 40, 80, 150];
+
+    const pickTool = (): [string, string] =>
+      SANDBOX_TOOLS_ACTIVE[Math.floor(Math.random() * SANDBOX_TOOLS_ACTIVE.length)];
+
+    const handle = window.setInterval(() => {
+      const now = Date.now();
+      setSandboxSessions((prev) => {
+        // Prune tracker entries for sessions that no longer exist OR have
+        // left active-state — entering working again starts the clock over.
+        const activeIds = new Set(
+          prev
+            .filter((s) => s.info.state === "working" || s.info.state === "subagent")
+            .map((s) => s.info.id),
+        );
+        for (const id of Array.from(sandboxActiveStartRef.current.keys())) {
+          if (!activeIds.has(id)) sandboxActiveStartRef.current.delete(id);
+        }
+
+        let changed = false;
+        const next = prev.map((s) => {
+          const isActive = s.info.state === "working" || s.info.state === "subagent";
+          if (!isActive) return s;
+
+          if (!sandboxActiveStartRef.current.has(s.info.id)) {
+            sandboxActiveStartRef.current.set(s.info.id, now);
+          }
+          const startMs = sandboxActiveStartRef.current.get(s.info.id)!;
+          const elapsedSec = (now - startMs) / 1000;
+          const dt = TICK_MS / 1000;
+
+          // Output-tokens-per-second random walk bounded to a plausible band.
+          const prevTps = s.outputTokensPerSec || 22;
+          const tps = Math.max(6, Math.min(80, prevTps + (Math.random() - 0.5) * 10));
+
+          // Base growth: output → linear in tps; input → ~1.6× output
+          // (assistant replies grow both sides as they're appended to the
+          // next turn); cache reads grow ~4× output (Claude's actual cache
+          // traffic dwarfs fresh input).
+          const outDelta = Math.round(tps * dt);
+          const inDelta = Math.round(tps * dt * 1.6 + Math.random() * 30);
+          const cacheDelta = Math.round(tps * dt * 4 + Math.random() * 120);
+
+          let inputTokens = s.metrics.inputTokens + inDelta;
+          const outputTokens = s.metrics.outputTokens + outDelta;
+          const cacheReadTokens = s.metrics.cacheReadTokens + cacheDelta;
+          const cacheCreationTokens = s.metrics.cacheCreationTokens + Math.round(Math.random() * 40);
+
+          let toolCounts = s.metrics.toolCounts;
+          let runningToolName = s.runningToolName;
+          let runningToolTarget = s.runningToolTarget;
+
+          // Tool call probability: one in every ~5s on expectation. When it
+          // fires, bump toolCounts (drives the comet tracer in SessionCard),
+          // swap the running tool label, and inject a chunk of tokens
+          // representing the tool result being read back into context.
+          if (Math.random() < dt / 5) {
+            const [name, target] = pickTool();
+            toolCounts = { ...toolCounts, [name]: (toolCounts[name] ?? 0) + 1 };
+            runningToolName = name;
+            runningToolTarget = target;
+            const injected = 200 + Math.floor(Math.random() * 4000);
+            inputTokens += injected;
+          }
+
+          // Clamp input to leave a little headroom so the context bar
+          // doesn't hard-lock at the right edge.
+          const cap = Math.floor(s.contextLimit * 0.98);
+          if (inputTokens > cap) inputTokens = cap;
+
+          // Auto-spawn subagents at working-duration thresholds. We only
+          // cross each threshold once per session because the subagent
+          // count only ever grows (manual -Sub doesn't reset the timer).
+          let subagents = s.metrics.subagents;
+          let stateOut = s.info.state;
+          let stateIconOut = s.stateIcon;
+          let stateDisplayOut = s.stateDisplayName;
+          let activeSubsOut = s.info.activeSubagents ?? subagents.length;
+
+          const desiredSubCount = SUB_THRESHOLDS_SEC.reduce(
+            (acc, t) => (elapsedSec >= t ? acc + 1 : acc),
+            0,
+          );
+          if (subagents.length < desiredSubCount) {
+            const addN = desiredSubCount - subagents.length;
+            const newOnes = [];
+            for (let k = 0; k < addN; k++) {
+              const idx = subagents.length + k;
+              newOnes.push({
+                agentId: `auto_sub_${s.info.id}_${idx + 1}_${now}_${k}`,
+                description: ["Research task", "Code review", "Test runner", "Build validator"][idx % 4],
+                slug: ["research", "code-reviewer", "test-runner", "build-validator"][idx % 4],
+                inputTokens: Math.floor(Math.random() * 20000 + 3000),
+                outputTokens: Math.floor(Math.random() * 5000 + 500),
+                cacheCreationTokens: 0,
+                cacheReadTokens: Math.floor(Math.random() * 8000),
+                model: s.metrics.model,
+                toolCounts: { Read: Math.floor(Math.random() * 6 + 1), Grep: Math.floor(Math.random() * 3) },
+                messageCount: Math.floor(Math.random() * 10 + 2),
+                isActive: true,
+              });
+            }
+            subagents = [...subagents, ...newOnes];
+            activeSubsOut = subagents.length;
+            const meta = SANDBOX_STATE_META.subagent;
+            stateOut = "subagent";
+            stateIconOut = meta.icon;
+            stateDisplayOut = meta.display;
+          }
+
+          changed = true;
+          return {
+            ...s,
+            info: {
+              ...s.info,
+              state: stateOut,
+              activeSubagents: activeSubsOut,
+              lastActivity: now / 1000,
+            },
+            stateIcon: stateIconOut,
+            stateDisplayName: stateDisplayOut,
+            hasSubagents: subagents.length > 0,
+            outputTokensPerSec: tps,
+            runningToolName,
+            runningToolTarget,
+            durationSecs: s.durationSecs + dt,
+            totalDurationSecs: s.totalDurationSecs + dt,
+            contextUsagePercent: inputTokens / s.contextLimit,
+            metrics: {
+              ...s.metrics,
+              inputTokens,
+              outputTokens,
+              lastInputTokens: inputTokens,
+              cacheReadTokens,
+              cacheCreationTokens,
+              toolCounts,
+              subagents,
+            },
+          };
+        });
+
+        return changed ? next : prev;
+      });
+    }, TICK_MS);
+    return () => {
+      window.clearInterval(handle);
+    };
+    // Re-subscribes only when entering/leaving sandbox mode; SANDBOX_* arrays
+    // are stable values baked into the component and read via closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [testMode]);
 
   const makeSandboxSession = useCallback((state: string = "idle", overrides?: Partial<{ title: string; workspace: string; model: string; source: string; branch: string; contextPct: number; tool: [string, string] | null; todoCompleted: number; todoTotal: number; subagentCount: number; tokPerSec: number; durationSecs: number }>): EnrichedSession => {
     const n = ++sandboxCounterRef.current;
@@ -581,43 +765,44 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const setSandboxState = useCallback((id: string, state: string) => {
     const meta = SANDBOX_STATE_META[state] ?? SANDBOX_STATE_META.idle;
     const tool = state === "working" ? SANDBOX_TOOLS_ACTIVE[Math.floor(Math.random() * SANDBOX_TOOLS_ACTIVE.length)] : null;
-    setSandboxSessions((prev) => prev.map((s) =>
-      s.info.id === id ? {
+    setSandboxSessions((prev) => prev.map((s) => {
+      if (s.info.id !== id) return s;
+      const nextSubs = state === "subagent"
+        ? (s.metrics.subagents.length > 0 ? s.metrics.subagents : [
+            { agentId: `sub_auto_1`, description: "Research task", slug: "research", inputTokens: 12000, outputTokens: 3000, cacheCreationTokens: 0, cacheReadTokens: 5000, model: s.metrics.model, toolCounts: { Read: 3, Grep: 2 }, messageCount: 8, isActive: true },
+          ])
+        : (state === "working" ? [] : s.metrics.subagents);
+      return {
         ...s,
-        info: { ...s.info, state, lastActivity: Date.now() / 1000 },
+        info: { ...s.info, state, activeSubagents: nextSubs.length, lastActivity: Date.now() / 1000 },
         stateIcon: meta.icon,
         stateDisplayName: meta.display,
-        hasSubagents: state === "subagent" ? true : (state === "working" ? false : s.hasSubagents),
+        hasSubagents: nextSubs.length > 0,
         outputTokensPerSec: (state === "working" || state === "subagent") ? Math.random() * 25 + 5 : 0,
         runningToolName: tool ? tool[0] : (state === "working" ? s.runningToolName : undefined),
         runningToolTarget: tool ? tool[1] : (state === "working" ? s.runningToolTarget : undefined),
-        metrics: {
-          ...s.metrics,
-          subagents: state === "subagent" ? (s.metrics.subagents.length > 0 ? s.metrics.subagents : [
-            { agentId: `sub_auto_1`, description: "Research task", slug: "research", inputTokens: 12000, outputTokens: 3000, cacheCreationTokens: 0, cacheReadTokens: 5000, model: s.metrics.model, toolCounts: { Read: 3, Grep: 2 }, messageCount: 8, isActive: true },
-          ]) : (state === "working" ? [] : s.metrics.subagents),
-        },
-      } : s,
-    ));
+        metrics: { ...s.metrics, subagents: nextSubs },
+      };
+    }));
   }, []);
 
   const setAllSandboxState = useCallback((state: string) => {
     setSandboxSessions((prev) => prev.map((s) => {
       const meta = SANDBOX_STATE_META[state] ?? SANDBOX_STATE_META.idle;
       const tool = state === "working" ? SANDBOX_TOOLS_ACTIVE[Math.floor(Math.random() * SANDBOX_TOOLS_ACTIVE.length)] : null;
+      const nextSubs = state === "subagent"
+        ? [{ agentId: `sub_auto`, description: "Research task", slug: "research", inputTokens: 12000, outputTokens: 3000, cacheCreationTokens: 0, cacheReadTokens: 5000, model: s.metrics.model, toolCounts: { Read: 3, Grep: 2 }, messageCount: 8, isActive: true }]
+        : [];
       return {
         ...s,
-        info: { ...s.info, state, lastActivity: Date.now() / 1000 },
+        info: { ...s.info, state, activeSubagents: nextSubs.length, lastActivity: Date.now() / 1000 },
         stateIcon: meta.icon,
         stateDisplayName: meta.display,
-        hasSubagents: state === "subagent",
+        hasSubagents: nextSubs.length > 0,
         outputTokensPerSec: (state === "working" || state === "subagent") ? Math.random() * 25 + 5 : 0,
         runningToolName: tool ? tool[0] : undefined,
         runningToolTarget: tool ? tool[1] : undefined,
-        metrics: {
-          ...s.metrics,
-          subagents: state === "subagent" ? [{ agentId: `sub_auto`, description: "Research task", slug: "research", inputTokens: 12000, outputTokens: 3000, cacheCreationTokens: 0, cacheReadTokens: 5000, model: s.metrics.model, toolCounts: { Read: 3, Grep: 2 }, messageCount: 8, isActive: true }] : [],
-        },
+        metrics: { ...s.metrics, subagents: nextSubs },
       };
     }));
   }, []);
@@ -670,7 +855,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     });
   }, [mutateSandboxSelected]);
 
-  // Toggle subagent count on selected
+  // Toggle subagent count on selected (legacy R-key cycle: 0→1→2→3→4→0)
   const cycleSandboxSubagents = useCallback(() => {
     mutateSandboxSelected((s) => {
       const currentCount = s.metrics.subagents.length;
@@ -688,9 +873,107 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         messageCount: Math.floor(Math.random() * 15 + 3),
         isActive: true,
       }));
-      return { ...s, hasSubagents: nextCount > 0, metrics: { ...s.metrics, subagents } };
+      return {
+        ...s,
+        info: { ...s.info, activeSubagents: nextCount },
+        hasSubagents: nextCount > 0,
+        metrics: { ...s.metrics, subagents },
+      };
     });
   }, [mutateSandboxSelected]);
+
+  // Add one subagent to the targeted session. Switches state to "subagent"
+  // (and stamps activeSubagents on info so the cyan diagonal lines render).
+  const addSandboxSubagent = useCallback((id: string) => {
+    setSandboxSessions((prev) => prev.map((s) => {
+      if (s.info.id !== id) return s;
+      const nextCount = s.metrics.subagents.length + 1;
+      const newSub = {
+        agentId: `sub_${id}_${nextCount}_${Date.now()}`,
+        description: ["Research task", "Code review", "Test runner", "Build validator"][(nextCount - 1) % 4],
+        slug: ["research", "code-reviewer", "test-runner", "build-validator"][(nextCount - 1) % 4],
+        inputTokens: Math.floor(Math.random() * 30000 + 5000),
+        outputTokens: Math.floor(Math.random() * 8000 + 1000),
+        cacheCreationTokens: 0,
+        cacheReadTokens: Math.floor(Math.random() * 10000),
+        model: s.metrics.model,
+        toolCounts: { Read: Math.floor(Math.random() * 8 + 1), Grep: Math.floor(Math.random() * 4) },
+        messageCount: Math.floor(Math.random() * 15 + 3),
+        isActive: true,
+      };
+      const subagents = [...s.metrics.subagents, newSub];
+      const meta = SANDBOX_STATE_META.subagent;
+      return {
+        ...s,
+        info: { ...s.info, state: "subagent", activeSubagents: nextCount, lastActivity: Date.now() / 1000 },
+        stateIcon: meta.icon,
+        stateDisplayName: meta.display,
+        hasSubagents: true,
+        outputTokensPerSec: Math.max(s.outputTokensPerSec, Math.random() * 25 + 5),
+        metrics: { ...s.metrics, subagents },
+      };
+    }));
+  }, []);
+
+  // Remove the most-recently-added subagent (LIFO so the visual line that
+  // retracts is the newest one). When the count drops to 0 we revert state
+  // to "working" — that's the natural parent state of a subagent run.
+  const removeSandboxSubagent = useCallback((id: string) => {
+    setSandboxSessions((prev) => prev.map((s) => {
+      if (s.info.id !== id) return s;
+      if (s.metrics.subagents.length === 0) return s; // edge case: nothing to remove
+      const subagents = s.metrics.subagents.slice(0, -1);
+      const nextCount = subagents.length;
+      if (nextCount === 0) {
+        const meta = SANDBOX_STATE_META.working;
+        const tool = SANDBOX_TOOLS_ACTIVE[Math.floor(Math.random() * SANDBOX_TOOLS_ACTIVE.length)];
+        return {
+          ...s,
+          info: { ...s.info, state: "working", activeSubagents: 0, lastActivity: Date.now() / 1000 },
+          stateIcon: meta.icon,
+          stateDisplayName: meta.display,
+          hasSubagents: false,
+          runningToolName: tool[0],
+          runningToolTarget: tool[1],
+          metrics: { ...s.metrics, subagents },
+        };
+      }
+      return {
+        ...s,
+        info: { ...s.info, activeSubagents: nextCount, lastActivity: Date.now() / 1000 },
+        metrics: { ...s.metrics, subagents },
+      };
+    }));
+  }, []);
+
+  // Simulate a single tool call on the target session. Bumps one entry in
+  // metrics.toolCounts (and updates runningToolName/Target to match) so
+  // SessionCard's comet emitter fires a tracer. Flips the session to
+  // "working" if it isn't already in working/subagent — a tool call only
+  // reads as a real call when the session is actively running.
+  const fireSandboxToolCall = useCallback((id: string) => {
+    setSandboxSessions((prev) => prev.map((s) => {
+      if (s.info.id !== id) return s;
+      const [toolName, toolTarget] = SANDBOX_TOOLS_ACTIVE[Math.floor(Math.random() * SANDBOX_TOOLS_ACTIVE.length)];
+      const nextToolCounts = { ...s.metrics.toolCounts, [toolName]: (s.metrics.toolCounts[toolName] ?? 0) + 1 };
+      const isActive = s.info.state === "working" || s.info.state === "subagent";
+      const meta = isActive ? undefined : SANDBOX_STATE_META.working;
+      return {
+        ...s,
+        info: {
+          ...s.info,
+          state: isActive ? s.info.state : "working",
+          lastActivity: Date.now() / 1000,
+        },
+        stateIcon: meta ? meta.icon : s.stateIcon,
+        stateDisplayName: meta ? meta.display : s.stateDisplayName,
+        outputTokensPerSec: Math.max(s.outputTokensPerSec, Math.random() * 25 + 5),
+        runningToolName: toolName,
+        runningToolTarget: toolTarget,
+        metrics: { ...s.metrics, toolCounts: nextToolCounts },
+      };
+    }));
+  }, []);
 
   // Cycle running tool on selected
   const cycleSandboxTool = useCallback(() => {
@@ -906,28 +1189,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         if (shift) {
           setAllSandboxState(state);
         } else if (sandboxSelectedIdx >= 0) {
-          setSandboxSessions((prev) => {
-            if (sandboxSelectedIdx >= prev.length) return prev;
-            const id = prev[sandboxSelectedIdx].info.id;
-            const meta = SANDBOX_STATE_META[state] ?? SANDBOX_STATE_META.idle;
-            const tool = state === "working" ? SANDBOX_TOOLS_ACTIVE[Math.floor(Math.random() * SANDBOX_TOOLS_ACTIVE.length)] : null;
-            return prev.map((s) =>
-              s.info.id === id ? {
-                ...s,
-                info: { ...s.info, state, lastActivity: Date.now() / 1000 },
-                stateIcon: meta.icon,
-                stateDisplayName: meta.display,
-                hasSubagents: state === "subagent" ? true : (state === "working" ? false : s.hasSubagents),
-                outputTokensPerSec: (state === "working" || state === "subagent") ? Math.random() * 25 + 5 : 0,
-                runningToolName: tool ? tool[0] : (state === "working" ? s.runningToolName : undefined),
-                runningToolTarget: tool ? tool[1] : (state === "working" ? s.runningToolTarget : undefined),
-                metrics: {
-                  ...s.metrics,
-                  subagents: state === "subagent" ? (s.metrics.subagents.length > 0 ? s.metrics.subagents : [{ agentId: `sub_auto_1`, description: "Research task", slug: "research", inputTokens: 12000, outputTokens: 3000, cacheCreationTokens: 0, cacheReadTokens: 5000, model: s.metrics.model, toolCounts: { Read: 3, Grep: 2 }, messageCount: 8, isActive: true }]) : (state === "working" ? [] : s.metrics.subagents),
-                },
-              } : s,
-            );
-          });
+          const id = sandboxSessions[sandboxSelectedIdx]?.info.id;
+          if (id) setSandboxState(id, state);
         }
         return;
       }
@@ -1197,14 +1460,59 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
     const ordered: EnrichedSession[] = [];
     const used = new Set<string>();
-    // Existing sessions keep their committed slot (even across state changes)
-    for (const id of committed) {
-      if (sessionMap.has(id)) {
-        ordered.push(sessionMap.get(id)!);
-        used.add(id);
+    const committedSet = new Set(committed);
+    // Existing sessions keep their committed slot, but we splice NEW sessions
+    // into their desiredOrder position instead of appending at the bottom —
+    // that way the door/rise animation lands the card in its real home slot
+    // and the only motion other cards need is a shuffle-to-make-room.
+    //
+    // Algorithm: walk desiredOrder. Whenever we hit a "new" id (not in the
+    // committed set), insert it into the result at the position of the next
+    // still-pending committed anchor. Existing ids are emitted in COMMITTED
+    // order (not desired) so sticky positioning is preserved.
+    const commitedIter: string[] = committed.filter((id) => sessionMap.has(id));
+    let ci = 0;
+    for (let di = 0; di < desiredOrder.length; di++) {
+      const id = desiredOrder[di];
+      if (!sessionMap.has(id)) continue;
+      if (committedSet.has(id)) continue; // will be emitted via committed iter
+      // This is a new session. Emit committed entries up to (but not
+      // including) the next committed anchor that comes after this new id
+      // in desiredOrder. Anchor = first committed id whose desiredOrder
+      // rank is > this new id's rank.
+      const anchor = (() => {
+        for (let j = di + 1; j < desiredOrder.length; j++) {
+          if (committedSet.has(desiredOrder[j])) return desiredOrder[j];
+        }
+        return null;
+      })();
+      if (anchor) {
+        while (ci < commitedIter.length && commitedIter[ci] !== anchor) {
+          const cid = commitedIter[ci++];
+          ordered.push(sessionMap.get(cid)!);
+          used.add(cid);
+        }
+      } else {
+        // No committed session comes after this new id in desiredOrder — the
+        // new id belongs at the tail, so drain all remaining committed first.
+        while (ci < commitedIter.length) {
+          const cid = commitedIter[ci++];
+          ordered.push(sessionMap.get(cid)!);
+          used.add(cid);
+        }
+      }
+      ordered.push(sessionMap.get(id)!);
+      used.add(id);
+    }
+    // Drain remaining committed entries (those after the last-inserted new id).
+    while (ci < commitedIter.length) {
+      const cid = commitedIter[ci++];
+      if (!used.has(cid)) {
+        ordered.push(sessionMap.get(cid)!);
+        used.add(cid);
       }
     }
-    // New sessions always land at the bottom, in desiredOrder among themselves
+    // Safety: any session still not placed (shouldn't happen) goes last.
     for (const id of desiredOrder) {
       if (!used.has(id) && sessionMap.has(id)) {
         ordered.push(sessionMap.get(id)!);
@@ -1373,6 +1681,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     }
 
     const cards = list.querySelectorAll<HTMLElement>("[data-session-id]");
+    const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
     const movers: {
       el: HTMLElement;
       dy: number;
@@ -1380,12 +1689,35 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       domTop: number;
       height: number;
     }[] = [];
+    // New cards — ones that didn't exist in the prior snapshot. They animate
+    // with a "door opens + rise up" entrance in their correct slot (not a
+    // FLIP slide from a previous position, since they have none).
+    const newCards: { el: HTMLElement; height: number }[] = [];
 
     cards.forEach((el, idx) => {
       const id = el.dataset.sessionId!;
       const oldRect = prev.get(id);
-      if (!oldRect) return;
       const newRect = el.getBoundingClientRect();
+      if (!oldRect) {
+        // Fresh session entering — hide it IMMEDIATELY (pre-paint) so the
+        // existing reorder swaps can land without the new card's content
+        // flashing in its final slot. While the swaps run, two "door" panels
+        // matching the app background cover the slot so it reads as negative
+        // space between the shuffling cards. When the swap queue drains,
+        // runSpawns slides the doors apart and rises the card up through the
+        // gap. Skipped under prefers-reduced-motion.
+        if (!prefersReducedMotion) {
+          const cardInner = el.querySelector<HTMLElement>(".session-card");
+          if (cardInner) {
+            cardInner.style.opacity = "0";
+            cardInner.style.transform = "translateY(100%) scale(0.96)";
+            cardInner.style.transformOrigin = "50% 0%";
+            cardInner.style.willChange = "transform, opacity";
+          }
+          newCards.push({ el, height: newRect.height });
+        }
+        return;
+      }
       const dy = oldRect.top - newRect.top;
       if (Math.abs(dy) < 1) return;
       movers.push({
@@ -1397,7 +1729,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       });
     });
 
-    if (movers.length === 0) {
+    if (movers.length === 0 && newCards.length === 0) {
       // No movement — just snapshot and clear any stale flags
       const allCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
       const positions = new Map<string, DOMRect>();
@@ -1413,151 +1745,309 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
     isAnimatingRef.current = true;
     const gen = ++animationGenRef.current; // cancellation token
-
-    // ─── Unified WAAPI FLIP animation ───
-    // All cards animate simultaneously from old position to new.
-    // The hero (biggest upward mover) ducks under with brightness + scale.
-    // Pure WAAPI — no CSS transitions, no transitionend, no setTimeout chains.
-
     isQuiescenceReorderRef.current = false;
 
-    const DURATION = 1250; // ms — all cards move together
-    // Very gentle wind-up (y1=0.01 with x1=0.62 → ~20% of time covers ~1% of
-    // displacement), smooth deceleration to target. Heavier "falling into
-    // place" feel — cards drift before committing to the move.
-    const EASING = "cubic-bezier(0.62, 0.01, 0.3, 1)";
+    // ─── Sequential adjacent-swap choreography ───
+    // Instead of animating every card simultaneously to its new slot, we
+    // decompose the permutation (prev order → next order) into a sequence
+    // of adjacent swaps and play them one pair at a time. Each swap: the
+    // two cards translate in opposite directions, passing through each
+    // other in the same column (temporary overlap during crossing is fine;
+    // they never land on the same slot). Reads as walking a card up the
+    // ladder rung by rung — the exact feel the user asked for.
+    //
+    // Algorithm: selection sort from the top. For each target slot i, find
+    // the card that belongs there and bubble it up via adjacent swaps with
+    // its upper neighbors. This groups swaps by "this card is climbing"
+    // so the eye can follow one traveler at a time.
 
-    // Identify hero: biggest upward mover (or biggest mover if none go up)
-    const upwardMovers = movers.filter((m) => m.dy < 0);
-    const hero =
-      upwardMovers.length > 0
-        ? upwardMovers.reduce((a, b) =>
-            Math.abs(b.dy) > Math.abs(a.dy) ? b : a,
-          )
-        : movers.reduce((a, b) =>
-            Math.abs(b.dy) > Math.abs(a.dy) ? b : a,
-          );
-
-    // Set up z-index so hero ducks under other cards. `will-change: transform`
-    // pre-promotes each mover to its own compositor layer so child canvases
-    // (flux / signal-string / sand) keep rendering through the translate —
-    // without this, the browser may rasterize the card and freeze the
-    // effect's canvas content during the shuffle.
-    const isLight = document.documentElement.dataset.theme === "light";
-    const duckBrightness = isLight ? 0.82 : 0.55;
+    // Build element / position maps. nextRect captures the card's current
+    // DOM-layout geometry (top + height); virtualY starts at its prev-snapshot
+    // top so the pre-paint can hold cards in their old visual positions.
+    const elById = new Map<string, HTMLElement>();
+    const nextRectById = new Map<string, DOMRect>();
+    const nextOrderAll: string[] = [];
     cards.forEach((el) => {
-      el.style.position = "relative";
-      el.style.zIndex = "2";
-      el.style.willChange = "transform";
+      const id = el.dataset.sessionId!;
+      elById.set(id, el);
+      nextRectById.set(id, el.getBoundingClientRect());
+      nextOrderAll.push(id);
     });
-    hero.el.style.zIndex = "1";
+    const prevEntries = [...prev.entries()]
+      .filter(([id]) => elById.has(id))
+      .sort((a, b) => a[1].top - b[1].top);
+    const prevOrder = prevEntries.map(([id]) => id);
 
-    // Track running animations for cleanup
-    const animations: Animation[] = [];
-    // Overlay element stashed for removal in cleanup phase.
-    let duckOverlay: HTMLDivElement | null = null;
-
-    // Animate every mover with WAAPI. `fill: "backwards"` holds the start
-    // keyframe (translateY(dy)) during WAAPI's play-pending state so the
-    // browser never paints a single frame at the new DOM position with no
-    // offset applied — that frame, combined with the gentle wind-up easing,
-    // is what reads as a "jump" at the start of the shuffle.
-    for (const { el, dy } of movers) {
-      if (!el.isConnected || Math.abs(dy) < 1) continue;
-
-      const anim = el.animate(
-        [
-          { transform: `translateY(${dy}px)` },
-          { transform: "translateY(0)" },
-        ],
-        { duration: DURATION, easing: EASING, fill: "backwards" },
-      );
-      animations.push(anim);
+    // Initial translateY per existing card = prevTop - nextTop. After all
+    // swaps, each card's dy must decay to 0 so the cleanup phase (which
+    // clears transforms) doesn't cause a visible snap.
+    const dyById = new Map<string, number>();
+    for (const [id, rect] of prevEntries) {
+      const nextTop = nextRectById.get(id)?.top ?? 0;
+      dyById.set(id, rect.top - nextTop);
     }
 
-    // Hero duck effect: scale + dimming overlay through the middle, surface at end.
-    // The dim is rendered as a sibling overlay (fading opacity on a black div)
-    // rather than `filter: brightness(...)` on the card. A CSS filter on the
-    // card would force the compositor to rasterize the card's subtree on every
-    // frame of the filter interpolation, which freezes WebGL / canvas effects
-    // (flux streamlines, signal strings, sand) inside the card for the duration
-    // of the duck. The overlay approach keeps the canvases rendering normally.
-    const heroCard = hero.el.querySelector<HTMLElement>(".session-card");
-    if (heroCard) {
-      const duckAnim = heroCard.animate(
-        [
-          { transform: "scale(1)", offset: 0 },
-          { transform: "scale(0.993)", offset: 0.12 },
-          { transform: "scale(0.985)", offset: 0.28 },
-          { transform: "scale(0.985)", offset: 0.72 },
-          { transform: "scale(0.993)", offset: 0.88 },
-          { transform: "scale(1)", offset: 1 },
-        ],
-        { duration: DURATION, easing: EASING, fill: "backwards" },
-      );
-      animations.push(duckAnim);
-
-      const peakOpacity = 1 - duckBrightness;
-      const midOpacity = peakOpacity * 0.5;
-      duckOverlay = document.createElement("div");
-      duckOverlay.style.cssText =
-        "position:absolute;inset:0;background:#000;opacity:0;" +
-        "pointer-events:none;border-radius:inherit;z-index:1000;";
-      heroCard.appendChild(duckOverlay);
-      const dimAnim = duckOverlay.animate(
-        [
-          { opacity: 0, offset: 0 },
-          { opacity: midOpacity, offset: 0.12 },
-          { opacity: peakOpacity, offset: 0.28 },
-          { opacity: peakOpacity, offset: 0.72 },
-          { opacity: midOpacity, offset: 0.88 },
-          { opacity: 0, offset: 1 },
-        ],
-        { duration: DURATION, easing: EASING, fill: "backwards" },
-      );
-      animations.push(dimAnim);
-    }
-
-    // Snapshot and clean up when all animations finish.
-    // Layer-style cleanup (will-change/position/zIndex) is deferred one frame:
-    // tearing down the compositor layer in the same frame the animation ends
-    // forces a re-rasterization that can subpixel-snap the card by ~1px,
-    // which reads as the "jump at end of shuffle". Letting one paint happen
-    // at the final position with the layer still alive eliminates that.
-    Promise.all(animations.map((a) => a.finished)).then(() => {
-      if (duckOverlay && duckOverlay.parentNode) {
-        duckOverlay.parentNode.removeChild(duckOverlay);
+    // Selection-sort swap sequence. Each entry is an adjacent pair
+    // [upperId, lowerId] that will trade visual slots. Produced top-down
+    // so consecutive swaps describe one card climbing up the ladder.
+    const working = [...prevOrder];
+    const nextOrderExisting = nextOrderAll.filter((id) => prev.has(id));
+    const swaps: [string, string][] = [];
+    for (let target = 0; target < nextOrderExisting.length; target++) {
+      const desired = nextOrderExisting[target];
+      const cur = working.indexOf(desired);
+      if (cur === -1 || cur === target) continue;
+      for (let j = cur; j > target; j--) {
+        const upper = working[j - 1];
+        const lower = working[j];
+        swaps.push([upper, lower]);
+        working[j - 1] = lower;
+        working[j] = upper;
       }
-      if (animationGenRef.current !== gen) return;
-      isAnimatingRef.current = false;
+    }
+
+    // Inter-card gap in the current layout (derived from first two siblings).
+    // Used along with per-card heights to compute the pixel delta of each
+    // adjacent swap: upper moves DOWN by (lower's height + gap); lower moves
+    // UP by (upper's height + gap). For uniform heights these are equal and
+    // the two cards pass through each other symmetrically.
+    let gap = 0;
+    if (nextOrderAll.length >= 2) {
+      const r0 = nextRectById.get(nextOrderAll[0])!;
+      const r1 = nextRectById.get(nextOrderAll[1])!;
+      gap = Math.max(0, r1.top - (r0.top + r0.height));
+    }
+
+    // Pre-paint: hold every existing card at its prev visual position via
+    // translateY. DOM has already rendered in next order, so without this
+    // there would be one paint at the final slots before swaps begin. Pure
+    // transform, compositor-only — child canvases keep rendering.
+    for (const id of prevOrder) {
+      const el = elById.get(id)!;
+      el.style.willChange = "transform";
+      el.style.transform = `translateY(${dyById.get(id) ?? 0}px)`;
+    }
+
+    // Swap motion config. Each pair gets a brief wind-up via spring-y ease
+    // so the card "leans" before it slides. Duration is short (sub-400ms)
+    // because consecutive swaps chain into a flowing walk when the same
+    // card climbs multiple rungs.
+    const SWAP_DUR = 340;
+    const SWAP_EASING = "cubic-bezier(0.32, 0.72, 0.28, 1)";
+    const SWAP_GAP = 40; // ms beat between swaps so the pair reads as discrete
+
+    const cleanupExistingTransforms = () => {
+      for (const id of prevOrder) {
+        const el = elById.get(id);
+        if (!el) continue;
+        el.style.transform = "";
+        el.style.willChange = "";
+      }
+    };
+
+    // ─── New-card spawn phase (runs after swap queue drains) ───
+    //
+    // Sliding-doors reveal: two panels the color of the app background cover
+    // the new card's slot — reading as negative space between the already-
+    // settled cards. The panels slide apart vertically (top panel up, bottom
+    // panel down) and the card rises from below its slot up through the
+    // opening gap. Door glide and card rise overlap for continuity.
+    const DOOR_DUR = 420;
+    const RISE_DUR = 720;
+    const RISE_DELAY = 180;
+    const SPAWN_EASING = "cubic-bezier(0.37, 0, 0.63, 1)";
+    const doorNodes: HTMLDivElement[] = [];
+    const cleanupSpawnState = () => {
+      for (const nc of newCards) {
+        const cardInner = nc.el.querySelector<HTMLElement>(".session-card");
+        if (cardInner) {
+          cardInner.style.opacity = "";
+          cardInner.style.transform = "";
+          cardInner.style.transformOrigin = "";
+          cardInner.style.willChange = "";
+        }
+        nc.el.style.position = "";
+        nc.el.style.overflow = "";
+      }
+      for (const door of doorNodes) {
+        if (door.parentNode) door.parentNode.removeChild(door);
+      }
+      doorNodes.length = 0;
+    };
+
+    const runSpawns = async () => {
+      const spawnAnims: Animation[] = [];
+      for (const nc of newCards) {
+        const { el } = nc;
+        if (!el.isConnected) continue;
+        const cardInner = el.querySelector<HTMLElement>(".session-card");
+        if (!cardInner) continue;
+
+        // Door container — absolute over the slot, clips the rising card so
+        // it stays visually inside the reveal gap instead of overflowing the
+        // slot boundaries. Sits above the card (z:5) so doors cover the
+        // card's travel through the lower half of the slot. `overflow:hidden`
+        // on el keeps the translated card from bleeding into the neighbor
+        // below while it's still sitting outside its slot.
+        el.style.position = "relative";
+        el.style.overflow = "hidden";
+        const doorContainer = document.createElement("div");
+        doorContainer.style.cssText =
+          "position:absolute;inset:0;pointer-events:none;z-index:5;" +
+          "overflow:hidden;border-radius:inherit;";
+        const topDoor = document.createElement("div");
+        topDoor.style.cssText =
+          "position:absolute;left:0;right:0;top:0;height:50%;" +
+          "background:var(--app-bg);box-shadow:0 1px 0 rgba(255,255,255,0.04);" +
+          "will-change:transform;";
+        const bottomDoor = document.createElement("div");
+        bottomDoor.style.cssText =
+          "position:absolute;left:0;right:0;bottom:0;height:50%;" +
+          "background:var(--app-bg);box-shadow:0 -1px 0 rgba(255,255,255,0.04);" +
+          "will-change:transform;";
+        doorContainer.appendChild(topDoor);
+        doorContainer.appendChild(bottomDoor);
+        el.appendChild(doorContainer);
+        doorNodes.push(doorContainer);
+
+        const topDoorAnim = topDoor.animate(
+          [
+            { transform: "translateY(0)" },
+            { transform: "translateY(-100%)" },
+          ],
+          { duration: DOOR_DUR, easing: SPAWN_EASING, fill: "forwards" },
+        );
+        const bottomDoorAnim = bottomDoor.animate(
+          [
+            { transform: "translateY(0)" },
+            { transform: "translateY(100%)" },
+          ],
+          { duration: DOOR_DUR, easing: SPAWN_EASING, fill: "forwards" },
+        );
+        spawnAnims.push(topDoorAnim, bottomDoorAnim);
+
+        const riseAnim = cardInner.animate(
+          [
+            { opacity: 0, transform: "translateY(100%) scale(0.96)", offset: 0 },
+            { opacity: 0.7, transform: "translateY(42%) scale(0.98)", offset: 0.45 },
+            { opacity: 1, transform: "translateY(0px) scale(1)", offset: 1 },
+          ],
+          {
+            duration: RISE_DUR,
+            delay: RISE_DELAY,
+            easing: SPAWN_EASING,
+            // `both`: hold start state during delay AND end state after, so
+            // the card doesn't snap back to its pre-paint translateY(100%)
+            // in the tick between animation end and cleanup clearing inline
+            // styles.
+            fill: "both",
+          },
+        );
+        spawnAnims.push(riseAnim);
+      }
+      if (spawnAnims.length > 0) {
+        await Promise.all(spawnAnims.map((a) => a.finished.catch(() => null)));
+      }
+    };
+
+    // Under reduced motion, skip the swap animation entirely — cards land
+    // in their new slots instantly. New-card spawns also collapse to an
+    // instant reveal (the rise animation's `fill: backwards` makes this
+    // work because we never start it).
+    if (prefersReducedMotion) {
+      cleanupExistingTransforms();
+      cleanupSpawnState();
       const allCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
       const positions = new Map<string, DOMRect>();
       const ids: string[] = [];
       allCards.forEach((c) => {
-        const cid = c.dataset.sessionId!;
-        positions.set(cid, c.getBoundingClientRect());
-        ids.push(cid);
+        positions.set(c.dataset.sessionId!, c.getBoundingClientRect());
+        ids.push(c.dataset.sessionId!);
       });
       cardPositions.current = positions;
       committedOrderRef.current = ids;
-      requestAnimationFrame(() => {
-        if (animationGenRef.current !== gen) return;
-        allCards.forEach((c) => {
-          c.style.zIndex = "";
-          c.style.position = "";
-          c.style.willChange = "";
-        });
-      });
+      isAnimatingRef.current = false;
       setReorderTick((t) => t + 1);
-    }).catch(() => {
-      // Animation cancelled (new reorder started) — just clear flag
-      if (duckOverlay && duckOverlay.parentNode) {
-        duckOverlay.parentNode.removeChild(duckOverlay);
-      }
-      if (animationGenRef.current === gen) {
+      return;
+    }
+
+    const runSequence = async () => {
+      try {
+        for (const [upperId, lowerId] of swaps) {
+          if (animationGenRef.current !== gen) return;
+          const elU = elById.get(upperId);
+          const elL = elById.get(lowerId);
+          if (!elU || !elL || !elU.isConnected || !elL.isConnected) continue;
+
+          const hU = nextRectById.get(upperId)?.height ?? 0;
+          const hL = nextRectById.get(lowerId)?.height ?? 0;
+
+          const curDyU = dyById.get(upperId) ?? 0;
+          const curDyL = dyById.get(lowerId) ?? 0;
+          // Upper moves DOWN by (lower's height + gap); lower moves UP by
+          // (upper's height + gap). Uniform-height cards pass through each
+          // other symmetrically; non-uniform heights still produce a valid
+          // adjacent swap because total span of the two slots is conserved.
+          const newDyU = curDyU + (hL + gap);
+          const newDyL = curDyL - (hU + gap);
+
+          const aU = elU.animate(
+            [
+              { transform: `translateY(${curDyU}px)` },
+              { transform: `translateY(${newDyU}px)` },
+            ],
+            { duration: SWAP_DUR, easing: SWAP_EASING, fill: "forwards" },
+          );
+          const aL = elL.animate(
+            [
+              { transform: `translateY(${curDyL}px)` },
+              { transform: `translateY(${newDyL}px)` },
+            ],
+            { duration: SWAP_DUR, easing: SWAP_EASING, fill: "forwards" },
+          );
+          await Promise.all([aU.finished, aL.finished]);
+          if (animationGenRef.current !== gen) return;
+
+          // Bake the end state into inline transform, then cancel the WAAPI
+          // effect so it doesn't stack with subsequent swaps on the same card.
+          elU.style.transform = `translateY(${newDyU}px)`;
+          elL.style.transform = `translateY(${newDyL}px)`;
+          aU.cancel();
+          aL.cancel();
+
+          dyById.set(upperId, newDyU);
+          dyById.set(lowerId, newDyL);
+
+          // Tiny beat between swaps so each pair reads as its own event.
+          if (SWAP_GAP > 0) {
+            await new Promise((r) => setTimeout(r, SWAP_GAP));
+          }
+        }
+
+        // All swaps complete — spawn new cards into the settled order.
+        if (animationGenRef.current === gen) {
+          await runSpawns();
+        }
+      } finally {
+        cleanupExistingTransforms();
+        cleanupSpawnState();
+        if (animationGenRef.current !== gen) return;
         isAnimatingRef.current = false;
+        const allCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
+        const positions = new Map<string, DOMRect>();
+        const ids: string[] = [];
+        allCards.forEach((c) => {
+          const cid = c.dataset.sessionId!;
+          positions.set(cid, c.getBoundingClientRect());
+          ids.push(cid);
+        });
+        cardPositions.current = positions;
+        committedOrderRef.current = ids;
+        setReorderTick((t) => t + 1);
       }
-    });
+    };
+
+    void runSequence();
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortKey, autoReorder, reorderTick]);
@@ -1714,7 +2204,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     thinking: "bg-orange-400/20 text-orange-400 hover:bg-orange-400/30",
     waiting: "bg-yellow-400/20 text-yellow-400 hover:bg-yellow-400/30",
     error: "bg-red-500/20 text-red-500 hover:bg-red-500/30",
-    subagent: "bg-[#A78BFF]/20 text-[#A78BFF] hover:bg-[#A78BFF]/30",
+    subagent: "bg-[#7CC5FF]/20 text-[#7CC5FF] hover:bg-[#7CC5FF]/30",
+    compacting: "bg-[#8B9FD4]/20 text-[#8B9FD4] hover:bg-[#8B9FD4]/30",
     idle: "bg-gray-500/20 text-gray-400 hover:bg-gray-500/30",
     done: "bg-green-500/20 text-green-500 hover:bg-green-500/30",
     ended: "bg-red-400/20 text-red-400 hover:bg-red-400/30",
@@ -1992,9 +2483,12 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                   </div>
 
                   {/* Per-session state controls — hidden in screenshot mode */}
-                  {isSelected && !screenshotMode && (
+                  {isSelected && !screenshotMode && (() => {
+                    const subagentCount = session.info.activeSubagents ?? session.metrics.subagents.length ?? 0;
+                    const canRemoveSub = subagentCount > 0;
+                    return (
                     <div className="flex items-center gap-1 px-2 py-1 rounded-b-lg bg-amber-500/5 border border-t-0 border-amber-500/15 -mt-px">
-                      {SANDBOX_STATES.map((st) => {
+                      {SANDBOX_STATES.filter((st) => st !== "subagent").map((st) => {
                         const isCurrent = session.info.state === st;
                         return (
                           <button
@@ -2012,6 +2506,38 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                           </button>
                         );
                       })}
+                      {/* Subagent add/remove pair (replaces single Subagent toggle) */}
+                      <button
+                        onClick={() => addSandboxSubagent(session.info.id)}
+                        title="Add subagent (switches state to Subagent)"
+                        className={`px-1.5 py-0.5 rounded text-[0.55rem] font-medium transition-colors ${SANDBOX_STATE_COLORS.subagent}`}
+                      >
+                        <span className="opacity-50 mr-0.5">+</span>
+                        Sub{subagentCount > 0 ? ` (${subagentCount})` : ""}
+                      </button>
+                      <button
+                        onClick={() => canRemoveSub && removeSandboxSubagent(session.info.id)}
+                        disabled={!canRemoveSub}
+                        title={canRemoveSub ? "Remove last subagent (LIFO; reverts to Working at 0)" : "No subagents to remove"}
+                        className={`px-1.5 py-0.5 rounded text-[0.55rem] font-medium transition-colors ${
+                          canRemoveSub
+                            ? SANDBOX_STATE_COLORS.subagent
+                            : "bg-white/5 text-white/20 cursor-not-allowed"
+                        }`}
+                      >
+                        <span className="opacity-50 mr-0.5">−</span>
+                        Sub
+                      </button>
+                      {/* Simulate a tool call — fires a comet tracer. Flips
+                          to Working if the session isn't already active. */}
+                      <button
+                        onClick={() => fireSandboxToolCall(session.info.id)}
+                        title="Simulate a tool call (fires a comet)"
+                        className="px-1.5 py-0.5 rounded text-[0.55rem] font-medium transition-colors bg-white/10 text-white/70 hover:bg-white/20"
+                      >
+                        <span className="opacity-50 mr-0.5">→</span>
+                        Tool call
+                      </button>
                       <div className="ml-auto">
                         <button
                           onClick={() => removeSandboxSession(session.info.id)}
@@ -2021,7 +2547,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                         </button>
                       </div>
                     </div>
-                  )}
+                    );
+                  })()}
                 </div>
               );
             })}

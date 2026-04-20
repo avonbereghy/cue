@@ -62,6 +62,11 @@ pub struct ParsedEntry {
     /// from `thinking` blocks (extended thinking) which also count as
     /// output tokens but should not promote the card from thinking→working.
     pub has_text_content: bool,
+    /// First non-empty `text` content block from this assistant message, used
+    /// as a disambiguation hint on idle/done cards when two sessions share a
+    /// workspace. Captured regardless of block position so the snippet is
+    /// deterministic.
+    pub assistant_text: Option<String>,
 }
 
 /// Parse a JSONL file into a list of entries.
@@ -181,8 +186,12 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
                         let block_type = block_obj.get("type").and_then(|v| v.as_str());
                         if block_type == Some("text") {
                             if let Some(text) = block_obj.get("text").and_then(|v| v.as_str()) {
-                                if !text.trim().is_empty() {
+                                let trimmed = text.trim();
+                                if !trimmed.is_empty() {
                                     entry.has_text_content = true;
+                                    if entry.assistant_text.is_none() {
+                                        entry.assistant_text = Some(trimmed.to_string());
+                                    }
                                 }
                             }
                         }
@@ -590,6 +599,11 @@ pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::Subagent
 
     // Aggregate metrics
     for entry in &entries {
+        // Track earliest and latest entry timestamps for start/end display.
+        if let Some(ts) = entry.timestamp {
+            m.started_at = Some(m.started_at.map_or(ts, |s| s.min(ts)));
+            m.ended_at = Some(m.ended_at.map_or(ts, |e| e.max(ts)));
+        }
         if entry.is_assistant_message {
             m.message_count += 1;
             if !entry.model.is_empty() {
@@ -668,6 +682,11 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
             if let Some(ref text) = entry.user_prompt_text {
                 m.last_prompt = Some(text.clone());
             }
+            // Track the last user-message timestamp so we can gate the
+            // thinking→working promotion against stale prior-turn text.
+            if let Some(ts) = entry.timestamp {
+                m.last_user_prompt_ts = Some(ts);
+            }
             // Last /effort command wins
             if let Some(ref eff) = entry.effort_command {
                 m.effort_level = Some(eff.clone());
@@ -695,6 +714,22 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
 
             // Latest assistant entry's text-content status wins.
             m.last_assistant_has_text = entry.has_text_content;
+            // Record the timestamp of the latest assistant message that
+            // actually carried text — pure tool_use / thinking-only messages
+            // don't count. Compared against `last_user_prompt_ts` during
+            // state promotion so stale prior-turn text can't pop a new
+            // UserPromptSubmit straight out of thinking.
+            if entry.has_text_content {
+                if let Some(ts) = entry.timestamp {
+                    m.last_assistant_text_ts = Some(ts);
+                }
+            }
+            // Latest non-empty assistant text wins. Skip entries without text
+            // (pure tool_use messages) so the snippet stays on the actual
+            // answer the user would have read.
+            if let Some(ref txt) = entry.assistant_text {
+                m.last_assistant_text = Some(txt.clone());
+            }
 
             for (tool, count) in &entry.tool_counts {
                 *m.tool_counts.entry(tool.clone()).or_insert(0) += count;

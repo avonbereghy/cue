@@ -590,9 +590,9 @@ html[data-theme="light"]:not([data-glass]) .session-card--thinking {
     inset 0 0 40px rgba(234, 88, 12, 0.10);
 }
 
-/* Compacting state — periwinkle border glow. The draining water tank
-   (CompactTankEffect canvas) carries the motion now; the legacy horizontal
-   sweep bar was removed so the two effects don't compete. */
+/* Compacting state — periwinkle border glow (Claude Code's compacting tint).
+   The draining liquid tank (CompactTankEffect canvas) carries the motion; the
+   legacy horizontal sweep bar was removed so the two effects don't compete. */
 .session-card--compacting {
   border-color: rgba(139, 159, 212, 0.35);
   box-shadow:
