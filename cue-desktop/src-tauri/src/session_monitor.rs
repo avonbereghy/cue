@@ -270,7 +270,18 @@ impl SessionMonitorState {
             active_since.retain(|id, _| current_ids.contains(id.as_str()));
             for s in &active {
                 if is_active_state(&s.state) {
-                    active_since.entry(s.id.clone()).or_insert(now_secs);
+                    // Prefer the hook-supplied stateChangedAt — it captures
+                    // every transition, including ones too brief for the 1 Hz
+                    // poll to see (e.g. compacting flashing between working).
+                    // Fall back to first-seen-now for entries from older hooks.
+                    match s.state_changed_at {
+                        Some(ts) => {
+                            active_since.insert(s.id.clone(), ts);
+                        }
+                        None => {
+                            active_since.entry(s.id.clone()).or_insert(now_secs);
+                        }
+                    }
                 } else {
                     active_since.remove(&s.id);
                 }
@@ -763,6 +774,7 @@ mod tests {
             state: state.to_string(),
             last_activity,
             started_at,
+            state_changed_at: None,
             source: None,
             hook_input_tokens: 0,
             hook_output_tokens: 0,
