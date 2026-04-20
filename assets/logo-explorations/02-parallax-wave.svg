@@ -1,0 +1,291 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- 02 · Parallax Wave (+ flux) ─ three-layer compacting wave with the
+       curl-noise streamline field humming quietly behind it. -->
+  <defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0f1624"/>
+      <stop offset="1" stop-color="#171a2c"/>
+    </linearGradient>
+    <linearGradient id="wave2a" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7aa0ff" stop-opacity="0"/>
+      <stop offset="0.35" stop-color="#7aa0ff" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#a78bff" stop-opacity="0.95"/>
+    </linearGradient>
+    <linearGradient id="wave2b" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8d9dd8" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#8d9dd8" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#b9a7ff" stop-opacity="0.6"/>
+    </linearGradient>
+    <linearGradient id="wave2c" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5870a8" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#5870a8" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#8a79c8" stop-opacity="0.4"/>
+    </linearGradient>
+    <linearGradient id="fluxStroke" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6f7ec2" stop-opacity="0.3"/>
+      <stop offset="0.5" stop-color="#b6a8ff"/>
+      <stop offset="1" stop-color="#e4dcff" stop-opacity="0.9"/>
+    </linearGradient>
+    <radialGradient id="fluxGlow" cx="0.5" cy="0.35" r="0.6">
+      <stop offset="0" stop-color="#a78bff" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#a78bff" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="clip2"><rect x="64" y="64" width="384" height="384" rx="64"/></clipPath>
+  </defs>
+
+  <rect width="512" height="512" rx="96" ry="96" fill="url(#bg2)"/>
+
+  <g clip-path="url(#clip2)">
+    <!-- ambient flux glow behind the streamlines -->
+    <rect x="64" y="64" width="384" height="384" fill="url(#fluxGlow)"/>
+
+    <!-- flux field: jittered curl streamlines, low opacity, denser in the sky -->
+    <g>
+    <line x1="83.1" y1="56.0" x2="87.1" y2="64.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.218"/>
+    <line x1="98.9" y1="61.8" x2="98.4" y2="76.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.230"/>
+    <line x1="127.2" y1="64.4" x2="124.8" y2="73.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.151"/>
+    <line x1="152.2" y1="63.8" x2="148.4" y2="76.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.160"/>
+    <line x1="165.9" y1="53.3" x2="163.5" y2="67.9" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.154"/>
+    <line x1="189.0" y1="59.0" x2="188.3" y2="68.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.238"/>
+    <line x1="208.5" y1="63.0" x2="208.7" y2="74.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.249"/>
+    <line x1="226.2" y1="59.0" x2="227.3" y2="74.9" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.219"/>
+    <line x1="288.1" y1="59.5" x2="287.4" y2="71.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.167"/>
+    <line x1="327.9" y1="65.3" x2="313.9" y2="58.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.162"/>
+    <line x1="352.0" y1="70.0" x2="346.4" y2="60.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.148"/>
+    <line x1="392.1" y1="74.9" x2="387.7" y2="61.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.187"/>
+    <line x1="400.2" y1="69.3" x2="397.2" y2="59.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.253"/>
+    <line x1="427.1" y1="69.2" x2="426.4" y2="58.6" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.273"/>
+    <line x1="447.6" y1="75.7" x2="451.1" y2="61.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.208"/>
+    <line x1="68.1" y1="81.3" x2="61.0" y2="91.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.284"/>
+    <line x1="84.6" y1="70.4" x2="81.5" y2="84.9" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.335"/>
+    <line x1="110.2" y1="74.3" x2="106.2" y2="84.5" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.228"/>
+    <line x1="132.0" y1="85.2" x2="125.5" y2="94.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.237"/>
+    <line x1="144.0" y1="76.8" x2="137.4" y2="88.5" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.201"/>
+    <line x1="166.2" y1="74.1" x2="161.1" y2="87.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.242"/>
+    <line x1="186.5" y1="74.4" x2="184.4" y2="86.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.326"/>
+    <line x1="200.7" y1="83.4" x2="199.8" y2="96.4" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.323"/>
+    <line x1="216.8" y1="74.3" x2="217.9" y2="86.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.329"/>
+    <line x1="249.1" y1="81.6" x2="252.3" y2="92.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.244"/>
+    <line x1="265.2" y1="71.8" x2="268.0" y2="83.6" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.289"/>
+    <line x1="289.4" y1="72.1" x2="291.9" y2="83.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.262"/>
+    <line x1="303.8" y1="77.0" x2="308.9" y2="90.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.231"/>
+    <line x1="312.1" y1="83.3" x2="322.8" y2="94.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.282"/>
+    <line x1="345.7" y1="97.5" x2="343.3" y2="84.4" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.293"/>
+    <line x1="359.5" y1="89.7" x2="356.0" y2="79.5" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.284"/>
+    <line x1="379.0" y1="95.6" x2="375.6" y2="84.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.247"/>
+    <line x1="406.8" y1="83.7" x2="403.2" y2="71.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.135"/>
+    <line x1="420.2" y1="83.9" x2="417.7" y2="73.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.243"/>
+    <line x1="444.1" y1="97.1" x2="441.9" y2="84.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.200"/>
+    <line x1="75.3" y1="105.4" x2="64.3" y2="113.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.285"/>
+    <line x1="88.8" y1="96.9" x2="81.7" y2="104.9" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.143"/>
+    <line x1="106.3" y1="98.2" x2="97.3" y2="108.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.302"/>
+    <line x1="125.2" y1="102.7" x2="116.9" y2="110.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.281"/>
+    <line x1="148.4" y1="104.0" x2="140.2" y2="111.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.297"/>
+    <line x1="173.9" y1="104.4" x2="167.0" y2="111.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.249"/>
+    <line x1="187.3" y1="101.6" x2="181.1" y2="111.9" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.132"/>
+    <line x1="208.7" y1="92.3" x2="208.5" y2="108.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.268"/>
+    <line x1="224.2" y1="92.3" x2="226.8" y2="105.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.324"/>
+    <line x1="236.6" y1="91.6" x2="241.5" y2="106.6" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.289"/>
+    <line x1="255.5" y1="93.3" x2="261.9" y2="107.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.312"/>
+    <line x1="284.8" y1="91.7" x2="293.2" y2="104.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.257"/>
+    <line x1="299.8" y1="104.6" x2="310.3" y2="114.4" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.218"/>
+    <line x1="321.4" y1="100.3" x2="334.6" y2="100.4" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.173"/>
+    <line x1="335.1" y1="109.0" x2="343.3" y2="96.9" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.271"/>
+    <line x1="361.2" y1="107.5" x2="359.1" y2="92.9" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.336"/>
+    <line x1="383.8" y1="107.8" x2="381.4" y2="98.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.305"/>
+    <line x1="402.2" y1="108.8" x2="399.0" y2="97.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.279"/>
+    <line x1="423.1" y1="107.1" x2="419.1" y2="93.4" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.131"/>
+    <line x1="450.3" y1="105.1" x2="447.9" y2="94.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.323"/>
+    <line x1="88.6" y1="125.3" x2="77.6" y2="133.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.140"/>
+    <line x1="113.0" y1="116.0" x2="101.6" y2="125.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.273"/>
+    <line x1="122.1" y1="125.3" x2="113.6" y2="131.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.282"/>
+    <line x1="145.5" y1="118.5" x2="133.5" y2="126.4" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.217"/>
+    <line x1="168.4" y1="124.8" x2="160.0" y2="129.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.232"/>
+    <line x1="191.4" y1="128.1" x2="181.1" y2="133.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.313"/>
+    <line x1="207.9" y1="113.5" x2="202.4" y2="128.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.266"/>
+    <line x1="225.2" y1="125.8" x2="227.0" y2="136.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.289"/>
+    <line x1="241.5" y1="112.1" x2="247.9" y2="124.4" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.312"/>
+    <line x1="261.3" y1="122.4" x2="270.8" y2="133.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.148"/>
+    <line x1="275.3" y1="118.3" x2="282.7" y2="126.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.168"/>
+    <line x1="293.4" y1="113.6" x2="301.8" y2="121.4" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.224"/>
+    <line x1="317.4" y1="126.0" x2="329.0" y2="131.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.312"/>
+    <line x1="334.3" y1="125.7" x2="347.0" y2="125.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.165"/>
+    <line x1="362.2" y1="126.5" x2="365.1" y2="115.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.290"/>
+    <line x1="391.7" y1="130.3" x2="390.2" y2="119.4" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.206"/>
+    <line x1="411.1" y1="131.4" x2="407.9" y2="119.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.188"/>
+    <line x1="432.9" y1="128.4" x2="428.5" y2="115.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.295"/>
+    <line x1="452.7" y1="129.6" x2="449.1" y2="120.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.298"/>
+    <line x1="74.0" y1="145.7" x2="64.9" y2="152.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.254"/>
+    <line x1="84.8" y1="134.8" x2="73.5" y2="143.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.164"/>
+    <line x1="113.7" y1="139.4" x2="102.7" y2="147.9" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.147"/>
+    <line x1="123.8" y1="140.5" x2="111.6" y2="149.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.194"/>
+    <line x1="149.0" y1="147.8" x2="135.8" y2="154.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.167"/>
+    <line x1="175.2" y1="139.6" x2="164.7" y2="142.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.312"/>
+    <line x1="193.6" y1="139.6" x2="182.4" y2="142.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.135"/>
+    <line x1="203.7" y1="148.9" x2="191.5" y2="149.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.319"/>
+    <line x1="227.1" y1="145.2" x2="217.9" y2="152.9" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.228"/>
+    <line x1="234.3" y1="143.6" x2="245.0" y2="155.5" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.195"/>
+    <line x1="260.0" y1="133.5" x2="270.8" y2="143.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.148"/>
+    <line x1="284.4" y1="144.0" x2="294.4" y2="150.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.173"/>
+    <line x1="292.7" y1="138.4" x2="302.8" y2="144.9" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.157"/>
+    <line x1="312.9" y1="142.3" x2="323.1" y2="147.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.134"/>
+    <line x1="342.2" y1="138.6" x2="356.1" y2="137.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.315"/>
+    <line x1="364.4" y1="144.0" x2="371.3" y2="137.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.242"/>
+    <line x1="384.4" y1="151.6" x2="387.4" y2="141.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.255"/>
+    <line x1="405.6" y1="155.2" x2="404.8" y2="144.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.139"/>
+    <line x1="425.5" y1="155.4" x2="421.9" y2="142.6" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.252"/>
+    <line x1="444.4" y1="154.5" x2="439.0" y2="141.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.285"/>
+    <line x1="70.8" y1="159.1" x2="62.7" y2="165.4" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.309"/>
+    <line x1="88.2" y1="158.0" x2="79.7" y2="165.6" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.241"/>
+    <line x1="114.8" y1="158.6" x2="106.1" y2="165.6" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.257"/>
+    <line x1="126.9" y1="161.0" x2="118.2" y2="167.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.259"/>
+    <line x1="158.1" y1="156.8" x2="143.7" y2="161.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.254"/>
+    <line x1="169.7" y1="164.2" x2="155.7" y2="166.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.238"/>
+    <line x1="184.9" y1="165.3" x2="175.9" y2="165.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.262"/>
+    <line x1="205.2" y1="169.1" x2="191.9" y2="165.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.323"/>
+    <line x1="226.6" y1="173.5" x2="214.3" y2="164.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.170"/>
+    <line x1="237.9" y1="173.2" x2="239.7" y2="161.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.152"/>
+    <line x1="264.1" y1="155.8" x2="277.0" y2="161.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.321"/>
+    <line x1="285.1" y1="158.8" x2="296.8" y2="164.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.255"/>
+    <line x1="303.4" y1="168.3" x2="315.4" y2="172.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.144"/>
+    <line x1="318.9" y1="158.8" x2="327.7" y2="162.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.291"/>
+    <line x1="340.2" y1="156.8" x2="354.7" y2="159.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.226"/>
+    <line x1="362.0" y1="164.1" x2="374.8" y2="162.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.170"/>
+    <line x1="384.2" y1="173.5" x2="395.7" y2="163.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.286"/>
+    <line x1="406.8" y1="169.8" x2="407.8" y2="158.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.292"/>
+    <line x1="421.7" y1="164.3" x2="419.7" y2="154.4" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.178"/>
+    <line x1="448.8" y1="171.2" x2="442.6" y2="157.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.147"/>
+    <line x1="68.1" y1="179.6" x2="58.7" y2="190.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.227"/>
+    <line x1="89.0" y1="177.9" x2="79.8" y2="188.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.194"/>
+    <line x1="111.9" y1="178.5" x2="102.7" y2="187.9" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.213"/>
+    <line x1="134.5" y1="186.1" x2="124.4" y2="193.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.126"/>
+    <line x1="144.2" y1="184.6" x2="134.6" y2="190.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.162"/>
+    <line x1="167.0" y1="176.9" x2="155.9" y2="178.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.162"/>
+    <line x1="196.0" y1="186.2" x2="182.7" y2="182.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.324"/>
+    <line x1="211.6" y1="192.5" x2="199.2" y2="184.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.274"/>
+    <line x1="233.9" y1="191.4" x2="227.3" y2="180.4" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.191"/>
+    <line x1="244.5" y1="187.5" x2="244.0" y2="177.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.202"/>
+    <line x1="260.0" y1="183.9" x2="274.9" y2="179.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.176"/>
+    <line x1="280.6" y1="185.6" x2="291.1" y2="185.6" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.243"/>
+    <line x1="303.0" y1="185.5" x2="316.5" y2="188.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.182"/>
+    <line x1="318.2" y1="177.0" x2="331.8" y2="181.6" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.326"/>
+    <line x1="341.4" y1="182.6" x2="351.2" y2="185.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.297"/>
+    <line x1="351.3" y1="186.9" x2="363.8" y2="190.6" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.227"/>
+    <line x1="381.9" y1="183.1" x2="392.2" y2="181.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.136"/>
+    <line x1="394.7" y1="193.2" x2="409.8" y2="188.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.242"/>
+    <line x1="417.2" y1="195.2" x2="421.4" y2="180.9" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.274"/>
+    <line x1="441.4" y1="195.7" x2="437.3" y2="183.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.237"/>
+    <line x1="64.0" y1="205.7" x2="59.4" y2="215.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.317"/>
+    <line x1="82.5" y1="200.7" x2="75.5" y2="213.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.182"/>
+    <line x1="108.2" y1="194.0" x2="102.6" y2="201.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.284"/>
+    <line x1="129.4" y1="202.3" x2="120.2" y2="213.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.144"/>
+    <line x1="151.3" y1="198.1" x2="142.5" y2="202.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.147"/>
+    <line x1="176.9" y1="198.9" x2="162.5" y2="199.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.305"/>
+    <line x1="191.8" y1="209.6" x2="181.7" y2="205.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.293"/>
+    <line x1="203.8" y1="213.5" x2="195.9" y2="207.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.172"/>
+    <line x1="232.2" y1="215.4" x2="226.2" y2="205.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.127"/>
+    <line x1="252.1" y1="216.1" x2="249.7" y2="204.6" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.294"/>
+    <line x1="261.0" y1="206.8" x2="263.6" y2="195.4" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.145"/>
+    <line x1="280.0" y1="201.4" x2="292.3" y2="196.6" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.269"/>
+    <line x1="295.0" y1="206.1" x2="308.0" y2="204.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.308"/>
+    <line x1="322.1" y1="197.9" x2="331.2" y2="200.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.276"/>
+    <line x1="337.1" y1="209.6" x2="346.6" y2="212.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.337"/>
+    <line x1="353.0" y1="201.5" x2="367.7" y2="206.5" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.138"/>
+    <line x1="370.7" y1="198.4" x2="383.5" y2="202.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.120"/>
+    <line x1="404.6" y1="202.5" x2="417.3" y2="199.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.146"/>
+    <line x1="416.3" y1="204.8" x2="425.9" y2="192.6" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.155"/>
+    <line x1="451.9" y1="208.2" x2="447.5" y2="199.6" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.312"/>
+    <line x1="87.0" y1="226.1" x2="84.4" y2="235.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.285"/>
+    <line x1="103.0" y1="222.7" x2="99.7" y2="232.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.207"/>
+    <line x1="122.1" y1="223.4" x2="117.8" y2="232.9" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.232"/>
+    <line x1="153.0" y1="214.0" x2="141.5" y2="222.9" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.154"/>
+    <line x1="178.1" y1="229.2" x2="163.2" y2="231.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.243"/>
+    <line x1="190.5" y1="225.1" x2="178.9" y2="220.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.251"/>
+    <line x1="204.1" y1="226.2" x2="195.4" y2="219.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.282"/>
+    <line x1="232.8" y1="229.0" x2="228.1" y2="220.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.305"/>
+    <line x1="249.0" y1="224.2" x2="244.8" y2="210.6" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.195"/>
+    <line x1="264.3" y1="230.2" x2="263.2" y2="219.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.331"/>
+    <line x1="277.7" y1="223.2" x2="282.0" y2="212.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.180"/>
+    <line x1="297.5" y1="226.9" x2="310.6" y2="219.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.320"/>
+    <line x1="312.3" y1="226.2" x2="323.6" y2="224.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.207"/>
+    <line x1="336.3" y1="222.5" x2="350.5" y2="225.9" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.179"/>
+    <line x1="358.6" y1="216.2" x2="373.1" y2="221.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.241"/>
+    <line x1="379.9" y1="219.3" x2="391.0" y2="224.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.215"/>
+    <line x1="400.3" y1="219.6" x2="413.5" y2="225.6" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.279"/>
+    <line x1="410.9" y1="226.7" x2="424.0" y2="234.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.214"/>
+    <line x1="435.0" y1="225.9" x2="446.8" y2="225.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.243"/>
+    <line x1="103.3" y1="243.8" x2="102.2" y2="253.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.259"/>
+    <line x1="145.2" y1="239.5" x2="140.6" y2="252.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.132"/>
+    <line x1="165.0" y1="236.1" x2="153.7" y2="246.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.126"/>
+    <line x1="193.5" y1="245.7" x2="179.7" y2="239.6" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.251"/>
+    <line x1="214.0" y1="254.5" x2="206.2" y2="243.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.203"/>
+    <line x1="231.8" y1="241.7" x2="227.4" y2="233.4" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.307"/>
+    <line x1="242.3" y1="245.9" x2="237.5" y2="234.5" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.176"/>
+    <line x1="258.6" y1="248.3" x2="255.6" y2="237.4" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.272"/>
+    <line x1="282.0" y1="247.2" x2="282.2" y2="234.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.305"/>
+    <line x1="303.5" y1="247.5" x2="308.1" y2="239.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.289"/>
+    <line x1="337.6" y1="243.4" x2="348.7" y2="244.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.170"/>
+    <line x1="358.3" y1="238.8" x2="370.7" y2="243.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.259"/>
+    <line x1="418.8" y1="246.7" x2="427.8" y2="255.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.215"/>
+    <line x1="443.5" y1="244.3" x2="451.5" y2="256.9" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.128"/>
+    <line x1="87.7" y1="263.1" x2="88.0" y2="276.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.245"/>
+    <line x1="151.4" y1="256.0" x2="150.5" y2="268.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.135"/>
+    <line x1="163.3" y1="252.3" x2="158.8" y2="265.0" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.130"/>
+    <line x1="192.5" y1="266.8" x2="181.1" y2="261.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.156"/>
+    <line x1="206.5" y1="264.9" x2="198.9" y2="254.9" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.262"/>
+    <line x1="232.7" y1="267.8" x2="228.7" y2="258.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.289"/>
+    <line x1="249.7" y1="266.1" x2="245.1" y2="253.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.234"/>
+    <line x1="308.0" y1="271.8" x2="308.7" y2="261.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.137"/>
+    <line x1="416.8" y1="262.1" x2="427.1" y2="274.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.215"/>
+    <line x1="157.8" y1="283.2" x2="165.1" y2="295.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.127"/>
+    <line x1="176.3" y1="276.8" x2="181.0" y2="286.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.147"/>
+    <line x1="206.4" y1="294.4" x2="205.9" y2="282.4" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.170"/>
+    <line x1="268.3" y1="285.8" x2="265.4" y2="275.6" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.189"/>
+    <line x1="377.2" y1="281.6" x2="389.4" y2="291.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.222"/>
+    <line x1="402.3" y1="280.3" x2="411.5" y2="291.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.137"/>
+    <line x1="446.1" y1="275.5" x2="451.8" y2="287.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.132"/>
+    <line x1="65.2" y1="293.5" x2="63.0" y2="303.6" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.181"/>
+    <line x1="89.4" y1="291.6" x2="91.5" y2="304.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.151"/>
+    <line x1="118.7" y1="304.2" x2="124.9" y2="314.4" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.103"/>
+    <line x1="179.1" y1="304.3" x2="189.1" y2="309.9" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.133"/>
+    <line x1="287.1" y1="311.4" x2="282.7" y2="296.3" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.123"/>
+    <line x1="327.9" y1="311.4" x2="324.9" y2="299.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.088"/>
+    <line x1="376.7" y1="306.3" x2="385.8" y2="315.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.147"/>
+    <line x1="427.8" y1="299.1" x2="433.2" y2="309.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.162"/>
+    <line x1="119.4" y1="315.9" x2="126.9" y2="325.4" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.062"/>
+    <line x1="133.0" y1="317.6" x2="142.5" y2="327.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.078"/>
+    <line x1="262.7" y1="323.5" x2="260.8" y2="313.8" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.137"/>
+    <line x1="305.4" y1="330.2" x2="300.3" y2="315.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.114"/>
+    <line x1="419.9" y1="315.9" x2="424.7" y2="328.5" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.078"/>
+    <line x1="248.0" y1="354.8" x2="253.6" y2="346.4" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.048"/>
+    <line x1="367.4" y1="364.2" x2="356.7" y2="353.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.050"/>
+    <line x1="307.3" y1="385.2" x2="303.3" y2="374.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.044"/>
+    <line x1="352.2" y1="392.6" x2="342.1" y2="382.6" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.041"/>
+    <line x1="70.0" y1="411.2" x2="56.7" y2="403.1" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.049"/>
+    <line x1="263.5" y1="397.6" x2="277.6" y2="398.5" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.035"/>
+    <line x1="320.8" y1="403.6" x2="315.9" y2="395.9" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.045"/>
+    <line x1="390.2" y1="400.4" x2="380.2" y2="396.2" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.043"/>
+    <line x1="199.1" y1="427.9" x2="213.9" y2="429.5" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.039"/>
+    <line x1="214.0" y1="424.6" x2="224.5" y2="427.7" stroke="url(#fluxStroke)" stroke-width="1.1" stroke-linecap="round" opacity="0.037"/>
+    </g>
+
+    <!-- back wave: slow, wide -->
+    <path d="M 0 290 Q 85 250 170 290 T 340 290 T 512 290 L 512 512 L 0 512 Z"
+          fill="url(#wave2c)"/>
+    <!-- mid wave -->
+    <path d="M 0 320 Q 72 280 144 320 T 288 320 T 432 320 T 576 320 L 576 512 L 0 512 Z"
+          fill="url(#wave2b)"/>
+    <!-- front wave: sharper, denser near left (compacting right-to-left) -->
+    <path d="M 0 352 Q 56 308 112 352 T 224 352 T 336 352 T 448 352 T 560 352 L 560 512 L 0 512 Z"
+          fill="url(#wave2a)"/>
+    <!-- crest highlights -->
+    <path d="M 0 290 Q 85 250 170 290 T 340 290 T 512 290"
+          stroke="#a78bff" stroke-opacity="0.5" stroke-width="1.5" fill="none"/>
+    <path d="M 0 352 Q 56 308 112 352 T 224 352 T 336 352 T 448 352"
+          stroke="#c8b6ff" stroke-opacity="0.9" stroke-width="2" fill="none"/>
+  </g>
+
+  <!-- glass rim -->
+  <rect x="64" y="64" width="384" height="384" rx="64"
+        fill="none" stroke="#2a3350" stroke-width="1"/>
+</svg>

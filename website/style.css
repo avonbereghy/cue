@@ -217,8 +217,6 @@ h1, h2, h3, h4,
 .overline, .hero-badge, .section-headline,
 .footer-brand { font-family: var(--font-display); }
 
-/* Logo rect adapts to theme */
-.logo-rect { fill: var(--bg-secondary); }
 
 /* ============================================================
    § 03 — LAYOUT
@@ -294,7 +292,7 @@ section {
   font-size: 1.125rem;
   color: var(--text-primary);
 }
-.nav-brand svg { width: 28px; height: 28px; }
+.nav-brand img { width: 28px; height: 28px; display: block; border-radius: 6px; }
 
 .nav-links {
   display: flex;

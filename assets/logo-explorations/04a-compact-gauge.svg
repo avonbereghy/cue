@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- 04 · Compact Gauge ─ the context bar itself, frozen mid-compaction.
+       A horizontal capsule with a wave eating into it from the right. -->
+  <defs>
+    <linearGradient id="bg4" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b1820"/>
+      <stop offset="1" stop-color="#0f0e14"/>
+    </linearGradient>
+    <linearGradient id="bar4" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#4b4558"/>
+      <stop offset="1" stop-color="#2b2834"/>
+    </linearGradient>
+    <linearGradient id="fill4" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#b288ff"/>
+      <stop offset="1" stop-color="#8a6df0"/>
+    </linearGradient>
+    <clipPath id="barclip4">
+      <rect x="96" y="228" width="320" height="56" rx="28"/>
+    </clipPath>
+  </defs>
+
+  <rect width="512" height="512" rx="96" ry="96" fill="url(#bg4)"/>
+
+  <!-- top hairline (toolbar reference) -->
+  <line x1="96" y1="164" x2="416" y2="164" stroke="#2e2a38" stroke-width="1"/>
+  <!-- tiny state dots above the gauge, the quiet session list -->
+  <circle cx="108" cy="140" r="4" fill="#ffffff" opacity="0.5"/>
+  <circle cx="124" cy="140" r="4" fill="#30d158" opacity="0.55"/>
+  <circle cx="140" cy="140" r="4" fill="#ff9f43" opacity="0.55"/>
+  <circle cx="156" cy="140" r="4" fill="#64d2ff" opacity="0.5"/>
+
+  <!-- bottom hairline -->
+  <line x1="96" y1="348" x2="416" y2="348" stroke="#2e2a38" stroke-width="1"/>
+  <text x="96" y="384" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+        font-size="20" letter-spacing="4" fill="#6f6a80">COMPACTING</text>
+
+  <!-- the empty bar capsule -->
+  <rect x="96" y="228" width="320" height="56" rx="28" fill="url(#bar4)"/>
+
+  <!-- wave-filled portion (right-to-left motion) clipped to capsule -->
+  <g clip-path="url(#barclip4)">
+    <path d="M 416 256
+             C 400 234, 372 234, 356 256
+             S 316 278, 300 256
+             S 260 234, 244 256
+             S 204 278, 188 256
+             L 188 312 L 416 312 Z"
+          fill="url(#fill4)"/>
+    <!-- crest line -->
+    <path d="M 416 256
+             C 400 234, 372 234, 356 256
+             S 316 278, 300 256
+             S 260 234, 244 256
+             S 204 278, 188 256"
+          stroke="#dcc8ff" stroke-width="2" fill="none" opacity="0.9"/>
+    <!-- trailing droplets -->
+    <circle cx="176" cy="262" r="2.5" fill="#b288ff" opacity="0.7"/>
+    <circle cx="162" cy="258" r="1.8" fill="#b288ff" opacity="0.45"/>
+    <circle cx="148" cy="262" r="1.2" fill="#b288ff" opacity="0.3"/>
+  </g>
+
+  <!-- capsule rim -->
+  <rect x="96" y="228" width="320" height="56" rx="28"
+        fill="none" stroke="#3a3548" stroke-width="1"/>
+</svg>
