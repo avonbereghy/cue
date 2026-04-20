@@ -142,11 +142,19 @@ export function SpoolContextBar({
   // the current time. The raf loop reads this to render a brief radial glow
   // at the silk's trailing edge that fades over GROWTH_GLOW_MS. Skipped
   // while compacting — the burst/strand already owns that edge visually.
+  //
+  // Stamped inside a post-commit effect rather than during render so React 18
+  // StrictMode's double-invoke / speculative renders don't spuriously trigger
+  // the pulse.
   const growthPulseAtRef = useRef<number>(0);
-  if (fillPercent > fillPctRef.current + 0.0005 && !isCompacting) {
-    growthPulseAtRef.current = performance.now();
-  }
-  fillPctRef.current = fillPercent;
+  const prevFillPctRef = useRef<number>(fillPercent);
+  useEffect(() => {
+    if (fillPercent > prevFillPctRef.current + 0.0005 && !isCompacting) {
+      growthPulseAtRef.current = performance.now();
+    }
+    prevFillPctRef.current = fillPercent;
+    fillPctRef.current = fillPercent;
+  }, [fillPercent, isCompacting]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
