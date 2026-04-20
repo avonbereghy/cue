@@ -346,7 +346,14 @@ export function FluxEffect({
         const jy = (Math.random() - 0.5) * 0.5;
         const bx = (gx + 0.5 + jx) * cellW;
         const by = (gy + 0.5 + jy) * cellH;
-        const [fx, fy] = sampleField(bx, by, t, seedVal, turb);
+        // Match the per-frame spring target's per-line temporal jitter so the
+        // endpoint we pre-settle to is the SAME point the spring will aim at
+        // on the first step. Without this, endpoint != target on frame 1 → the
+        // spring fires with a large restoring force, velocities spike, and
+        // widthBoost (which drives brightness + alpha) flashes high for ~1s
+        // on every fresh mount/resize.
+        const tLocal = t + Math.sin(bx * 0.013 + by * 0.019) * 2.2;
+        const [fx, fy] = sampleField(bx, by, tLocal, seedVal, turb);
         arr[idx + 0] = bx;
         arr[idx + 1] = by;
         arr[idx + 2] = lineLen * fx;
@@ -473,6 +480,13 @@ export function FluxEffect({
       return;
     }
 
+    // Hard cut-off guard: once growth fully retracts and active is false, we
+    // emit one final clear then stop issuing draw calls until the next
+    // activation. Without this, degenerate quads at growth≈0 can leave
+    // single-pixel AA specks that read as trailing flicker after the retract
+    // visually completes.
+    let cleared = false;
+
     const render = (now: number) => {
       const canvas = canvasRef.current;
       if (!canvas || !gl || !prog) return;
@@ -540,10 +554,23 @@ export function FluxEffect({
       // geometry. See vertex shader comment.
       const audioDrive = 1 + E * intensityRef.current;
 
+      // Retract-aware motion damping. While retracting (active=false) we fade
+      // the field evolution rate AND disturbance effect with growth — so the
+      // spring stops being fed fresh target deltas as the needles shrink.
+      // Without this the field advances at full speed through the whole
+      // retract, velocities stay alive, widthBoost stays high, and the
+      // needles read as "still energetic" right up until they pop to zero
+      // length. Easing motion with growth lets the brightness trail off in
+      // lockstep with the length, so the retract reads as a graceful fade
+      // instead of an abrupt cutoff.
+      const motionScale = activeRef.current
+        ? 1
+        : Math.max(0.05, growthRef.current);
+
       // Advance field time as dt · speed · audioDrive. Accumulating (rather
       // than multiplying wall-clock) means audioDrive changes smoothly alter
       // the evolution rate without phase jumps.
-      fieldTimeRef.current += dt * speedRef.current * audioDrive;
+      fieldTimeRef.current += dt * speedRef.current * audioDrive * motionScale;
       const tField = fieldTimeRef.current;
 
       const lineLen = BASE_LINE_LENGTH * lineLengthRef.current;
@@ -576,6 +603,8 @@ export function FluxEffect({
         // Apply radial displacement from any active disturbances. Quadratic
         // falloff within the radius; direction from disturbance center to
         // basepoint, so lines bend AWAY from whatever is pushing through.
+        // Scaled by motionScale so strings can't spring-kick needles that
+        // are already retracting — the push fades with growth.
         for (let di = 0; di < dists.length; di++) {
           const d = dists[di];
           const ddx = bx - d.x;
@@ -583,7 +612,7 @@ export function FluxEffect({
           const rr = Math.sqrt(ddx * ddx + ddy * ddy);
           if (rr < d.radius) {
             const falloff = 1 - rr / d.radius;
-            const push = falloff * falloff * d.force * d.strength;
+            const push = falloff * falloff * d.force * d.strength * motionScale;
             if (rr > 0.01) {
               tx += (ddx / rr) * push;
               ty += (ddy / rr) * push;
@@ -629,6 +658,20 @@ export function FluxEffect({
           growthRef.current = Math.max(target, growthRef.current - step);
         }
       }
+
+      // Hard cut-off once fully retracted — one final clear, then no more
+      // draws until reactivation. This eliminates trailing sub-pixel flicker
+      // from degenerate quads after the needles have visibly finished fading.
+      if (!activeRef.current && growthRef.current <= 0) {
+        if (!cleared) {
+          gl.clearColor(0, 0, 0, 0);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+          cleared = true;
+        }
+        rafRef.current = requestAnimationFrame(render);
+        return;
+      }
+      cleared = false;
 
       // Upload instance data.
       gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);

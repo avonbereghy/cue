@@ -42,11 +42,11 @@ fn color_for_state(state: &str, blink_on: bool) -> Rgba {
         "error" => Rgba { r: 255, g: 69, b: 58, a: 255 },   // red (255,69,58)
         "subagent" => {
             let a = if blink_on { 255 } else { 38 };
-            Rgba { r: 0, g: 255, b: 255, a } // cyan (0,255,255)
+            Rgba { r: 124, g: 197, b: 255, a } // vibrant light blue (blinking) — matches Claude Code agent/shell accent
         }
         "compacting" => {
             let a = if blink_on { 220 } else { 50 };
-            Rgba { r: 139, g: 159, b: 212, a } // periwinkle (blinking, slightly dimmer than full white)
+            Rgba { r: 139, g: 159, b: 212, a } // periwinkle (Claude Code compacting tint)
         }
         "clearing" => {
             let a = if blink_on { 220 } else { 50 };

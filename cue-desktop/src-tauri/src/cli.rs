@@ -61,14 +61,14 @@ const GREEN: &str = "\x1b[32m";
 const YELLOW: &str = "\x1b[33m";
 const RED: &str = "\x1b[31m";
 const WHITE: &str = "\x1b[37m";
-const PURPLE: &str = "\x1b[95m"; // bright magenta — closest ANSI to subagent purple #A78BFF
+const CYAN: &str = "\x1b[96m"; // bright cyan — closest ANSI to subagent light blue #7CC5FF
 
 fn state_color(state: &str) -> &'static str {
     match state {
         "working" => WHITE,
         "waiting" => YELLOW,
         "error" => RED,
-        "subagent" => PURPLE,
+        "subagent" => CYAN,
         "idle" => WHITE,
         "done" => GREEN,
         _ => WHITE,

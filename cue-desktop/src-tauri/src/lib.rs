@@ -1032,11 +1032,15 @@ pub fn run() {
 
     // Custom panic handler that suppresses session data from crash dumps
     std::panic::set_hook(Box::new(|info| {
-        // Log panic without potentially sensitive payload data
         let location = info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
+        let payload = info.payload();
+        let msg = if let Some(s) = payload.downcast_ref::<&str>() { *s }
+                  else if let Some(s) = payload.downcast_ref::<String>() { s.as_str() }
+                  else { "<opaque>" };
         log::error!(
-            "Panic at {}: application error (details suppressed for privacy)",
-            location.unwrap_or_else(|| "unknown".to_string())
+            "Panic at {}: {}",
+            location.unwrap_or_else(|| "unknown".to_string()),
+            msg
         );
     }));
 

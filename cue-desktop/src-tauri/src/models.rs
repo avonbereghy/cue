@@ -151,6 +151,13 @@ pub struct SubagentMetrics {
     /// True if the subagent's JSONL was modified recently (within 60s)
     #[serde(default)]
     pub is_active: bool,
+    /// Unix timestamp of the first entry in the JSONL (agent start).
+    #[serde(default)]
+    pub started_at: Option<f64>,
+    /// Unix timestamp of the last entry in the JSONL. For active agents this
+    /// is the most recent activity; for completed agents it's the end time.
+    #[serde(default)]
+    pub ended_at: Option<f64>,
 }
 
 impl SubagentMetrics {
@@ -188,6 +195,17 @@ pub struct SessionMetrics {
     /// PreToolUse nor PostToolUse fires.
     #[serde(default)]
     pub last_assistant_has_text: bool,
+    /// Timestamp (unix secs) of the last assistant message that contained a
+    /// non-empty `text` content block. Compared against `last_user_prompt_ts`
+    /// so stale text from the *previous* turn can't promote the next turn
+    /// straight out of thinking.
+    #[serde(default)]
+    pub last_assistant_text_ts: Option<f64>,
+    /// Timestamp (unix secs) of the most recent user prompt entry in this
+    /// session's JSONL. Paired with `last_assistant_text_ts` to decide
+    /// whether the assistant has actually begun streaming a reply.
+    #[serde(default)]
+    pub last_user_prompt_ts: Option<f64>,
     /// Name of the currently running tool (from last pending tool_use)
     #[serde(default)]
     pub running_tool_name: Option<String>,
@@ -200,6 +218,11 @@ pub struct SessionMetrics {
     /// Full text of the last user prompt (pill truncates visually; popup shows all)
     #[serde(default)]
     pub last_prompt: Option<String>,
+    /// First non-empty text block from the most recent assistant message.
+    /// Used as a disambiguation hint on idle/done cards that share a workspace,
+    /// where the final answer is a better thread cue than the user's last prompt.
+    #[serde(default)]
+    pub last_assistant_text: Option<String>,
     /// Session ID extracted from the JSONL file's metadata header.
     /// Used to verify the parsed JSONL actually belongs to this session
     /// (guards against dedup stable-id / cache mismatch returning the wrong file).
@@ -332,8 +355,36 @@ impl EnrichedSession {
         // last assistant message's `text` content block (extended-thinking
         // tokens land in `thinking` blocks, so output_tokens alone would
         // false-positive during a still-thinking response).
+        //
+        // Guard: the text must be from the CURRENT turn. When a new prompt
+        // fires UserPromptSubmit → thinking, the previous turn's assistant
+        // text is still in the JSONL and `last_assistant_has_text` stays
+        // true. Comparing timestamps ensures we only promote once the
+        // model has actually started replying to the latest prompt.
         if info.state == "thinking" && metrics.last_assistant_has_text {
-            info.state = "working".to_string();
+            let text_ts = metrics.last_assistant_text_ts;
+            let prompt_ts = metrics.last_user_prompt_ts;
+            let text_after_prompt = match (text_ts, prompt_ts) {
+                (Some(t), Some(p)) => t >= p,
+                // Missing either timestamp: fall back to the old behaviour so
+                // sessions whose JSONL predates this field still work.
+                _ => true,
+            };
+            // Diagnostic: emit every promotion decision so we can correlate
+            // the ~1s working flash with JSONL-flush timing. Remove once the
+            // root cause of the thinking→working→thinking bounce is resolved.
+            log::info!(
+                "promote-check id={} lastActivity={:.3} prompt_ts={:?} text_ts={:?} text_after_prompt={} promoting={}",
+                info.id,
+                info.last_activity,
+                prompt_ts,
+                text_ts,
+                text_after_prompt,
+                text_after_prompt,
+            );
+            if text_after_prompt {
+                info.state = "working".to_string();
+            }
         }
         let workspace_name = std::path::Path::new(&info.workspace)
             .file_name()
@@ -1093,6 +1144,50 @@ mod tests {
         let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
         assert_eq!(es.info.state, "working");
         assert_eq!(es.state_display_name, "Working");
+    }
+
+    #[test]
+    fn test_thinking_stays_when_text_is_from_previous_turn() {
+        // UserPromptSubmit just fired, but the previous turn's assistant
+        // message is still the latest text-carrying entry in the JSONL.
+        // The promoter must NOT flip straight to working — the user should
+        // see the thinking state until the new turn actually produces text.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        let mut info = make_test_info("s", "/tmp", "thinking");
+        info.last_activity = now;
+        info.started_at = now - 60.0;
+        let metrics = SessionMetrics {
+            last_assistant_has_text: true,
+            last_assistant_text_ts: Some(now - 30.0),
+            last_user_prompt_ts: Some(now - 1.0),
+            ..Default::default()
+        };
+        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        assert_eq!(es.info.state, "thinking");
+    }
+
+    #[test]
+    fn test_thinking_promotes_when_text_is_from_current_turn() {
+        // Prompt fired at t-5s, a text block appeared at t-1s → that's the
+        // current turn's reply beginning. Promote as expected.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        let mut info = make_test_info("s", "/tmp", "thinking");
+        info.last_activity = now;
+        info.started_at = now - 60.0;
+        let metrics = SessionMetrics {
+            last_assistant_has_text: true,
+            last_user_prompt_ts: Some(now - 5.0),
+            last_assistant_text_ts: Some(now - 1.0),
+            ..Default::default()
+        };
+        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        assert_eq!(es.info.state, "working");
     }
 
     #[test]
