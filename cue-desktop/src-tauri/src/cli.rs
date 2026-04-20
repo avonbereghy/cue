@@ -60,15 +60,15 @@ const DIM: &str = "\x1b[2m";
 const GREEN: &str = "\x1b[32m";
 const YELLOW: &str = "\x1b[33m";
 const RED: &str = "\x1b[31m";
-const CYAN: &str = "\x1b[36m";
 const WHITE: &str = "\x1b[37m";
+const PURPLE: &str = "\x1b[95m"; // bright magenta — closest ANSI to subagent purple #A78BFF
 
 fn state_color(state: &str) -> &'static str {
     match state {
         "working" => WHITE,
         "waiting" => YELLOW,
         "error" => RED,
-        "subagent" => CYAN,
+        "subagent" => PURPLE,
         "idle" => WHITE,
         "done" => GREEN,
         _ => WHITE,
@@ -553,14 +553,14 @@ mod tests {
 
     #[test]
     fn test_try_run_cli_no_args_returns_none() {
-        let args = vec!["cue-desktop".to_string()];
+        let args = vec!["Cue".to_string()];
         assert!(try_run_cli_inner(&args).is_none());
     }
 
     #[test]
     fn test_try_run_cli_status_returns_some() {
         let args = vec![
-            "cue-desktop".to_string(),
+            "Cue".to_string(),
             "--status".to_string(),
         ];
         assert!(try_run_cli_inner(&args).is_some());
@@ -569,7 +569,7 @@ mod tests {
     #[test]
     fn test_try_run_cli_status_pretty_returns_some() {
         let args = vec![
-            "cue-desktop".to_string(),
+            "Cue".to_string(),
             "--status".to_string(),
             "--pretty".to_string(),
         ];
@@ -579,7 +579,7 @@ mod tests {
     #[test]
     fn test_try_run_cli_compact_returns_some() {
         let args = vec![
-            "cue-desktop".to_string(),
+            "Cue".to_string(),
             "--status".to_string(),
             "--pretty".to_string(),
             "--compact".to_string(),
@@ -590,7 +590,7 @@ mod tests {
     #[test]
     fn test_try_run_cli_unrelated_args_returns_none() {
         let args = vec![
-            "cue-desktop".to_string(),
+            "Cue".to_string(),
             "--some-other-flag".to_string(),
         ];
         assert!(try_run_cli_inner(&args).is_none());
@@ -599,7 +599,7 @@ mod tests {
     #[test]
     fn test_try_run_cli_show_paths_without_status_returns_none() {
         let args = vec![
-            "cue-desktop".to_string(),
+            "Cue".to_string(),
             "--show-paths".to_string(),
         ];
         assert!(try_run_cli_inner(&args).is_none());
