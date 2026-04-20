@@ -33,6 +33,23 @@ export function FlipNumber({
 }: FlipNumberProps) {
   const containerRef = useRef<HTMLSpanElement>(null);
   const prevRef = useRef<string>(value);
+  // Tracks the in-flight outgoing-overlay (element + animation) per slot
+  // index so rapid `value` changes can cancel and clean up the previous
+  // animation before appending a new one. Without this, overlapping flips
+  // leak orphan DOM nodes when the counter ticks faster than `duration`.
+  const liveOverlaysRef = useRef<Map<number, { el: HTMLSpanElement; anim: Animation }>>(new Map());
+
+  // Cancel any in-flight overlays and clean up their DOM nodes on unmount.
+  useEffect(() => {
+    const live = liveOverlaysRef.current;
+    return () => {
+      live.forEach(({ el, anim }) => {
+        anim.cancel();
+        el.remove();
+      });
+      live.clear();
+    };
+  }, []);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -47,6 +64,8 @@ export function FlipNumber({
     const prevArr = [...prev];
     const nextArr = [...value];
     const len = nextArr.length;
+    const prevLen = prevArr.length;
+    const live = liveOverlaysRef.current;
 
     const containerRect = container.getBoundingClientRect();
     let flipIndex = 0;
@@ -54,9 +73,22 @@ export function FlipNumber({
     for (let i = 0; i < len; i++) {
       const slot = slots[i];
       if (!slot) continue;
-      const oldC = prevArr[i] ?? "";
+      // Newly-added positions (string grew): no outgoing glyph to flip — let
+      // the slot appear normally without spawning a blank overlay.
+      if (i >= prevLen) continue;
+      const oldC = prevArr[i];
       const newC = nextArr[i];
       if (oldC === newC) continue;
+
+      // Kill any still-running overlay for this slot before appending a new
+      // one — prevents DOM-node accumulation when `value` changes faster
+      // than the flip animation's duration.
+      const existing = live.get(i);
+      if (existing) {
+        existing.anim.cancel();
+        existing.el.remove();
+        live.delete(i);
+      }
 
       // Old glyph rendered as a sibling overlay (attached to the container, not
       // the slot) so its rotateX doesn't inherit the slot's own rotation.
@@ -84,7 +116,14 @@ export function FlipNumber({
         ],
         { duration, easing: "cubic-bezier(0.55, 0.05, 0.55, 1)", delay, fill: "forwards" },
       );
-      oldAnim.onfinish = () => old.remove();
+      // Track this overlay so the next flip in the same slot can cancel it.
+      live.set(i, { el: old, anim: oldAnim });
+      const cleanup = () => {
+        old.remove();
+        if (live.get(i)?.anim === oldAnim) live.delete(i);
+      };
+      oldAnim.onfinish = cleanup;
+      oldAnim.oncancel = cleanup;
 
       slot.animate(
         [
