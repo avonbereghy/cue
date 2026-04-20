@@ -168,8 +168,12 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     }
   }, [compactMode]);
 
-  // Track ended sessions: sessions that disappear OR transition to "done" state
-  // get moved to the revive list. Sessions that reappear get removed from revive.
+  // Track ended sessions for the revive list. We ONLY treat sessions that
+  // disappear from the list as revivable — that's the signature of a dirty
+  // exit (process died, terminal killed, PID gone). Sessions that reach
+  // state="ended" came in through a clean SessionEnd hook (user typed /exit
+  // or closed the chat cleanly) and shouldn't need reviving — they just
+  // disappear silently via the main-list filter.
   useEffect(() => {
     const currentIds = new Set(sessions.map((s) => s.info.id));
     const prevIds = prevSessionIdsRef.current;
@@ -181,20 +185,16 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       if (prevIds.size > 0) {
         const ended: RevivedSession[] = [];
 
-        // Sessions that disappeared entirely
+        // Sessions that disappeared entirely — dirty exits only.
+        // Snapshot must itself have been in a non-"ended" state, otherwise the
+        // disappearance is the tail end of a clean SessionEnd and still
+        // doesn't warrant a revive prompt.
         for (const id of prevIds) {
           if (!currentIds.has(id) && !alreadyRevived.has(id)) {
             const snapshot = prevSessionsRef.current.find((s) => s.info.id === id);
-            if (snapshot) {
+            if (snapshot && snapshot.info.state !== "ended") {
               ended.push({ session: snapshot, revivedAt: Date.now() });
             }
-          }
-        }
-
-        // Sessions that transitioned to "ended" (SessionEnd fired — chat exited)
-        for (const session of sessions) {
-          if (session.info.state === "ended" && !alreadyRevived.has(session.info.id) && !dismissedIdsRef.current.has(session.info.id)) {
-            ended.push({ session, revivedAt: Date.now() });
           }
         }
 
@@ -1011,7 +1011,15 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     const st = s.info.state;
     if (st === "waiting") return 0;
     if (st === "error") return 1;
-    if (st === "working" || st === "subagent") return 2;
+    if (
+      st === "working" ||
+      st === "subagent" ||
+      st === "thinking" ||
+      st === "compacting" ||
+      st === "clearing"
+    ) {
+      return 2;
+    }
     return 3;
   }, []);
 
@@ -1113,7 +1121,16 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     if (!activeIdSet.has(id)) prevStatesRef.current.delete(id);
   }
 
-  // Compute fully-sorted desired order (for deferred full rearrange)
+  // Compute fully-sorted desired order (for deferred full rearrange).
+  // Two sort blocks: the working set (waiting/error/working/subagent) sorted
+  // longest-active-first, and the idle/done set sorted most-recently-idle-first
+  // so the session that just settled rises to the top of the idle stack.
+  const idleTiebreak = (a: EnrichedSession, b: EnrichedSession) => {
+    const sa = settledSinceRef.current.get(a.info.id) ?? 0;
+    const sb = settledSinceRef.current.get(b.info.id) ?? 0;
+    if (sa !== sb) return sb - sa; // newest-settled first
+    return b.info.startedAt - a.info.startedAt; // newer session first
+  };
   const desiredOrder = (() => {
     const all = [...activeSessions];
     if (autoReorder) {
@@ -1121,9 +1138,9 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         const pa = reorderPriority(a);
         const pb = reorderPriority(b);
         if (pa !== pb) return pa - pb;
-        // Within the same priority: longest-active session first.
-        // activeSince is set when a session enters working/thinking;
-        // lower value = been active longer = should sort first.
+        // Idle/done block: most recently settled goes to the top.
+        if (pa === 3) return idleTiebreak(a, b);
+        // Working block: longest-active first.
         const aa = activeSinceRef.current.get(a.info.id) ?? Infinity;
         const ba = activeSinceRef.current.get(b.info.id) ?? Infinity;
         if (aa !== ba) return aa - ba;
@@ -1131,8 +1148,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       });
     } else {
       all.sort((a, b) => {
-        // Active sessions (working/thinking/subagent) sort before idle/done,
-        // longest-active first. Idle/done sessions keep startedAt order.
+        // Working set (active) sorts before idle/done.
         const aActive = !isQuiescent(a.info.state);
         const bActive = !isQuiescent(b.info.state);
         if (aActive !== bActive) return aActive ? -1 : 1;
@@ -1140,8 +1156,10 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           const aa = activeSinceRef.current.get(a.info.id) ?? Infinity;
           const ba = activeSinceRef.current.get(b.info.id) ?? Infinity;
           if (aa !== ba) return aa - ba;
+          return a.info.startedAt - b.info.startedAt;
         }
-        return a.info.startedAt - b.info.startedAt;
+        // Idle block: most recently settled first.
+        return idleTiebreak(a, b);
       });
     }
     return all.map((s) => s.info.id);
@@ -1160,8 +1178,9 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           const aa = activeSinceRef.current.get(a.info.id) ?? Infinity;
           const ba = activeSinceRef.current.get(b.info.id) ?? Infinity;
           if (aa !== ba) return aa - ba;
+          return a.info.startedAt - b.info.startedAt;
         }
-        return a.info.startedAt - b.info.startedAt;
+        return idleTiebreak(a, b);
       });
       committedOrderRef.current = sorted.map((s) => s.info.id);
       return sorted;
@@ -1695,7 +1714,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     thinking: "bg-orange-400/20 text-orange-400 hover:bg-orange-400/30",
     waiting: "bg-yellow-400/20 text-yellow-400 hover:bg-yellow-400/30",
     error: "bg-red-500/20 text-red-500 hover:bg-red-500/30",
-    subagent: "bg-blue-400/20 text-blue-400 hover:bg-blue-400/30",
+    subagent: "bg-[#A78BFF]/20 text-[#A78BFF] hover:bg-[#A78BFF]/30",
     idle: "bg-gray-500/20 text-gray-400 hover:bg-gray-500/30",
     done: "bg-green-500/20 text-green-500 hover:bg-green-500/30",
     ended: "bg-red-400/20 text-red-400 hover:bg-red-400/30",
@@ -1969,7 +1988,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                         {originalIdx + 1}
                       </div>
                     )}
-                    <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} timerDisplay={timerDisplay} />
+                    <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} fluxEnabled={lowPower ? false : fluxEnabled} fluxAlpha={fluxAlpha} fluxIntensity={fluxIntensity} fluxDensity={fluxDensity} fluxSpeed={fluxSpeed} fluxLineLength={fluxLineLength} fluxTurbulence={fluxTurbulence} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} timerDisplay={timerDisplay} />
                   </div>
 
                   {/* Per-session state controls — hidden in screenshot mode */}
@@ -2098,7 +2117,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
             return (
               <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="relative space-y-2" style={{ zIndex: idx + 1 }}>
-                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} timerDisplay={timerDisplay} isDuplicate={duplicateTitles.has(session.displayTitle)} expandOverride={compactMode ? expandOverrides[session.info.id] : undefined} onExpandCycle={compactMode ? () => {
+                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} fluxEnabled={lowPower ? false : fluxEnabled} fluxAlpha={fluxAlpha} fluxIntensity={fluxIntensity} fluxDensity={fluxDensity} fluxSpeed={fluxSpeed} fluxLineLength={fluxLineLength} fluxTurbulence={fluxTurbulence} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} timerDisplay={timerDisplay} isDuplicate={duplicateTitles.has(session.displayTitle)} expandOverride={compactMode ? expandOverrides[session.info.id] : undefined} onExpandCycle={compactMode ? () => {
                   setExpandOverrides((prev) => {
                     const current = prev[session.info.id] ?? 0;
                     const next = (current + 1) % 3;
@@ -2191,7 +2210,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                   return (
                     <div key={revived.session.info.id} className={`revived-card-wrapper relative ${pulseClass}`}>
                       <div key={clicks} className="revived-overlay" />
-                      <SessionCard session={revived.session} titleAnimation="none" signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={signalEffect} sandEnabled={sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} revived />
+                      <SessionCard session={revived.session} titleAnimation="none" signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={signalEffect} sandEnabled={sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} fluxEnabled={fluxEnabled} fluxAlpha={fluxAlpha} fluxIntensity={fluxIntensity} fluxDensity={fluxDensity} fluxSpeed={fluxSpeed} fluxLineLength={fluxLineLength} fluxTurbulence={fluxTurbulence} revived />
                       {/* Full blur overlay */}
                       <div className="absolute inset-0 z-8 rounded-lg overflow-hidden" style={{ backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }} />
                       {/* Title re-rendered on top of blur in original position */}
