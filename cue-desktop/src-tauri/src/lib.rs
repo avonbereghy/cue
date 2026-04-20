@@ -1030,17 +1030,15 @@ pub fn run() {
         std::process::exit(0);
     }
 
-    // Custom panic handler that suppresses session data from crash dumps
+    // Custom panic handler that suppresses session data from crash dumps.
+    // Panic payload strings can be built from `format!("... {}", user_data)`
+    // or similar and may leak workspace paths, prompts, or assistant text —
+    // log location only, never the payload, per CLAUDE.md security rules.
     std::panic::set_hook(Box::new(|info| {
         let location = info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
-        let payload = info.payload();
-        let msg = if let Some(s) = payload.downcast_ref::<&str>() { *s }
-                  else if let Some(s) = payload.downcast_ref::<String>() { s.as_str() }
-                  else { "<opaque>" };
         log::error!(
-            "Panic at {}: {}",
-            location.unwrap_or_else(|| "unknown".to_string()),
-            msg
+            "Panic at {}: application error (details suppressed for privacy)",
+            location.unwrap_or_else(|| "unknown".to_string())
         );
     }));
 

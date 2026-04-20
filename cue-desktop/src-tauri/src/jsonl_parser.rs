@@ -10,6 +10,34 @@ use std::path::Path;
 /// Maximum file size we'll parse (500 MB).
 const MAX_FILE_SIZE: u64 = 500 * 1024 * 1024;
 
+/// Cap on the last-prompt / last-assistant-text snippets we retain in the
+/// in-memory session metrics and ship to the frontend. The UI only shows a
+/// short pill inline and an expandable popup — multi-MB messages would bloat
+/// memory and cross the IPC boundary unnecessarily.
+const SNIPPET_CHAR_CAP: usize = 2000;
+
+/// Truncate `s` to at most `SNIPPET_CHAR_CAP` Unicode scalar values without
+/// splitting a multi-byte code point. Appends an ellipsis if truncation ran.
+fn cap_snippet(s: &str) -> String {
+    let mut count = 0usize;
+    let mut end_byte = s.len();
+    for (idx, _) in s.char_indices() {
+        if count == SNIPPET_CHAR_CAP {
+            end_byte = idx;
+            break;
+        }
+        count += 1;
+    }
+    if end_byte < s.len() {
+        let mut out = String::with_capacity(end_byte + 1);
+        out.push_str(&s[..end_byte]);
+        out.push('…');
+        out
+    } else {
+        s.to_string()
+    }
+}
+
 /// A parsed entry from a JSONL line.
 #[derive(Debug, Clone, Default)]
 pub struct ParsedEntry {
@@ -678,9 +706,12 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
 
         if entry.is_user_message {
             m.user_message_count += 1;
-            // Last user prompt text wins
+            // Last user prompt text wins. Snippet is capped to keep
+            // oversized pastes from bloating the IPC payload and the
+            // frontend PromptPopup — UI only renders a short preview
+            // anyway.
             if let Some(ref text) = entry.user_prompt_text {
-                m.last_prompt = Some(text.clone());
+                m.last_prompt = Some(cap_snippet(text));
             }
             // Track the last user-message timestamp so we can gate the
             // thinking→working promotion against stale prior-turn text.
@@ -726,9 +757,10 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
             }
             // Latest non-empty assistant text wins. Skip entries without text
             // (pure tool_use messages) so the snippet stays on the actual
-            // answer the user would have read.
+            // answer the user would have read. Same snippet cap as the
+            // prompt — multi-MB assistant responses are clipped.
             if let Some(ref txt) = entry.assistant_text {
-                m.last_assistant_text = Some(txt.clone());
+                m.last_assistant_text = Some(cap_snippet(txt));
             }
 
             for (tool, count) in &entry.tool_counts {
