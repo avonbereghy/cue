@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- 04e · Maximal Capsule ─ the compact gauge, stripped. No dots, no label,
+       no hairlines. Just the bar at icon-scale — the mark, maximized. -->
+  <defs>
+    <linearGradient id="bg4e" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#17141e"/>
+      <stop offset="1" stop-color="#0c0b12"/>
+    </linearGradient>
+    <linearGradient id="bar4e" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#51495f"/>
+      <stop offset="1" stop-color="#2c2838"/>
+    </linearGradient>
+    <linearGradient id="fill4e" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#c3a0ff"/>
+      <stop offset="0.6" stop-color="#9a76f5"/>
+      <stop offset="1" stop-color="#7a5ee0"/>
+    </linearGradient>
+    <radialGradient id="halo4e" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#b288ff" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#b288ff" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="barClip4e">
+      <rect x="60" y="196" width="392" height="120" rx="60"/>
+    </clipPath>
+  </defs>
+
+  <rect width="512" height="512" rx="96" ry="96" fill="url(#bg4e)"/>
+
+  <!-- ambient halo -->
+  <ellipse cx="256" cy="256" rx="260" ry="170" fill="url(#halo4e)"/>
+
+  <!-- empty bar (full-width capsule) -->
+  <rect x="60" y="196" width="392" height="120" rx="60" fill="url(#bar4e)"/>
+
+  <g clip-path="url(#barClip4e)">
+    <!-- large wave fill, scaled up to match the big capsule -->
+    <path d="M 452 256
+             C 418 196, 358 196, 324 256
+             S 232 316, 198 256
+             S 106 196, 72 256
+             S -20 316, -54 256
+             L -54 380 L 452 380 Z"
+          fill="url(#fill4e)"/>
+    <!-- crest highlight -->
+    <path d="M 452 256
+             C 418 196, 358 196, 324 256
+             S 232 316, 198 256
+             S 106 196, 72 256"
+          stroke="#eadcff" stroke-width="3" fill="none" opacity="0.95"/>
+    <!-- secondary crest shadow -->
+    <path d="M 452 268
+             C 418 212, 358 212, 324 268
+             S 232 324, 198 268
+             S 106 212, 72 268"
+          stroke="#3f2d78" stroke-width="2" fill="none" opacity="0.6"/>
+    <!-- trailing droplets -->
+    <circle cx="52" cy="262" r="4" fill="#c3a0ff" opacity="0.75"/>
+    <circle cx="32" cy="254" r="2.8" fill="#c3a0ff" opacity="0.5"/>
+    <circle cx="18" cy="260" r="1.8" fill="#c3a0ff" opacity="0.3"/>
+  </g>
+
+  <!-- capsule rim -->
+  <rect x="60" y="196" width="392" height="120" rx="60"
+        fill="none" stroke="#3c3548" stroke-width="1.5"/>
+</svg>

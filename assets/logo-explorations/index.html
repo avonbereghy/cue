@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cue — Logo Explorations</title>
+<style>
+  :root {
+    --bg: oklch(0.18 0.02 270);
+    --panel: oklch(0.22 0.02 270);
+    --ink: oklch(0.93 0.01 80);
+    --muted: oklch(0.64 0.02 80);
+    --rule: oklch(0.32 0.02 270);
+    --tile-dark: #0e0e12;
+    --tile-light: #f4efe4;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", Helvetica, Arial, sans-serif;
+    font-feature-settings: "ss01", "cv11";
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    padding: 56px 48px 32px;
+    border-bottom: 1px solid var(--rule);
+  }
+  h1 {
+    margin: 0 0 8px;
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  header p {
+    margin: 0;
+    font-size: 32px;
+    letter-spacing: -0.02em;
+    max-width: 760px;
+    line-height: 1.2;
+  }
+  main {
+    padding: 40px 48px 80px;
+    display: grid;
+    gap: 48px;
+  }
+  .group-label {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    letter-spacing: 0.26em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 24px 0 -16px;
+    padding-left: 4px;
+  }
+  .concept {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 32px;
+    padding: 28px;
+    border: 1px solid var(--rule);
+    border-radius: 20px;
+    background: var(--panel);
+  }
+  .concept h2 {
+    margin: 0 0 6px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .concept h3 {
+    margin: 0 0 12px;
+    font-size: 22px;
+    letter-spacing: -0.01em;
+  }
+  .concept p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.55;
+  }
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    align-items: center;
+  }
+  .tile {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 14px;
+    padding: 18px;
+    aspect-ratio: 1;
+    position: relative;
+  }
+  .tile.dark  { background: var(--tile-dark); }
+  .tile.light { background: var(--tile-light); }
+  .tile.dock  { background: radial-gradient(120% 120% at 50% 0%, #2a2f3a, #16181f); }
+  .tile.menubar {
+    background: linear-gradient(180deg, #1c1c22 0%, #15151a 100%);
+    display: grid; grid-template-columns: 1fr auto; align-items: center; padding: 10px 14px;
+  }
+  .tile img {
+    width: 100%; height: 100%; object-fit: contain; display: block;
+  }
+  .tile.menubar img { width: 22px; height: 22px; }
+  .tile.menubar .ghost {
+    display: flex; gap: 6px; color: #6a6a72; font-family: ui-monospace, Menlo, monospace; font-size: 10px;
+  }
+  .tile.menubar .ghost span { letter-spacing: 0.14em; }
+  .tag {
+    position: absolute;
+    top: 8px; left: 10px;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    color: rgba(255,255,255,0.35);
+  }
+  .tile.light .tag { color: rgba(0,0,0,0.4); }
+  footer {
+    padding: 24px 48px 56px;
+    color: var(--muted);
+    font-size: 13px;
+    border-top: 1px solid var(--rule);
+    font-family: ui-monospace, Menlo, monospace;
+  }
+  footer code { color: var(--ink); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>cue · logo explorations · apr 2026</h1>
+  <p>Two surviving directions — the parallax wave (with flux-field atmosphere) and the compact gauge — plus four iterations on the gauge.</p>
+</header>
+
+<main>
+
+  <section class="concept">
+    <div>
+      <h2>02</h2>
+      <h3>Parallax Wave + Flux</h3>
+      <p>Three phase-offset wave layers, with the curl-noise streamline field humming quietly in the sky behind them. The flux thins as it approaches the crest so it reads as atmosphere, not competing detail.</p>
+    </div>
+    <div class="tiles">
+      <div class="tile dark"><span class="tag">DARK</span><img src="02-parallax-wave.svg" alt=""></div>
+      <div class="tile light"><span class="tag">LIGHT TILE</span><img src="02-parallax-wave.svg" alt=""></div>
+      <div class="tile dock"><span class="tag">DOCK</span><img src="02-parallax-wave.svg" alt=""></div>
+      <div class="tile menubar"><img src="02-parallax-wave.svg" alt=""><div class="ghost"><span>CUE</span><span>3</span></div></div>
+    </div>
+  </section>
+
+  <div class="group-label">04 · Compact Gauge — iterations</div>
+
+  <section class="concept">
+    <div>
+      <h2>04a</h2>
+      <h3>Original</h3>
+      <p>The baseline: capsule bar with a violet wave eating it right-to-left, tiny state dots above, "COMPACTING" label below.</p>
+    </div>
+    <div class="tiles">
+      <div class="tile dark"><span class="tag">DARK</span><img src="04a-compact-gauge.svg" alt=""></div>
+      <div class="tile light"><span class="tag">LIGHT TILE</span><img src="04a-compact-gauge.svg" alt=""></div>
+      <div class="tile dock"><span class="tag">DOCK</span><img src="04a-compact-gauge.svg" alt=""></div>
+      <div class="tile menubar"><img src="04a-compact-gauge.svg" alt=""><div class="ghost"><span>CUE</span><span>3</span></div></div>
+    </div>
+  </section>
+
+  <section class="concept">
+    <div>
+      <h2>04b</h2>
+      <h3>Stacked Sessions</h3>
+      <p>Three live session rows filling the canvas — compacting wave, thinking flux, working waveform — each fronted by its status dot. No text. Reads as a mini-dashboard of the running app.</p>
+    </div>
+    <div class="tiles">
+      <div class="tile dark"><span class="tag">DARK</span><img src="04b-stacked-sessions.svg" alt=""></div>
+      <div class="tile light"><span class="tag">LIGHT TILE</span><img src="04b-stacked-sessions.svg" alt=""></div>
+      <div class="tile dock"><span class="tag">DOCK</span><img src="04b-stacked-sessions.svg" alt=""></div>
+      <div class="tile menubar"><img src="04b-stacked-sessions.svg" alt=""><div class="ghost"><span>CUE</span><span>3</span></div></div>
+    </div>
+  </section>
+
+  <section class="concept">
+    <div>
+      <h2>04c</h2>
+      <h3>Radial Gauge</h3>
+      <p>The capsule curled into a ring — clock-like, the violet wave arc advancing around a dark core. A single session dot sits in the middle. More "app icon" than "data viz."</p>
+    </div>
+    <div class="tiles">
+      <div class="tile dark"><span class="tag">DARK</span><img src="04c-radial-gauge.svg" alt=""></div>
+      <div class="tile light"><span class="tag">LIGHT TILE</span><img src="04c-radial-gauge.svg" alt=""></div>
+      <div class="tile dock"><span class="tag">DOCK</span><img src="04c-radial-gauge.svg" alt=""></div>
+      <div class="tile menubar"><img src="04c-radial-gauge.svg" alt=""><div class="ghost"><span>CUE</span><span>3</span></div></div>
+    </div>
+  </section>
+
+  <section class="concept">
+    <div>
+      <h2>04d</h2>
+      <h3>Flux-Infused Gauge</h3>
+      <p>The gauge, but the violet fill is alive — the curl streamline field running through it. Pulls the two surviving concepts into one mark: a wave that carries flux.</p>
+    </div>
+    <div class="tiles">
+      <div class="tile dark"><span class="tag">DARK</span><img src="04d-flux-infused.svg" alt=""></div>
+      <div class="tile light"><span class="tag">LIGHT TILE</span><img src="04d-flux-infused.svg" alt=""></div>
+      <div class="tile dock"><span class="tag">DOCK</span><img src="04d-flux-infused.svg" alt=""></div>
+      <div class="tile menubar"><img src="04d-flux-infused.svg" alt=""><div class="ghost"><span>CUE</span><span>3</span></div></div>
+    </div>
+  </section>
+
+  <section class="concept">
+    <div>
+      <h2>04e</h2>
+      <h3>Maximal Capsule</h3>
+      <p>Same gauge, stripped to essentials: no dots, no label, no hairlines. The capsule scaled up to fill the tile, with a richer gradient and a deeper crest shadow. This is the version that survives at 32×32.</p>
+    </div>
+    <div class="tiles">
+      <div class="tile dark"><span class="tag">DARK</span><img src="04e-maximal-capsule.svg" alt=""></div>
+      <div class="tile light"><span class="tag">LIGHT TILE</span><img src="04e-maximal-capsule.svg" alt=""></div>
+      <div class="tile dock"><span class="tag">DOCK</span><img src="04e-maximal-capsule.svg" alt=""></div>
+      <div class="tile menubar"><img src="04e-maximal-capsule.svg" alt=""><div class="ghost"><span>CUE</span><span>3</span></div></div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  Files: <code>assets/logo-explorations/02-parallax-wave.svg</code>, <code>04a..04e-*.svg</code> &middot; open <code>index.html</code> in a browser to compare at scale.
+</footer>
+
+</body>
+</html>
