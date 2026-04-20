@@ -771,6 +771,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       const r2 = seedHash(id + "@end");
       const r3 = seedHash(id + "@angle");
       const r4 = seedHash(id + "@phase");
+      const r5 = seedHash(id + "@endY");
       // Anchor both endpoints just outside the actual card walls so the
       // strings appear to enter from off-screen edges rather than floating
       // in the middle of the card. Only minor horizontal jitter (±3% past
@@ -778,9 +779,12 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       // Start near bottom-left wall: x in [-0.08, -0.02], y in [0.82, 1.05]
       const startXFrac = -0.08 + r1 * 0.06;
       const startYFrac = 0.82 + r2 * 0.23;
-      // End near top-right wall: x in [1.02, 1.08], y in [-0.05, 0.18]
+      // End near top-right wall: x in [1.02, 1.08], y in [-0.05, 0.18].
+      // endYFrac uses its own seed so it's statistically independent of the
+      // start position — otherwise high-start-Y siblings would always land at
+      // high-end-Y, flattening the angle distribution.
       const endXFrac = 1.02 + r3 * 0.06;
-      const endYFrac = -0.05 + ((r1 + r2) * 0.5) * 0.23;
+      const endYFrac = -0.05 + r5 * 0.23;
       out.push({
         id,
         bandKind: kinds[i % kinds.length],
