@@ -1184,4 +1184,50 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // ── cap_snippet ────────────────────────────────────────────────────
+    // Guards the privacy/size cap on `last_prompt` and `last_assistant_text`
+    // added in the security pass. Multi-MB assistant responses must be
+    // clipped before they cross the Tauri IPC boundary.
+
+    #[test]
+    fn cap_snippet_leaves_short_text_alone() {
+        let s = "hello world";
+        assert_eq!(super::cap_snippet(s), s);
+    }
+
+    #[test]
+    fn cap_snippet_truncates_long_text_with_ellipsis() {
+        let s: String = std::iter::repeat('a').take(super::SNIPPET_CHAR_CAP + 500).collect();
+        let out = super::cap_snippet(&s);
+        // SNIPPET_CHAR_CAP ASCII chars + a single '…' on the end.
+        assert_eq!(out.chars().count(), super::SNIPPET_CHAR_CAP + 1);
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn cap_snippet_respects_utf8_boundaries() {
+        // Multi-byte chars: each '🌊' is 4 bytes, and we want to make sure
+        // truncation counts code points (not bytes) so the result never
+        // splits a code point.
+        let s: String = std::iter::repeat('🌊').take(super::SNIPPET_CHAR_CAP + 10).collect();
+        let out = super::cap_snippet(&s);
+        // Valid UTF-8 (String::from_utf8 would have panicked on a bad split).
+        assert!(out.is_char_boundary(out.len()));
+        assert!(out.ends_with('…'));
+        assert_eq!(out.chars().count(), super::SNIPPET_CHAR_CAP + 1);
+    }
+
+    #[test]
+    fn cap_snippet_exact_cap_no_ellipsis() {
+        let s: String = std::iter::repeat('x').take(super::SNIPPET_CHAR_CAP).collect();
+        let out = super::cap_snippet(&s);
+        assert_eq!(out, s);
+        assert!(!out.ends_with('…'));
+    }
+
+    #[test]
+    fn cap_snippet_empty_is_empty() {
+        assert_eq!(super::cap_snippet(""), "");
+    }
+
 }
