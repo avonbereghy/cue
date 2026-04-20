@@ -370,10 +370,12 @@ impl EnrichedSession {
                 // sessions whose JSONL predates this field still work.
                 _ => true,
             };
-            // Diagnostic: emit every promotion decision so we can correlate
-            // the ~1s working flash with JSONL-flush timing. Remove once the
-            // root cause of the thinking→working→thinking bounce is resolved.
-            log::info!(
+            // Diagnostic for the thinking→working→thinking bounce
+            // investigation. Demoted from `info` to `debug` so it no longer
+            // spams the release log on every poll — can still be surfaced
+            // with `RUST_LOG=cue_desktop=debug` when investigating the
+            // JSONL-flush race.
+            log::debug!(
                 "promote-check id={} lastActivity={:.3} prompt_ts={:?} text_ts={:?} text_after_prompt={} promoting={}",
                 info.id,
                 info.last_activity,
