@@ -27,6 +27,84 @@ export interface StrikePulse {
   amplitude: number; // initial strength (typically 1.0)
 }
 
+/**
+ * A thin white tracer that streaks left→right across one of the three string
+ * lanes. Emitted by the parent (SessionCard) once per tool call so the signal
+ * strings visibly "fire" as Claude runs tools.
+ */
+export interface CometPulse {
+  /** performance.now() when this comet was spawned. */
+  startTime: number;
+  /**
+   * Vertical position as a fraction of card height (0 = top, 1 = bottom).
+   * Producers pick a random value in [0.25, 0.75] so comets land inside the
+   * card's visual safe zone rather than clipping through row content.
+   */
+  yFrac: number;
+}
+
+/** Total flight time of a comet (ms). Short — reads as a tracer, not a car. */
+const COMET_LIFE_MS = 550;
+
+/**
+ * Draw and prune comet tracers. Mutates `buf` (filters expired entries).
+ * Uses "lighter" composite for the glass/tracer sheen and falls through when
+ * the buffer is empty so it's cheap to call unconditionally.
+ */
+function renderComets(
+  ctx: CanvasRenderingContext2D,
+  buf: CometPulse[],
+  now: number,
+  w: number,
+  h: number,
+) {
+  if (buf.length === 0) return;
+  const tailLen = Math.max(24, w * 0.22);
+
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.lineCap = "round";
+
+  // Iterate in reverse so in-place splice is safe.
+  for (let i = buf.length - 1; i >= 0; i--) {
+    const c = buf[i];
+    const age = now - c.startTime;
+    if (age < 0) continue;                // scheduled slightly in the future (stagger)
+    if (age >= COMET_LIFE_MS) { buf.splice(i, 1); continue; }
+
+    const t = age / COMET_LIFE_MS;        // 0..1 travel progress
+    const headX = t * w;
+    const tailX = Math.max(0, headX - tailLen);
+    const y = c.yFrac * h;
+
+    // Sin envelope: fades in on entry, fades out as it exits the right edge.
+    const env = Math.sin(t * Math.PI);
+    // Faint tracer — 20% peak so the comet reads as a subtle background
+    // spark beneath the strings rather than competing with them.
+    const headAlpha = 0.20 * env;
+
+    // Tracer trail — transparent at tail, bright at the head.
+    const grad = ctx.createLinearGradient(tailX, y, headX, y);
+    grad.addColorStop(0, "rgba(255,255,255,0)");
+    grad.addColorStop(0.75, `rgba(255,255,255,${(headAlpha * 0.28).toFixed(3)})`);
+    grad.addColorStop(1, `rgba(255,255,255,${headAlpha.toFixed(3)})`);
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 0.9;
+    ctx.beginPath();
+    ctx.moveTo(tailX, y);
+    ctx.lineTo(headX, y);
+    ctx.stroke();
+
+    // Bullet head — small bright dot at the leading point.
+    ctx.beginPath();
+    ctx.fillStyle = `rgba(255,255,255,${headAlpha.toFixed(3)})`;
+    ctx.arc(headX, y, 1.1, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
 interface SignalStringProps {
   state: string;
   /** Frequency multiplier (0.3 = slow, 1.0 = normal, 3.0 = fast) */
@@ -35,6 +113,8 @@ interface SignalStringProps {
   revived?: boolean;
   /** Shared pulse buffer from SessionCard's strike detector */
   pulses?: React.RefObject<StrikePulse[]>;
+  /** Shared comet buffer — one entry per tool call, drawn as a thin white tracer. */
+  comets?: React.RefObject<CometPulse[]>;
   /** "simulated" (piano strikes) or "audio" (uploaded audio FFT) */
   signalMode?: string;
   /** Global alpha multiplier (0.0 = invisible, 1.0 = full) */
@@ -91,9 +171,46 @@ interface SignalStringProps {
    * visual working-state swap after strings physically connect, not before.
    */
   onStringsConnected?: () => void;
+  /**
+   * Additional dynamically-created bands (e.g. one per active subagent).
+   * Each is rendered along its own axis (start → end in fractional card
+   * coordinates) and uses the audio physics of the referenced band kind.
+   * Order is significant: latest items are the "newest" for LIFO retract.
+   */
+  extraBands?: ExtraBandSpec[];
+  /**
+   * When true, force-retract the 3 base bands and stop drawing them. Used by
+   * the parent for subagent-state entries that did NOT come from working —
+   * in those cases only the subagent lines should be visible.
+   */
+  suppressBaseBands?: boolean;
+  /**
+   * How many of the 3 base bands the parent currently wants deployed (1..3).
+   * Bands at index >= target stay at clipFraction=0. Growing the target mid-
+   * turn schedules a deploy for the newly-enabled band; shrinking retracts.
+   * Defaults to 3 so callers that don't pass this see the legacy behavior.
+   */
+  baseBandsTarget?: number;
 }
 
-export function SignalString({ state, frequency = 1.0, revived = false, pulses, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 0.5, cordDeployForce = 1.0, cordRetractForce = 1.0, stringSpread = 0.15, sessionId = "", contentRef, keyReleaseSpeed: _keyReleaseSpeed = 0.4, onStringsConnected }: SignalStringProps) {
+export interface ExtraBandSpec {
+  id: string;
+  bandKind: "bass" | "mids" | "treble";
+  /** Start of the axis, fractional card coords (0..1 in x and y). */
+  axisStart: { xFrac: number; yFrac: number };
+  /** End of the axis, fractional card coords (0..1 in x and y). */
+  axisEnd: { xFrac: number; yFrac: number };
+  /** Stroke color (0-255). Subagents: cyan. */
+  color: { r: number; g: number; b: number };
+  /**
+   * Optional radians-valued phase offset added to the band's temporal term,
+   * so multiple extras of the same bandKind don't all crest at the same
+   * moment. Stable per id (seeded by the caller).
+   */
+  phaseJitter?: number;
+}
+
+export function SignalString({ state, frequency = 1.0, revived = false, pulses, comets, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 0.5, cordDeployForce = 1.0, cordRetractForce = 1.0, stringSpread = 0.15, sessionId = "", contentRef, keyReleaseSpeed: _keyReleaseSpeed = 0.4, onStringsConnected, extraBands, suppressBaseBands = false, baseBandsTarget = 3 }: SignalStringProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const pageVisible = usePageVisible();
@@ -106,7 +223,11 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // Smooth blend between string (0) and sand (1) effects — crossfades during state transitions
   const sandBlendRef = useRef(state === "idle" ? 1.0 : 0.0);
 
-  const stateIsActive = state === "working" || state === "subagent" || state === "thinking";
+  // Base strings deploy during working and subagent only. Thinking does not
+  // deploy strings — on working→thinking the deactivate effect below fires
+  // the staggered retract; on thinking→working the handoff below sweeps them
+  // back in from zero.
+  const stateIsActive = state === "working" || state === "subagent";
   // Strings should stay deployed (no retract) for error/waiting — those are
   // transient pauses, not a return to idle. Only idle/done/compacting retract.
   const stringsStayDeployed = state === "error" || state === "waiting";
@@ -139,9 +260,17 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       }, FADE_DURATION * 1000);
       return () => clearTimeout(timer);
     }
-    // Track whether we're deactivating while sand is covering — strings should
-    // stay hidden while the sand fades out. (Sand is now the idle effect.)
-    deactivatedFromThinkingRef.current = stateRef.current === "idle" || sandBlendRef.current > 0.5;
+    // "Deactivated from thinking" means the strings were never actually
+    // deployed — skip the retract animation and just snap to zero. The
+    // previous check (`state === "idle"`) was too broad: a working→idle
+    // transition also passes it, which instant-snapped visible strings
+    // instead of retracting them. Base the decision on whether any clip
+    // fraction is up, with sand coverage as a separate short-circuit.
+    const anyBandDeployed =
+      clipFractionsRef.current[0] > 0.05 ||
+      clipFractionsRef.current[1] > 0.05 ||
+      clipFractionsRef.current[2] > 0.05;
+    deactivatedFromThinkingRef.current = !anyBandDeployed || sandBlendRef.current > 0.5;
     // State left working/subagent — begin fade, then deactivate after fade completes
     fadingRef.current = true;
     fadeStartRef.current = performance.now();
@@ -166,16 +295,31 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   const sandGrainsRef = useRef<{ x: number; y: number; vx: number; vy: number; size: number; band: number; birth: number; life: number }[]>([]);
   // Tracks when the session went inactive — drives wind ramp-down and gravity transition
   const sandDeactivatedAtRef = useRef<number | null>(null);
+  // Deploy priority for progressive working strings.
+  // Index 0 is the FIRST band that deploys (mids = visually central). As
+  // `baseBandsTarget` grows 1→3 we enable one more band in this order.
+  //   priority[0] = mids  (central, where a single string belongs)
+  //   priority[1] = bass  (above center)
+  //   priority[2] = treble (below center)
+  const BAND_PRIORITY = [1, 0, 2] as const;
+  const bandEnabled = (bandIdx: number, target: number) =>
+    BAND_PRIORITY.indexOf(bandIdx as 0 | 1 | 2) < target;
+  const baseBandsTargetRef = useRef(baseBandsTarget);
+  baseBandsTargetRef.current = baseBandsTarget;
+
   // Vacuum cord retract/deploy per band: 0 = fully retracted (left), 1 = fully deployed (right)
-  // [bass, mids, treble] — each travels at a slightly different rate
-  const clipFractionsRef = useRef(isActive ? new Float64Array([1, 1, 1]) : new Float64Array(3));
+  // [bass, mids, treble] — each travels at a slightly different rate. Always
+  // start at zero so mounting into an already-active turn still plays the
+  // deploy animation — the isActive useEffect below runs on mount and schedules
+  // the staggered deploy for whichever bands baseBandsTarget currently enables.
+  const clipFractionsRef = useRef(new Float64Array(3));
   const clipVelsRef = useRef(new Float64Array(3));
   // Per-band ready flags and timers — staggered: band 0 first, band 1 after 400ms, band 2 after 520ms
   const bandStaggerMs = [0, 400, 520];
   const retractTimersRef = useRef<(number | null)[]>([null, null, null]);
-  const retractReadyRef = useRef(isActive ? [false, false, false] : [true, true, true]);
+  const retractReadyRef = useRef<boolean[]>([true, true, true]);
   const deployTimersRef = useRef<(number | null)[]>([null, null, null]);
-  const deployReadyRef = useRef(isActive ? [true, true, true] : [false, false, false]);
+  const deployReadyRef = useRef<boolean[]>([false, false, false]);
 
   // Store tuning props in a ref so the draw loop reads them live
   // without tearing down the animation pipeline on every slider change
@@ -203,6 +347,39 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // three bands have landed. Reset on each thinking→working redeploy so the
   // next cycle can fire again.
   const stringsConnectedFiredRef = useRef(false);
+
+  // Reverse handoff (working/subagent → thinking): while true, strings retract
+  // visibly while state === "thinking", and their leading edges continue to
+  // publish flux disturbances so the retract pushes the growing needles the
+  // same way the forward deploy does. Cleared once all three bands reach 0 or
+  // when state leaves thinking.
+  const reverseRetractingRef = useRef(false);
+
+  // ─── Extra bands (subagents) ────────────────────────────────────────────
+  // One entry per live subagent id. Kept around after removal while the
+  // retract animation plays out; dropped when clipFraction hits 0.
+  type ExtraBandState = {
+    spec: ExtraBandSpec;
+    clipFraction: number;
+    clipVel: number;
+    modePos: Float64Array;   // length 6 (matches max band.numModes)
+    modeVel: Float64Array;
+    deployReady: boolean;
+    retractReady: boolean;
+    deployTimer: number | null;
+    retractTimer: number | null;
+    whip: { active: boolean; t0: number; amp: number; dir: number };
+    insertionIdx: number;
+    removing: boolean;
+  };
+  const extraBandsStateRef = useRef<Map<string, ExtraBandState>>(new Map());
+  const extraInsertionCounterRef = useRef(0);
+  // Base-band suppression latch: once tripped, the 3 base strings retract and
+  // stay hidden until the consumer clears suppressBaseBands.
+  const baseSuppressedRef = useRef(suppressBaseBands);
+  // Track whether base bands were force-retracted due to suppression — so we
+  // can redeploy them when suppression releases while state is still active.
+  const baseSuppressRetractedRef = useRef(false);
 
   // Whip pulses — triggered when each band starts retracting
   // Each pulse: a Gaussian kink at the cord tip that travels left and decays
@@ -243,10 +420,13 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       // Cancel any pending retract
       retractReadyRef.current = [false, false, false];
       clearAllTimers();
-      // Staggered deploy: band 0 first, band 1 after 800ms, band 2 after 950ms
+      // Staggered deploy: only for bands the parent currently wants (per
+      // baseBandsTarget). Disabled bands stay at clipFraction=0 and will be
+      // deployed later by the progressive-deploy effect if the target grows.
       deployReadyRef.current = [false, false, false];
       const bandNudge = [0.35, 0.15, 0.15]; // first band gets a stronger initial push
       for (let i = 0; i < 3; i++) {
+        if (!bandEnabled(i, baseBandsTargetRef.current)) continue;
         const delay = 850 + bandStaggerMs[i];
         deployTimersRef.current[i] = window.setTimeout(() => {
           deployReadyRef.current[i] = true;
@@ -310,6 +490,28 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     prevStateRef.current = state;
 
     if (prev === "thinking" && (state === "working" || state === "subagent")) {
+      // Skip the reset-and-redeploy only if the CURRENTLY-enabled bands are
+      // already deployed AND the disabled bands are already retracted. This
+      // matters across turn boundaries: the previous turn may have left all
+      // three bands deployed, but the new turn starts with baseBandsTarget=1
+      // — without force-retracting the now-disabled bands, users see a stale
+      // "instant 3 lines" the moment the next turn enters working.
+      const t = baseBandsTargetRef.current;
+      let matchesTarget = true;
+      for (let i = 0; i < 3; i++) {
+        const enabled = bandEnabled(i, t);
+        const frac = clipFractionsRef.current[i];
+        if (enabled ? frac < 0.9 : frac > 0.05) { matchesTarget = false; break; }
+      }
+      if (matchesTarget) {
+        reverseRetractingRef.current = false;
+        return;
+      }
+      // Fall through to the reset + gated re-deploy below. `fill(0)` zeros
+      // every band's clip fraction; the deploy loop only re-deploys the ones
+      // enabled by the current baseBandsTarget, so disabled bands are
+      // automatically retracted.
+      reverseRetractingRef.current = false;
       clipFractionsRef.current.fill(0);
       clipVelsRef.current.fill(0);
       retractReadyRef.current = [false, false, false];
@@ -321,9 +523,17 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           clearTimeout(deployTimersRef.current[i]!);
           deployTimersRef.current[i] = null;
         }
+        if (retractTimersRef.current[i] !== null) {
+          clearTimeout(retractTimersRef.current[i]!);
+          retractTimersRef.current[i] = null;
+        }
       }
       const bandNudge = [0.35, 0.15, 0.15];
       for (let i = 0; i < 3; i++) {
+        // Respect progressive deploy: only kick off bands the parent currently
+        // wants (baseBandsTarget). The remainder stay at clipFraction=0 until
+        // the target grows and the baseBandsTarget effect below deploys them.
+        if (!bandEnabled(i, baseBandsTargetRef.current)) continue;
         // 150 ms anticipation is enough to register the "pullback" without
         // feeling slow. Bass leads slightly so the ear-ish ordering matches
         // the existing bandStaggerMs spread.
@@ -335,7 +545,230 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         }, delay);
       }
     }
+
+    // Reverse retract (working/subagent → thinking) removed: strings now stay
+    // deployed through the entire turn, including working↔thinking cycles.
+    // They only retract on turn end — any active state → idle/done/compacting/
+    // clearing/ended. That retract runs via `stateIsActive` flipping false in
+    // the deactivation effect above.
   }, [state, cordDeployForce]);
+
+  // ─── Progressive base-band deploy ──────────────────────────────────────
+  // Keep the base bands in sync with the parent's baseBandsTarget.
+  //   • Enabled-but-not-yet-deployed bands get a staggered deploy scheduled.
+  //   • Disabled bands that are still hanging on (from a previous turn that
+  //     ended before they could fully retract) are snapped back to zero —
+  //     without this, a fresh turn that starts with baseBandsTarget=1 would
+  //     render all three bands that the prior turn left deployed.
+  useEffect(() => {
+    if (!stateIsActive) return;
+    const target = baseBandsTarget;
+    const bandNudge = [0.35, 0.15, 0.15];
+    for (let i = 0; i < 3; i++) {
+      const enabled = bandEnabled(i, target);
+      if (enabled) {
+        // Cancel any lingering retract from a prior turn — we want to keep
+        // (or bring back) this band, not pull it down.
+        if (retractTimersRef.current[i] !== null) {
+          clearTimeout(retractTimersRef.current[i]!);
+          retractTimersRef.current[i] = null;
+        }
+        retractReadyRef.current[i] = false;
+        if (clipFractionsRef.current[i] > 0.02 || deployReadyRef.current[i]) continue;
+        if (deployTimersRef.current[i] !== null) continue;
+        const delay = 150 + bandStaggerMs[i];
+        stringsConnectedFiredRef.current = false;
+        deployTimersRef.current[i] = window.setTimeout(() => {
+          deployReadyRef.current[i] = true;
+          clipVelsRef.current[i] = Math.max(clipVelsRef.current[i], bandNudge[i] * cordDeployForce);
+          deployTimersRef.current[i] = null;
+        }, delay);
+      } else {
+        // Disabled — cancel any pending deploy/retract and snap to 0.
+        if (deployTimersRef.current[i] !== null) {
+          clearTimeout(deployTimersRef.current[i]!);
+          deployTimersRef.current[i] = null;
+        }
+        if (retractTimersRef.current[i] !== null) {
+          clearTimeout(retractTimersRef.current[i]!);
+          retractTimersRef.current[i] = null;
+        }
+        deployReadyRef.current[i] = false;
+        retractReadyRef.current[i] = false;
+        if (clipFractionsRef.current[i] > 0.001 || clipVelsRef.current[i] !== 0) {
+          clipFractionsRef.current[i] = 0;
+          clipVelsRef.current[i] = 0;
+        }
+      }
+    }
+  }, [baseBandsTarget, stateIsActive, cordDeployForce]);
+
+  // ─── Extra-bands lifecycle ──────────────────────────────────────────────
+  // Diff the caller's extraBands list against our live map each render. New
+  // ids get init state + staggered deploy. Ids no longer present are marked
+  // `removing` and scheduled to retract. Retract stagger is LIFO by insertion
+  // index (newest first), with the same 0/400/520/640…ms spacing as the
+  // base-band stagger so a wholesale state exit feels like the main strings.
+  useEffect(() => {
+    const map = extraBandsStateRef.current;
+    const incoming = extraBands ?? [];
+    const incomingIds = new Set(incoming.map(b => b.id));
+
+    // Added or updated ids
+    incoming.forEach((spec, orderIdx) => {
+      const existing = map.get(spec.id);
+      if (existing) {
+        // Refresh cached spec (colour / axis may jitter across renders; we
+        // keep a single authoritative copy rather than re-reading on hot
+        // paths). Don't touch physics state.
+        existing.spec = spec;
+        // If it was previously marked for removal but came back, revive it.
+        if (existing.removing) {
+          existing.removing = false;
+          existing.retractReady = false;
+          if (existing.retractTimer !== null) {
+            window.clearTimeout(existing.retractTimer);
+            existing.retractTimer = null;
+          }
+          // Re-schedule a gentle deploy pulse so a reappearing band doesn't
+          // snap back instantly.
+          if (!existing.deployReady) {
+            existing.deployTimer = window.setTimeout(() => {
+              existing.deployReady = true;
+              existing.clipVel = Math.max(existing.clipVel, 0.25 * cordDeployForce);
+              existing.deployTimer = null;
+            }, 60);
+          }
+        }
+        return;
+      }
+      // Fresh entry. Stagger small deploy delay by insertion order so rapid
+      // multi-add reads as a cascade rather than a single pop.
+      const insertionIdx = extraInsertionCounterRef.current++;
+      const stBand: ExtraBandState = {
+        spec,
+        clipFraction: 0,
+        clipVel: 0,
+        modePos: new Float64Array(6),
+        modeVel: new Float64Array(6),
+        deployReady: false,
+        retractReady: false,
+        deployTimer: null,
+        retractTimer: null,
+        whip: { active: false, t0: 0, amp: 0, dir: 1 },
+        insertionIdx,
+        removing: false,
+      };
+      const delay = 120 + orderIdx * 140;
+      stBand.deployTimer = window.setTimeout(() => {
+        stBand.deployReady = true;
+        stBand.clipVel = Math.max(stBand.clipVel, 0.30 * cordDeployForce);
+        stBand.deployTimer = null;
+      }, delay);
+      map.set(spec.id, stBand);
+    });
+
+    // Removed ids — gather then stagger LIFO.
+    const removing: ExtraBandState[] = [];
+    map.forEach((st, id) => {
+      if (!incomingIds.has(id) && !st.removing) {
+        st.removing = true;
+        removing.push(st);
+      }
+    });
+    // Newest (highest insertionIdx) first.
+    removing.sort((a, b) => b.insertionIdx - a.insertionIdx);
+    const retractStagger = [0, 400, 520, 640, 760, 880, 1000];
+    const whipAmps = [2.2, 1.6, 1.1, 0.9, 0.75, 0.6];
+    removing.forEach((st, rIdx) => {
+      if (st.retractTimer !== null) window.clearTimeout(st.retractTimer);
+      if (st.deployTimer !== null) {
+        window.clearTimeout(st.deployTimer);
+        st.deployTimer = null;
+      }
+      st.deployReady = false;
+      const delay = retractStagger[Math.min(rIdx, retractStagger.length - 1)] + rIdx * 120 / Math.max(1, retractStagger.length);
+      const amp = whipAmps[Math.min(rIdx, whipAmps.length - 1)];
+      st.retractTimer = window.setTimeout(() => {
+        st.retractReady = true;
+        st.retractTimer = null;
+        st.whip = { active: true, t0: performance.now(), amp, dir: rIdx % 2 === 0 ? 1 : -1 };
+      }, delay);
+    });
+  }, [extraBands, cordDeployForce]);
+
+  // Flush extra-band timers on unmount so nothing fires after disposal.
+  useEffect(() => {
+    return () => {
+      const map = extraBandsStateRef.current;
+      map.forEach(st => {
+        if (st.deployTimer !== null) window.clearTimeout(st.deployTimer);
+        if (st.retractTimer !== null) window.clearTimeout(st.retractTimer);
+      });
+      map.clear();
+    };
+  }, []);
+
+  // ─── Base-band suppression latch ─────────────────────────────────────────
+  // When suppressBaseBands flips true while strings are deployed, we treat
+  // them as if the session went inactive for the purpose of retract physics:
+  // retractReady goes true (staggered) so they pull back like a normal exit.
+  // When suppression releases and the state is still active, redeploy.
+  useEffect(() => {
+    baseSuppressedRef.current = suppressBaseBands;
+    if (suppressBaseBands) {
+      // Schedule staggered retract for base bands — mirror the isActive=false
+      // path timing so the motion reads as familiar.
+      deployReadyRef.current = [false, false, false];
+      for (let i = 0; i < 3; i++) {
+        if (deployTimersRef.current[i] !== null) {
+          window.clearTimeout(deployTimersRef.current[i]!);
+          deployTimersRef.current[i] = null;
+        }
+        if (retractTimersRef.current[i] !== null) {
+          window.clearTimeout(retractTimersRef.current[i]!);
+          retractTimersRef.current[i] = null;
+        }
+      }
+      retractReadyRef.current = [false, false, false];
+      const whipAmps = [2.2, 1.6, 1.1];
+      for (let i = 0; i < 3; i++) {
+        const delay = 100 + bandStaggerMs[i];
+        retractTimersRef.current[i] = window.setTimeout(() => {
+          retractReadyRef.current[i] = true;
+          retractTimersRef.current[i] = null;
+          whipPulsesRef.current[i] = { active: true, t0: performance.now(), amp: whipAmps[i], dir: i % 2 === 0 ? 1 : -1 };
+        }, delay);
+      }
+      baseSuppressRetractedRef.current = true;
+    } else if (baseSuppressRetractedRef.current) {
+      // Suppression released — if the session is still in an active state,
+      // redeploy the base bands from zero. Otherwise let the regular isActive
+      // flow take over.
+      if (stateRef.current === "working" || stateRef.current === "subagent") {
+        clipFractionsRef.current.fill(0);
+        clipVelsRef.current.fill(0);
+        retractReadyRef.current = [false, false, false];
+        deployReadyRef.current = [false, false, false];
+        for (let i = 0; i < 3; i++) {
+          if (deployTimersRef.current[i] !== null) {
+            window.clearTimeout(deployTimersRef.current[i]!);
+            deployTimersRef.current[i] = null;
+          }
+        }
+        const bandNudge = [0.35, 0.15, 0.15];
+        for (let i = 0; i < 3; i++) {
+          const delay = 150 + bandStaggerMs[i];
+          deployTimersRef.current[i] = window.setTimeout(() => {
+            deployReadyRef.current[i] = true;
+            clipVelsRef.current[i] = Math.max(clipVelsRef.current[i], bandNudge[i] * cordDeployForce);
+            deployTimersRef.current[i] = null;
+          }, delay);
+        }
+      }
+      baseSuppressRetractedRef.current = false;
+    }
+  }, [suppressBaseBands, cordDeployForce]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -373,8 +806,17 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         sandGrainSize: cfgSandGrainSize, sandTurbulence: cfgSandTurbulence, sandAlpha: cfgSandAlpha,
         stringSpread: cfgStringSpread } = cfg;
       // Smooth crossfade between string and sand effects. Sand is now the
-      // idle-state effect (was thinking-state previously).
-      const sandTarget = stateRef.current === "idle" ? 1.0 : 0.0;
+      // idle-state effect (was thinking-state previously). Hold sand at 0
+      // while any base band is still extended so the retract animation plays
+      // visibly — otherwise sand ramps to ~0.99 during the 500ms fade +
+      // cordRetractDelay window and masks the strings completely before they
+      // get a chance to pull back.
+      const anyBaseBandUp =
+        clipFractionsRef.current[0] > 0.01 ||
+        clipFractionsRef.current[1] > 0.01 ||
+        clipFractionsRef.current[2] > 0.01;
+      const sandTarget =
+        stateRef.current === "idle" && !anyBaseBandUp ? 1.0 : 0.0;
       if (isActiveRef.current && stateRef.current !== "idle") {
         // An active state that isn't idle — snap sand off immediately.
         sandBlendRef.current = 0;
@@ -384,14 +826,16 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         if (Math.abs(sandBlendRef.current - sandTarget) < 0.003) sandBlendRef.current = sandTarget;
       }
       const sandBlend = sandBlendRef.current;
-      // Don't draw strings when sand is covering or while thinking — thinking
-      // now has its own flux overlay from the card, so the underlying strings
-      // would double up visually. (Strings still deploy physically so that
-      // transitions like thinking→working don't need a fresh redeploy.)
+      // Draw strings whenever they're deployed and sand isn't covering them.
+      // Strings stay visible through working↔thinking so the card retains a
+      // sense of continuity during re-thinking; flux coexists above.
       const drawStrings =
         sandBlend < 0.99 &&
         !deactivatedFromThinkingRef.current &&
-        stateRef.current !== "thinking";
+        // While suppressed, base bands shouldn't draw — but only fully gate
+        // off once they've fully retracted, otherwise they'd pop out of view
+        // mid-retract.
+        (!baseSuppressedRef.current || clipFractionsRef.current[0] > 0.005 || clipFractionsRef.current[1] > 0.005 || clipFractionsRef.current[2] > 0.005);
       const drawSand = sandBlend > 0.01 || sandGrainsRef.current.length > 0;
       const isGlass = document.documentElement.hasAttribute("data-glass");
       const isDark = isGlass || document.documentElement.getAttribute("data-theme") !== "light";
@@ -407,15 +851,16 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       // State-aware target color. Attention states (error, waiting) win over
       // everything else — if the user needs to respond, the string color must
       // communicate that even when subagents are stacked on top. Priority:
-      //   error > waiting > thinking > subagent > idle > configured default
+      //   error > waiting > idle > configured default
+      // Thinking used to force orange, but working↔thinking is a common
+      // in-turn oscillation and recoloring mid-turn reads as a regression —
+      // strings now hold the working/default color across that transition.
+      // Subagent state does not recolor the base bands either (subagent-
+      // specific blue lines come in via extraBands).
       const targetColor = state === "error"
         ? (isDark ? { r: 239, g: 68, b: 68 } : { r: 185, g: 28, b: 28 })     // red
         : state === "waiting"
         ? (isDark ? { r: 234, g: 179, b: 8 } : { r: 161, g: 98, b: 7 })       // amber/yellow
-        : state === "thinking"
-        ? (isDark ? { r: 246, g: 165, b: 96 } : { r: 194, g: 65, b: 12 })     // thinking orange
-        : state === "subagent"
-        ? (isDark ? { r: 167, g: 139, b: 255 } : { r: 107, g: 78, b: 224 })   // subagent purple (#A78BFF / #6B4EE0)
         : state === "idle"
         ? (isDark ? { r: 212, g: 165, b: 116 } : { r: 168, g: 162, b: 158 })  // idle tan / gray
         : defaultColor;
@@ -448,6 +893,10 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
 
       ctx.clearRect(0, 0, w, h);
 
+      // Tool-call comets — rendered FIRST so strings and sand paint on top of
+      // them. Reads as background tracers sliding underneath the waveform.
+      if (comets?.current) renderComets(ctx, comets.current, now, w, h);
+
       // Reduced motion — flat line, no animation
       if (prefersReducedMotion) {
         return;
@@ -464,11 +913,12 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         const fracs = clipFractionsRef.current;
         const vels = clipVelsRef.current;
 
+        const baseEffectivelyActive = isActiveRef.current && !baseSuppressedRef.current;
         for (let i = 0; i < 3; i++) {
           const clip = fracs[i];
           const fm = bandForceMult[i];
 
-          if (isActiveRef.current && deployReadyRef.current[i]) {
+          if (baseEffectivelyActive && deployReadyRef.current[i]) {
             // Deploy: magnetic acceleration — very slow buildup, explosive finish
             // Cubic ramp: near-zero force at start, steep ramp past ~60%
             const pullStrength = (0.4 + clip * clip * clip * 8) * deployF * fm;
@@ -491,11 +941,20 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         // redeploy (see useEffect above).
         if (
           !stringsConnectedFiredRef.current &&
-          (stateRef.current === "working" || stateRef.current === "subagent") &&
-          fracs[0] >= 0.98 && fracs[1] >= 0.98 && fracs[2] >= 0.98
+          (stateRef.current === "working" || stateRef.current === "subagent")
         ) {
-          stringsConnectedFiredRef.current = true;
-          onStringsConnectedRef.current?.();
+          // Only require the currently-enabled subset of base bands to have
+          // landed. At baseBandsTarget=1 just band 1 (mids) needs to be up.
+          const t = baseBandsTargetRef.current;
+          let allLanded = true;
+          for (let i = 0; i < 3; i++) {
+            if (!bandEnabled(i, t)) continue;
+            if (fracs[i] < 0.98) { allLanded = false; break; }
+          }
+          if (allLanded) {
+            stringsConnectedFiredRef.current = true;
+            onStringsConnectedRef.current?.();
+          }
         }
 
         // ── Publish disturbances for the Flux field ─────────────────────
@@ -505,12 +964,13 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         // nearby line targets radially outward — so strings physically
         // displace the flux as they arrive, instead of popping on top of it.
         //
-        // Skip while state === "thinking": strings are invisibly deploying
-        // in the background (stateIsActive covers thinking so physics stay
-        // primed for the thinking→working redeploy), but we don't want that
-        // invisible sweep to bulge the flux field. The ripple should only
-        // read on the thinking→working transition when strings are visible.
-        if (sessionId && stateRef.current !== "thinking") {
+        // Skip while state === "thinking" — strings are deployed but we don't
+        // want them pushing flux needles around; flux should flow freely
+        // during pure thinking. Disturbances only fire during the deploy sweep
+        // (thinking → working) so the sweep visibly pushes flux aside.
+        const publishDisturbances =
+          sessionId && stateRef.current !== "thinking";
+        if (publishDisturbances) {
           const list: FluxDisturbance[] = [];
           // Three bands stacked vertically; exact y doesn't matter much
           // given the generous push radius, just needs to cover the card.
@@ -536,8 +996,8 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             clearDisturbances(sessionId);
           }
         } else if (sessionId && stateRef.current === "thinking") {
-          // Keep the registry clean during thinking so any lingering entry
-          // from a prior state doesn't keep pushing flux lines around.
+          // During thinking, keep the disturbance registry clean so lingering
+          // entries from the prior state don't keep pushing flux lines around.
           clearDisturbances(sessionId);
         }
 
@@ -1073,6 +1533,175 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
 
           // Restore per-band clip
           if (!revived) ctx.restore();
+        }
+
+        // ── Extra bands (subagents) — diagonal axis renderer ──
+        // Each entry has its own clip physics + 6-mode oscillator state. Audio
+        // characteristics are inherited from the referenced band kind so they
+        // visibly resemble the white lines but in their own colour.
+        const extraMap = extraBandsStateRef.current;
+        if (!revived && extraMap.size > 0) {
+          const extraDt = 1 / 60;
+          const { cordDeployForce: deployFE, cordRetractForce: retractFE } = cfg;
+          // Snapshot ids so we can prune retired entries after iteration.
+          const idsToDrop: string[] = [];
+          extraMap.forEach((st, id) => {
+            const kindIdx = st.spec.bandKind === "bass" ? 0 : st.spec.bandKind === "mids" ? 1 : 2;
+            const cfgBand = allBands[kindIdx];
+            if (!cfgBand.enabled) {
+              // Disabled band — gently retract and clean up
+              st.clipFraction = Math.max(0, st.clipFraction - extraDt);
+              if (st.clipFraction <= 0 && st.removing) idsToDrop.push(id);
+              return;
+            }
+
+            // Clip physics — same shape as base bands.
+            const clip = st.clipFraction;
+            const fm = 0.78; // fixed mid-ish force multiplier
+            if (st.deployReady && !st.removing) {
+              const pull = (0.4 + clip * clip * clip * 8) * deployFE * fm;
+              st.clipVel += pull * extraDt;
+            } else if (st.retractReady) {
+              const pull = (1.5 + (1 - clip) * 6) * retractFE * fm;
+              st.clipVel -= pull * extraDt;
+            }
+            st.clipFraction = Math.max(0, Math.min(1, clip + st.clipVel * extraDt));
+            if (st.clipFraction <= 0) { st.clipFraction = 0; st.clipVel = 0; }
+            if (st.clipFraction >= 1) st.clipVel = Math.max(0, st.clipVel * 0.9);
+
+            // Mode oscillator integration — per-band-kind FFT bins, per-id state.
+            const bandBins = cfgBand.binEnd - cfgBand.binStart;
+            const modeAmps: number[] = [];
+            for (let m = 0; m < cfgBand.numModes; m++) {
+              const mStart = cfgBand.binStart + Math.floor((m / cfgBand.numModes) * bandBins);
+              const mEnd = cfgBand.binStart + Math.floor(((m + 1) / cfgBand.numModes) * bandBins);
+              let energy = 0;
+              for (let i = mStart; i < mEnd; i++) energy += freqData[i];
+              const raw = energy / Math.max(1, (mEnd - mStart) * 255);
+              let target = Math.sqrt(raw);
+              target += onsetArr[kindIdx] * 0.35;
+              const modeDamping = cfgBand.baseDamping * (1 + m * 0.3);
+
+              if (!st.removing) {
+                const force = (target - st.modePos[m]) * STIFFNESS - st.modeVel[m] * modeDamping;
+                st.modeVel[m] += force * extraDt;
+              } else if (st.clipFraction > 0.001) {
+                const retractProgress = 1 - st.clipFraction;
+                const audioStrength = 1 - retractProgress * 0.6;
+                const straightenStrength = retractProgress * retractProgress * STIFFNESS * 1.5;
+                const audioForce = (target * audioStrength - st.modePos[m]) * STIFFNESS;
+                const straightenForce = -st.modePos[m] * straightenStrength;
+                const dampForce = -st.modeVel[m] * (modeDamping + retractProgress * 8);
+                st.modeVel[m] += (audioForce + straightenForce + dampForce) * extraDt;
+              } else {
+                st.modeVel[m] *= 0.92;
+              }
+              st.modePos[m] += st.modeVel[m] * extraDt;
+              st.modePos[m] = Math.max(0, Math.min(1.5, st.modePos[m]));
+              modeAmps.push(st.modePos[m]);
+            }
+
+            // Drop fully-retracted removed entries.
+            if (st.removing && st.clipFraction <= 0) {
+              idsToDrop.push(id);
+              return;
+            }
+
+            // Skip drawing if invisible.
+            if (!drawStrings || st.clipFraction <= 0.001) return;
+
+            // Resolve axis in pixel space.
+            const sx = st.spec.axisStart.xFrac * w;
+            const sy = st.spec.axisStart.yFrac * h;
+            const ex = st.spec.axisEnd.xFrac * w;
+            const ey = st.spec.axisEnd.yFrac * h;
+            const dx = ex - sx;
+            const dy = ey - sy;
+            const axisLen = Math.hypot(dx, dy);
+            if (axisLen < 1) return;
+            const tanX = dx / axisLen;
+            const tanY = dy / axisLen;
+            const nrmX = -tanY;
+            const nrmY = tanX;
+
+            // Precompute per-mode constants.
+            const modeConsts: { n: number; nEff: number; mAmp: number }[] = new Array(cfgBand.numModes);
+            for (let m = 0; m < cfgBand.numModes; m++) {
+              const n = cfgBand.startMode + m;
+              modeConsts[m] = { n, nEff: n * Math.sqrt(1 + INHARMONICITY * n * n), mAmp: modeAmps[m] };
+            }
+            const avgAmp = modeAmps.reduce((s, v) => s + v, 0) / Math.max(1, modeAmps.length);
+            // Perpendicular displacement scale — use a fixed half-extent
+            // similar to halfH so the wave amplitude reads consistently
+            // regardless of axis orientation.
+            const halfDisp = Math.min(halfH, axisLen * 0.18);
+            // Sample density along the axis — match base-band ~2px stride.
+            const sampleStep = 2;
+            const nPts = Math.max(2, Math.floor(axisLen / sampleStep));
+
+            const r = st.spec.color.r;
+            const g = st.spec.color.g;
+            const b = st.spec.color.b;
+
+            for (let trail = 0; trail < numTrails; trail++) {
+              const tOff = t - trail * trailSpacing;
+              const alphaT = 1.0 - (trail / numTrails);
+              const echoFade = trail === 0 ? 1.0 : signalEcho;
+              const op = alphaT * alphaT * cfgBand.opacity * signalAlpha * echoFade;
+              if (op < 0.005) continue;
+
+              ctx.beginPath();
+              for (let i = 0; i <= nPts; i++) {
+                const tParam = i / nPts;        // 0..1 along axis
+                const u = tParam * axisLen;     // axis distance
+                if (tParam > st.clipFraction) break; // clip tip
+
+                let sum = 0;
+                for (let m = 0; m < cfgBand.numModes; m++) {
+                  const mc = modeConsts[m];
+                  const standing = Math.sin(mc.nEff * Math.PI * tParam);
+                  const traveling = Math.sin(mc.nEff * Math.PI * tParam - cfgBand.travel * tOff * mc.n);
+                  const spatial = standing * 0.6 + traveling * 0.4;
+                  const temporal = Math.cos(tOff * (cfgBand.speed + m * 0.35) + cfgBand.phaseOff + (st.spec.phaseJitter ?? 0) + m * 1.9);
+                  sum += mc.mAmp * spatial * temporal;
+                }
+                const breath = breathe(tParam, tOff, decayEnvelope > 0.01 ? avgAmp : 0);
+
+                let whipContrib = 0;
+                if (trail === 0 && st.whip.active) {
+                  const elapsed = (now - st.whip.t0) / 1000;
+                  const decay = Math.exp(-elapsed * 5.5);
+                  if (decay < 0.01) {
+                    st.whip.active = false;
+                  } else {
+                    const kinkCenter = Math.max(0, st.clipFraction - elapsed * 0.35);
+                    const sigma = 0.07;
+                    const gaussian = Math.exp(-((tParam - kinkCenter) ** 2) / (2 * sigma * sigma));
+                    whipContrib = st.whip.dir * st.whip.amp * decay * gaussian;
+                  }
+                }
+
+                const v = Math.tanh((sum * decayEnvelope + breath + whipContrib) * cfgBand.gain) * halfDisp;
+                const px = sx + u * tanX + v * nrmX;
+                const py = sy + u * tanY + v * nrmY;
+                if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+              }
+              if (trail === 0) {
+                // glow pass
+                const glowOp = op * 0.25;
+                ctx.strokeStyle = `rgba(${r},${g},${b},${glowOp})`;
+                ctx.lineWidth = cfgBand.lw * 4;
+                ctx.globalAlpha = 1 - sandBlend;
+                ctx.stroke();
+              }
+              ctx.strokeStyle = `rgba(${r},${g},${b},${op})`;
+              ctx.lineWidth = trail === 0 ? cfgBand.lw : cfgBand.lw * 0.6;
+              ctx.globalAlpha = 1 - sandBlend;
+              ctx.stroke();
+            }
+            ctx.globalAlpha = 1;
+          });
+          for (const id of idsToDrop) extraMap.delete(id);
         }
 
         // ── Sand effect: 3 layers (bass/mids/treble) driven independently ──

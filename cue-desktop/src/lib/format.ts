@@ -18,6 +18,27 @@ export function formatDuration(secs: number): string {
   return `${String(hrs).padStart(2, "0")}:${String(mins).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+/** Clock-style HH:MM:SS for a Unix timestamp (seconds). */
+export function formatClockTime(unixSecs: number): string {
+  const d = new Date(unixSecs * 1000);
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  const s = String(d.getSeconds()).padStart(2, "0");
+  return `${h}:${m}:${s}`;
+}
+
+/** Compact elapsed between two Unix timestamps: "12s" / "2m14s" / "1h03m". */
+export function formatElapsedCompact(startSecs: number, endSecs: number): string {
+  const total = Math.max(0, Math.floor(endSecs - startSecs));
+  if (total < 60) return `${total}s`;
+  const mins = Math.floor(total / 60);
+  const s = total % 60;
+  if (mins < 60) return `${mins}m${String(s).padStart(2, "0")}s`;
+  const hrs = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `${hrs}h${String(m).padStart(2, "0")}m`;
+}
+
 export function formatCost(usd: number): string {
   if (usd < 0.01) return "$0.00";
   return `$${usd.toFixed(2)}`;
