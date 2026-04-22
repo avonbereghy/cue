@@ -905,3 +905,124 @@ html[data-glass] .session-card--error {
   backdrop-filter: blur(14px) saturate(1.8) !important;
   -webkit-backdrop-filter: blur(14px) saturate(1.8) !important;
 }
+
+/* ---------------------------------------------------------------------------
+   Tray Popover — Raycast-style frosted glass surface (dark + light)
+   --------------------------------------------------------------------------- */
+
+/* Dark defaults — applied at :root, overridden by [data-tray-light] below.
+   Solid surface (not see-through) — keep the rounded corners by drawing
+   the shell inside a transparent NSWindow. */
+.tray-popover {
+  --tray-shell-bg: rgb(24, 24, 28);
+  --tray-shell-border: rgba(255, 255, 255, 0.10);
+  --tray-text: rgba(255, 255, 255, 0.95);
+  --tray-muted: rgba(255, 255, 255, 0.52);
+  --tray-border: rgba(255, 255, 255, 0.12);
+  --tray-row-hover: rgba(255, 255, 255, 0.05);
+  --tray-bar-track: rgba(255, 255, 255, 0.10);
+  --tray-divider: rgba(255, 255, 255, 0.07);
+  --tray-danger: rgba(255, 99, 88, 0.95);
+
+  position: fixed;
+  inset: 0;
+  margin: 0;
+  padding: 6px;
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--tray-shell-bg);
+  border-radius: 12px;
+  border: 1px solid var(--tray-shell-border);
+  box-shadow:
+    0 0 0 0.5px rgba(0, 0, 0, 0.3),
+    0 12px 40px rgba(0, 0, 0, 0.45),
+    0 4px 12px rgba(0, 0, 0, 0.25);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  color: var(--tray-text);
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.tray-popover[data-tray-light="1"] {
+  --tray-shell-bg: rgb(248, 248, 250);
+  --tray-shell-border: rgba(0, 0, 0, 0.10);
+  --tray-text: rgba(20, 20, 24, 0.95);
+  --tray-muted: rgba(20, 20, 24, 0.55);
+  --tray-border: rgba(0, 0, 0, 0.10);
+  --tray-row-hover: rgba(0, 0, 0, 0.04);
+  --tray-bar-track: rgba(0, 0, 0, 0.08);
+  --tray-divider: rgba(0, 0, 0, 0.06);
+  --tray-danger: rgba(200, 50, 40, 0.9);
+  box-shadow:
+    0 0 0 0.5px rgba(0, 0, 0, 0.08),
+    0 12px 40px rgba(0, 0, 0, 0.18),
+    0 4px 12px rgba(0, 0, 0, 0.10);
+}
+
+.tray-popover html, .tray-popover body { background: transparent !important; }
+
+.tray-header {
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--tray-divider);
+  flex: 0 0 auto;
+}
+
+.tray-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tray-list::-webkit-scrollbar { width: 6px; }
+.tray-list::-webkit-scrollbar-track { background: transparent; }
+.tray-list::-webkit-scrollbar-thumb {
+  background: var(--tray-border);
+  border-radius: 3px;
+}
+
+.tray-row {
+  transition: background-color 120ms ease;
+  cursor: default;
+}
+.tray-row:hover {
+  background-color: var(--tray-row-hover);
+}
+
+.tray-footer {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid var(--tray-divider);
+}
+
+.tray-footer-btn:hover {
+  background-color: var(--tray-row-hover) !important;
+  border-color: var(--tray-border) !important;
+}
+.tray-footer-btn:active { transform: scale(0.98); }
+.tray-footer-btn:focus-visible {
+  outline: 2px solid rgb(124,197,255);
+  outline-offset: 1px;
+}
+
+@keyframes tray-pulse-anim {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+.tray-pulse {
+  animation: tray-pulse-anim 1.4s ease-in-out infinite;
+  will-change: opacity;
+}
+
+/* Body background fully transparent so the NSWindow vibrancy can show through. */
+html.tray-popover-root,
+html.tray-popover-root body {
+  background: transparent !important;
+  background-color: transparent !important;
+}
