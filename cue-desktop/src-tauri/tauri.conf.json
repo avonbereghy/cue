@@ -19,6 +19,21 @@
         "resizable": true,
         "fullscreen": false,
         "transparent": true
+      },
+      {
+        "label": "tray-popover",
+        "url": "index.html#/tray-popover",
+        "title": "Cue Tray",
+        "width": 380,
+        "height": 460,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false,
+        "shadow": false
       }
     ],
     "security": {

@@ -27,8 +27,8 @@ use session_monitor::SessionMonitorState;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
-use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager, State, Theme, WebviewUrl};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, State, Theme, WebviewUrl};
 
 /// Application state managed by Tauri.
 pub struct AppState {
@@ -144,6 +144,46 @@ fn open_signal_settings(app: AppHandle) -> Result<(), String> {
         .build()
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+fn hide_tray_popover(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("tray-popover") {
+        let _ = win.hide();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn open_dashboard_from_tray(app: AppHandle) -> Result<(), String> {
+    if let Some(popover) = app.get_webview_window("tray-popover") {
+        let _ = popover.hide();
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn open_settings_from_tray(app: AppHandle) -> Result<(), String> {
+    if let Some(popover) = app.get_webview_window("tray-popover") {
+        let _ = popover.hide();
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        let _ = app.emit("navigate-settings", ());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    app.exit(0);
 }
 
 #[tauri::command]
@@ -1093,6 +1133,10 @@ pub fn run() {
             get_hook_status,
             install_cue_hooks,
             uninstall_cue_hooks,
+            hide_tray_popover,
+            open_dashboard_from_tray,
+            open_settings_from_tray,
+            quit_app,
         ])
         .on_window_event(|window, event| {
             match event {
@@ -1101,17 +1145,26 @@ pub fn run() {
                     if window.label() == "main" {
                         let _ = window.hide();
                         api.prevent_close();
+                    } else if window.label() == "tray-popover" {
+                        // Tray popover should hide rather than close on Cmd-W etc.
+                        let _ = window.hide();
+                        api.prevent_close();
                     }
                 }
                 // Emit fresh sessions immediately when window regains focus.
                 // macOS throttles WKWebView JS when unfocused, so events/timers
                 // stall and the UI appears frozen until this catch-up emit.
-                tauri::WindowEvent::Focused(true) => {
-                    if window.label() == "main" {
-                        if let Some(state) = window.try_state::<AppState>() {
-                            let sessions = state.monitor.enriched_sessions.lock().unwrap().clone();
-                            let _ = window.emit("sessions-updated", &sessions);
+                tauri::WindowEvent::Focused(focused) => {
+                    if *focused {
+                        if window.label() == "main" {
+                            if let Some(state) = window.try_state::<AppState>() {
+                                let sessions = state.monitor.enriched_sessions.lock().unwrap().clone();
+                                let _ = window.emit("sessions-updated", &sessions);
+                            }
                         }
+                    } else if window.label() == "tray-popover" {
+                        // Click anywhere outside the popover dismisses it.
+                        let _ = window.hide();
                     }
                 }
                 _ => {}
@@ -1526,7 +1579,20 @@ fn setup_tray(
     TrayIconBuilder::with_id("cue-tray")
         .icon(icon)
         .menu(&menu)
+        // Left-click triggers our popover; right-click still gets the native menu.
+        .show_menu_on_left_click(false)
         .tooltip(format_tooltip(&sessions))
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                rect,
+                ..
+            } = event
+            {
+                show_tray_popover(tray.app_handle(), rect);
+            }
+        })
         .on_menu_event(move |app, event| {
             match event.id().as_ref() {
                 "dashboard" => {
@@ -1559,6 +1625,59 @@ fn setup_tray(
         .build(handle)?;
 
     Ok(())
+}
+
+/// Position the tray popover under the tray icon and show it. The `rect`
+/// from `TrayIconEvent::Click` is the icon's screen rect in physical pixels.
+fn show_tray_popover(app: &AppHandle, rect: tauri::Rect) {
+    let popover = match app.get_webview_window("tray-popover") {
+        Some(w) => w,
+        None => return,
+    };
+
+    // If already visible, treat the click as toggle-off.
+    if let Ok(true) = popover.is_visible() {
+        let _ = popover.hide();
+        return;
+    }
+
+    // Anchor: horizontally centered under the tray icon, with a small gap.
+    // `rect` uses the `Position`/`Size` enum (Logical or Physical) — convert
+    // both to physical pixels using the popover's scale factor.
+    let scale = popover.scale_factor().unwrap_or(1.0);
+    let icon_pos = rect.position.to_physical::<f64>(scale);
+    let icon_size = rect.size.to_physical::<f64>(scale);
+
+    let icon_center_x = icon_pos.x + (icon_size.width / 2.0);
+    let icon_bottom_y = icon_pos.y + icon_size.height;
+    let popover_width = popover
+        .outer_size()
+        .map(|s| s.width as f64)
+        .unwrap_or(380.0);
+
+    let target_x = (icon_center_x - popover_width / 2.0).round();
+    let target_y = (icon_bottom_y + 6.0).round();
+
+    let _ = popover.set_position(PhysicalPosition::new(target_x, target_y));
+
+    // Match the popover's NSWindow appearance to the user's resolved theme so
+    // the system-rendered scrollbars and form controls don't flicker against
+    // a mismatched chrome. Resolve the same way main.tsx does: explicit
+    // light/dark wins, otherwise follow system.
+    #[cfg(target_os = "macos")]
+    {
+        let s = settings::load_settings();
+        let dark = match s.theme.as_str() {
+            "light" => false,
+            "dark" => true,
+            _ => detect_system_theme() == Theme::Dark,
+        };
+        set_native_appearance(&popover, dark);
+    }
+
+    let _ = popover.show();
+    let _ = popover.set_focus();
+    let _ = app.emit("tray-popover-shown", ());
 }
 
 /// Build the tray context menu from current session data.
