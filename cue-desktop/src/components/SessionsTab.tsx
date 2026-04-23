@@ -100,6 +100,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [showToolPills, setShowToolPills] = useState(false);
   const [showCurrentTool, setShowCurrentTool] = useState(false);
   const [showConfigCounts, setShowConfigCounts] = useState(false);
+  const [showToolCallComets, setShowToolCallComets] = useState(false);
   const [timerDisplay, setTimerDisplay] = useState("seconds");
   const [keyPressSpeed, setKeyPressSpeed] = useState(0.35);
   const [keyReleaseSpeed, setKeyReleaseSpeed] = useState(0.4);
@@ -333,6 +334,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setShowToolPills(s.showToolPills ?? false);
     setShowCurrentTool(s.showCurrentTool ?? false);
     setShowConfigCounts(s.showConfigCounts ?? false);
+    setShowToolCallComets(s.showToolCallComets ?? false);
     setTimerDisplay(s.timerDisplay ?? "seconds");
     if (s.lowPower) document.documentElement.setAttribute("data-low-power", "");
     else document.documentElement.removeAttribute("data-low-power");
@@ -2506,7 +2508,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                         {originalIdx + 1}
                       </div>
                     )}
-                    <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} fluxEnabled={lowPower ? false : fluxEnabled} fluxAlpha={fluxAlpha} fluxIntensity={fluxIntensity} fluxDensity={fluxDensity} fluxSpeed={fluxSpeed} fluxLineLength={fluxLineLength} fluxTurbulence={fluxTurbulence} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} timerDisplay={timerDisplay} />
+                    <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} fluxEnabled={lowPower ? false : fluxEnabled} fluxAlpha={fluxAlpha} fluxIntensity={fluxIntensity} fluxDensity={fluxDensity} fluxSpeed={fluxSpeed} fluxLineLength={fluxLineLength} fluxTurbulence={fluxTurbulence} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} showToolCallComets={showToolCallComets} timerDisplay={timerDisplay} />
                   </div>
 
                   {/* Per-session state controls — hidden in screenshot mode */}
@@ -2607,7 +2609,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     cordRetractDelay, cordDeployForce,
     cordRetractForce, stringSpread, keyPressSpeed, keyReleaseSpeed,
     compactMode, slimMode, contextThreshold, contextDisplay,
-    showToolPills, showCurrentTool, showConfigCounts, timerDisplay,
+    showToolPills, showCurrentTool, showConfigCounts, showToolCallComets, timerDisplay,
   };
 
   // ---------------------------------------------------------------------------
@@ -2671,7 +2673,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
             return (
               <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="relative space-y-2" style={{ zIndex: idx + 1 }}>
-                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} fluxEnabled={lowPower ? false : fluxEnabled} fluxAlpha={fluxAlpha} fluxIntensity={fluxIntensity} fluxDensity={fluxDensity} fluxSpeed={fluxSpeed} fluxLineLength={fluxLineLength} fluxTurbulence={fluxTurbulence} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} timerDisplay={timerDisplay} isDuplicate={duplicateTitles.has(session.displayTitle)} expandOverride={compactMode ? expandOverrides[session.info.id] : undefined} onExpandCycle={compactMode ? () => {
+                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} fluxEnabled={lowPower ? false : fluxEnabled} fluxAlpha={fluxAlpha} fluxIntensity={fluxIntensity} fluxDensity={fluxDensity} fluxSpeed={fluxSpeed} fluxLineLength={fluxLineLength} fluxTurbulence={fluxTurbulence} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} showToolCallComets={showToolCallComets} timerDisplay={timerDisplay} isDuplicate={duplicateTitles.has(session.displayTitle)} expandOverride={compactMode ? expandOverrides[session.info.id] : undefined} onExpandCycle={compactMode ? () => {
                   setExpandOverrides((prev) => {
                     const current = prev[session.info.id] ?? 0;
                     const next = (current + 1) % 3;
