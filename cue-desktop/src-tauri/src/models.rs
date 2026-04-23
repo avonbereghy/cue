@@ -780,6 +780,9 @@ pub struct Settings {
     /// Beta: show config counts (CLAUDE.md, hooks, MCP) in detail mode
     #[serde(default)]
     pub show_config_counts: bool,
+    /// Show comet tracers across the strings on every tool call. Off by default.
+    #[serde(default)]
+    pub show_tool_call_comets: bool,
     /// Timer display mode: "minutes" (HH:MM), "seconds" (HH:MM:SS), or "off"
     #[serde(default = "default_timer_display")]
     pub timer_display: String,
@@ -962,6 +965,7 @@ impl Default for Settings {
             show_tool_pills: false,
             show_current_tool: false,
             show_config_counts: false,
+            show_tool_call_comets: false,
             timer_display: "seconds".to_string(),
             theme_customizations: HashMap::new(),
             settings_version: crate::settings::CURRENT_SETTINGS_VERSION,
