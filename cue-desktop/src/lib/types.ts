@@ -217,6 +217,8 @@ export interface Settings {
   showCurrentTool: boolean;
   /** Beta: show config counts (CLAUDE.md, hooks, MCP) in detail mode */
   showConfigCounts: boolean;
+  /** Show comet tracers on the strings whenever a tool call fires. Off by default. */
+  showToolCallComets: boolean;
   /** Timer display: "minutes" (HH:MM), "seconds" (HH:MM:SS), or "off" */
   timerDisplay: string;
   /** Per-theme appearance customizations saved by the user, keyed by theme ID */

@@ -604,6 +604,7 @@ export function SettingsView() {
       showToolPills: false,
       showCurrentTool: false,
       showConfigCounts: false,
+      showToolCallComets: false,
       timerDisplay: "seconds",
       themeCustomizations: settings.themeCustomizations ?? {},
     };
@@ -1086,6 +1087,13 @@ export function SettingsView() {
             checked={settings.showConfigCounts ?? false}
             onChange={() => setSettings({ ...settings, showConfigCounts: !(settings.showConfigCounts ?? false) })}
             label="Config counts"
+          />
+        </SettingRow>
+        <SettingRow label="Tool Call Comets" description="Fire a thin white tracer across the strings on each tool call" onReset={(settings.showToolCallComets ?? false) ? () => setSettings({ ...settings, showToolCallComets: false }) : undefined}>
+          <Toggle
+            checked={settings.showToolCallComets ?? false}
+            onChange={() => setSettings({ ...settings, showToolCallComets: !(settings.showToolCallComets ?? false) })}
+            label="Tool call comets"
           />
         </SettingRow>
       </section>
