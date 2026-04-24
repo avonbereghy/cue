@@ -171,14 +171,22 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
     entry.agent_id = obj.get("agentId").and_then(|v| v.as_str()).map(String::from);
     entry.slug = obj.get("slug").and_then(|v| v.as_str()).map(String::from);
 
-    // Count user messages and extract prompt text
+    // Count user messages and extract prompt text.
+    //
+    // Only entries that carry an actual prompt (extractable text in
+    // `message.content`) are flagged as user messages. Claude Code also emits
+    // `type: "user"` entries for tool_result payloads and bare metadata rows
+    // (gitBranch markers, idle_notification events, etc.) — treating those as
+    // user messages inflated `user_message_count` on every tool call, which
+    // downstream code used as a "new turn" signal and reset per-turn state
+    // (e.g. the signal-string deploy counter) mid-turn.
     if entry_type == "user" {
-        entry.is_user_message = true;
         entry.user_prompt_text = extract_user_prompt_text(obj);
         entry.effort_command = extract_effort_command(obj);
         if entry.effort_command.is_some() {
             entry.effort_command_ts = entry.timestamp;
         }
+        entry.is_user_message = entry.user_prompt_text.is_some();
     }
 
     // Parse assistant messages for tokens and tool usage
@@ -873,7 +881,7 @@ mod tests {
 
     const ASSISTANT_WITH_USAGE: &str = r#"{"type":"assistant","timestamp":1710000000.0,"message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":1000,"output_tokens":500,"cache_creation_input_tokens":200,"cache_read_input_tokens":800},"content":[{"type":"tool_use","name":"Bash"},{"type":"tool_use","name":"Read"},{"type":"tool_use","name":"Bash"}]}}"#;
 
-    const USER_MESSAGE: &str = r#"{"type":"user","timestamp":1710000001.0}"#;
+    const USER_MESSAGE: &str = r#"{"type":"user","timestamp":1710000001.0,"message":{"role":"user","content":"hello"}}"#;
 
     const CUSTOM_TITLE: &str = r#"{"type":"custom-title","timestamp":1710000002.0,"customTitle":"Auth Refactor"}"#;
 
@@ -907,6 +915,30 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(entries[0].is_user_message);
         assert!(!entries[0].is_assistant_message);
+    }
+
+    /// Regression: tool_result entries are `type: "user"` in Claude Code JSONL,
+    /// but they carry no prompt text. They must NOT be flagged as user messages
+    /// — otherwise `user_message_count` increments on every tool call mid-turn,
+    /// which downstream code uses as a new-turn signal and resets per-turn
+    /// state (signal-string deploy counter, token-usage rollups, etc.).
+    #[test]
+    fn test_tool_result_user_entry_not_counted() {
+        let tool_result = r#"{"type":"user","timestamp":1710000004.0,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"abc","content":"ok"}]}}"#;
+        let entries = parse_jsonl_content(tool_result);
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].is_user_message);
+        assert!(entries[0].user_prompt_text.is_none());
+    }
+
+    /// Regression: bare metadata-only `type: "user"` entries (gitBranch markers,
+    /// idle_notification events, harness-injected ANSI messages) must not count
+    /// as user prompts either.
+    #[test]
+    fn test_metadata_user_entry_not_counted() {
+        let entries = parse_jsonl_content(GIT_BRANCH);
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].is_user_message);
     }
 
     #[test]
@@ -1027,7 +1059,9 @@ mod tests {
         std::fs::write(&path, &content).unwrap();
 
         let metrics = parse_jsonl_to_session_metrics(&path).unwrap();
-        assert_eq!(metrics.user_message_count, 2); // user + gitBranch user
+        // Only USER_MESSAGE counts — GIT_BRANCH is a metadata-only user entry
+        // with no prompt text, so it's excluded from user_message_count.
+        assert_eq!(metrics.user_message_count, 1);
         assert_eq!(metrics.message_count, 2); // two assistant messages
         assert_eq!(metrics.input_tokens, 3000); // 1000 + 2000
         assert_eq!(metrics.output_tokens, 1500); // 500 + 1000

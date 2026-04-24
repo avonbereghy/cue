@@ -923,7 +923,7 @@ mod tests {
 
         // Write a minimal JSONL file with usage data
         let jsonl = concat!(
-            r#"{"type":"user","timestamp":1710000000.0}"#, "\n",
+            r#"{"type":"user","timestamp":1710000000.0,"message":{"role":"user","content":"hi"}}"#, "\n",
             r#"{"type":"assistant","timestamp":1710000001.0,"message":{"usage":{"input_tokens":1000,"output_tokens":500}}}"#, "\n",
         );
         std::fs::write(project_dir.join("sess-1.jsonl"), jsonl).unwrap();
