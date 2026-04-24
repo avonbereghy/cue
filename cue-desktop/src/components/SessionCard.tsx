@@ -965,12 +965,18 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     prevUserMsgCountRef.current = metrics.userMessageCount;
   }, [metrics.userMessageCount]);
 
-  // When strings can't deploy (thinking / waiting / error / turn-end), pass
-  // target 0 so SignalString retracts all base bands. During working/subagent
-  // we pass the current count (clamped to the 3-band ceiling; 4–5 handled via
-  // extraBands below). stringCount starts at 0 on turn entry and promotes to
-  // 1 after the 1s warm-up, so the base-band target follows naturally.
-  const baseBandsTarget = canDeployStrings ? Math.min(stringCount, 3) : 0;
+  // Target reflects the turn's intended deployment, not the transient
+  // displayState. Mid-turn transitions (working → thinking/waiting/error →
+  // working) keep the target stable so already-deployed strings aren't
+  // mistaken for "should be retracted" and torn down on re-entry. SignalString
+  // handles the visual gate via `stringsStayDeployed`. stringCount itself
+  // resets on turn-end states, so the target falls to 0 naturally there.
+  const isMidTurn =
+    canDeployStrings ||
+    displayState === "thinking" ||
+    displayState === "waiting" ||
+    displayState === "error";
+  const baseBandsTarget = isMidTurn ? Math.min(stringCount, 3) : 0;
 
   // Amplitude progression: each new string that spawns during a long working
   // session is 5% louder than the one before (compounded). String N gets a
