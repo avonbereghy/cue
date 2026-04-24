@@ -175,6 +175,16 @@ impl SubagentMetrics {
     pub fn total_tool_uses(&self) -> i64 {
         self.tool_counts.values().sum()
     }
+
+    /// True when the JSONL wrote an entry within the last `window_secs`.
+    /// Tighter than `is_active` (60s file-mtime check); used by the
+    /// state-rescue path to avoid bouncing just-finished agents back to
+    /// "subagent".
+    pub fn is_recently_live(&self, now: f64, window_secs: f64) -> bool {
+        self.ended_at
+            .map(|e| (now - e) < window_secs && (now - e) >= 0.0)
+            .unwrap_or(false)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -401,6 +411,34 @@ impl EnrichedSession {
                 info.state = "working".to_string();
             }
         }
+
+        // Missed-SubagentStop rescue: if the hook counter says 0 but a
+        // subagent JSONL wrote an entry within the last 10 seconds, a
+        // SubagentStart/Stop pair drifted out of sync (common with
+        // background agents whose hook events can fire unbalanced).
+        // Only rescue from terminal states — `working`/`thinking` already
+        // reflect live activity, and `waiting`/`error`/`compacting`/`clearing`
+        // must stay put to preserve user-attention signals.
+        if matches!(info.state.as_str(), "done" | "idle")
+            && info.active_subagents == 0
+        {
+            let live_count = metrics
+                .subagents
+                .iter()
+                .filter(|s| s.is_recently_live(now, 10.0))
+                .count() as i64;
+            if live_count > 0 {
+                log::info!(
+                    "subagent-rescue id={} state={}→subagent live_count={}",
+                    info.id,
+                    info.state,
+                    live_count,
+                );
+                info.state = "subagent".to_string();
+                info.active_subagents = live_count;
+            }
+        }
+
         let workspace_name = std::path::Path::new(&info.workspace)
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
@@ -1255,6 +1293,94 @@ mod tests {
         };
         let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
         assert_eq!(es.info.state, "waiting");
+    }
+
+    #[test]
+    fn test_done_rescued_to_subagent_when_jsonl_active() {
+        // Hook counter says 0 subagents, state is "done", but a subagent
+        // JSONL wrote an entry a few seconds ago — a SubagentStop was
+        // missed (e.g. background agent). Promote to "subagent" and
+        // surface the live count so the UI blinks.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        let mut info = make_test_info("s", "/tmp", "done");
+        info.active_subagents = 0;
+        let metrics = SessionMetrics {
+            subagents: vec![SubagentMetrics {
+                ended_at: Some(now - 3.0),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        assert_eq!(es.info.state, "subagent");
+        assert_eq!(es.info.active_subagents, 1);
+    }
+
+    #[test]
+    fn test_done_not_rescued_when_subagent_stale() {
+        // JSONL hasn't been written to for minutes — agent is truly done.
+        // Must not bounce the card back to "subagent".
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        let mut info = make_test_info("s", "/tmp", "done");
+        info.active_subagents = 0;
+        let metrics = SessionMetrics {
+            subagents: vec![SubagentMetrics {
+                ended_at: Some(now - 120.0),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        assert_eq!(es.info.state, "done");
+        assert_eq!(es.info.active_subagents, 0);
+    }
+
+    #[test]
+    fn test_working_not_overridden_by_rescue() {
+        // Active states must never flip to "subagent" via the rescue path —
+        // that was the prior regression (frontend showing Subagents(2) when
+        // hook said working, subs=0).
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        let mut info = make_test_info("s", "/tmp", "working");
+        info.active_subagents = 0;
+        let metrics = SessionMetrics {
+            subagents: vec![SubagentMetrics {
+                ended_at: Some(now - 2.0),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        assert_eq!(es.info.state, "working");
+    }
+
+    #[test]
+    fn test_rescue_skipped_when_hook_counter_already_positive() {
+        // Counter is trusted; rescue path only acts when counter==0.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        let mut info = make_test_info("s", "/tmp", "done");
+        info.active_subagents = 3;
+        let metrics = SessionMetrics {
+            subagents: vec![SubagentMetrics {
+                ended_at: Some(now - 2.0),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        assert_eq!(es.info.active_subagents, 3);
     }
 
     #[test]
