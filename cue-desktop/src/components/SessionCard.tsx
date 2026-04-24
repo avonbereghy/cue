@@ -293,8 +293,14 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   const [staleAfterCompact, setStaleAfterCompact] = useState(false);
 
   useEffect(() => {
+    // Effect-local flag: tick() self-reschedules, so when cleanup cancels the
+    // pending frame, we also need to stop the tick that's already in flight
+    // from queuing a fresh one. Without this, one extra frame can fire after
+    // cleanup and loop forever (compactPhaseRef outlives the effect).
+    let unmounted = false;
     const tick = () => {
       compactRafRef.current = null;
+      if (unmounted) return;
       const now = performance.now();
       if (compactPhaseRef.current === "draining") {
         const f = Math.max(0, 1 - (now - compactStartRef.current) / COMPACT_DRAIN_MS);
@@ -343,6 +349,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     }
 
     return () => {
+      unmounted = true;
       if (compactRafRef.current !== null) {
         cancelAnimationFrame(compactRafRef.current);
         compactRafRef.current = null;
@@ -438,12 +445,18 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       window.clearTimeout(handoffCommitTimerRef.current);
     }
     handoffCommitTimerRef.current = window.setTimeout(() => {
-      if (smoothExitTimerRef.current !== null) window.clearTimeout(smoothExitTimerRef.current);
       const target = latestStateRef.current;
+      handoffCommitTimerRef.current = null;
+      // State may have flipped back (e.g. working → thinking) between schedule
+      // and fire. Committing a non-handoffable target here (thinking) would
+      // silently no-op the label/display while still arming the smoothExit
+      // timer, leaving the card stuck when the next working transition arrives.
+      // Let the main effect re-stage a fresh handoff for whatever comes next.
+      if (target !== "working" && target !== "subagent") return;
+      if (smoothExitTimerRef.current !== null) window.clearTimeout(smoothExitTimerRef.current);
       setSmoothExit(true);
       setLabelState(target);
       setDisplayState(target);
-      handoffCommitTimerRef.current = null;
       // Clear a hair after the longest transition (border/shadow = 850ms)
       // so the class keeps the slower easing in effect until everything lands.
       // Outlast the slower flux retract (FLUX_EXIT_MS = 2500ms) so the

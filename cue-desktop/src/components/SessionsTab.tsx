@@ -1333,6 +1333,10 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const quiesceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isAnimatingRef = useRef(false);
   const animationGenRef = useRef(0); // incremented each animation; stale chains check this
+  // Set when the effect observes a fresh sortKey while an animation is already
+  // in flight. The in-flight run's finally consumes it to retrigger the effect
+  // so the deferred reorder doesn't get dropped.
+  const pendingReorderRef = useRef(false);
   const isQuiescenceReorderRef = useRef(false);
   // Tracks previous state per session so we can detect turn-end transitions
   // (non-quiescent → quiescent) and fire a gated reorder.
@@ -1715,9 +1719,14 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     if (!list || !autoReorder) return;
 
     // Don't start a new animation while one is in flight — the current
-    // animation owns cardPositions and will snapshot on completion.
-    // The next render after it finishes will pick up any pending changes.
-    if (isAnimatingRef.current) return;
+    // animation owns cardPositions. Flag the pending reorder so the in-flight
+    // run's finally retriggers this effect; without that, a reorder that
+    // arrives mid-animation is silently dropped (cardPositions gets written
+    // from post-animation DOM, so the re-run sees a no-op diff).
+    if (isAnimatingRef.current) {
+      pendingReorderRef.current = true;
+      return;
+    }
 
     const prev = cardPositions.current;
     if (prev.size === 0) {
@@ -2082,6 +2091,26 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           await runSpawns();
         }
       } finally {
+        // If a reorder was requested mid-flight, the latest sortKey no longer
+        // matches the DOM we just animated toward. Capture cards' *current*
+        // visual positions (getBoundingClientRect reflects applied transforms)
+        // as the "from" snapshot BEFORE clearing transforms — the re-run can
+        // then diff against the new DOM layout and animate from where cards
+        // visually are, avoiding a snap.
+        if (pendingReorderRef.current && animationGenRef.current === gen) {
+          const liveCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
+          const livePositions = new Map<string, DOMRect>();
+          liveCards.forEach((c) => {
+            livePositions.set(c.dataset.sessionId!, c.getBoundingClientRect());
+          });
+          cardPositions.current = livePositions;
+          cleanupExistingTransforms();
+          cleanupSpawnState();
+          isAnimatingRef.current = false;
+          pendingReorderRef.current = false;
+          setReorderTick((t) => t + 1);
+          return;
+        }
         cleanupExistingTransforms();
         cleanupSpawnState();
         if (animationGenRef.current !== gen) return;

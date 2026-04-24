@@ -38,16 +38,24 @@ export function FlipNumber({
   // animation before appending a new one. Without this, overlapping flips
   // leak orphan DOM nodes when the counter ticks faster than `duration`.
   const liveOverlaysRef = useRef<Map<number, { el: HTMLSpanElement; anim: Animation }>>(new Map());
+  // Tracks the in-flight incoming animation per slot index. Without this,
+  // rapid `value` changes stack multiple rotateX animations on the same live
+  // slot element (only the outgoing overlay was previously tracked), producing
+  // a visually jumbled flip when counters tick faster than the flip duration.
+  const incomingAnimsRef = useRef<Map<number, Animation>>(new Map());
 
   // Cancel any in-flight overlays and clean up their DOM nodes on unmount.
   useEffect(() => {
     const live = liveOverlaysRef.current;
+    const incoming = incomingAnimsRef.current;
     return () => {
       live.forEach(({ el, anim }) => {
         anim.cancel();
         el.remove();
       });
       live.clear();
+      incoming.forEach((anim) => anim.cancel());
+      incoming.clear();
     };
   }, []);
 
@@ -66,6 +74,7 @@ export function FlipNumber({
     const len = nextArr.length;
     const prevLen = prevArr.length;
     const live = liveOverlaysRef.current;
+    const incoming = incomingAnimsRef.current;
 
     const containerRect = container.getBoundingClientRect();
     let flipIndex = 0;
@@ -88,6 +97,13 @@ export function FlipNumber({
         existing.anim.cancel();
         existing.el.remove();
         live.delete(i);
+      }
+      // Also cancel any still-running incoming rotateX on the live slot so
+      // the fresh flip doesn't stack on top of the previous one.
+      const existingIncoming = incoming.get(i);
+      if (existingIncoming) {
+        existingIncoming.cancel();
+        incoming.delete(i);
       }
 
       // Old glyph rendered as a sibling overlay (attached to the container, not
@@ -125,7 +141,7 @@ export function FlipNumber({
       oldAnim.onfinish = cleanup;
       oldAnim.oncancel = cleanup;
 
-      slot.animate(
+      const incomingAnim = slot.animate(
         [
           { transform: "translateY(55%) rotateX(-90deg)", opacity: 0, filter: "blur(0.6px)", offset: 0 },
           { transform: "translateY(55%) rotateX(-90deg)", opacity: 0, filter: "blur(0.6px)", offset: 0.35 },
@@ -137,6 +153,12 @@ export function FlipNumber({
           delay,
         },
       );
+      incoming.set(i, incomingAnim);
+      const clearIncoming = () => {
+        if (incoming.get(i) === incomingAnim) incoming.delete(i);
+      };
+      incomingAnim.onfinish = clearIncoming;
+      incomingAnim.oncancel = clearIncoming;
     }
   }, [value, duration, stagger]);
 
