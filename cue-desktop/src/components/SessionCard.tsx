@@ -126,6 +126,8 @@ export interface SessionCardProps {
   onExpandCycle?: () => void;
   /** True when another session shares the same displayTitle — shows last prompt for disambiguation */
   isDuplicate?: boolean;
+  /** Low-power mode — skip mounting heavy effects (WebGL aurora, etc.) */
+  lowPower?: boolean;
 }
 
 function PromptPopup({ text, onClose, isDark }: {
@@ -202,7 +204,7 @@ function PromptPopup({ text, onClose, isDark }: {
   );
 }
 
-function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, fluxEnabled = true, fluxAlpha = 0.9, fluxIntensity = 1.5, fluxDensity = 1.0, fluxSpeed = 1.0, fluxLineLength = 0.55, fluxTurbulence = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, stringSpread = 0.15, stringDeployAngle = -16, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "percent", showToolPills = false, showCurrentTool = false, showConfigCounts = false, showToolCallComets = false, timerDisplay = "seconds", expandOverride, onExpandCycle, isDuplicate = false }: SessionCardProps) {
+function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, fluxEnabled = true, fluxAlpha = 0.9, fluxIntensity = 1.5, fluxDensity = 1.0, fluxSpeed = 1.0, fluxLineLength = 0.55, fluxTurbulence = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, stringSpread = 0.15, stringDeployAngle = -16, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "percent", showToolPills = false, showCurrentTool = false, showConfigCounts = false, showToolCallComets = false, timerDisplay = "seconds", expandOverride, onExpandCycle, isDuplicate = false, lowPower = false }: SessionCardProps) {
   // Effective display mode: expandOverride takes precedence over global compact/slim
   const effectiveCompact = expandOverride !== undefined ? expandOverride === 0 : compactMode;
   const effectiveSlim = expandOverride !== undefined ? expandOverride <= 1 : slimMode;
@@ -554,9 +556,10 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     }
 
     // Subagent ↔ working — same ambient-active group but different tint and
-    // status icon. Turn on smoothExit briefly so the tint morph rides the
-    // outExpo curve instead of snapping. Shorter window than the full
-    // thinking→working handoff since no flux retract is involved.
+    // status icon. Turn on smoothExit so the tint morph rides the outExpo
+    // curve instead of snapping. Window covers the full string handoff
+    // (base-band whip retract + SUBAGENT_HANDOFF_MS + subagent-band deploy)
+    // so the badge/label color finishes arriving as the new strings do.
     const isActiveMorph =
       (displayState === "subagent" && info.state === "working") ||
       (displayState === "working" && info.state === "subagent");
@@ -566,7 +569,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       smoothExitTimerRef.current = window.setTimeout(() => {
         setSmoothExit(false);
         smoothExitTimerRef.current = null;
-      }, 900);
+      }, 1400);
     }
 
     // Thinking → non-handoffable (typically idle or done): route through the
@@ -757,15 +760,35 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     ? `Subagents(${activeSubs})`
     : STATE_DISPLAY_NAME[labelState] ?? session.stateDisplayName;
 
-  // ─── Subagent string lines ──────────────────────────────────────────────
-  // Track whether we entered the subagent state from working — that's what
-  // determines whether the 3 white base lines persist alongside the blue
-  // subagent lines, or are suppressed.
-  // Subagent state now suppresses base bands unconditionally so the visible
-  // string count matches the "Subagents(N)" badge. Previously this latched on
-  // a working→subagent transition and kept the 3 base bands rendering
-  // alongside, giving N + base_count visible strings.
-  const suppressBaseBands = displayState === "subagent";
+  // ─── Subagent string lines — staggered handoff ──────────────────────────
+  // Two phases to avoid the base-band retract and subagent-band deploy
+  // firing simultaneously (the old single-derived-value behavior caused
+  // white strings to cross blue strings mid-animation):
+  //   Entering subagent: suppressBaseBands flips TRUE immediately so base
+  //     bands start their whip-retract at once. subagentBandsVisible flips
+  //     TRUE only after SUBAGENT_HANDOFF_MS so the blue bands deploy onto
+  //     a canvas the white ones have already vacated.
+  //   Leaving subagent: subagentBandsVisible flips FALSE immediately so
+  //     the blue bands start their LIFO retract. suppressBaseBands flips
+  //     FALSE after the handoff window so base bands redeploy onto a
+  //     canvas the blue ones have left.
+  // Rapid flips (less than handoff window) cancel cleanly via the effect
+  // cleanup — the scheduled phase-2 update never lands.
+  const SUBAGENT_HANDOFF_MS = 700;
+  const [suppressBaseBands, setSuppressBaseBands] = useState(displayState === "subagent");
+  const [subagentBandsVisible, setSubagentBandsVisible] = useState(displayState === "subagent");
+
+  useEffect(() => {
+    const isSubagent = displayState === "subagent";
+    if (isSubagent) {
+      setSuppressBaseBands(true);
+      const t = window.setTimeout(() => setSubagentBandsVisible(true), SUBAGENT_HANDOFF_MS);
+      return () => window.clearTimeout(t);
+    }
+    setSubagentBandsVisible(false);
+    const t = window.setTimeout(() => setSuppressBaseBands(false), SUBAGENT_HANDOFF_MS);
+    return () => window.clearTimeout(t);
+  }, [displayState]);
 
   // Build the extraBands list. One blue line per active subagent, identified
   // by a stable slot id ("sub-0", "sub-1", …) so add/remove maps correctly to
@@ -775,7 +798,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   // so siblings sit at slightly different angles. Seed = sessionId + slotIdx
   // so each subagent slot has a stable axis across renders.
   const subagentExtraBands = useMemo(() => {
-    if (displayState !== "subagent" || activeSubs <= 0) return [];
+    if (!subagentBandsVisible || activeSubs <= 0) return [];
     // Cyan / subagent blue (#7CC5FF) — same colour family the badge uses.
     const color = isDark ? { r: 124, g: 197, b: 255 } : { r: 42, g: 139, b: 217 };
     const kinds: ("bass" | "mids" | "treble")[] = ["mids", "treble", "bass"];
@@ -807,7 +830,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       });
     }
     return out;
-  }, [displayState, activeSubs, info.id, isDark]);
+  }, [subagentBandsVisible, activeSubs, info.id, isDark]);
 
   // During the smooth-exit window, text/background colors stretch longer and
   // use the same outExpo curve as the card to keep the whole retract in sync.
@@ -1113,7 +1136,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
 
       {/* Aurora wash — done-state ambient background. Slow FBM flow; mounts
           on done, fades out via AURORA_EXIT_MS when state leaves. */}
-      {auroraMounted && (revived || info.state !== "ended") && (
+      {!lowPower && auroraMounted && (revived || info.state !== "ended") && (
         <AuroraEffect
           seed={info.id}
           active={auroraActive}
@@ -1344,13 +1367,16 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           </div>
 
 
-          {/* Agent subtitle — team agents (from JSONL or hook) or sessions with a custom title */}
+          {/* Agent subtitle — team agents (from JSONL or hook) or sessions with a custom title.
+              customTitle passes through cleanPromptText because Claude Code's
+              fork-session feature can seed it with raw <command-*> slash-command
+              wrappers from the originating message. */}
           {(() => {
             const teamName = info.teamName || metrics.teamName;
             const agentName = info.agentName || metrics.agentName;
             const subtitle = teamName
               ? `${agentName || "team agent"} · ${teamName}`
-              : metrics.customTitle || null;
+              : (cleanPromptText(metrics.customTitle) || null);
             return subtitle ? (
               <div style={{ position: "relative", height: 0, overflow: "visible", paddingLeft: "calc(20px + 0.5rem)", marginTop: "-0.5rem" }}>
                 <span style={{ fontSize: "0.65rem", color: titleHex, opacity: 0.55, fontWeight: 400, whiteSpace: "nowrap" }}>
