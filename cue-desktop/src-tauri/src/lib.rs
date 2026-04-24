@@ -650,7 +650,7 @@ fn list_presets() -> Result<Vec<models::PresetSummary>, String> {
             }
         }
     }
-    summaries.sort_by(|a, b| b.created_at.partial_cmp(&a.created_at).unwrap_or(std::cmp::Ordering::Equal));
+    summaries.sort_by(|a, b| b.created_at.total_cmp(&a.created_at));
     Ok(summaries)
 }
 
@@ -1009,11 +1009,14 @@ fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
         loop {
             interval.tick().await;
             let m = monitor_poll.clone();
-            let sessions = tokio::task::spawn_blocking(move || {
+            let result = tokio::task::spawn_blocking(move || {
                 m.poll_status();
                 m.enriched_sessions.lock().unwrap().clone()
-            }).await.unwrap_or_default();
-            let _ = app_poll.emit("sessions-updated", &sessions);
+            }).await;
+            match result {
+                Ok(sessions) => { let _ = app_poll.emit("sessions-updated", &sessions); }
+                Err(e) => log::warn!("poll_status blocking task failed: {}", e),
+            }
         }
     });
 
@@ -1172,12 +1175,16 @@ pub fn run() {
             // --- Theme change polling (for "auto" mode) ---
             {
                 let theme_handle = handle.clone();
-                let mut last_theme = detect_system_theme();
                 tauri::async_runtime::spawn(async move {
+                    let mut last_theme = tokio::task::spawn_blocking(detect_system_theme)
+                        .await
+                        .unwrap_or(Theme::Dark);
                     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(2));
                     loop {
                         interval.tick().await;
-                        let current = detect_system_theme();
+                        let current = tokio::task::spawn_blocking(detect_system_theme)
+                            .await
+                            .unwrap_or(last_theme);
                         if current != last_theme {
                             last_theme = current;
 
@@ -1458,8 +1465,8 @@ async fn handle_permission_connection(
             };
 
             let response_body = match decision {
-                models::PermissionDecision::Allow => permission_server::format_allow_response(),
-                models::PermissionDecision::Deny => permission_server::format_deny_response(),
+                models::PermissionDecision::Allow => permission_server::ALLOW_RESPONSE,
+                models::PermissionDecision::Deny => permission_server::DENY_RESPONSE,
             };
 
             let response = format!(

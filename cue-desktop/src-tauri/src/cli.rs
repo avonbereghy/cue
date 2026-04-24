@@ -137,7 +137,7 @@ fn load_sessions() -> Vec<EnrichedSession> {
         let pb = priority(b);
         pa.cmp(&pb).then_with(|| {
             // Within same priority group: most recent first
-            b.info.started_at.partial_cmp(&a.info.started_at).unwrap_or(std::cmp::Ordering::Equal)
+            b.info.started_at.total_cmp(&a.info.started_at)
         })
     });
 
@@ -844,7 +844,7 @@ mod tests {
             let pa = priority(a);
             let pb = priority(b);
             pa.cmp(&pb).then_with(|| {
-                b.info.started_at.partial_cmp(&a.info.started_at).unwrap_or(std::cmp::Ordering::Equal)
+                b.info.started_at.total_cmp(&a.info.started_at)
             })
         });
 
