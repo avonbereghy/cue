@@ -364,9 +364,12 @@ export function TrayPopoverPage() {
     });
   }, [sessions]);
 
-  const activeCount = sessions.filter(s =>
-    ["working", "thinking", "subagent", "compacting", "clearing"].includes(s.info.state)
-  ).length;
+  const activeCount = useMemo(
+    () => sessions.filter((s) =>
+      ["working", "thinking", "subagent", "compacting", "clearing"].includes(s.info.state),
+    ).length,
+    [sessions],
+  );
 
   return (
     <div className="tray-popover" data-tray-light={isLight ? "1" : "0"}>
