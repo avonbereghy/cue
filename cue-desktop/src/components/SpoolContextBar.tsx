@@ -270,10 +270,11 @@ export function SpoolContextBar({
       const barY = (cssH - barH) / 2;
       const radius = barH / 2;
 
-      // Well
+      // Well — fully opaque track so the bar reads as a solid element
+      // rather than a tinted wash over whatever sits behind the card.
       const dark = isDarkRef.current;
       roundedRectPath(ctx, 0, barY, cssW, barH, radius);
-      ctx.fillStyle = dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.07)";
+      ctx.fillStyle = dark ? "rgb(28,30,36)" : "rgb(228,230,234)";
       ctx.fill();
       // Subtle inner shadow at the top of the well — gives it depth
       ctx.save();
