@@ -467,9 +467,11 @@ def main():
     hook_start_time = time.time()
 
 
-    # Read hook payload from stdin
+    # Read hook payload from stdin. Cap at 1 MiB so a malformed or oversized
+    # payload can't OOM the hook process (Claude Code normally sends < 10 KiB).
     try:
-        hook_data = json.load(sys.stdin)
+        raw = sys.stdin.buffer.read(1_048_576)
+        hook_data = json.loads(raw) if raw else {}
     except Exception:
         hook_data = {}
 
@@ -479,8 +481,19 @@ def main():
     subprocess_label = _detect_subprocess()
     ignored_session = _should_ignore_session(hook_data)
 
-    # Read latest token usage directly from the JSONL transcript
+    # Read latest token usage directly from the JSONL transcript. Only trust
+    # the path if it resolves under the expected Claude projects directory —
+    # a malformed payload could otherwise point file reads at arbitrary paths
+    # (e.g., /etc/passwd, large files to stall the hook).
     transcript_path = hook_data.get("transcript_path", "")
+    if transcript_path:
+        try:
+            resolved = os.path.realpath(transcript_path)
+            claude_home = os.path.realpath(os.path.expanduser("~/.claude"))
+            if not resolved.startswith(claude_home + os.sep):
+                transcript_path = ""
+        except Exception:
+            transcript_path = ""
 
     team_name, agent_name = _detect_team(transcript_path)
     last_tokens = _read_last_tokens(transcript_path)
