@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState } from "react";
 import { usePageVisible } from "@/hooks/usePageVisible";
+import { useOnScreen } from "@/hooks/useOnScreen";
 import { getFrequencyData, getFrequencyDataAtTime, getCurrentTime, getDuration, isPlaying, getOnsets } from "@/lib/presetEngine";
 import { setDisturbances, clearDisturbances, type FluxDisturbance } from "@/lib/fluxDisturbance";
 import { listen } from "@tauri-apps/api/event";
@@ -214,6 +215,11 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const pageVisible = usePageVisible();
+  const onScreen = useOnScreen(canvasRef);
+  // Drive the draw loop only when the canvas is actually on-screen AND the
+  // app is in foreground. Off-screen cards used to keep running physics +
+  // canvas draws at 60fps; this gate collapses them to zero cost.
+  const renderActive = pageVisible && onScreen;
 
   // Smoothly interpolated string color (r,g,b) — transitions between states
   const currentColorRef = useRef<{ r: number; g: number; b: number } | null>(null);
@@ -776,8 +782,8 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    // Pause all rendering when page is hidden
-    if (!pageVisible) return;
+    // Pause all rendering when page is hidden OR the canvas isn't on screen.
+    if (!renderActive) return;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -797,6 +803,15 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
 
     const observer = new ResizeObserver(resize);
     observer.observe(canvas);
+
+    // Cached erase-rect geometry. Previously rebuilt every frame by calling
+    // getBoundingClientRect on every content row + child — an N-read forced
+    // layout per card per frame. Content layout shifts slowly (token ticks,
+    // state pills), so refreshing at ~5Hz is visually indistinguishable and
+    // collapses an entire layout-thrash hotspot.
+    let cachedEraseRects: { x: number; y: number; w: number; h: number }[] = [];
+    let eraseRectsNextRebuildAt = 0;
+    const ERASE_RECTS_REBUILD_MS = 200;
 
     const draw = (now: number) => {
       const cfg = configRef.current;
@@ -1378,16 +1393,18 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           );
         };
 
-        // Collect element rects for soft-erase after drawing
-        // Skip empty spacer divs (no text/visible content) to avoid erasing
-        // the waveform behind invisible layout elements in slim mode.
-        const eraseRects: { x: number; y: number; w: number; h: number }[] = [];
-        if (contentRef?.current && canvas) {
+        // Collect element rects for soft-erase after drawing. Skip empty
+        // spacer divs (no text/visible content) to avoid erasing the
+        // waveform behind invisible layout elements in slim mode. Cache is
+        // refreshed at ERASE_RECTS_REBUILD_MS cadence — see note above the
+        // draw closure for why per-frame rebuilds were removed.
+        if (contentRef?.current && canvas && now >= eraseRectsNextRebuildAt) {
+          eraseRectsNextRebuildAt = now + ERASE_RECTS_REBUILD_MS;
+          const fresh: { x: number; y: number; w: number; h: number }[] = [];
           const canvasRect = rectCacheRef.current ?? canvas.getBoundingClientRect();
           const rows = contentRef.current.children;
           for (let ri = 0; ri < rows.length; ri++) {
             const row = rows[ri] as HTMLElement;
-            // Skip empty spacer elements (no children AND no text content)
             if (row.children.length === 0 && !row.textContent?.trim()) continue;
             const items = row.children;
             if (items.length > 0) {
@@ -1395,7 +1412,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
                 const el = items[ci] as HTMLElement;
                 const er = el.getBoundingClientRect();
                 if (er.width < 1 || er.height < 1) continue;
-                eraseRects.push({
+                fresh.push({
                   x: er.left - canvasRect.left,
                   y: er.top - canvasRect.top,
                   w: er.width,
@@ -1405,7 +1422,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             } else {
               const rr = row.getBoundingClientRect();
               if (rr.width < 1 || rr.height < 1) continue;
-              eraseRects.push({
+              fresh.push({
                 x: rr.left - canvasRect.left,
                 y: rr.top - canvasRect.top,
                 w: rr.width,
@@ -1413,7 +1430,9 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
               });
             }
           }
+          cachedEraseRects = fresh;
         }
+        const eraseRects = cachedEraseRects;
 
         // Store trail-0 points per band for particle rendering
         const bandPaths: number[][] = [];
@@ -2067,7 +2086,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // Only re-create the animation pipeline for structural changes.
   // Tuning props (alpha, amplitude, colors, etc.) are read from configRef each frame.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, revived, isAudio, sessionId, pageVisible]);
+  }, [state, revived, isAudio, sessionId, renderActive]);
 
   // Full-card background canvas — z-0 ensures content (z-10) renders above
   return (
