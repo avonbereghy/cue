@@ -109,9 +109,11 @@ export function Dashboard() {
               onClick={() => {
                 const next = !compactMode;
                 setCompactMode(next);
-                invoke<Settings>("get_settings").then((s) => {
-                  invoke("update_settings", { newSettings: { ...s, compactMode: next } });
-                }).catch(() => {});
+                invoke<Settings>("get_settings")
+                  .then((s) =>
+                    invoke("update_settings", { newSettings: { ...s, compactMode: next } }),
+                  )
+                  .catch(console.error);
               }}
               className={`flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors ${
                 compactMode ? "text-white" : "text-white/50 hover:text-white/80 hover:bg-white/10"
@@ -130,9 +132,11 @@ export function Dashboard() {
                 if (compactMode) return;
                 const next = !slimMode;
                 setSlimMode(next);
-                invoke<Settings>("get_settings").then((s) => {
-                  invoke("update_settings", { newSettings: { ...s, slimMode: next } });
-                }).catch(() => {});
+                invoke<Settings>("get_settings")
+                  .then((s) =>
+                    invoke("update_settings", { newSettings: { ...s, slimMode: next } }),
+                  )
+                  .catch(console.error);
               }}
               className={`flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors ${
                 compactMode ? "text-white/15 cursor-not-allowed"

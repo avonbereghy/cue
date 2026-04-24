@@ -241,26 +241,20 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
   const handleReviveClick = useCallback((session: EnrichedSession) => {
     const id = session.info.id;
-    const current = reviveClicks[id] ?? 0;
-    const next = current + 1;
-
-    if (next >= REVIVE_CLICKS_REQUIRED) {
-      // Final click — fire the revive
-      setReviveClicks((prev) => {
+    setReviveClicks((prev) => {
+      const next = (prev[id] ?? 0) + 1;
+      if (next >= REVIVE_CLICKS_REQUIRED) {
+        invoke("revive_session", {
+          sessionId: session.info.id,
+          workspace: session.info.workspace,
+        }).catch((err) => console.error("Failed to revive session:", err));
         const copy = { ...prev };
         delete copy[id];
         return copy;
-      });
-      invoke("revive_session", {
-        sessionId: session.info.id,
-        workspace: session.info.workspace,
-      }).catch((err) => {
-        console.error("Failed to revive session:", err);
-      });
-    } else {
-      setReviveClicks((prev) => ({ ...prev, [id]: next }));
-    }
-  }, [reviveClicks]);
+      }
+      return { ...prev, [id]: next };
+    });
+  }, []);
 
   const handleDismissRevived = useCallback((sessionId: string) => {
     dismissedIdsRef.current.add(sessionId);
@@ -559,7 +553,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             .filter((s) => s.info.state === "working" || s.info.state === "subagent")
             .map((s) => s.info.id),
         );
-        for (const id of Array.from(sandboxActiveStartRef.current.keys())) {
+        for (const id of sandboxActiveStartRef.current.keys()) {
           if (!activeIds.has(id)) sandboxActiveStartRef.current.delete(id);
         }
 

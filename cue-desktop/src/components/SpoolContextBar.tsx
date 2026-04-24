@@ -17,6 +17,8 @@
  * Easing (spring-like ease-out for each burst).
  */
 import { useEffect, useRef } from "react";
+import { usePageVisible } from "@/hooks/usePageVisible";
+import { useOnScreen } from "@/hooks/useOnScreen";
 
 interface SpoolContextBarProps {
   /** 0..1 context usage (rest fill level). */
@@ -129,6 +131,12 @@ export function SpoolContextBar({
   restColor = [120, 150, 200],
 }: SpoolContextBarProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const pageVisible = usePageVisible();
+  const onScreen = useOnScreen(canvasRef);
+  const pageVisibleRef = useRef(pageVisible);
+  pageVisibleRef.current = pageVisible;
+  const onScreenRef = useRef(onScreen);
+  onScreenRef.current = onScreen;
   // Latest props mirrored into refs so the raf loop never re-subscribes.
   const fillPctRef = useRef(fillPercent);
   const compactingRef = useRef(isCompacting);
@@ -184,6 +192,13 @@ export function SpoolContextBar({
 
     const tick = () => {
       if (!running) return;
+      // Off-screen or tab-hidden: skip work but keep the loop alive so we
+      // resume instantly when visibility returns.
+      if (!pageVisibleRef.current || !onScreenRef.current) {
+        lastT = performance.now();
+        raf = requestAnimationFrame(tick);
+        return;
+      }
       const now = performance.now();
       const dt = Math.min(0.05, (now - lastT) / 1000);
       lastT = now;
