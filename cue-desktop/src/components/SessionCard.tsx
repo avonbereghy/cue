@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { usePageVisible } from "@/hooks/usePageVisible";
+import { useTheme } from "@/hooks/useIsDark";
 
 /** Deterministic per-character hash for stable animation randomness */
 function charHash(i: number, title: string): number {
@@ -736,8 +737,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   const isWaiting = displayState === "waiting";
   const isError = displayState === "error";
 
-  const isGlass = typeof document !== "undefined" && document.documentElement.hasAttribute("data-glass");
-  const isDark = isGlass || (typeof document !== "undefined" ? document.documentElement.getAttribute("data-theme") !== "light" : true);
+  const { isDark, isGlass } = useTheme();
 
   // Two color streams during the handoff:
   //   labelHex — semantic (StatusDot, visible labels). Follows labelState so
