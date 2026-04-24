@@ -17,6 +17,11 @@ pub struct PendingRequests {
     requests: Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>,
 }
 
+/// Hard cap on concurrently-pending permission requests. A flood of requests
+/// from a hostile local process would otherwise grow this map without bound
+/// along with the corresponding Tokio tasks and oneshot channels.
+const MAX_PENDING: usize = 64;
+
 impl PendingRequests {
     pub fn new() -> Self {
         Self {
@@ -25,13 +30,16 @@ impl PendingRequests {
     }
 
     /// Store a pending request and return a receiver for the decision.
-    pub fn insert(&self, request_id: &str) -> oneshot::Receiver<PermissionDecision> {
+    /// Returns None if the pending-request cap is already saturated; callers
+    /// should respond 503 and drop the connection.
+    pub fn insert(&self, request_id: &str) -> Option<oneshot::Receiver<PermissionDecision>> {
+        let mut map = self.requests.lock().unwrap();
+        if map.len() >= MAX_PENDING {
+            return None;
+        }
         let (tx, rx) = oneshot::channel();
-        self.requests
-            .lock()
-            .unwrap()
-            .insert(request_id.to_string(), tx);
-        rx
+        map.insert(request_id.to_string(), tx);
+        Some(rx)
     }
 
     /// Resolve a pending request with a decision.
@@ -87,7 +95,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_and_resolve_allow() {
         let pending = PendingRequests::new();
-        let rx = pending.insert("req-1");
+        let rx = pending.insert("req-1").unwrap();
 
         assert!(pending.is_pending("req-1"));
         assert_eq!(pending.len(), 1);
@@ -102,7 +110,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_and_resolve_deny() {
         let pending = PendingRequests::new();
-        let rx = pending.insert("req-2");
+        let rx = pending.insert("req-2").unwrap();
 
         pending.resolve("req-2", PermissionDecision::Deny).unwrap();
 
@@ -123,14 +131,14 @@ mod tests {
         let pending = PendingRequests::new();
         assert!(!pending.is_pending("req-x"));
 
-        let _rx = pending.insert("req-x");
+        let _rx = pending.insert("req-x").unwrap();
         assert!(pending.is_pending("req-x"));
     }
 
     #[test]
     fn test_remove() {
         let pending = PendingRequests::new();
-        let _rx = pending.insert("req-r");
+        let _rx = pending.insert("req-r").unwrap();
         assert!(pending.is_pending("req-r"));
 
         pending.remove("req-r");
@@ -147,9 +155,9 @@ mod tests {
     #[test]
     fn test_multiple_pending_requests() {
         let pending = PendingRequests::new();
-        let _rx1 = pending.insert("a");
-        let _rx2 = pending.insert("b");
-        let _rx3 = pending.insert("c");
+        let _rx1 = pending.insert("a").unwrap();
+        let _rx2 = pending.insert("b").unwrap();
+        let _rx3 = pending.insert("c").unwrap();
 
         assert_eq!(pending.len(), 3);
         assert!(!pending.is_empty());

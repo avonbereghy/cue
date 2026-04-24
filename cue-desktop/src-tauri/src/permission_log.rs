@@ -18,44 +18,10 @@ fn log_path() -> Result<PathBuf, String> {
     Ok(status_dir.join("permission-log.jsonl"))
 }
 
-/// Append a permission decision to the audit log.
-pub fn append_permission_log(entry: &PermissionLogEntry) -> Result<(), String> {
-    let log_path = log_path()?;
-
-    // Ensure parent directory exists
-    if let Some(parent) = log_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create log directory: {}", e))?;
-    }
-
-    let line = serde_json::to_string(entry)
-        .map_err(|e| format!("Failed to serialize log entry: {}", e))?;
-
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .map_err(|e| format!("Failed to open permission log: {}", e))?;
-
-    writeln!(file, "{}", line)
-        .map_err(|e| format!("Failed to write log entry: {}", e))?;
-
-    file.sync_all()
-        .map_err(|e| format!("Failed to fsync permission log: {}", e))?;
-
-    // Set owner-only permissions
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&log_path, std::fs::Permissions::from_mode(0o600));
-    }
-
-    Ok(())
-}
-
-/// Append a permission decision to a specific log file path (for testing).
-#[cfg(test)]
-fn append_permission_log_to(path: &Path, entry: &PermissionLogEntry) -> Result<(), String> {
+/// Append a permission entry to `path`. Creates the file at 0600 on unix so
+/// the audit log is never briefly world-readable before a subsequent
+/// set_permissions call (the previous race window).
+fn append_entry(path: &Path, entry: &PermissionLogEntry) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create log directory: {}", e))?;
@@ -64,9 +30,14 @@ fn append_permission_log_to(path: &Path, entry: &PermissionLogEntry) -> Result<(
     let line = serde_json::to_string(entry)
         .map_err(|e| format!("Failed to serialize log entry: {}", e))?;
 
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts
         .open(path)
         .map_err(|e| format!("Failed to open permission log: {}", e))?;
 
@@ -76,13 +47,18 @@ fn append_permission_log_to(path: &Path, entry: &PermissionLogEntry) -> Result<(
     file.sync_all()
         .map_err(|e| format!("Failed to fsync permission log: {}", e))?;
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-    }
-
     Ok(())
+}
+
+/// Append a permission decision to the audit log.
+pub fn append_permission_log(entry: &PermissionLogEntry) -> Result<(), String> {
+    append_entry(&log_path()?, entry)
+}
+
+/// Append a permission decision to a specific log file path (for testing).
+#[cfg(test)]
+fn append_permission_log_to(path: &Path, entry: &PermissionLogEntry) -> Result<(), String> {
+    append_entry(path, entry)
 }
 
 /// Read permission log entries for a specific session.

@@ -239,14 +239,7 @@ fn set_vibrancy(app: tauri::AppHandle, enabled: bool) {
 }
 
 fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
-    use std::io::Write;
-
-    let mut f = match std::fs::OpenOptions::new().create(true).append(true)
-        .open("/tmp/cue-vibrancy.log") {
-        Ok(f) => f,
-        Err(_) => return, // log is debug-only; skip toggle if /tmp is unwritable
-    };
-    let _ = writeln!(f, "toggle_vibrancy called, enabled={}", enabled);
+    log::debug!("toggle_vibrancy called, enabled={}", enabled);
 
     #[cfg(target_os = "macos")]
     {
@@ -281,7 +274,7 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                         let ve_class = objc2::runtime::AnyClass::get(c"NSVisualEffectView").unwrap();
                         let already: objc2::runtime::Bool = objc2::msg_send![&*old_content, isKindOfClass: ve_class];
                         if already.as_bool() {
-                            let _ = writeln!(f, "Already wrapped in NSVisualEffectView, skipping");
+                            log::debug!("Already wrapped in NSVisualEffectView, skipping");
                             return;
                         }
 
@@ -307,14 +300,11 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                         // Set the NSVisualEffectView as the new contentView
                         let _: () = objc2::msg_send![ns_window, setContentView: &*ve_view];
 
-                        let _ = writeln!(f, "Wrapped contentView in NSVisualEffectView OK");
+                        log::debug!("Wrapped contentView in NSVisualEffectView OK");
 
                         // Now make the WKWebView layer AND its HTML content transparent
-                        let f2 = f.try_clone().ok();
                         let w = window.clone();
                         tauri::async_runtime::spawn(async move {
-                            use std::io::Write;
-                            let mut f = f2;
                             for delay_ms in [50, 200, 500, 1000, 2000, 4000] {
                                 tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
                                 // Make WKWebView layer transparent
@@ -330,9 +320,7 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                                      document.documentElement.style.background='transparent';\
                                      document.body.style.background='transparent';"
                                 );
-                                if let Some(f) = f.as_mut() {
-                                    let _ = writeln!(f, "  applied transparency at {}ms", delay_ms);
-                                }
+                                log::debug!("  applied transparency at {}ms", delay_ms);
                             }
                         });
                     } else {
@@ -388,7 +376,7 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                         };
                         set_native_appearance(window, effective_dark);
 
-                        let _ = writeln!(f, "Vibrancy cleared, contentView restored");
+                        log::debug!("Vibrancy cleared, contentView restored");
                     }
                 }
             }
@@ -398,7 +386,7 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = enabled;
-        let _ = writeln!(f, "Vibrancy not supported on this platform");
+        log::debug!("Vibrancy not supported on this platform");
     }
 }
 
@@ -1294,19 +1282,35 @@ async fn handle_permission_connection(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    // Read the HTTP request (headers + body in one read for small payloads)
-    let mut buf = vec![0u8; 16384];
-    let n = stream.read(&mut buf).await?;
-    if n == 0 {
-        return Ok(());
-    }
-    let raw = &buf[..n];
+    // Hard caps — this server talks only to the local Python hook. Anything
+    // larger than these bounds is either a bug or a local-DoS attempt.
+    const MAX_HEADER_BYTES: usize = 8 * 1024;
+    const MAX_BODY_BYTES: usize = 1 * 1024 * 1024;
 
-    // Find end of headers
-    let header_end = raw
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .unwrap_or(n);
+    // Read until we have the \r\n\r\n header terminator or MAX_HEADER_BYTES.
+    // A single `read` is not guaranteed to deliver a full header block; fragmented
+    // TCP segments would otherwise silently fail the Host-header parse.
+    let mut buf: Vec<u8> = Vec::with_capacity(4096);
+    let header_end;
+    loop {
+        let mut chunk = [0u8; 4096];
+        let got = stream.read(&mut chunk).await?;
+        if got == 0 {
+            return Ok(());
+        }
+        buf.extend_from_slice(&chunk[..got]);
+        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            header_end = pos;
+            break;
+        }
+        if buf.len() > MAX_HEADER_BYTES {
+            let response = "HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            let _ = stream.write_all(response.as_bytes()).await;
+            return Ok(());
+        }
+    }
+    let n = buf.len();
+    let raw = &buf[..];
     let header_str = String::from_utf8_lossy(&raw[..header_end]);
 
     let first_line = header_str.lines().next().unwrap_or("");
@@ -1353,6 +1357,14 @@ async fn handle_permission_connection(
                     }
                 })
                 .unwrap_or(0);
+
+            // Cap body size so a hostile local caller can't claim Content-Length
+            // of 4 GB and OOM the process before we even try to read.
+            if content_length > MAX_BODY_BYTES {
+                let response = "HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                let _ = stream.write_all(response.as_bytes()).await;
+                return Ok(());
+            }
 
             let body_start = header_end + 4;
             let mut body_bytes: Vec<u8> = if body_start < n {
@@ -1430,6 +1442,19 @@ async fn handle_permission_connection(
                 received_at: now,
             };
 
+            // Reserve the pending-request slot first. If we're saturated (local
+            // DoS flood, or a stuck user with dozens of unresolved prompts),
+            // reject with 503 before emitting to the frontend so the UI doesn't
+            // get a prompt the backend can't track.
+            let rx = match pending.insert(&request_id) {
+                Some(rx) => rx,
+                None => {
+                    let response = "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nToo many requests";
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    return Ok(());
+                }
+            };
+
             // Store metadata for logging on decision
             metadata
                 .lock()
@@ -1449,9 +1474,6 @@ async fn handle_permission_connection(
 
             // Emit to React frontend
             let _ = app.emit("permission-request", &frontend_payload);
-
-            // Wait for user decision (blocks this connection until approve/deny)
-            let rx = pending.insert(&request_id);
 
             let decision = match rx.await {
                 Ok(d) => d,
