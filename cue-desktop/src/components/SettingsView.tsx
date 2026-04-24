@@ -591,6 +591,7 @@ export function SettingsView() {
       cordDeployForce: 1.5,
       cordRetractForce: 1.5,
       stringSpread: 0.02,
+      stringDeployAngle: -16,
       keyPressSpeed: 0.35,
       keyReleaseSpeed: 0.4,
       autoReorder: false,
@@ -794,6 +795,9 @@ export function SettingsView() {
             </SettingRow>
             <SettingRow label="Spread" description="Vertical separation between the three strings">
               <Slider value={settings.stringSpread ?? 0.02} min={0} max={0.5} step={0.01} defaultValue={0.02} format={formatMul} onChange={(v) => setSettings({ ...settings, stringSpread: v })} />
+            </SettingRow>
+            <SettingRow label="Deploy Angle" description="Tilt of working strings around the card center (negative = bottom-left → top-right)">
+              <Slider value={settings.stringDeployAngle ?? -16} min={-90} max={90} step={1} defaultValue={-16} format={(v) => `${v.toFixed(0)}°`} onChange={(v) => setSettings({ ...settings, stringDeployAngle: v })} />
             </SettingRow>
 
             {/* ── Sand settings (active during idle state) ── */}
