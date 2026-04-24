@@ -256,6 +256,26 @@ impl SessionMonitorState {
                 .collect()
         };
 
+        // Turn-ended recovery: demote `working`/`thinking` cards when the
+        // JSONL transcript shows `stop_reason == "end_turn"` newer than the
+        // session's `stateChangedAt`. This catches the case where the Stop
+        // hook failed to fire but Claude's own transcript records the turn
+        // finished. Deterministic (no timers). We only demote the two states
+        // — `subagent`, `waiting`, `compacting`, `clearing` are left alone.
+        let active: Vec<_> = {
+            let cache = self.metrics_cache.lock().unwrap();
+            active
+                .into_iter()
+                .map(|mut s| {
+                    let metrics = cache.get(&s.id);
+                    if should_demote_turn_ended(&s.state, s.state_changed_at, metrics) {
+                        s.state = "idle".to_string();
+                    }
+                    s
+                })
+                .collect()
+        };
+
         // Update active-since timestamps: track when each session entered an
         // active state (working/thinking/waiting/error/subagent). Reset on
         // idle/done/compacting/clearing. Used for the "active duration" timer.
@@ -597,6 +617,33 @@ enum LivenessOutcome {
 /// real processes. `live_start` is the `start_time` reported by sysinfo for
 /// the recorded pid (or None if no process currently holds that pid).
 /// `cached` is the `(pid, start_time)` we recorded on a previous poll, if any.
+/// Pure predicate for the turn-ended recovery path. Returns true when the
+/// session should be demoted to `idle` because the JSONL transcript records
+/// a completed turn newer than the current state transition.
+///
+/// Gated on `{working, thinking}` only — `subagent`, `waiting`, `compacting`,
+/// `clearing` are left alone. Suppressed when a pending tool_use is open
+/// (the aggregator already cleared `last_end_turn_ts` in that case, but the
+/// explicit check keeps the contract clear).
+fn should_demote_turn_ended(
+    state: &str,
+    state_changed_at: Option<f64>,
+    metrics: Option<&crate::models::SessionMetrics>,
+) -> bool {
+    if !matches!(state, "working" | "thinking") {
+        return false;
+    }
+    let Some(metrics) = metrics else { return false };
+    if metrics.pending_tool_use {
+        return false;
+    }
+    let Some(end_turn_ts) = metrics.last_end_turn_ts else {
+        return false;
+    };
+    let boundary = state_changed_at.unwrap_or(0.0);
+    end_turn_ts > boundary
+}
+
 fn resolve_liveness(
     pid: u32,
     live_start: Option<u64>,
@@ -785,6 +832,64 @@ mod tests {
             agent_name: None,
             pid: None,
         }
+    }
+
+    fn metrics_with_end_turn(end_turn_ts: Option<f64>, pending: bool) -> crate::models::SessionMetrics {
+        crate::models::SessionMetrics {
+            last_end_turn_ts: end_turn_ts,
+            pending_tool_use: pending,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_demote_when_end_turn_newer_than_state_change() {
+        // Canonical stuck-working case: Stop hook missed, but JSONL has
+        // end_turn timestamp after stateChangedAt → demote to idle.
+        let m = metrics_with_end_turn(Some(200.0), false);
+        assert!(should_demote_turn_ended("working", Some(100.0), Some(&m)));
+        assert!(should_demote_turn_ended("thinking", Some(100.0), Some(&m)));
+    }
+
+    #[test]
+    fn test_no_demote_when_end_turn_older_than_state_change() {
+        // Stale end_turn from a prior turn (e.g. before /clear reset the
+        // boundary, or before the user's new prompt). Must not demote.
+        let m = metrics_with_end_turn(Some(50.0), false);
+        assert!(!should_demote_turn_ended("working", Some(100.0), Some(&m)));
+    }
+
+    #[test]
+    fn test_no_demote_when_pending_tool_use() {
+        // Mid-turn with an unresolved tool_use: leave state alone.
+        let m = metrics_with_end_turn(Some(200.0), true);
+        assert!(!should_demote_turn_ended("working", Some(100.0), Some(&m)));
+    }
+
+    #[test]
+    fn test_no_demote_for_non_working_states() {
+        // Gate on {working, thinking} — don't touch subagent, waiting, etc.
+        let m = metrics_with_end_turn(Some(200.0), false);
+        for st in ["subagent", "waiting", "compacting", "clearing", "idle", "done", "error"] {
+            assert!(
+                !should_demote_turn_ended(st, Some(100.0), Some(&m)),
+                "state {} should not be demoted",
+                st
+            );
+        }
+    }
+
+    #[test]
+    fn test_no_demote_when_metrics_absent() {
+        // Transcript not yet parsed or missing → stay put.
+        assert!(!should_demote_turn_ended("working", Some(100.0), None));
+    }
+
+    #[test]
+    fn test_no_demote_when_end_turn_ts_absent() {
+        // Metrics exist but no end_turn observed → stay put.
+        let m = metrics_with_end_turn(None, false);
+        assert!(!should_demote_turn_ended("working", Some(100.0), Some(&m)));
     }
 
     #[test]
