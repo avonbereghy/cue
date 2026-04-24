@@ -18,9 +18,18 @@ interface SessionFamily {
   children: EnrichedSession[];
 }
 
-/** True if a session is a team-spawned child (has teamName from hook or JSONL). */
+/**
+ * True if a session is a team-spawned child. A genuine TeamCreate agent has
+ * BOTH a team name AND an agent name (the `@track-a-memory` / `@track-b-viz`
+ * tag that identifies the specific agent within the team). Sessions with
+ * only a team name are either the team lead itself — which is a parent, not
+ * a child — or a stale artifact from earlier JSONL content; either way they
+ * should render standalone, not as a branch.
+ */
 function isChildSession(s: EnrichedSession): boolean {
-  return !!(s.info.teamName || s.metrics.teamName);
+  const teamName = s.info.teamName || s.metrics.teamName;
+  const agentName = s.info.agentName || s.metrics.agentName;
+  return !!(teamName && agentName && agentName.trim().length > 0);
 }
 
 /**
