@@ -13,7 +13,7 @@ import { listen } from "@tauri-apps/api/event";
  */
 
 /** Parse hex color string to RGB components */
-function hexToRgb(hex: string) {
+export function hexToRgb(hex: string) {
   const h = hex.replace("#", "");
   return {
     r: parseInt(h.substring(0, 2), 16) || 0,
@@ -105,106 +105,6 @@ function renderComets(
 
   ctx.restore();
 }
-
-/**
- * Silkspear-style spear-tip ornament drawn at the leading edge of a string
- * while it deploys or retracts. Five forward-pointing curved blades — central
- * spike, inner pair, outer pair — converge at a spindle body with a small
- * accent bead. (dirX, dirY) is the unit motion vector along which the central
- * spike points; barbs splay perpendicular. Caller gates visibility via
- * `opacity` (we expect them to map it from |clipVel| so the tip naturally
- * vanishes once the string lands and momentum decays).
- */
-function drawSpearTip(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  dirX: number,
-  dirY: number,
-  size: number,
-  r: number,
-  g: number,
-  b: number,
-  opacity: number,
-  // Glow opacity arg kept for call-site compatibility but unused — the filled
-  // silhouette doesn't need a separate glow pass to read clearly.
-  _glowOpacity: number,
-) {
-  if (opacity < 0.01 || size < 2) return;
-  // 90° CCW perpendicular for "across-axis" offsets.
-  const perpX = -dirY;
-  const perpY = dirX;
-  // Transform a tip-frame coordinate (along, across) into canvas space.
-  const tx = (along: number, across: number) => x + dirX * along + perpX * across;
-  const ty = (along: number, across: number) => y + dirY * along + perpY * across;
-
-  ctx.fillStyle = `rgba(${r},${g},${b},${opacity.toFixed(3)})`;
-
-  // One curved leaf-shaped blade from a base segment to a sharp tip.
-  // The blade's base sits perpendicular to its own axis (so each barb tapers
-  // toward its own tip rather than the spear's forward axis).
-  const blade = (tipA: number, tipC: number, baseA: number, halfW: number, curve: number) => {
-    const ba = tipA - baseA;
-    const bc = tipC;
-    const len = Math.hypot(ba, bc) || 1;
-    // Perpendicular to the blade axis, in tip-frame.
-    const pA = -bc / len;
-    const pC = ba / len;
-    const midA = (baseA + tipA) * 0.5;
-    const midC = tipC * 0.5;
-
-    const b1A = baseA + pA * halfW, b1C = pC * halfW;
-    const b2A = baseA - pA * halfW, b2C = -pC * halfW;
-    const c1A = midA + pA * (halfW + curve), c1C = midC + pC * (halfW + curve);
-    const c2A = midA - pA * (halfW + curve), c2C = midC - pC * (halfW + curve);
-
-    ctx.beginPath();
-    ctx.moveTo(tx(b1A, b1C), ty(b1A, b1C));
-    ctx.quadraticCurveTo(tx(c1A, c1C), ty(c1A, c1C), tx(tipA, tipC), ty(tipA, tipC));
-    ctx.quadraticCurveTo(tx(c2A, c2C), ty(c2A, c2C), tx(b2A, b2C), ty(b2A, b2C));
-    ctx.closePath();
-    ctx.fill();
-  };
-
-  // Five forward-pointing blades. Tip positions in tip-frame: along grows
-  // toward the leading edge, across is symmetric ±. Outer barbs are slightly
-  // shorter but splay wider; inner barbs sit between the center spike and
-  // the outer ones; the central spike is the longest reach.
-  const baseA = -size * 0.18;
-  const halfW = size * 0.085;
-  const curve = size * 0.05;
-  blade( size * 1.00,  0,            baseA,           halfW * 1.05, curve);  // center spike
-  blade( size * 0.85,  size * 0.30,  baseA * 0.6,     halfW,        curve);  // inner upper
-  blade( size * 0.85, -size * 0.30,  baseA * 0.6,     halfW,        curve);  // inner lower
-  blade( size * 0.62,  size * 0.62,  baseA * 0.3,     halfW * 1.05, curve);  // outer upper
-  blade( size * 0.62, -size * 0.62,  baseA * 0.3,     halfW * 1.05, curve);  // outer lower
-
-  // Central spindle body — stretched diamond running along the spear axis,
-  // grounding all the blades at a common origin and giving the silhouette its
-  // ornate "knot" feel.
-  const spA = size * 0.32;   // front of spindle
-  const spB = -size * 0.40;  // back tail point
-  const spW = size * 0.13;   // half-width at widest
-  ctx.beginPath();
-  ctx.moveTo(tx(spA, 0), ty(spA, 0));
-  ctx.quadraticCurveTo(tx(0, spW),  ty(0, spW),  tx(spB, 0), ty(spB, 0));
-  ctx.quadraticCurveTo(tx(0, -spW), ty(0, -spW), tx(spA, 0), ty(spA, 0));
-  ctx.closePath();
-  ctx.fill();
-
-  // Small accent bead in the center — only at sizes large enough to read.
-  if (size >= 8) {
-    ctx.fillStyle = `rgba(${r},${g},${b},${(opacity * 0.55).toFixed(3)})`;
-    const cx = tx(-size * 0.05, 0);
-    const cy = ty(-size * 0.05, 0);
-    ctx.beginPath();
-    ctx.arc(cx, cy, size * 0.06, 0, Math.PI * 2);
-    ctx.fill();
-  }
-}
-// Keep the helper "live" while its call sites are commented out so the
-// unused-locals lint doesn't strip it. Uncomment the calls to re-enable.
-void drawSpearTip;
 
 interface SignalStringProps {
   state: string;

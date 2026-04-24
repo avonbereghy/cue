@@ -43,6 +43,13 @@ function saveRevivedSessions(revived: RevivedSession[]) {
   localStorage.setItem(REVIVED_STORAGE_KEY, JSON.stringify(revived));
 }
 
+/** Compacting and clearing are ordering-transparent — entering one of these
+ *  states should not move the session in the list. */
+const isOrderingNeutral = (st: string) => st === "compacting" || st === "clearing";
+
+/** Quiescent = terminal-for-this-turn. Used by the settle/reorder gating. */
+const isQuiescent = (st: string) => st === "idle" || st === "done";
+
 interface SessionsTabProps {
   sessions: EnrichedSession[];
 }
@@ -414,14 +421,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       .then((preset) => loadPresetEngine(preset))
       .catch(() => {});
   }, [signalMode, activePresetId, presetBootAttempted]);
-
-  // Live audio disabled — Core Audio Taps permission issue
-  // useEffect(() => {
-  //   if (signalMode === "live") {
-  //     invoke("start_live_audio").catch((e) => console.warn("Live audio start failed:", e));
-  //     return () => { invoke("stop_live_audio").catch(() => {}); };
-  //   }
-  // }, [signalMode]);
 
   const toggleSessionCollapse = (sessionId: string) => {
     setCollapsedSessions((prev) => {
@@ -1297,20 +1296,14 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
   const SETTLE_MS = 5000;
 
-  // Compacting and clearing are ordering-transparent — entering one of these
-  // states should not move the session in the list. We track the most recent
-  // non-neutral state per session so the sort/invariant logic can treat a
-  // compacting session as if it were still in its prior state.
-  const isOrderingNeutral = useCallback(
-    (st: string) => st === "compacting" || st === "clearing",
-    [],
-  );
+  // Track the most recent non-neutral state per session so the sort/invariant
+  // logic can treat a compacting session as if it were still in its prior state.
   const orderingStateRef = useRef<Map<string, string>>(new Map());
   const effectiveState = useCallback((s: EnrichedSession) => {
     const st = s.info.state;
     if (!isOrderingNeutral(st)) return st;
     return orderingStateRef.current.get(s.info.id) ?? st;
-  }, [isOrderingNeutral]);
+  }, []);
 
   // The "desired" fully-sorted order (used by the deferred full rearrange)
   const reorderPriority = useCallback((s: EnrichedSession) => {
@@ -1368,8 +1361,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // active sessions so the longest-working session stays on top.
   const activeSinceRef = useRef<Map<string, number>>(new Map());
 
-  const isQuiescent = useCallback((st: string) => st === "idle" || st === "done", []);
-
   // Check whether ALL sessions are settled (idle/done for 5s+)
   const allSettled = useCallback((list: EnrichedSession[], now: number) => {
     return list.every((s) => {
@@ -1377,7 +1368,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       const since = settledSinceRef.current.get(s.info.id);
       return since !== undefined && (now - since) >= SETTLE_MS;
     });
-  }, [isQuiescent, effectiveState]);
+  }, [effectiveState]);
 
   // Build the active (non-ended) session list.
   // Team children (spawned via TeamCreate) are separated so they don't

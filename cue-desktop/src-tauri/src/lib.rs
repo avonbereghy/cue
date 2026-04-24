@@ -188,12 +188,7 @@ fn quit_app(app: AppHandle) {
 
 #[tauri::command]
 fn get_sessions(state: State<'_, AppState>) -> Vec<EnrichedSession> {
-    let sessions = state.monitor.enriched_sessions.lock().unwrap().clone();
-    for s in &sessions {
-        log::info!("get_sessions: id={} state={} active_subagents={} has_subagents={}",
-            &s.info.id[..8], &s.info.state, s.info.active_subagents, s.has_subagents);
-    }
-    sessions
+    state.monitor.enriched_sessions.lock().unwrap().clone()
 }
 
 #[tauri::command]
@@ -417,17 +412,17 @@ fn configure_hooks(hook_path: String) -> Result<(), String> {
     env_detect::configure_hooks(&hook_path)
 }
 
-#[tauri::command]
-fn approve_permission(
-    state: State<'_, AppState>,
-    session_id: String,
-    request_id: String,
+fn record_permission_decision(
+    state: &State<'_, AppState>,
+    session_id: &str,
+    request_id: &str,
+    decision: models::PermissionDecision,
+    label: &str,
 ) -> Result<(), String> {
-    log::info!("Permission approved: session={}, request={}", session_id, request_id);
-    state.pending_permissions.resolve(&request_id, models::PermissionDecision::Allow)?;
+    log::info!("Permission {}: session={}, request={}", label.to_lowercase(), session_id, request_id);
+    state.pending_permissions.resolve(request_id, decision)?;
 
-    // Log the decision using stored metadata
-    if let Some(req) = state.permission_metadata.lock().unwrap().remove(&request_id) {
+    if let Some(req) = state.permission_metadata.lock().unwrap().remove(request_id) {
         let summary = summary_formatter::format_tool_summary(&req.tool_name, &req.tool_input);
         let entry = models::PermissionLogEntry {
             timestamp: std::time::SystemTime::now()
@@ -437,12 +432,20 @@ fn approve_permission(
             session_id: req.session_id,
             tool_name: req.tool_name,
             tool_input_summary: summary,
-            decision: "Allow".to_string(),
+            decision: label.to_string(),
         };
         let _ = permission_log::append_permission_log(&entry);
     }
-
     Ok(())
+}
+
+#[tauri::command]
+fn approve_permission(
+    state: State<'_, AppState>,
+    session_id: String,
+    request_id: String,
+) -> Result<(), String> {
+    record_permission_decision(&state, &session_id, &request_id, models::PermissionDecision::Allow, "Allow")
 }
 
 #[tauri::command]
@@ -451,26 +454,7 @@ fn deny_permission(
     session_id: String,
     request_id: String,
 ) -> Result<(), String> {
-    log::info!("Permission denied: session={}, request={}", session_id, request_id);
-    state.pending_permissions.resolve(&request_id, models::PermissionDecision::Deny)?;
-
-    // Log the decision using stored metadata
-    if let Some(req) = state.permission_metadata.lock().unwrap().remove(&request_id) {
-        let summary = summary_formatter::format_tool_summary(&req.tool_name, &req.tool_input);
-        let entry = models::PermissionLogEntry {
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs_f64(),
-            session_id: req.session_id,
-            tool_name: req.tool_name,
-            tool_input_summary: summary,
-            decision: "Deny".to_string(),
-        };
-        let _ = permission_log::append_permission_log(&entry);
-    }
-
-    Ok(())
+    record_permission_decision(&state, &session_id, &request_id, models::PermissionDecision::Deny, "Deny")
 }
 
 #[tauri::command]
@@ -614,15 +598,19 @@ fn take_window_screenshot(_app: AppHandle) -> Result<String, String> {
     Err("Screenshots only supported on macOS".to_string())
 }
 
+/// Reject any identifier containing characters outside [A-Za-z0-9-]. Used for
+/// preset IDs and resumed session UUIDs — both flow into filesystem paths.
+fn validate_alphanumeric_id(id: &str, label: &str) -> Result<(), String> {
+    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err(format!("Invalid {}", label));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn revive_session(session_id: String, workspace: String) -> Result<(), String> {
-    // Validate session_id is a plausible UUID (alphanumeric + hyphens only)
-    if !session_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-        return Err("Invalid session ID".to_string());
-    }
-    // Validate workspace path
+    validate_alphanumeric_id(&session_id, "session ID")?;
     security::sanitize_workspace_path(&workspace).map_err(|e| e.to_string())?;
-
     spawn_terminal_with_resume(&session_id, &workspace)
 }
 
@@ -668,9 +656,7 @@ fn list_presets() -> Result<Vec<models::PresetSummary>, String> {
 
 #[tauri::command]
 fn load_preset(id: String) -> Result<models::SignalPreset, String> {
-    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-        return Err("Invalid preset ID".to_string());
-    }
+    validate_alphanumeric_id(&id, "preset ID")?;
     let path = paths::presets_dir().join(format!("{}.json", id));
     let data = std::fs::read(&path)
         .map_err(|e| format!("Failed to read preset: {}", e))?;
@@ -680,9 +666,7 @@ fn load_preset(id: String) -> Result<models::SignalPreset, String> {
 
 #[tauri::command]
 fn delete_preset(id: String) -> Result<(), String> {
-    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-        return Err("Invalid preset ID".to_string());
-    }
+    validate_alphanumeric_id(&id, "preset ID")?;
     let path = paths::presets_dir().join(format!("{}.json", id));
     if path.exists() {
         std::fs::remove_file(&path)
@@ -693,9 +677,7 @@ fn delete_preset(id: String) -> Result<(), String> {
 
 #[tauri::command]
 fn rename_preset(id: String, name: String) -> Result<(), String> {
-    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-        return Err("Invalid preset ID".to_string());
-    }
+    validate_alphanumeric_id(&id, "preset ID")?;
     let path = paths::presets_dir().join(format!("{}.json", id));
     let data = std::fs::read(&path)
         .map_err(|e| format!("Failed to read preset: {}", e))?;
