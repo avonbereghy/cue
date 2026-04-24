@@ -19,7 +19,7 @@ use std::time::SystemTime;
 /// Sort sessions by start time. Used by both the monitor and CLI.
 pub fn sort_sessions(sessions: impl IntoIterator<Item = SessionInfo>) -> Vec<SessionInfo> {
     let mut list: Vec<_> = sessions.into_iter().collect();
-    list.sort_by(|a, b| a.started_at.partial_cmp(&b.started_at).unwrap_or(std::cmp::Ordering::Equal));
+    list.sort_by(|a, b| a.started_at.total_cmp(&b.started_at));
     list
 }
 
