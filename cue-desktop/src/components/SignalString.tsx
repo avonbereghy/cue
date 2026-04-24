@@ -106,6 +106,106 @@ function renderComets(
   ctx.restore();
 }
 
+/**
+ * Silkspear-style spear-tip ornament drawn at the leading edge of a string
+ * while it deploys or retracts. Five forward-pointing curved blades — central
+ * spike, inner pair, outer pair — converge at a spindle body with a small
+ * accent bead. (dirX, dirY) is the unit motion vector along which the central
+ * spike points; barbs splay perpendicular. Caller gates visibility via
+ * `opacity` (we expect them to map it from |clipVel| so the tip naturally
+ * vanishes once the string lands and momentum decays).
+ */
+function drawSpearTip(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  dirX: number,
+  dirY: number,
+  size: number,
+  r: number,
+  g: number,
+  b: number,
+  opacity: number,
+  // Glow opacity arg kept for call-site compatibility but unused — the filled
+  // silhouette doesn't need a separate glow pass to read clearly.
+  _glowOpacity: number,
+) {
+  if (opacity < 0.01 || size < 2) return;
+  // 90° CCW perpendicular for "across-axis" offsets.
+  const perpX = -dirY;
+  const perpY = dirX;
+  // Transform a tip-frame coordinate (along, across) into canvas space.
+  const tx = (along: number, across: number) => x + dirX * along + perpX * across;
+  const ty = (along: number, across: number) => y + dirY * along + perpY * across;
+
+  ctx.fillStyle = `rgba(${r},${g},${b},${opacity.toFixed(3)})`;
+
+  // One curved leaf-shaped blade from a base segment to a sharp tip.
+  // The blade's base sits perpendicular to its own axis (so each barb tapers
+  // toward its own tip rather than the spear's forward axis).
+  const blade = (tipA: number, tipC: number, baseA: number, halfW: number, curve: number) => {
+    const ba = tipA - baseA;
+    const bc = tipC;
+    const len = Math.hypot(ba, bc) || 1;
+    // Perpendicular to the blade axis, in tip-frame.
+    const pA = -bc / len;
+    const pC = ba / len;
+    const midA = (baseA + tipA) * 0.5;
+    const midC = tipC * 0.5;
+
+    const b1A = baseA + pA * halfW, b1C = pC * halfW;
+    const b2A = baseA - pA * halfW, b2C = -pC * halfW;
+    const c1A = midA + pA * (halfW + curve), c1C = midC + pC * (halfW + curve);
+    const c2A = midA - pA * (halfW + curve), c2C = midC - pC * (halfW + curve);
+
+    ctx.beginPath();
+    ctx.moveTo(tx(b1A, b1C), ty(b1A, b1C));
+    ctx.quadraticCurveTo(tx(c1A, c1C), ty(c1A, c1C), tx(tipA, tipC), ty(tipA, tipC));
+    ctx.quadraticCurveTo(tx(c2A, c2C), ty(c2A, c2C), tx(b2A, b2C), ty(b2A, b2C));
+    ctx.closePath();
+    ctx.fill();
+  };
+
+  // Five forward-pointing blades. Tip positions in tip-frame: along grows
+  // toward the leading edge, across is symmetric ±. Outer barbs are slightly
+  // shorter but splay wider; inner barbs sit between the center spike and
+  // the outer ones; the central spike is the longest reach.
+  const baseA = -size * 0.18;
+  const halfW = size * 0.085;
+  const curve = size * 0.05;
+  blade( size * 1.00,  0,            baseA,           halfW * 1.05, curve);  // center spike
+  blade( size * 0.85,  size * 0.30,  baseA * 0.6,     halfW,        curve);  // inner upper
+  blade( size * 0.85, -size * 0.30,  baseA * 0.6,     halfW,        curve);  // inner lower
+  blade( size * 0.62,  size * 0.62,  baseA * 0.3,     halfW * 1.05, curve);  // outer upper
+  blade( size * 0.62, -size * 0.62,  baseA * 0.3,     halfW * 1.05, curve);  // outer lower
+
+  // Central spindle body — stretched diamond running along the spear axis,
+  // grounding all the blades at a common origin and giving the silhouette its
+  // ornate "knot" feel.
+  const spA = size * 0.32;   // front of spindle
+  const spB = -size * 0.40;  // back tail point
+  const spW = size * 0.13;   // half-width at widest
+  ctx.beginPath();
+  ctx.moveTo(tx(spA, 0), ty(spA, 0));
+  ctx.quadraticCurveTo(tx(0, spW),  ty(0, spW),  tx(spB, 0), ty(spB, 0));
+  ctx.quadraticCurveTo(tx(0, -spW), ty(0, -spW), tx(spA, 0), ty(spA, 0));
+  ctx.closePath();
+  ctx.fill();
+
+  // Small accent bead in the center — only at sizes large enough to read.
+  if (size >= 8) {
+    ctx.fillStyle = `rgba(${r},${g},${b},${(opacity * 0.55).toFixed(3)})`;
+    const cx = tx(-size * 0.05, 0);
+    const cy = ty(-size * 0.05, 0);
+    ctx.beginPath();
+    ctx.arc(cx, cy, size * 0.06, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+// Keep the helper "live" while its call sites are commented out so the
+// unused-locals lint doesn't strip it. Uncomment the calls to re-enable.
+void drawSpearTip;
+
 interface SignalStringProps {
   state: string;
   /** Frequency multiplier (0.3 = slow, 1.0 = normal, 3.0 = fast) */
@@ -192,6 +292,14 @@ interface SignalStringProps {
    * Defaults to 3 so callers that don't pass this see the legacy behavior.
    */
   baseBandsTarget?: number;
+  /**
+   * Per-base-band amplitude multiplier, indexed by bandIdx (0=bass, 1=mids,
+   * 2=treble). Applied post-tanh so the string's visible vertical span
+   * scales by the multiplier without clipping at saturation. Used to give
+   * each successive progressive working string (strings 1..5 from SessionCard)
+   * a slightly louder amplitude than the one before. Defaults to [1,1,1].
+   */
+  baseBandsAmpMuls?: [number, number, number];
 }
 
 export interface ExtraBandSpec {
@@ -209,9 +317,15 @@ export interface ExtraBandSpec {
    * moment. Stable per id (seeded by the caller).
    */
   phaseJitter?: number;
+  /**
+   * Per-band amplitude multiplier applied post-tanh. Used to give strings 4/5
+   * (progressive working strings) their compounded 5% amplitude bumps.
+   * Defaults to 1.
+   */
+  amplitudeMul?: number;
 }
 
-export function SignalString({ state, frequency = 1.0, revived = false, pulses, comets, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 0.5, cordDeployForce = 1.0, cordRetractForce = 1.0, stringSpread = 0.15, sessionId = "", contentRef, keyReleaseSpeed: _keyReleaseSpeed = 0.4, onStringsConnected, extraBands, suppressBaseBands = false, baseBandsTarget = 3 }: SignalStringProps) {
+export function SignalString({ state, frequency = 1.0, revived = false, pulses, comets, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 0.5, cordDeployForce = 1.0, cordRetractForce = 1.0, stringSpread = 0.15, sessionId = "", contentRef, keyReleaseSpeed: _keyReleaseSpeed = 0.4, onStringsConnected, extraBands, suppressBaseBands = false, baseBandsTarget = 3, baseBandsAmpMuls = [1, 1, 1] }: SignalStringProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const pageVisible = usePageVisible();
@@ -865,21 +979,22 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         return;
       }
 
-      // State-aware target color. Attention states (error, waiting) win over
-      // everything else — if the user needs to respond, the string color must
-      // communicate that even when subagents are stacked on top. Priority:
-      //   error > waiting > idle > configured default
-      // Thinking used to force orange, but working↔thinking is a common
-      // in-turn oscillation and recoloring mid-turn reads as a regression —
-      // strings now hold the working/default color across that transition.
-      // Subagent state does not recolor the base bands either (subagent-
-      // specific blue lines come in via extraBands).
+      // State-aware target color. A base/subagent string is constrained to
+      // exactly four colours:
+      //   error    → red
+      //   waiting  → yellow
+      //   subagent → blue (matches the subagent badge & the diagonal extras)
+      //   anything else → configured default (white)
+      // Idle and thinking get no special colour — they fall through to the
+      // default, so transitioning into idle/thinking from working stays white,
+      // and transitioning into idle from waiting/error/subagent visibly lerps
+      // back to white. Priority: error > waiting > subagent > default.
       const targetColor = state === "error"
         ? (isDark ? { r: 239, g: 68, b: 68 } : { r: 185, g: 28, b: 28 })     // red
         : state === "waiting"
-        ? (isDark ? { r: 234, g: 179, b: 8 } : { r: 161, g: 98, b: 7 })       // amber/yellow
-        : state === "idle"
-        ? (isDark ? { r: 212, g: 165, b: 116 } : { r: 168, g: 162, b: 158 })  // idle tan / gray
+        ? (isDark ? { r: 234, g: 179, b: 8 } : { r: 161, g: 98, b: 7 })       // yellow
+        : state === "subagent"
+        ? (isDark ? { r: 124, g: 197, b: 255 } : { r: 42, g: 139, b: 217 })   // blue (#7CC5FF / #2A8BD9)
         : defaultColor;
 
       // Initialize on first frame
@@ -1270,7 +1385,9 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         const INHARMONICITY = 0.0005; // slight detuning for organic phase drift
         const allBands = [
           { enabled: signalBass, bandIdx: 0, binStart: 0, binEnd: Math.floor(numBins * 0.25), startMode: 1, numModes: 3, speed: 0.7, travel: -0.3, phaseOff: 0, gain: 2.2 * amp, lw: 1.5, opacity: 0.3, baseDamping: 4 },
-          { enabled: signalMids, bandIdx: 1, binStart: Math.floor(numBins * 0.25), binEnd: Math.floor(numBins * 0.6), startMode: 2, numModes: 4, speed: 1.4, travel: 0, phaseOff: 2.1, gain: 1.8 * amp, lw: 1.0, opacity: 0.25, baseDamping: 5 },
+          // mids travel was 0 → traveling wave collapsed to standing, producing
+          // bright pinch-point "dots" at x=1/3, 2/3 where modes 3 etc. share nodes.
+          { enabled: signalMids, bandIdx: 1, binStart: Math.floor(numBins * 0.25), binEnd: Math.floor(numBins * 0.6), startMode: 2, numModes: 4, speed: 1.4, travel: 0.55, phaseOff: 2.1, gain: 1.8 * amp, lw: 1.0, opacity: 0.25, baseDamping: 5 },
           { enabled: signalTreble, bandIdx: 2, binStart: Math.floor(numBins * 0.6), binEnd: numBins, startMode: 4, numModes: 6, speed: 2.8, travel: 0.4, phaseOff: 4.5, gain: 1.5 * amp, lw: 0.75, opacity: 0.2, baseDamping: 6 },
         ];
         const bands = allBands.filter(b => b.enabled);
@@ -1481,11 +1598,20 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             for (let x = 0; x <= w; x += 2) {
               let sum = 0;
               const xNorm = x / w;
+              // Edge-softened per-mode spatial phase. Without this, every mode's
+              // standing wave is sin(nπx) → modes 3, 6, 9 all have nodes at x=1/3
+              // and 2/3, so all trails collapse to the center axis at those two
+              // x values and stack into visible bright "dots". Multiplying by
+              // sin(πx) keeps the phase offset zero at x=0 and x=1 (so strings
+              // still land on their anchors) while scrambling the node
+              // positions in the middle.
+              const midMod = Math.sin(Math.PI * xNorm);
 
               for (let m = 0; m < band.numModes; m++) {
                 const mc = modeConsts[m];
-                const standing = Math.sin(mc.nEff * Math.PI * xNorm);
-                const traveling = Math.sin(mc.nEff * Math.PI * xNorm - band.travel * tOff * mc.n);
+                const spatialPhase = m * 0.55 * midMod;
+                const standing = Math.sin(mc.nEff * Math.PI * xNorm + spatialPhase);
+                const traveling = Math.sin(mc.nEff * Math.PI * xNorm + spatialPhase - band.travel * tOff * mc.n);
                 const spatial = standing * 0.6 + traveling * 0.4;
                 const temporal = Math.cos(tOff * (band.speed + m * 0.35) + band.phaseOff + m * 1.9);
                 sum += mc.mAmp * spatial * temporal;
@@ -1515,7 +1641,8 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
                 }
               }
 
-              const y = Math.tanh((sum * decayEnvelope + breath + whipContrib) * band.gain) * halfH;
+              const ampMul = baseBandsAmpMuls[band.bandIdx] ?? 1;
+              const y = Math.tanh((sum * decayEnvelope + breath + whipContrib) * band.gain) * halfH * ampMul;
               points.push(midY + yOffset + y);
             }
 
@@ -1554,6 +1681,45 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
 
           // Restore per-band clip
           if (!revived) ctx.restore();
+
+          // ── Spear-tip ornament at the leading edge ── (disabled for now)
+          // Visible only while the cord is in motion (deploying or retracting):
+          // opacity is driven by |clipVel|, which decays to 0 once the string
+          // lands or fully retracts, so the tip naturally disappears at rest.
+          // Direction follows the sign of clipVel — points right while
+          // deploying, points left while retracting — and tilts to the local
+          // wave tangent so it reads as attached to the cord.
+          // if (drawStrings && bandPaths[bi] && bandPaths[bi].length >= 2) {
+          //   const tipPts = bandPaths[bi];
+          //   const bandClip = clipFractionsRef.current[band.bandIdx];
+          //   const vel = clipVelsRef.current[band.bandIdx];
+          //   const speed = Math.abs(vel);
+          //   const tipAlpha = Math.min(1, speed * 1.2) * signalAlpha * (1 - sandBlend);
+          //   if (tipAlpha > 0.01 && bandClip > 0.005) {
+          //     const bandClipX = bandClip * w;
+          //     const idx = Math.max(1, Math.min(tipPts.length - 1, Math.floor(bandClipX / 2)));
+          //     const dx = 2;
+          //     const dy = tipPts[idx] - tipPts[idx - 1];
+          //     const len = Math.hypot(dx, dy) || 1;
+          //     const sign = vel >= 0 ? 1 : -1;
+          //     const tx = (dx / len) * sign;
+          //     const ty = (dy / len) * sign;
+          //     const tipSize = 11 + band.lw * 3;
+          //     drawSpearTip(
+          //       ctx,
+          //       bandClipX,
+          //       tipPts[idx],
+          //       tx,
+          //       ty,
+          //       tipSize,
+          //       scR,
+          //       scG,
+          //       scB,
+          //       tipAlpha,
+          //       tipAlpha * 0.35,
+          //     );
+          //   }
+          // }
         }
 
         // ── Extra bands (subagents) — diagonal axis renderer ──
@@ -1671,6 +1837,13 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             const g = st.spec.color.g;
             const b = st.spec.color.b;
 
+            // Capture the leading-edge position of the trail-0 path so we can
+            // hang a spear-tip ornament there once the loop finishes drawing.
+            // (disabled — re-enable alongside the drawSpearTip call below)
+            // let tipPx = 0;
+            // let tipPy = 0;
+            // let tipReady = false;
+
             for (let trail = 0; trail < numTrails; trail++) {
               const tOff = t - trail * trailSpacing;
               const alphaT = 1.0 - (trail / numTrails);
@@ -1685,10 +1858,14 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
                 if (tParam > st.clipFraction) break; // clip tip
 
                 let sum = 0;
+                // Edge-softened per-mode spatial phase — see note in base-band
+                // render loop. Prevents trail stacking at x=1/3, 2/3.
+                const midMod = Math.sin(Math.PI * tParam);
                 for (let m = 0; m < cfgBand.numModes; m++) {
                   const mc = modeConsts[m];
-                  const standing = Math.sin(mc.nEff * Math.PI * tParam);
-                  const traveling = Math.sin(mc.nEff * Math.PI * tParam - cfgBand.travel * tOff * mc.n);
+                  const spatialPhase = m * 0.55 * midMod;
+                  const standing = Math.sin(mc.nEff * Math.PI * tParam + spatialPhase);
+                  const traveling = Math.sin(mc.nEff * Math.PI * tParam + spatialPhase - cfgBand.travel * tOff * mc.n);
                   const spatial = standing * 0.6 + traveling * 0.4;
                   const temporal = Math.cos(tOff * (cfgBand.speed + m * 0.35) + cfgBand.phaseOff + (st.spec.phaseJitter ?? 0) + m * 1.9);
                   sum += mc.mAmp * spatial * temporal;
@@ -1709,10 +1886,12 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
                   }
                 }
 
-                const v = Math.tanh((sum * decayEnvelope + breath + whipContrib) * cfgBand.gain) * halfDisp;
+                const ampMulX = st.spec.amplitudeMul ?? 1;
+                const v = Math.tanh((sum * decayEnvelope + breath + whipContrib) * cfgBand.gain) * halfDisp * ampMulX;
                 const px = sx + u * tanX + v * nrmX;
                 const py = sy + u * tanY + v * nrmY;
                 if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+                // if (trail === 0) { tipPx = px; tipPy = py; tipReady = true; }
               }
               if (trail === 0) {
                 // glow pass
@@ -1728,6 +1907,32 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
               ctx.stroke();
             }
             ctx.globalAlpha = 1;
+
+            // ── Spear-tip on the subagent string ── (disabled for now)
+            // Only visible during deploy/retract motion (|clipVel|-driven
+            // opacity). Direction follows the axis tangent — flipped when
+            // retracting — so the tip always points where the cord is heading.
+            // if (tipReady) {
+            //   const speed = Math.abs(st.clipVel);
+            //   const tipAlpha = Math.min(1, speed * 1.2) * signalAlpha * (1 - sandBlend);
+            //   if (tipAlpha > 0.01) {
+            //     const sign = st.clipVel >= 0 ? 1 : -1;
+            //     const tipSize = 11 + cfgBand.lw * 3;
+            //     drawSpearTip(
+            //       ctx,
+            //       tipPx,
+            //       tipPy,
+            //       tanX * sign,
+            //       tanY * sign,
+            //       tipSize,
+            //       r,
+            //       g,
+            //       b,
+            //       tipAlpha,
+            //       tipAlpha * 0.35,
+            //     );
+            //   }
+            // }
           });
           for (const id of idsToDrop) extraMap.delete(id);
         }
