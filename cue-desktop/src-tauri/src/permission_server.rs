@@ -68,31 +68,13 @@ impl PendingRequests {
     }
 }
 
-/// Format the HTTP JSON response body for an Allow decision.
-pub fn format_allow_response() -> String {
-    serde_json::json!({
-        "hookSpecificOutput": {
-            "hookEventName": "PermissionRequest",
-            "decision": {
-                "behavior": "allow"
-            }
-        }
-    })
-    .to_string()
-}
+/// HTTP JSON response body for an Allow decision.
+pub const ALLOW_RESPONSE: &str =
+    r#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#;
 
-/// Format the HTTP JSON response body for a Deny decision.
-pub fn format_deny_response() -> String {
-    serde_json::json!({
-        "hookSpecificOutput": {
-            "hookEventName": "PermissionRequest",
-            "decision": {
-                "behavior": "deny"
-            }
-        }
-    })
-    .to_string()
-}
+/// HTTP JSON response body for a Deny decision.
+pub const DENY_RESPONSE: &str =
+    r#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -181,39 +163,23 @@ mod tests {
 
     #[test]
     fn test_format_allow_response() {
-        let response = format_allow_response();
-        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
-
-        assert_eq!(
-            parsed["hookSpecificOutput"]["hookEventName"],
-            "PermissionRequest"
-        );
-        assert_eq!(
-            parsed["hookSpecificOutput"]["decision"]["behavior"],
-            "allow"
-        );
+        let parsed: serde_json::Value = serde_json::from_str(ALLOW_RESPONSE).unwrap();
+        assert_eq!(parsed["hookSpecificOutput"]["hookEventName"], "PermissionRequest");
+        assert_eq!(parsed["hookSpecificOutput"]["decision"]["behavior"], "allow");
     }
 
     #[test]
     fn test_format_deny_response() {
-        let response = format_deny_response();
-        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
-
-        assert_eq!(
-            parsed["hookSpecificOutput"]["hookEventName"],
-            "PermissionRequest"
-        );
-        assert_eq!(
-            parsed["hookSpecificOutput"]["decision"]["behavior"],
-            "deny"
-        );
+        let parsed: serde_json::Value = serde_json::from_str(DENY_RESPONSE).unwrap();
+        assert_eq!(parsed["hookSpecificOutput"]["hookEventName"], "PermissionRequest");
+        assert_eq!(parsed["hookSpecificOutput"]["decision"]["behavior"], "deny");
     }
 
     #[test]
     fn test_response_formats_are_valid_json() {
         // Verify both responses are parseable and have the exact expected structure
-        let allow: serde_json::Value = serde_json::from_str(&format_allow_response()).unwrap();
-        let deny: serde_json::Value = serde_json::from_str(&format_deny_response()).unwrap();
+        let allow: serde_json::Value = serde_json::from_str(ALLOW_RESPONSE).unwrap();
+        let deny: serde_json::Value = serde_json::from_str(DENY_RESPONSE).unwrap();
 
         // They should differ only in the behavior field
         assert_eq!(
