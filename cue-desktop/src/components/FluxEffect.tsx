@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { usePageVisible } from "@/hooks/usePageVisible";
+import { useOnScreen } from "@/hooks/useOnScreen";
 import { getFrequencyData } from "@/lib/presetEngine";
 import { getDisturbances } from "@/lib/fluxDisturbance";
 
@@ -292,6 +293,11 @@ export function FluxEffect({
   }>({ quad: -1, base: -1, end: -1, vel: -1, seed: -1 });
   const instExtRef = useRef<ANGLE_instanced_arrays | null>(null);
   const pageVisible = usePageVisible();
+  const onScreen = useOnScreen(canvasRef);
+  // Combined gate: only drive the render loop when the card is actually
+  // visible on screen AND the app's tab/window is focused. Cards scrolled
+  // out of view used to burn 60fps forever; this collapses their cost to zero.
+  const renderActive = pageVisible && onScreen;
 
   const colorRef = useRef(color);
   const alphaRef = useRef(alpha);
@@ -474,7 +480,7 @@ export function FluxEffect({
     const gl = glRef.current;
     const ext = instExtRef.current;
     const prog = progRef.current;
-    if (!gl || !ext || !prog || !pageVisible) {
+    if (!gl || !ext || !prog || !renderActive) {
       cancelAnimationFrame(rafRef.current);
       lastTimeRef.current = 0;
       return;
@@ -659,8 +665,11 @@ export function FluxEffect({
         }
       }
 
-      // Hard cut-off once fully retracted — one final clear, then no more
-      // draws until reactivation. This eliminates trailing sub-pixel flicker
+      // Hard cut-off once fully retracted — one final clear, then stop
+      // scheduling new frames entirely. Previously this rescheduled rAF
+      // forever (burning a loop per idle card); reactivation now re-runs
+      // the enclosing effect via the `active` dep below, which kicks a
+      // fresh rAF. The one-time clear eliminates trailing sub-pixel flicker
       // from degenerate quads after the needles have visibly finished fading.
       if (!activeRef.current && growthRef.current <= 0) {
         if (!cleared) {
@@ -668,7 +677,8 @@ export function FluxEffect({
           gl.clear(gl.COLOR_BUFFER_BIT);
           cleared = true;
         }
-        rafRef.current = requestAnimationFrame(render);
+        rafRef.current = 0;
+        lastTimeRef.current = 0;
         return;
       }
       cleared = false;
@@ -724,7 +734,10 @@ export function FluxEffect({
 
     rafRef.current = requestAnimationFrame(render);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [pageVisible]);
+    // `active` is in deps so a re-activation kicks a fresh rAF after the
+    // idle-exit branch above has stopped the loop. renderActive collapses
+    // the page-visibility + on-screen gates into a single dep.
+  }, [renderActive, active]);
 
   return (
     <canvas
