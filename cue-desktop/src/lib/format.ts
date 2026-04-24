@@ -67,6 +67,28 @@ export function formatModelName(model: string): string {
   return model;
 }
 
+/**
+ * Strip Claude Code slash-command wrapper tags from a prompt-like string.
+ * Claude Code represents slash commands in JSONL user messages as:
+ *   <command-message>name</command-message>
+ *   <command-name>/name</command-name>
+ *   <command-args>args...</command-args>
+ * Collapses the wrapper to a single readable line: "/name args..." when
+ * tags are detected, otherwise returns the input unchanged. Runs on every
+ * display site (the snippet pill, tray preview, popup) as a belt-and-
+ * suspenders defense — the backend also strips, but this guarantees the
+ * tags never survive to the UI even if the backend pipeline changes.
+ */
+export function cleanPromptText(text: string | null | undefined): string {
+  if (!text) return "";
+  if (!text.includes("<command-")) return text;
+  const name = /<command-name>([^<]*)<\/command-name>/.exec(text)?.[1]?.trim() ?? "";
+  const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(text)?.[1]?.trim() ?? "";
+  const collapsed = [name, args].filter(Boolean).join(" ").trim();
+  if (collapsed) return collapsed;
+  return text.replace(/<\/?command-(?:message|name|args)>/g, "").replace(/\s+/g, " ").trim();
+}
+
 function modelPricing(model: string): { inputPerToken: number; outputPerToken: number } {
   const m = model.toLowerCase();
   if (m.includes("opus")) {

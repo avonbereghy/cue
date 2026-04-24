@@ -31,7 +31,7 @@ function effortTextClass(level: string): string {
 }
 import type { EnrichedSession } from "@/lib/types";
 import { STATE_HEX, STATE_HEX_LIGHT, STATE_DOT_HEX, STATE_DOT_HEX_LIGHT, STATE_BADGE_HEX, STATE_BADGE_HEX_LIGHT } from "@/lib/types";
-import { formatTokens, formatDuration, formatClockTime, formatElapsedCompact } from "@/lib/format";
+import { formatTokens, formatDuration, formatClockTime, formatElapsedCompact, cleanPromptText } from "@/lib/format";
 import { SignalString } from "./SignalString";
 import type { StrikePulse, CometPulse, ExtraBandSpec } from "./SignalString";
 import { FluxEffect, FLUX_EXIT_MS } from "./FluxEffect";
@@ -1234,9 +1234,10 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
               if (hidePromptPill || !isDuplicate || metrics.customTitle) return null;
               if (metrics.lastPromptSessionId && metrics.lastPromptSessionId !== info.id) return null;
               const preferAssistant = info.state !== "thinking" && !!metrics.lastAssistantText;
-              const text = preferAssistant
+              const rawText = preferAssistant
                 ? (metrics.lastAssistantText as string)
                 : metrics.lastPrompt;
+              const text = cleanPromptText(rawText);
               if (!text) return null;
               const bodyColor = badgeHex.text;
               const glyphColor = labelHex;
