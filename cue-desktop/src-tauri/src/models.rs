@@ -196,6 +196,12 @@ pub struct SessionMetrics {
     /// Used to infer "waiting" state from the JSONL when the hook doesn't fire.
     #[serde(default)]
     pub pending_tool_use: bool,
+    /// Timestamp (unix secs) of the most recent assistant message with
+    /// `stop_reason == "end_turn"`. When this is newer than the session's
+    /// `stateChangedAt` and no newer pending tool_use exists, the poller
+    /// treats the turn as finished and demotes stuck working/thinking cards.
+    #[serde(default)]
+    pub last_end_turn_ts: Option<f64>,
     /// True if the latest assistant message contains a non-empty `text` content
     /// block — i.e., user-visible response prose has begun streaming. Used to
     /// promote `thinking` → `working` for text-only responses where neither

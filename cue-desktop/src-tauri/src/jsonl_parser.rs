@@ -57,6 +57,10 @@ pub struct ParsedEntry {
     pub slug: Option<String>,
     /// True if this assistant message has stop_reason "tool_use"
     pub has_pending_tool_use: bool,
+    /// True if this assistant message has stop_reason "end_turn" — Claude's
+    /// own signal that the turn has finished. Used to demote stuck working/
+    /// thinking cards when the Stop hook fails to fire (see session_monitor).
+    pub has_end_turn: bool,
     /// True if this entry is a tool_result
     pub is_tool_result: bool,
     /// Name of the last tool_use in this message (for running tool display)
@@ -246,8 +250,10 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
             }
 
             // Detect pending tool use (session is waiting for permission/input)
-            if message.get("stop_reason").and_then(|v| v.as_str()) == Some("tool_use") {
-                entry.has_pending_tool_use = true;
+            match message.get("stop_reason").and_then(|v| v.as_str()) {
+                Some("tool_use") => entry.has_pending_tool_use = true,
+                Some("end_turn") => entry.has_end_turn = true,
+                _ => {}
             }
         }
     }
@@ -772,6 +778,10 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
     // Detect pending tool_use: scan backwards from end to find if the last
     // assistant message with tool_use has no subsequent tool_result.
     // This indicates the session is waiting for permission/user input.
+    // Simultaneously capture `last_end_turn_ts` from the same scan — the last
+    // assistant message (going backward) that has stop_reason=end_turn AND no
+    // newer pending tool_use is the ground-truth "turn finished" signal.
+    let mut saw_pending_tool_use = false;
     for entry in entries.iter().rev() {
         if entry.is_tool_result {
             // A tool_result was found before any pending assistant — not waiting
@@ -781,9 +791,28 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
             m.pending_tool_use = true;
             m.running_tool_name = entry.running_tool_name.clone();
             m.running_tool_target = entry.running_tool_target.clone();
+            saw_pending_tool_use = true;
             break;
         }
         // Skip non-relevant entries (e.g., progress, thinking)
+    }
+    if !saw_pending_tool_use {
+        // No pending tool_use at the tail. Find the newest assistant message
+        // with end_turn. We only trust it if nothing newer is a pending
+        // tool_use (already handled above) or a user prompt starting a new
+        // turn — that user-prompt check is deferred to session_monitor where
+        // `stateChangedAt` encodes the same boundary.
+        for entry in entries.iter().rev() {
+            if entry.has_end_turn {
+                m.last_end_turn_ts = entry.timestamp;
+                break;
+            }
+            // Stop at the first user prompt: anything older belongs to a
+            // previous turn and doesn't reflect current state.
+            if entry.is_user_message {
+                break;
+            }
+        }
     }
 
     // Todo items: accumulate from all entries.
@@ -1162,6 +1191,84 @@ mod tests {
 
         let m = parse_jsonl_to_session_metrics(&path).unwrap();
         assert!(m.last_assistant_has_text);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── stop_reason=end_turn detection ────────────────────────────────
+    // Powers the session_monitor turn-ended recovery path: Claude's own
+    // "I'm done" signal, used to demote stuck working/thinking cards when
+    // the Stop hook failed to fire. Deterministic — no time thresholds.
+
+    #[test]
+    fn test_parse_entry_has_end_turn() {
+        let line = r#"{"type":"assistant","timestamp":1710000000.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}}"#;
+        let entries = parse_jsonl_content(line);
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].has_end_turn);
+        assert!(!entries[0].has_pending_tool_use);
+    }
+
+    #[test]
+    fn test_metrics_captures_last_end_turn_ts() {
+        // user → assistant(end_turn) → nothing newer. Should populate the ts.
+        let user = r#"{"type":"user","timestamp":1.0,"message":{"content":"hi"}}"#;
+        let assistant = r#"{"type":"assistant","timestamp":2.5,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}}"#;
+
+        let dir = std::env::temp_dir().join("cue_test_end_turn_ts");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        std::fs::write(&path, format!("{}\n{}", user, assistant)).unwrap();
+
+        let m = parse_jsonl_to_session_metrics(&path).unwrap();
+        assert_eq!(m.last_end_turn_ts, Some(2.5));
+        assert!(!m.pending_tool_use);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_metrics_pending_tool_use_suppresses_end_turn() {
+        // Older end_turn, then a new turn with an unresolved tool_use.
+        // The aggregator sets pending_tool_use; last_end_turn_ts must NOT
+        // be populated — the card is mid-turn.
+        let prior_end = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}}"#;
+        let new_user = r#"{"type":"user","timestamp":2.0,"message":{"content":"again"}}"#;
+        let pending = r#"{"type":"assistant","timestamp":3.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x.rs"}}],"stop_reason":"tool_use"}}"#;
+
+        let dir = std::env::temp_dir().join("cue_test_end_turn_suppressed");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        std::fs::write(&path, format!("{}\n{}\n{}", prior_end, new_user, pending)).unwrap();
+
+        let m = parse_jsonl_to_session_metrics(&path).unwrap();
+        assert!(m.pending_tool_use);
+        assert_eq!(m.last_end_turn_ts, None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_metrics_user_prompt_after_end_turn_stops_scan() {
+        // end_turn happened, then user kicked off a new turn. We only want
+        // end_turn signals that are newer than any user prompt — otherwise
+        // the next turn hasn't emitted its own end_turn yet and we'd be
+        // acting on a stale signal. Scan from end walks past the new user
+        // prompt and stops: no end_turn should be reported.
+        let prior_end = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}}"#;
+        let new_user = r#"{"type":"user","timestamp":2.0,"message":{"content":"again"}}"#;
+
+        let dir = std::env::temp_dir().join("cue_test_user_stops_scan");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        std::fs::write(&path, format!("{}\n{}", prior_end, new_user)).unwrap();
+
+        let m = parse_jsonl_to_session_metrics(&path).unwrap();
+        assert_eq!(m.last_end_turn_ts, None);
+        assert!(!m.pending_tool_use);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
