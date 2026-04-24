@@ -332,6 +332,17 @@ export function FluxEffect({
   const activeRef = useRef(active);
   activeRef.current = active;
 
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mql = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onChange = (e: MediaQueryListEvent) => {
+      reducedMotionRef.current = e.matches;
+      if (e.matches) growthRef.current = activeRef.current ? 1 : 0;
+    };
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
+
   // Generate basepoints for a given CSS size. Endpoints are pre-settled to the
   // field's target at `t` so lines appear already flowing on the first frame;
   // velocity starts at zero and the spring keeps them tracking from there.

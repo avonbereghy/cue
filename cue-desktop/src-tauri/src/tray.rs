@@ -203,20 +203,21 @@ fn render_pixmap(
 
     // Height is fixed at `size` (matches menu bar). Width grows with columns
     // so dots are never clipped.
-    let scale = size as f32 / native_h;
-    let pixel_w = ((native_w * scale).ceil() as u32).max(size);
-    let mut pixmap = tiny_skia::Pixmap::new(pixel_w, size).expect("pixmap");
+    let safe_size = size.max(1);
+    let scale = safe_size as f32 / native_h;
+    let pixel_w = ((native_w * scale).ceil() as u32).max(safe_size);
+    let mut pixmap = tiny_skia::Pixmap::new(pixel_w, safe_size).expect("pixmap");
 
     let offset_x = (pixel_w as f32 - native_w * scale) / 2.0;
-    let offset_y = (size as f32 - native_h * scale) / 2.0;
+    let offset_y = (safe_size as f32 - native_h * scale) / 2.0;
 
     if count == 0 {
         // Draw hollow white ring
-        let cx = size as f32 / 2.0;
-        let cy = size as f32 / 2.0;
+        let cx = safe_size as f32 / 2.0;
+        let cy = safe_size as f32 / 2.0;
         let stroke_w = 1.5 * scale;
         let inset = 0.75 * scale;
-        let radius = (size as f32 / 2.0) - inset - stroke_w / 2.0;
+        let radius = (safe_size as f32 / 2.0) - inset - stroke_w / 2.0;
         let color = Rgba { r: 255, g: 255, b: 255, a: 255 };
         draw_stroked_circle(&mut pixmap, cx, cy, radius, stroke_w, &color);
     } else {

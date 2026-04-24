@@ -106,8 +106,11 @@ impl SessionMonitorState {
             Ok(content) => match serde_json::from_str::<StatusData>(&content) {
                 Ok(s) => s,
                 Err(e) => {
-                    log::debug!("Failed to parse sessions.json: {}", e);
-                    *self.enriched_sessions.lock().unwrap() = Vec::new();
+                    // Preserve the prior enriched list across a transient parse
+                    // failure (mid-rename read from the Python hook, or a manual
+                    // edit). Wiping would drop active_since timers and cause a
+                    // one-poll UI flash of zero sessions.
+                    log::warn!("sessions.json parse failed, keeping previous state: {}", e);
                     return;
                 }
             },

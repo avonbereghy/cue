@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSessionMonitor } from "@/hooks/useSessionMonitor";
@@ -317,16 +317,14 @@ export function TrayPopoverPage() {
 
   // Track current theme so colors recompute when the user switches dark/light.
   // The root <html> data-theme attribute is set by main.tsx and updated on
-  // system theme change; we mirror that into a state value.
-  const isLight = typeof document !== "undefined" &&
+  // system theme change.
+  const readIsLight = () =>
+    typeof document !== "undefined" &&
     document.documentElement.getAttribute("data-theme") === "light";
+  const [isLight, setIsLight] = useState(readIsLight);
 
-  // Keep local re-render aligned with system theme flips.
   useEffect(() => {
-    const observer = new MutationObserver(() => {
-      // Force re-evaluation by toggling a CSS var the component already reads
-      document.documentElement.style.setProperty("--tray-tick", Date.now().toString());
-    });
+    const observer = new MutationObserver(() => setIsLight(readIsLight()));
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     return () => observer.disconnect();
   }, []);
