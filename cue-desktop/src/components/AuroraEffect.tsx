@@ -165,6 +165,17 @@ export function AuroraEffect({
     growthRef.current = active ? 1 : 0;
   }
 
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mql = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onChange = (e: MediaQueryListEvent) => {
+      reducedMotionRef.current = e.matches;
+      if (e.matches) growthRef.current = activeRef.current ? 1 : 0;
+    };
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
+
   // One-time WebGL program + buffer setup.
   useEffect(() => {
     const canvas = canvasRef.current;
