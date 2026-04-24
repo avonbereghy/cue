@@ -198,6 +198,8 @@ export interface Settings {
   cordDeployForce: number;
   cordRetractForce: number;
   stringSpread: number;
+  /** Deploy angle in degrees — tilt of working strings around card center */
+  stringDeployAngle: number;
   keyPressSpeed: number;
   keyReleaseSpeed: number;
   autoReorder: boolean;

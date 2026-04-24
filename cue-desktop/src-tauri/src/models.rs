@@ -777,6 +777,10 @@ pub struct Settings {
     /// Vertical spread between the three strings (0 = all at center, 0.5 = fully spread)
     #[serde(default = "default_string_spread")]
     pub string_spread: f64,
+    /// Deploy angle in degrees — tilt of working strings around card center.
+    /// Negative = bottom-left → top-right diagonal (default -16°).
+    #[serde(default = "default_string_deploy_angle")]
+    pub string_deploy_angle: f64,
     /// Beta: show per-tool usage pills in detail mode
     #[serde(default)]
     pub show_tool_pills: bool,
@@ -911,6 +915,10 @@ fn default_string_spread() -> f64 {
     0.15
 }
 
+fn default_string_deploy_angle() -> f64 {
+    -16.0
+}
+
 fn default_timer_display() -> String {
     "seconds".to_string()
 }
@@ -968,6 +976,7 @@ impl Default for Settings {
             cord_deploy_force: 1.0,
             cord_retract_force: 1.0,
             string_spread: 0.15,
+            string_deploy_angle: -16.0,
             show_tool_pills: false,
             show_current_tool: false,
             show_config_counts: false,

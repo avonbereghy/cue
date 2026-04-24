@@ -266,6 +266,8 @@ interface SignalStringProps {
   keyReleaseSpeed?: number;
   /** Vertical spread between the three strings (0 = all at center, 0.5 = fully spread) */
   stringSpread?: number;
+  /** Deploy angle in degrees — tilt of the working strings around card center */
+  stringDeployAngle?: number;
   /**
    * Fires once per thinking→working deploy cycle when all three string bands
    * have reached full clipFraction (≥0.98). Used by the parent to commit the
@@ -325,7 +327,7 @@ export interface ExtraBandSpec {
   amplitudeMul?: number;
 }
 
-export function SignalString({ state, frequency = 1.0, revived = false, pulses, comets, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 0.5, cordDeployForce = 1.0, cordRetractForce = 1.0, stringSpread = 0.15, sessionId = "", contentRef, keyReleaseSpeed: _keyReleaseSpeed = 0.4, onStringsConnected, extraBands, suppressBaseBands = false, baseBandsTarget = 3, baseBandsAmpMuls = [1, 1, 1] }: SignalStringProps) {
+export function SignalString({ state, frequency = 1.0, revived = false, pulses, comets, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 0.5, cordDeployForce = 1.0, cordRetractForce = 1.0, stringSpread = 0.15, stringDeployAngle = -16, sessionId = "", contentRef, keyReleaseSpeed: _keyReleaseSpeed = 0.4, onStringsConnected, extraBands, suppressBaseBands = false, baseBandsTarget = 3, baseBandsAmpMuls = [1, 1, 1] }: SignalStringProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const pageVisible = usePageVisible();
@@ -450,14 +452,14 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     signalBass, signalMids, signalTreble,
     signalColorDark, signalColorLight, signalOffset,
     signalEffect, sandEnabled, sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize, sandTurbulence, sandAlpha,
-    cordRetractDelay, cordDeployForce, cordRetractForce, stringSpread, signalMode,
+    cordRetractDelay, cordDeployForce, cordRetractForce, stringSpread, stringDeployAngle, signalMode,
   });
   configRef.current = {
     signalAlpha, signalAmplitude, signalEcho, frequency,
     signalBass, signalMids, signalTreble,
     signalColorDark, signalColorLight, signalOffset,
     signalEffect, sandEnabled, sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize, sandTurbulence, sandAlpha,
-    cordRetractDelay, cordDeployForce, cordRetractForce, stringSpread, signalMode,
+    cordRetractDelay, cordDeployForce, cordRetractForce, stringSpread, stringDeployAngle, signalMode,
   };
 
   // Latest onStringsConnected callback — stashed in a ref so the draw loop
@@ -1566,7 +1568,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         // the tilted axis instead of along the card's horizontal. Negative
         // angle = clockwise in canvas y-down space, which lifts the right end
         // and drops the left end → bottom-left → top-right diagonal.
-        const BASE_TILT = -0.28; // radians (~-16°)
+        const BASE_TILT = (configRef.current.stringDeployAngle ?? -16) * Math.PI / 180;
 
         for (let bi = 0; bi < bands.length; bi++) {
           const band = bands[bi];
