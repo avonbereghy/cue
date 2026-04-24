@@ -171,13 +171,34 @@ export function BranchView({ sessions, cardSettings, compactMode, expandOverride
           );
         }
 
-        // Parent on left (~55%), children stacked vertically on the right.
+        // Parent on left (~45%), children stacked vertically on the right.
         // Each child renders in compact mode so multiple agents fit in the
-        // height of one parent card without dominating the layout.
+        // height of one parent card without dominating the layout. Parent
+        // gets less of the row so children have room for their title +
+        // prompt-preview snippet without truncation.
+        //
+        // Parent state demotion: a thread cannot be "done" while its team
+        // agents are still running — the parent has handed off control and
+        // is really waiting on the team. Show it as idle in that case.
+        const hasActiveChild = family.children.some((c) =>
+          c.info.state === "working" ||
+          c.info.state === "thinking" ||
+          c.info.state === "subagent" ||
+          c.info.state === "waiting"
+        );
+        const parentForRender =
+          hasActiveChild && family.parent.info.state === "done"
+            ? {
+                ...family.parent,
+                info: { ...family.parent.info, state: "idle" },
+                stateDisplayName: "Idle",
+                stateIcon: "○",
+              }
+            : family.parent;
         return (
           <div key={family.parent.info.id} className="flex items-stretch gap-2">
-            <div className="w-[55%] shrink-0">
-              {renderCard(family.parent)}
+            <div className="w-[45%] shrink-0">
+              {renderCard(parentForRender)}
             </div>
             {/* Connector line */}
             <div className="w-3 shrink-0 flex items-center">

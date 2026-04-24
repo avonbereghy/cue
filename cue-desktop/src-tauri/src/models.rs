@@ -444,9 +444,17 @@ impl EnrichedSession {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| info.workspace.clone());
 
-        // Always use workspace as the main title. When a custom title exists
-        // (agent name, /title label), the frontend renders it as a subtitle.
-        let display_title = workspace_name.clone();
+        // Team agents (spawned via TeamCreate) use the agent name as the main
+        // title so branches render as "track-a-memory" instead of the shared
+        // workspace label. Non-team sessions keep the workspace name; custom
+        // /title labels are rendered as a subtitle by the frontend.
+        let display_title = info
+            .agent_name
+            .as_ref()
+            .filter(|_| info.team_name.is_some())
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .unwrap_or_else(|| workspace_name.clone());
 
         let state_icon = match info.state.as_str() {
             "working" => "\u{27F3}",   // ⟳
