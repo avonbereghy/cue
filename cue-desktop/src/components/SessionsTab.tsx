@@ -379,6 +379,30 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     return () => window.removeEventListener("keydown", handleZoom);
   }, []);
 
+  // Cmd/Ctrl+D — toggle detail mode (full card details on/off).
+  // Entering detail clears both compactMode and slimMode; exiting sets slimMode
+  // so cards stay visible without per-session details. Persists via settings
+  // so other windows and restarts pick up the change.
+  useEffect(() => {
+    const handleDetail = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key !== "d" && e.key !== "D") return;
+      if (e.shiftKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      e.preventDefault();
+      invoke<Settings>("get_settings").then((s) => {
+        const inDetail = !(s.compactMode ?? false) && !(s.slimMode ?? false);
+        const next = inDetail
+          ? { ...s, slimMode: true }
+          : { ...s, compactMode: false, slimMode: false };
+        invoke("update_settings", { newSettings: next });
+      });
+    };
+    window.addEventListener("keydown", handleDetail);
+    return () => window.removeEventListener("keydown", handleDetail);
+  }, []);
+
   // Auto-load active preset on launch when preset mode is configured
   useEffect(() => {
     if (presetBootAttempted || signalMode !== "preset" || isPresetLoaded()) return;

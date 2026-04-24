@@ -860,7 +860,12 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   // Strings 1–3 gate the bass/mids/treble base bands (SignalString deploys
   // in priority [mids, bass, treble]). Strings 4–5 render as mids-physics
   // extra bands at wider vertical offsets.
-  const isTurnOngoing = !TURN_END_STATES.has(displayState);
+  // Reset on turn-end states from EITHER signal. displayState has sticky
+  // handoff logic that can hold "working" briefly after info.state has already
+  // flipped to compacting/idle/done — without also checking info.state, the
+  // reset would miss those fast exits and the counter would leak into the
+  // next turn.
+  const isTurnOngoing = !TURN_END_STATES.has(displayState) && !TURN_END_STATES.has(info.state);
   // Strings are visible (deployed) during working and subagent only. Thinking,
   // waiting, and error do not show strings — the counter is preserved through
   // them, but the strings themselves retract.
@@ -909,7 +914,13 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       for (const ms of STRING_THRESHOLDS_MS) {
         if (elapsed >= ms) target += 1;
       }
-      setStringCount(c => (c < target ? target : c));
+      // Hard cap at 5 working strings per session (subagents add their own
+      // bands on top of this ceiling — they're accounted for separately).
+      target = Math.min(5, target);
+      setStringCount(c => {
+        const next = c < target ? target : c;
+        return Math.min(5, next);
+      });
     };
     tick();
     const id = window.setInterval(tick, 500);
