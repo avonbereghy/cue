@@ -20,6 +20,8 @@
  * pulsing UI stay in sync without React re-renders per frame.
  */
 import { useEffect, useRef } from "react";
+import { usePageVisible } from "@/hooks/usePageVisible";
+import { useOnScreen } from "@/hooks/useOnScreen";
 
 interface CompactTankEffectProps {
   /** Fill fraction in [0, 1] — read every frame. Owned by the parent. */
@@ -106,10 +108,17 @@ export function CompactTankEffect({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const alphaRef = useRef(alpha);
   alphaRef.current = alpha;
+  const pageVisible = usePageVisible();
+  const onScreen = useOnScreen(canvasRef);
+  const renderActive = pageVisible && onScreen;
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    // Skip the entire tick loop when the card is off-screen or the tab is
+    // hidden — compaction is a long-running state, so an off-screen card
+    // would otherwise burn 60fps of canvas draws for no visible benefit.
+    if (!renderActive) return;
     const ctx = canvas.getContext("2d", { alpha: true });
     if (!ctx) return;
 
@@ -250,7 +259,7 @@ export function CompactTankEffect({
       cancelAnimationFrame(rafId);
       mql.removeEventListener("change", onChange);
     };
-  }, [fillRef]);
+  }, [fillRef, renderActive]);
 
   return (
     <canvas
