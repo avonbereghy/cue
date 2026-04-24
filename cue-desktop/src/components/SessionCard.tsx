@@ -35,6 +35,7 @@ import { formatTokens, formatDuration, formatClockTime, formatElapsedCompact } f
 import { SignalString } from "./SignalString";
 import type { StrikePulse, CometPulse, ExtraBandSpec } from "./SignalString";
 import { FluxEffect, FLUX_EXIT_MS } from "./FluxEffect";
+import { AuroraEffect, AURORA_EXIT_MS } from "./AuroraEffect";
 import { StatusDot } from "./StatusDot";
 import { FlipNumber } from "./FlipNumber";
 import { SpoolContextBar } from "./SpoolContextBar";
@@ -266,6 +267,33 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     return clearTimers;
   }, [displayState, fluxMounted]);
 
+  // Aurora linger: same pattern as flux, but gated on the `done` state. Stays
+  // mounted briefly after the state changes so the fade-out can play out.
+  const [auroraMounted, setAuroraMounted] = useState(displayState === "done");
+  const [auroraActive, setAuroraActive] = useState(displayState === "done");
+  const auroraUnmountTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    const isDone = displayState === "done";
+    const clearAuroraTimer = () => {
+      if (auroraUnmountTimerRef.current !== null) {
+        window.clearTimeout(auroraUnmountTimerRef.current);
+        auroraUnmountTimerRef.current = null;
+      }
+    };
+    if (isDone) {
+      clearAuroraTimer();
+      setAuroraMounted(true);
+      setAuroraActive(true);
+    } else if (auroraMounted) {
+      setAuroraActive(false);
+      auroraUnmountTimerRef.current = window.setTimeout(() => {
+        setAuroraMounted(false);
+        auroraUnmountTimerRef.current = null;
+      }, AURORA_EXIT_MS + 80);
+    }
+    return clearAuroraTimer;
+  }, [displayState, auroraMounted]);
+
   // Unmount-only cleanup for the handoff timer.
   useEffect(() => {
     return () => {
@@ -369,23 +397,6 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     }
   }, [metrics.lastInputTokens, staleAfterCompact]);
 
-  // Give up on the context-loading spinner after 30s. If we're not in
-  // compacting mode and lastInputTokens still hasn't landed, the session
-  // probably won't publish metrics at all (e.g., an old resumed session,
-  // hook silent). Drop the spinner so the card doesn't spin forever.
-  const contextLoadingCandidate =
-    displayState !== "compacting" &&
-    (staleAfterCompact || metrics.lastInputTokens === 0);
-  const [contextLoadingGaveUp, setContextLoadingGaveUp] = useState(false);
-  useEffect(() => {
-    if (!contextLoadingCandidate) {
-      setContextLoadingGaveUp(false);
-      return;
-    }
-    const id = window.setTimeout(() => setContextLoadingGaveUp(true), 30_000);
-    return () => window.clearTimeout(id);
-  }, [contextLoadingCandidate]);
-
   // One-shot smooth-exit window applied during the thinking→working commit.
   // Flips .session-card--smooth-exit on simultaneously with the label/display
   // flip so the resulting CSS property changes interpolate over the longer
@@ -447,12 +458,13 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     handoffCommitTimerRef.current = window.setTimeout(() => {
       const target = latestStateRef.current;
       handoffCommitTimerRef.current = null;
-      // State may have flipped back (e.g. working → thinking) between schedule
-      // and fire. Committing a non-handoffable target here (thinking) would
-      // silently no-op the label/display while still arming the smoothExit
-      // timer, leaving the card stuck when the next working transition arrives.
-      // Let the main effect re-stage a fresh handoff for whatever comes next.
-      if (target !== "working" && target !== "subagent") return;
+      // If state flipped back to thinking between schedule and fire, bail —
+      // the main effect will re-stage a fresh commit when strings reconnect.
+      // Broader "not working/subagent" guards are wrong: this callback is
+      // also scheduled for working/subagent → idle/done exits (line ~574),
+      // and bailing there leaves labelState/displayState stuck on "working"
+      // while strings, flux, and dust all animate to the idle state.
+      if (target === "thinking") return;
       if (smoothExitTimerRef.current !== null) window.clearTimeout(smoothExitTimerRef.current);
       setSmoothExit(true);
       setLabelState(target);
@@ -896,12 +908,12 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   // string now also gets a short warm-up so the card doesn't snap straight
   // to a deployed state the instant work starts. Upper strings stretch so
   // 4 and 5 read as increasingly rare.
-  //   1st string →  1s
-  //   2nd string → 30s
-  //   3rd string →  1:30
-  //   4th string →  5:00
-  //   5th string → 10:00
-  const STRING_THRESHOLDS_MS = [1_000, 30_000, 90_000, 300_000, 600_000];
+  //   1st string →  1s    (short warm-up, unchanged)
+  //   2nd string → 60s    (2×30s)
+  //   3rd string →  3:00  (2×1:30)
+  //   4th string → 10:00  (2×5:00)
+  //   5th string → 20:00  (2×10:00)
+  const STRING_THRESHOLDS_MS = [1_000, 60_000, 180_000, 600_000, 1_200_000];
 
   useEffect(() => {
     if (!isTurnOngoing) {
@@ -916,10 +928,22 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     const tick = () => {
       const now = performance.now();
       const last = lastTickMsRef.current ?? now;
+      // Wall-time backstop: if the gap since our last tick is huge, the
+      // session was almost certainly inactive in between (component throttled,
+      // tab hidden, or a turn-end transition was missed). Treat that gap as a
+      // turn boundary and reset the counter rather than silently preserving
+      // it across what was effectively a different turn.
+      const gap = now - last;
+      if (gap > 8_000) {
+        activeGenMsRef.current = 0;
+        setStringCount(c => (c === 0 ? c : 0));
+        lastTickMsRef.current = now;
+        return;
+      }
       // Only bank time while purely working. Thinking / subagent / waiting /
       // error just advance `last` so the delta when we resume is small.
       if (isPromoting) {
-        activeGenMsRef.current += now - last;
+        activeGenMsRef.current += gap;
       }
       lastTickMsRef.current = now;
       const elapsed = activeGenMsRef.current;
@@ -940,12 +964,46 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     return () => window.clearInterval(id);
   }, [isTurnOngoing, isPromoting]);
 
+  // Fallback reset: a new user prompt is the most reliable "new turn" signal
+  // available, regardless of whether the previous turn fired its done/idle
+  // transition. If userMessageCount ticks up, force the counter back to zero
+  // so a leaked accumulator from a stuck previous turn (e.g., Claude Code
+  // process died before Stop hook fired) doesn't pre-deploy 4–5 strings on
+  // a turn that's only been working for seconds.
+  const prevUserMsgCountRef = useRef(metrics.userMessageCount);
+  useEffect(() => {
+    if (metrics.userMessageCount > prevUserMsgCountRef.current) {
+      activeGenMsRef.current = 0;
+      lastTickMsRef.current = null;
+      setStringCount(c => (c === 0 ? c : 0));
+    }
+    prevUserMsgCountRef.current = metrics.userMessageCount;
+  }, [metrics.userMessageCount]);
+
   // When strings can't deploy (thinking / waiting / error / turn-end), pass
   // target 0 so SignalString retracts all base bands. During working/subagent
   // we pass the current count (clamped to the 3-band ceiling; 4–5 handled via
   // extraBands below). stringCount starts at 0 on turn entry and promotes to
   // 1 after the 1s warm-up, so the base-band target follows naturally.
   const baseBandsTarget = canDeployStrings ? Math.min(stringCount, 3) : 0;
+
+  // Amplitude progression: each new string that spawns during a long working
+  // session is 5% louder than the one before (compounded). String N gets a
+  // multiplier of 1.05^(N-1). String 1 = 1.0, 2 = 1.05, 3 = 1.1025, 4 = ~1.158,
+  // 5 = ~1.2155. Multipliers are assigned to each string at the moment it
+  // appears and persist for the rest of the turn. Deploy order is
+  // [mids, bass, treble] (see BAND_PRIORITY inside SignalString), so:
+  //   string 1 → mids   (bandIdx 1) → 1.0
+  //   string 2 → bass   (bandIdx 0) → 1.05
+  //   string 3 → treble (bandIdx 2) → 1.1025
+  // Strings 4 and 5 are extra bands — their multiplier rides on the
+  // ExtraBandSpec.amplitudeMul field set below.
+  const AMP_STEP = 1.05;
+  const baseBandsAmpMuls: [number, number, number] = [
+    AMP_STEP,           // bandIdx 0 (bass)   = string 2
+    1,                  // bandIdx 1 (mids)   = string 1
+    AMP_STEP * AMP_STEP, // bandIdx 2 (treble) = string 3
+  ];
 
   // Strings 4 and 5 — extras that inherit the active signal theme color and
   // each get their own phase jitter so they wobble out of lockstep with the
@@ -981,6 +1039,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
         axisEnd:   { xFrac: 1, yFrac: yBelow },
         color,
         phaseJitter: jitterSeed(`${info.id}@work-4`),
+        amplitudeMul: Math.pow(1.05, 3), // string 4
       });
     }
     if (stringCount >= 5) {
@@ -991,6 +1050,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
         axisEnd:   { xFrac: 1, yFrac: yAbove },
         color,
         phaseJitter: jitterSeed(`${info.id}@work-5`),
+        amplitudeMul: Math.pow(1.05, 4), // string 5
       });
     }
     return bands;
@@ -1057,8 +1117,19 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       } as React.CSSProperties}
     >
 
+      {/* Aurora wash — done-state ambient background. Slow FBM flow; mounts
+          on done, fades out via AURORA_EXIT_MS when state leaves. */}
+      {auroraMounted && (revived || info.state !== "ended") && (
+        <AuroraEffect
+          seed={info.id}
+          active={auroraActive}
+          alpha={0.75}
+          speed={0.55}
+        />
+      )}
+
       {/* Signal String / Sand — renders behind all content */}
-      {signalString && (revived || info.state !== "ended") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} comets={cometsRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={signalEffect} sandEnabled={sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} sessionId={info.id} contentRef={contentRef} keyReleaseSpeed={keyReleaseSpeed} onStringsConnected={handleStringsConnected} extraBands={combinedExtraBands} suppressBaseBands={suppressBaseBands} baseBandsTarget={baseBandsTarget} />}
+      {signalString && (revived || info.state !== "ended") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} comets={cometsRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={signalEffect} sandEnabled={sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} sessionId={info.id} contentRef={contentRef} keyReleaseSpeed={keyReleaseSpeed} onStringsConnected={handleStringsConnected} extraBands={combinedExtraBands} suppressBaseBands={suppressBaseBands} baseBandsTarget={baseBandsTarget} baseBandsAmpMuls={baseBandsAmpMuls} />}
 
       {/* Flux streamline overlay on thinking cards, tinted by the state color.
           Mounted by a linger timer: stays while thinking is active, lingers
@@ -1404,17 +1475,16 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             })();
             const pct = Math.round(session.contextUsagePercent * 100);
             const tokStr = `${formatTokens(metrics.lastInputTokens)} / ${formatTokens(session.contextLimit)}`;
-            // While Claude is compacting or the post-compact token count
-            // hasn't refreshed yet, show the spinner instead of a misleading
-            // pre-compact size. Once a fresh API reading lands the stale
-            // flag clears and the bar/text swap in.
             const isCompactingUI = displayState === "compacting";
-            const isLoadingRaw = isCompactingUI || staleAfterCompact || metrics.lastInputTokens === 0;
-            // After 30s of a non-compacting load that never resolves, stop
-            // showing the spinner — fall through to whatever data we have.
-            // Exception: staleAfterCompact waits indefinitely for a fresh
-            // reading rather than showing the misleading pre-compact value.
-            const isLoading = isLoadingRaw && !(contextLoadingGaveUp && !isCompactingUI && !staleAfterCompact);
+            // Spinner runs only when something is genuinely in flight:
+            // actively compacting, or awaiting the post-compact API reading
+            // that will swap in the new size. Outside of those, no spinner.
+            const showSpinner = isCompactingUI || staleAfterCompact;
+            // No token data yet and no loading happening — show a static
+            // empty circle rather than either a spinner (implies loading)
+            // or a "0 / 1M" readout (implies zero context, misleading when
+            // the session simply hasn't published metrics yet).
+            const contextUnknown = !showSpinner && metrics.lastInputTokens === 0;
 
             if (contextDisplay === "compact") {
               return (
@@ -1441,13 +1511,21 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                       restColor={restBarRgb}
                     />
                   </div>
-                  {/* Third row: spinner when loading, stale/live tokens
-                      otherwise. Always present so height stays constant. */}
-                  {isLoading ? (
+                  {/* Third row: spinner while compacting/stale, static
+                      empty circle when context is unknown, stale/live
+                      tokens otherwise. Always present so height stays
+                      constant. */}
+                  {showSpinner ? (
                     <div className="flex items-center justify-end" style={{ minHeight: "0.9rem" }}>
                       <svg className={`w-3 h-3 animate-spin shrink-0 ${isGlass ? "text-white/55" : "text-white/35"}`} viewBox="0 0 16 16" fill="none">
                         <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.2" strokeWidth="2" />
                         <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeOpacity="0.5" strokeWidth="2" strokeLinecap="round" />
+                      </svg>
+                    </div>
+                  ) : contextUnknown ? (
+                    <div className="flex items-center justify-end" style={{ minHeight: "0.9rem" }}>
+                      <svg className={`w-3 h-3 shrink-0 ${isGlass ? "text-white/45" : "text-white/25"}`} viewBox="0 0 16 16" fill="none">
+                        <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.5" strokeWidth="2" />
                       </svg>
                     </div>
                   ) : (
@@ -1464,12 +1542,19 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             return (
               <div className="relative flex items-center gap-1.5">
                 <span className={`text-[0.625rem] shrink-0 ${isGlass ? "text-white/65" : "text-white/40"}`}>Context</span>
-                {isLoading && !isCompactingUI ? (
+                {showSpinner && !isCompactingUI ? (
                   <>
                     <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden" />
                     <svg className="w-3 h-3 animate-spin shrink-0" viewBox="0 0 16 16" fill="none">
                       <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.2" strokeWidth="2" />
                       <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeOpacity="0.5" strokeWidth="2" strokeLinecap="round" />
+                    </svg>
+                  </>
+                ) : contextUnknown ? (
+                  <>
+                    <div className="flex-1 relative h-1.5 rounded-full bg-white/8 overflow-hidden" />
+                    <svg className={`w-3 h-3 shrink-0 ${isGlass ? "text-white/45" : "text-white/25"}`} viewBox="0 0 16 16" fill="none">
+                      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.5" strokeWidth="2" />
                     </svg>
                   </>
                 ) : (
