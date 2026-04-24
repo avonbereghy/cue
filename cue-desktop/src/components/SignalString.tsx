@@ -1558,16 +1558,35 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         // Indexed by bandIdx (0=bass, 1=mids, 2=treble)
         const bandYOffsets = [-cfgStringSpread * halfH, 0, cfgStringSpread * halfH];
 
+        // Working-state tilt. The sweep math below stays horizontal — we apply
+        // a ctx rotation around the card center just for the draw calls, so
+        // bandPaths, sand spawning, erase rects, and everything downstream
+        // continue to read horizontal y values (unchanged from before). The
+        // clip rect is set INSIDE the rotation so deployment progresses along
+        // the tilted axis instead of along the card's horizontal. Negative
+        // angle = clockwise in canvas y-down space, which lifts the right end
+        // and drops the left end → bottom-left → top-right diagonal.
+        const BASE_TILT = -0.28; // radians (~-16°)
+
         for (let bi = 0; bi < bands.length; bi++) {
           const band = bands[bi];
           const modeAmps = allModeAmps[bi];
           const avgAmp = modeAmps.reduce((s, v) => s + v, 0) / modeAmps.length;
           const yOffset = bandYOffsets[band.bandIdx] ?? 0;
 
-          // Per-band clip region (each string deploys/retracts at its own speed)
+          // Save + rotate (always, so we can restore) + optionally clip.
+          ctx.save();
+          ctx.translate(w / 2, h / 2);
+          ctx.rotate(BASE_TILT);
+          ctx.translate(-w / 2, -h / 2);
+
+          // Per-band clip region (each string deploys/retracts at its own
+          // speed). Set INSIDE the rotation so the clip rect is axis-aligned
+          // to the tilted frame — deployment reads as the tip advancing along
+          // the tilted string, which is what clipFraction has always meant
+          // geometrically; only the visible orientation changes.
           if (!revived) {
             const bandClipX = clipFractionsRef.current[band.bandIdx] * w;
-            ctx.save();
             ctx.beginPath();
             ctx.rect(0, 0, bandClipX, h);
             ctx.clip();
@@ -1679,8 +1698,9 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           }
               ctx.globalAlpha = 1;
 
-          // Restore per-band clip
-          if (!revived) ctx.restore();
+          // Restore rotation (and clip, if applied). Paired with the ctx.save
+          // up top that wraps rotate + conditional clip.
+          ctx.restore();
 
           // ── Spear-tip ornament at the leading edge ── (disabled for now)
           // Visible only while the cord is in motion (deploying or retracting):
