@@ -759,17 +759,11 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   // Track whether we entered the subagent state from working — that's what
   // determines whether the 3 white base lines persist alongside the blue
   // subagent lines, or are suppressed.
-  const wasWorkingBeforeSubagentRef = useRef(false);
-  useEffect(() => {
-    if (displayState === "working") {
-      wasWorkingBeforeSubagentRef.current = true;
-    } else if (displayState !== "subagent") {
-      // Any state that isn't subagent/working clears the latch.
-      wasWorkingBeforeSubagentRef.current = false;
-    }
-    // displayState === "subagent" preserves the existing latch.
-  }, [displayState]);
-  const suppressBaseBands = displayState === "subagent" && !wasWorkingBeforeSubagentRef.current;
+  // Subagent state now suppresses base bands unconditionally so the visible
+  // string count matches the "Subagents(N)" badge. Previously this latched on
+  // a working→subagent transition and kept the 3 base bands rendering
+  // alongside, giving N + base_count visible strings.
+  const suppressBaseBands = displayState === "subagent";
 
   // Build the extraBands list. One blue line per active subagent, identified
   // by a stable slot id ("sub-0", "sub-1", …) so add/remove maps correctly to
@@ -794,29 +788,18 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     const out: { id: string; bandKind: "bass" | "mids" | "treble"; axisStart: { xFrac: number; yFrac: number }; axisEnd: { xFrac: number; yFrac: number }; color: { r: number; g: number; b: number }; phaseJitter: number }[] = [];
     for (let i = 0; i < activeSubs; i++) {
       const id = `${info.id}-sub-${i}`;
-      const r1 = seedHash(id + "@start");
-      const r2 = seedHash(id + "@end");
-      const r3 = seedHash(id + "@angle");
+      const r1 = seedHash(id + "@y");
       const r4 = seedHash(id + "@phase");
-      const r5 = seedHash(id + "@endY");
-      // Anchor both endpoints just outside the actual card walls so the
-      // strings appear to enter from off-screen edges rather than floating
-      // in the middle of the card. Only minor horizontal jitter (±3% past
-      // the wall) — vertical variance is what gives siblings distinct angles.
-      // Start near bottom-left wall: x in [-0.08, -0.02], y in [0.82, 1.05]
-      const startXFrac = -0.08 + r1 * 0.06;
-      const startYFrac = 0.82 + r2 * 0.23;
-      // End near top-right wall: x in [1.02, 1.08], y in [-0.05, 0.18].
-      // endYFrac uses its own seed so it's statistically independent of the
-      // start position — otherwise high-start-Y siblings would always land at
-      // high-end-Y, flattening the angle distribution.
-      const endXFrac = 1.02 + r3 * 0.06;
-      const endYFrac = -0.05 + r5 * 0.23;
+      // Subagent strings now run straight across the card horizontally. Each
+      // sibling gets a seeded y position in [0.18, 0.82] — the edge-safe zone
+      // that clears the state row and the context bar — so multiple active
+      // subagents spread vertically rather than stacking on a single line.
+      const yFrac = 0.18 + r1 * 0.64;
       out.push({
         id,
         bandKind: kinds[i % kinds.length],
-        axisStart: { xFrac: startXFrac, yFrac: startYFrac },
-        axisEnd: { xFrac: endXFrac, yFrac: endYFrac },
+        axisStart: { xFrac: -0.05, yFrac },
+        axisEnd:   { xFrac:  1.05, yFrac },
         color,
         phaseJitter: r4 * Math.PI * 2,
       });
@@ -1030,13 +1013,19 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     };
     const yBelow = Math.min(0.92, 0.5 + stringSpread * 2.0);
     const yAbove = Math.max(0.08, 0.5 - stringSpread * 2.0);
+    // Strings 4 and 5 now run on opposing diagonals so together they form an X
+    // across the card — the working-string diagonal read, matching base bands
+    // (which render tilted via a canvas rotation in SignalString). stringSpread
+    // controls how far the corners push past the horizontal midline.
+    const xPad = 0.05;
     const bands: ExtraBandSpec[] = [];
     if (stringCount >= 4) {
       bands.push({
         id: `${info.id}-work-4`,
         bandKind: "mids",
-        axisStart: { xFrac: 0, yFrac: yBelow },
-        axisEnd:   { xFrac: 1, yFrac: yBelow },
+        // bottom-left → top-right
+        axisStart: { xFrac: -xPad,    yFrac: yBelow },
+        axisEnd:   { xFrac: 1 + xPad, yFrac: yAbove },
         color,
         phaseJitter: jitterSeed(`${info.id}@work-4`),
         amplitudeMul: Math.pow(1.05, 3), // string 4
@@ -1046,8 +1035,9 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       bands.push({
         id: `${info.id}-work-5`,
         bandKind: "bass",
-        axisStart: { xFrac: 0, yFrac: yAbove },
-        axisEnd:   { xFrac: 1, yFrac: yAbove },
+        // top-left → bottom-right (opposite diagonal, forming an X with #4)
+        axisStart: { xFrac: -xPad,    yFrac: yAbove },
+        axisEnd:   { xFrac: 1 + xPad, yFrac: yBelow },
         color,
         phaseJitter: jitterSeed(`${info.id}@work-5`),
         amplitudeMul: Math.pow(1.05, 4), // string 5
