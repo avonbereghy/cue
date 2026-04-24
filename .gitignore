@@ -11,3 +11,10 @@ cue-desktop/node_modules/
 cue-desktop/dist/
 cue-desktop/src-tauri/gen/
 cue-desktop/src-tauri/target/
+
+# Sidecar binary is built from cue-audio-tap.swift; keep the source, not the binary
+cue-desktop/src-tauri/sidecar/cue-audio-tap
+
+# Python bytecode cache
+__pycache__/
+*.pyc
