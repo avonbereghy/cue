@@ -32,7 +32,7 @@ function effortTextClass(level: string): string {
 import type { EnrichedSession } from "@/lib/types";
 import { STATE_HEX, STATE_HEX_LIGHT, STATE_DOT_HEX, STATE_DOT_HEX_LIGHT, STATE_BADGE_HEX, STATE_BADGE_HEX_LIGHT } from "@/lib/types";
 import { formatTokens, formatDuration, formatClockTime, formatElapsedCompact, cleanPromptText } from "@/lib/format";
-import { SignalString } from "./SignalString";
+import { SignalString, hexToRgb } from "./SignalString";
 import type { StrikePulse, CometPulse, ExtraBandSpec } from "./SignalString";
 import { FluxEffect, FLUX_EXIT_MS } from "./FluxEffect";
 import { AuroraEffect, AURORA_EXIT_MS } from "./AuroraEffect";
@@ -1006,11 +1006,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   const workingExtraBands = useMemo(() => {
     if (!canDeployStrings || stringCount <= 3) return [];
     const hex = isDark ? signalColorDark : signalColorLight;
-    const cleaned = hex.replace("#", "");
-    const r = parseInt(cleaned.slice(0, 2), 16) || 255;
-    const g = parseInt(cleaned.slice(2, 4), 16) || 255;
-    const b = parseInt(cleaned.slice(4, 6), 16) || 255;
-    const color = { r, g, b };
+    const color = hexToRgb(hex);
     const jitterSeed = (s: string) => {
       let h = 2166136261 >>> 0;
       for (let i = 0; i < s.length; i++) {
