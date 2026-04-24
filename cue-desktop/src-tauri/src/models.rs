@@ -971,7 +971,6 @@ fn default_timer_display() -> String {
 
 impl Default for Settings {
     fn default() -> Self {
-        // Default to Max Standard ($100/mo)
         Self {
             five_hour_token_limit: 2_000_000,
             daily_token_limit: 8_000_000,

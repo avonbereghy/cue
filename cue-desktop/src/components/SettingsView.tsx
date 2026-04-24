@@ -117,9 +117,6 @@ function formatPct(v: number): string { return `${Math.round(v * 100)}%`; }
 function formatMul(v: number): string { return `${v.toFixed(2)}x`; }
 function formatSec(v: number): string { return `${Math.round(v * 1000)}ms`; }
 
-// LiveAudioMeters disabled — Core Audio Taps permission issue
-// See logged problem: AudioDeviceStart returns "nope" (OSStatus 1852797029)
-
 function formatDuration(secs: number): string {
   const m = Math.floor(secs / 60);
   const s = Math.floor(secs % 60);
@@ -616,15 +613,6 @@ export function SettingsView() {
       (win.__applyTheme as (p: string) => void)("auto");
     }
   };
-
-  // Live audio disabled — Core Audio Taps permission issue
-  // const currentMode = settings?.signalMode ?? "simulated";
-  // useEffect(() => {
-  //   if (currentMode === "live") {
-  //     invoke("start_live_audio").catch((e) => console.warn("Live audio start failed:", e));
-  //     return () => { invoke("stop_live_audio").catch(() => {}); };
-  //   }
-  // }, [currentMode]);
 
   if (!settings) {
     return (
