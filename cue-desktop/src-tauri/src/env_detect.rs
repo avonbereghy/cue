@@ -249,10 +249,15 @@ pub fn configure_hooks(hook_path: &str) -> Result<(), String> {
         serde_json::json!({})
     };
 
-    // Backup existing settings before modification
+    // Backup existing settings before modification. Write through atomic_write
+    // so the backup lands at 0600 (fs::copy would inherit source perms or apply
+    // umask, potentially exposing the hook config to other local users on a
+    // shared system).
     if settings_path.exists() {
         let backup_path = settings_path.with_extension("json.bak");
-        std::fs::copy(&settings_path, &backup_path)
+        let backup_bytes = std::fs::read(&settings_path)
+            .map_err(|e| format!("Failed to read settings for backup: {}", e))?;
+        security::atomic_write(&backup_path, &backup_bytes)
             .map_err(|e| format!("Failed to backup settings: {}", e))?;
     }
 
