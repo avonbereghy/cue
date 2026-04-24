@@ -146,9 +146,22 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
     // Extract timestamp — try multiple formats
     entry.timestamp = extract_timestamp(obj);
 
-    // Extract custom title
+    // Extract custom title. Claude Code's branch/fork feature seeds the
+    // customTitle with the originating user message's raw text, which can
+    // include slash-command XML wrappers (<command-message>.../</command-args>),
+    // ANSI escapes, or [Image #N] bracket markers. Apply the same sanitization
+    // as user_prompt_text so the subtitle never leaks raw harness markup.
     if entry_type == "custom-title" {
-        entry.custom_title = obj.get("customTitle").and_then(|v| v.as_str()).map(String::from);
+        entry.custom_title = obj
+            .get("customTitle")
+            .and_then(|v| v.as_str())
+            .map(|raw| {
+                let s = strip_ansi_escapes(raw);
+                let s = strip_xml_tags(&s);
+                let s = strip_bracket_markers(&s);
+                s.split_whitespace().collect::<Vec<_>>().join(" ")
+            })
+            .filter(|s| !s.is_empty());
     }
 
     // Extract session ID from metadata entries (permission-mode or system headers)
@@ -948,6 +961,21 @@ mod tests {
         assert_eq!(
             entries[0].custom_title.as_deref(),
             Some("Auth Refactor")
+        );
+    }
+
+    /// Regression: Claude Code's fork-session feature can seed customTitle
+    /// with the raw text of the originating user message — including
+    /// slash-command XML wrappers like `<command-message>…</command-message>
+    /// <command-name>/research</command-name> <command-args>…`. The subtitle
+    /// pipeline strips these at ingest so they never reach the UI.
+    #[test]
+    fn test_custom_title_strips_slash_command_wrappers() {
+        let line = r#"{"type":"custom-title","customTitle":"<command-message>research</command-message> <command-name>/research</command-name> <command-args>the (Branch)","sessionId":"s1"}"#;
+        let entries = parse_jsonl_content(line);
+        assert_eq!(
+            entries[0].custom_title.as_deref(),
+            Some("research /research the (Branch)")
         );
     }
 
