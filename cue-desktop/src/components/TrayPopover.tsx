@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSessionMonitor } from "@/hooks/useSessionMonitor";
 import type { EnrichedSession } from "@/lib/types";
+import { cleanPromptText } from "@/lib/format";
 
 // State color palette mirrors src-tauri/src/tray.rs::color_for_state
 // Returned as { rail, pillBg, pillText } so the row + state pill can use
@@ -93,7 +94,7 @@ function SessionRow({ session, isLight }: { session: EnrichedSession; isLight: b
     : null;
   const teamBadge = session.info.teamName ?? null;
   const subprocBadge = session.info.subprocess ?? null;
-  const promptPreview = (session.metrics.lastPrompt ?? "").trim().split("\n")[0]?.slice(0, 80) ?? "";
+  const promptPreview = cleanPromptText(session.metrics.lastPrompt).trim().split("\n")[0]?.slice(0, 80) ?? "";
 
   return (
     <div
@@ -243,7 +244,7 @@ function SessionRow({ session, isLight }: { session: EnrichedSession; isLight: b
               opacity: 0.7,
               minWidth: 0,
             }}
-            title={session.metrics.lastPrompt ?? ""}
+            title={cleanPromptText(session.metrics.lastPrompt)}
           >
             › {promptPreview}
           </span>
