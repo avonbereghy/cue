@@ -1564,9 +1564,8 @@ async fn handle_permission_connection(
 // Tray Setup
 // ---------------------------------------------------------------------------
 
-/// Filter sessions to only those that are actively running or need attention.
-/// Excludes "done" and "ended" sessions — these are shown as revivable in the
-/// frontend and should not appear as tray dots or menu items.
+/// Sessions to surface in the tray. Excludes "ended" — those are revivable
+/// in the main app and shouldn't clutter the menu bar dots or popover.
 fn tray_active_sessions(sessions: &[EnrichedSession]) -> Vec<EnrichedSession> {
     sessions
         .iter()

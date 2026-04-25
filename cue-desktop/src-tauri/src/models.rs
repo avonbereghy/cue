@@ -54,6 +54,13 @@ pub struct SessionInfo {
     /// whose owning process has died.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
+    /// Most recent Claude Code permission mode seen by the hook. One of
+    /// "default", "plan", "acceptEdits", "bypassPermissions". The frontend
+    /// only renders this while the session is in an actively-busy state —
+    /// otherwise the user could have toggled it via shift+tab without our
+    /// knowledge, so the value is suppressed to avoid showing stale data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -778,6 +785,15 @@ pub struct Settings {
     /// Sand grain opacity (0.05 = faint, 1.0 = solid)
     #[serde(default = "default_sand_alpha")]
     pub sand_alpha: f64,
+    /// Aurora wash effect — enabled while a session sits in `done`.
+    #[serde(default = "default_true")]
+    pub aurora_enabled: bool,
+    /// Aurora overall opacity multiplier (0.05 = faint, 1.0 = solid).
+    #[serde(default = "default_aurora_alpha")]
+    pub aurora_alpha: f64,
+    /// Aurora time-evolution multiplier (0.1 = glacial, 4.0 = lively).
+    #[serde(default = "default_aurora_speed")]
+    pub aurora_speed: f64,
     /// Piano key press-down speed in seconds
     #[serde(default = "default_key_press_speed")]
     pub key_press_speed: f64,
@@ -939,6 +955,8 @@ fn default_sand_speed() -> f64 { 0.26 }
 fn default_sand_grain_size() -> f64 { 0.4 }
 fn default_sand_turbulence() -> f64 { 0.9 }
 fn default_sand_alpha() -> f64 { 0.7 }
+fn default_aurora_alpha() -> f64 { 0.75 }
+fn default_aurora_speed() -> f64 { 0.55 }
 
 fn default_key_press_speed() -> f64 {
     0.35
@@ -1017,6 +1035,9 @@ impl Default for Settings {
             sand_grain_size: 0.4,
             sand_turbulence: 0.9,
             sand_alpha: 0.7,
+            aurora_enabled: true,
+            aurora_alpha: 0.75,
+            aurora_speed: 0.55,
             key_press_speed: 0.35,
             key_release_speed: 0.4,
             auto_reorder: false,

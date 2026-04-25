@@ -584,6 +584,9 @@ export function SettingsView() {
       fluxSpeed: 1.0,
       fluxLineLength: 0.55,
       fluxTurbulence: 1.0,
+      auroraEnabled: true,
+      auroraAlpha: 0.75,
+      auroraSpeed: 0.55,
       cordRetractDelay: 0.2,
       cordDeployForce: 1.5,
       cordRetractForce: 1.5,
@@ -851,6 +854,30 @@ export function SettingsView() {
                 </SettingRow>
                 <SettingRow label="Turbulence" description="How many swirls fit across the card (0.3 = wide eddies, 3 = tight curls)">
                   <Slider value={settings.fluxTurbulence ?? 1.0} min={0.3} max={3.0} step={0.01} defaultValue={1.0} format={formatMul} onChange={(v) => setSettings({ ...settings, fluxTurbulence: v })} />
+                </SettingRow>
+              </>
+            )}
+
+            {/* ── Aurora settings (active during done state) ── */}
+            <div className="flex items-center gap-2 py-2.5 px-1">
+              <span className="text-xs font-semibold text-white/70 uppercase tracking-wider">Aurora</span>
+              <span className="text-xs text-white/40">Done state</span>
+              <span className="ml-auto">
+                <Toggle
+                  checked={settings.auroraEnabled ?? true}
+                  onChange={() => setSettings({ ...settings, auroraEnabled: !(settings.auroraEnabled ?? true) })}
+                  label="Aurora enabled"
+                />
+              </span>
+            </div>
+
+            {(settings.auroraEnabled ?? true) && (
+              <>
+                <SettingRow label="Opacity" description="Overall aurora wash transparency">
+                  <Slider value={settings.auroraAlpha ?? 0.75} min={0.05} max={1.0} step={0.01} defaultValue={0.75} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, auroraAlpha: v })} />
+                </SettingRow>
+                <SettingRow label="Speed" description="Time-evolution rate of the aurora flow">
+                  <Slider value={settings.auroraSpeed ?? 0.55} min={0.1} max={4.0} step={0.01} defaultValue={0.55} format={formatMul} onChange={(v) => setSettings({ ...settings, auroraSpeed: v })} />
                 </SettingRow>
               </>
             )}

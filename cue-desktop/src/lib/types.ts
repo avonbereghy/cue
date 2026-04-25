@@ -19,6 +19,9 @@ export interface SessionInfo {
   agentName?: string;
   /** PID of the owning Claude Code process — used by backend liveness check. */
   pid?: number;
+  /** Most recent Claude Code permission mode seen by the hook.
+   *  "default" | "plan" | "acceptEdits" | "bypassPermissions". */
+  permissionMode?: string;
 }
 
 export interface SubagentMetrics {
@@ -194,6 +197,10 @@ export interface Settings {
   fluxSpeed: number;
   fluxLineLength: number;
   fluxTurbulence: number;
+  /** Aurora wash effect (done state) */
+  auroraEnabled: boolean;
+  auroraAlpha: number;
+  auroraSpeed: number;
   cordRetractDelay: number;
   cordDeployForce: number;
   cordRetractForce: number;

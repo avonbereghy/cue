@@ -123,25 +123,8 @@ function SessionRow({ session, isLight }: { session: EnrichedSession; isLight: b
         }}
       />
 
-      {/* Top line: name + state + duration */}
+      {/* Top line: state + name + duration */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-        <span
-          style={{
-            fontWeight: 600,
-            fontSize: 13,
-            letterSpacing: "-0.01em",
-            color: "var(--tray-text)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            flex: "1 1 auto",
-            minWidth: 0,
-          }}
-          title={session.workspaceName}
-        >
-          {session.workspaceName}
-        </span>
-
         <span
           style={{
             display: "inline-flex",
@@ -159,6 +142,23 @@ function SessionRow({ session, isLight }: { session: EnrichedSession; isLight: b
         >
           <StateDot state={session.info.state} color={colors.pillText} />
           {label}
+        </span>
+
+        <span
+          style={{
+            fontWeight: 600,
+            fontSize: 13,
+            letterSpacing: "-0.01em",
+            color: "var(--tray-text)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            flex: "1 1 auto",
+            minWidth: 0,
+          }}
+          title={session.workspaceName}
+        >
+          {session.workspaceName}
         </span>
 
         <span
@@ -349,6 +349,13 @@ export function TrayPopoverPage() {
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
+  // Hide ended sessions from the menu bar — they're revivable in the main
+  // app and don't belong as menu-bar dots or popover rows.
+  const visibleSessions = useMemo(
+    () => sessions.filter((s) => s.info.state !== "ended"),
+    [sessions],
+  );
+
   // Sort: active states first, then by recent activity. Stable for render.
   const sorted = useMemo(() => {
     const order: Record<string, number> = {
@@ -356,19 +363,19 @@ export function TrayPopoverPage() {
       waiting: 1, error: 1,
       idle: 2, done: 2,
     };
-    return [...sessions].sort((a, b) => {
+    return [...visibleSessions].sort((a, b) => {
       const oa = order[a.info.state] ?? 3;
       const ob = order[b.info.state] ?? 3;
       if (oa !== ob) return oa - ob;
       return b.info.lastActivity - a.info.lastActivity;
     });
-  }, [sessions]);
+  }, [visibleSessions]);
 
   const activeCount = useMemo(
-    () => sessions.filter((s) =>
+    () => visibleSessions.filter((s) =>
       ["working", "thinking", "subagent", "compacting", "clearing"].includes(s.info.state),
     ).length,
-    [sessions],
+    [visibleSessions],
   );
 
   return (
@@ -389,9 +396,9 @@ export function TrayPopoverPage() {
             fontSize: 11,
             color: "var(--tray-muted)",
           }}>
-            {sessions.length === 0
+            {visibleSessions.length === 0
               ? "no sessions"
-              : `${sessions.length} session${sessions.length === 1 ? "" : "s"}${activeCount > 0 ? ` · ${activeCount} active` : ""}`}
+              : `${visibleSessions.length} session${visibleSessions.length === 1 ? "" : "s"}${activeCount > 0 ? ` · ${activeCount} active` : ""}`}
           </span>
         </div>
       </div>
