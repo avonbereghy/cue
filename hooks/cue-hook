@@ -145,7 +145,8 @@ def _validate_sessions(data):
 
 def _quick_state_write(session_id, workspace, source, subprocess_label,
                        last_tokens, hook_start_time,
-                       team_name=None, agent_name=None):
+                       team_name=None, agent_name=None,
+                       permission_mode=None):
     """Write 'waiting' state to sessions.json immediately (before blocking HTTP).
 
     This is a fast-path write so the dashboard shows 'waiting' while the
@@ -196,6 +197,10 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
                     entry["inputTokens"] = existing["inputTokens"]
                     entry["outputTokens"] = existing.get("outputTokens", 0)
                     entry["model"] = existing.get("model", "")
+                # Carry forward last known mode if the current hook didn't include it.
+                pm = permission_mode or existing.get("permissionMode")
+                if pm:
+                    entry["permissionMode"] = pm
 
                 status["sessions"][session_id] = entry
 
@@ -498,6 +503,13 @@ def main():
     team_name, agent_name = _detect_team(transcript_path)
     last_tokens = _read_last_tokens(transcript_path)
 
+    # Permission mode comes through on PreToolUse / UserPromptSubmit / PostToolUse
+    # payloads as either `permission_mode` or `permissionMode`. Normalize to a
+    # canonical value Cue can render. None when the field is absent — Cue keeps
+    # the previous value rather than overwriting with "unknown".
+    raw_mode = hook_data.get("permission_mode") or hook_data.get("permissionMode")
+    permission_mode = raw_mode if isinstance(raw_mode, str) and raw_mode else None
+
     os.makedirs(STATUS_DIR, exist_ok=True)
 
     # For PermissionRequest, write "waiting" state BEFORE the blocking HTTP
@@ -506,7 +518,8 @@ def main():
     if action == "waiting":
         _quick_state_write(session_id, workspace, source, subprocess_label,
                            last_tokens, hook_start_time,
-                           team_name=team_name, agent_name=agent_name)
+                           team_name=team_name, agent_name=agent_name,
+                           permission_mode=permission_mode)
 
     # Forward permission requests to the dashboard for user decision.
     # PermissionRequest hooks have tool_name in the payload and action="waiting".
@@ -703,6 +716,11 @@ def main():
                     entry["inputTokens"] = existing["inputTokens"]
                     entry["outputTokens"] = existing.get("outputTokens", 0)
                     entry["model"] = existing.get("model", "")
+                # Carry forward last known permission mode when the current
+                # hook event didn't include it (e.g. SessionStart, Stop).
+                pm = permission_mode or existing.get("permissionMode")
+                if pm:
+                    entry["permissionMode"] = pm
                 status["sessions"][session_id] = entry
 
             # Atomic write with unique temp file to avoid collisions
