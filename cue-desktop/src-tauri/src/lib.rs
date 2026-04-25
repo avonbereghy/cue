@@ -69,6 +69,51 @@ fn set_native_appearance(window: &tauri::WebviewWindow, dark: bool) {
 #[cfg(not(target_os = "macos"))]
 fn set_native_appearance(_window: &tauri::WebviewWindow, _dark: bool) {}
 
+/// Toggle whether the app shows up in the macOS Dock. When hidden, the app
+/// runs as a menu-bar-only "accessory" — no Dock tile and no main menu bar.
+/// `NSApplicationActivationPolicyRegular = 0`, `Accessory = 1`.
+#[cfg(target_os = "macos")]
+fn set_dock_visible(visible: bool) {
+    unsafe {
+        let nsapp_class = match objc2::runtime::AnyClass::get(c"NSApplication") {
+            Some(c) => c,
+            None => return,
+        };
+        let app: *mut objc2::runtime::AnyObject = objc2::msg_send![nsapp_class, sharedApplication];
+        if app.is_null() {
+            return;
+        }
+        let policy: isize = if visible { 0 } else { 1 };
+        let _: () = objc2::msg_send![&*app, setActivationPolicy: policy];
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_dock_visible(_visible: bool) {}
+
+/// Apply the menu-bar / Dock / login settings to the running app. Idempotent —
+/// safe to call on startup and after every settings change.
+fn apply_visibility_settings(handle: &AppHandle, settings: &Settings) {
+    if let Some(tray) = handle.tray_by_id("cue-tray") {
+        let _ = tray.set_visible(settings.show_in_menu_bar);
+    }
+
+    set_dock_visible(settings.show_in_dock);
+
+    use tauri_plugin_autostart::ManagerExt;
+    let autostart = handle.autolaunch();
+    let enabled = autostart.is_enabled().unwrap_or(false);
+    if settings.start_at_login && !enabled {
+        if let Err(e) = autostart.enable() {
+            log::warn!("autostart.enable failed: {}", e);
+        }
+    } else if !settings.start_at_login && enabled {
+        if let Err(e) = autostart.disable() {
+            log::warn!("autostart.disable failed: {}", e);
+        }
+    }
+}
+
 /// Detect the macOS system appearance by checking UserDefaults.
 /// Returns Theme::Dark if AppleInterfaceStyle is "Dark", otherwise Theme::Light.
 #[cfg(target_os = "macos")]
@@ -203,6 +248,7 @@ fn update_settings(app: tauri::AppHandle, new_settings: Settings) -> Result<(), 
     // toggle_vibrancy here — doing so on every save resets the window
     // theme and causes a white flash.
     settings::save_settings(&new_settings)?;
+    apply_visibility_settings(&app, &new_settings);
     let _ = app.emit("settings-changed", &new_settings);
     Ok(())
 }
@@ -1068,6 +1114,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(AppState {
             monitor: monitor.clone(),
             pending_permissions,
@@ -1206,6 +1256,9 @@ pub fn run() {
 
             // --- System Tray ---
             setup_tray(&handle, &monitor_tray)?;
+
+            // --- Menu-bar / Dock / login settings ---
+            apply_visibility_settings(&handle, &settings::load_settings());
 
             // --- Blink timer (0.5s) ---
             spawn_blink_timer(handle.clone(), monitor_tray.clone());

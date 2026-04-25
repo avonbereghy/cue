@@ -842,6 +842,17 @@ pub struct Settings {
     /// Timer display mode: "minutes" (HH:MM), "seconds" (HH:MM:SS), or "off"
     #[serde(default = "default_timer_display")]
     pub timer_display: String,
+    /// Show the system tray (menu bar) icon. Defaults to true.
+    #[serde(default = "default_true")]
+    pub show_in_menu_bar: bool,
+    /// Show the app in the macOS Dock / OS taskbar. Defaults to true.
+    /// On macOS this toggles NSApplication's activation policy between
+    /// `.regular` (Dock + main menu) and `.accessory` (menu-bar-only).
+    #[serde(default = "default_true")]
+    pub show_in_dock: bool,
+    /// Launch Cue automatically when the user logs in. Defaults to true.
+    #[serde(default = "default_true")]
+    pub start_at_login: bool,
     /// Per-theme appearance customizations saved by the user, keyed by theme ID
     #[serde(default)]
     pub theme_customizations: HashMap<String, ThemeCustomization>,
@@ -1027,6 +1038,9 @@ impl Default for Settings {
             show_config_counts: false,
             show_tool_call_comets: false,
             timer_display: "seconds".to_string(),
+            show_in_menu_bar: true,
+            show_in_dock: true,
+            start_at_login: true,
             theme_customizations: HashMap::new(),
             settings_version: crate::settings::CURRENT_SETTINGS_VERSION,
         }

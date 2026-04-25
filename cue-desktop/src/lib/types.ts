@@ -223,6 +223,12 @@ export interface Settings {
   showToolCallComets: boolean;
   /** Timer display: "minutes" (HH:MM), "seconds" (HH:MM:SS), or "off" */
   timerDisplay: string;
+  /** Show the system tray icon in the menu bar. Default: true. */
+  showInMenuBar: boolean;
+  /** Show the app in the macOS Dock / OS taskbar. Default: true. */
+  showInDock: boolean;
+  /** Launch Cue automatically at login. Default: true. */
+  startAtLogin: boolean;
   /** Per-theme appearance customizations saved by the user, keyed by theme ID */
   themeCustomizations: Record<string, ThemeCustomization>;
 }
