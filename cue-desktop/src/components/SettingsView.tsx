@@ -604,6 +604,9 @@ export function SettingsView() {
       showConfigCounts: false,
       showToolCallComets: false,
       timerDisplay: "seconds",
+      showInMenuBar: true,
+      showInDock: true,
+      startAtLogin: true,
       themeCustomizations: settings.themeCustomizations ?? {},
     };
     setSettings(defaults);
@@ -1035,6 +1038,31 @@ export function SettingsView() {
               )}
       </section>
       )}
+
+      {/* App Behavior */}
+      <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
+        <SettingRow label="Show in menu bar" description="Display the Cue tray icon in the menu bar" onReset={!(settings.showInMenuBar ?? true) ? () => setSettings({ ...settings, showInMenuBar: true }) : undefined}>
+          <Toggle
+            checked={settings.showInMenuBar ?? true}
+            onChange={() => setSettings({ ...settings, showInMenuBar: !(settings.showInMenuBar ?? true) })}
+            label="Show in menu bar"
+          />
+        </SettingRow>
+        <SettingRow label="Show in Dock" description="Display the Cue icon in the macOS Dock" onReset={!(settings.showInDock ?? true) ? () => setSettings({ ...settings, showInDock: true }) : undefined}>
+          <Toggle
+            checked={settings.showInDock ?? true}
+            onChange={() => setSettings({ ...settings, showInDock: !(settings.showInDock ?? true) })}
+            label="Show in Dock"
+          />
+        </SettingRow>
+        <SettingRow label="Start at login" description="Launch Cue automatically when you log in" onReset={!(settings.startAtLogin ?? true) ? () => setSettings({ ...settings, startAtLogin: true }) : undefined}>
+          <Toggle
+            checked={settings.startAtLogin ?? true}
+            onChange={() => setSettings({ ...settings, startAtLogin: !(settings.startAtLogin ?? true) })}
+            label="Start at login"
+          />
+        </SettingRow>
+      </section>
 
       {/* Beta Features */}
       <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Beta Features</h3>
