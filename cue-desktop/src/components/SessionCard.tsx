@@ -96,6 +96,10 @@ export interface SessionCardProps {
   fluxSpeed?: number;
   fluxLineLength?: number;
   fluxTurbulence?: number;
+  /** Aurora effect (done state) */
+  auroraEnabled?: boolean;
+  auroraAlpha?: number;
+  auroraSpeed?: number;
   cordRetractDelay?: number;
   cordDeployForce?: number;
   cordRetractForce?: number;
@@ -204,7 +208,7 @@ function PromptPopup({ text, onClose, isDark }: {
   );
 }
 
-function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, fluxEnabled = true, fluxAlpha = 0.9, fluxIntensity = 1.5, fluxDensity = 1.0, fluxSpeed = 1.0, fluxLineLength = 0.55, fluxTurbulence = 1.0, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, stringSpread = 0.15, stringDeployAngle = -16, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "percent", showToolPills = false, showCurrentTool = false, showConfigCounts = false, showToolCallComets = false, timerDisplay = "seconds", expandOverride, onExpandCycle, isDuplicate = false, lowPower = false }: SessionCardProps) {
+function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, fluxEnabled = true, fluxAlpha = 0.9, fluxIntensity = 1.5, fluxDensity = 1.0, fluxSpeed = 1.0, fluxLineLength = 0.55, fluxTurbulence = 1.0, auroraEnabled = true, auroraAlpha = 0.75, auroraSpeed = 0.55, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, stringSpread = 0.15, stringDeployAngle = -16, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "percent", showToolPills = false, showCurrentTool = false, showConfigCounts = false, showToolCallComets = false, timerDisplay = "seconds", expandOverride, onExpandCycle, isDuplicate = false, lowPower = false }: SessionCardProps) {
   // Effective display mode: expandOverride takes precedence over global compact/slim
   const effectiveCompact = expandOverride !== undefined ? expandOverride === 0 : compactMode;
   const effectiveSlim = expandOverride !== undefined ? expandOverride <= 1 : slimMode;
@@ -1136,12 +1140,12 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
 
       {/* Aurora wash — done-state ambient background. Slow FBM flow; mounts
           on done, fades out via AURORA_EXIT_MS when state leaves. */}
-      {!lowPower && auroraMounted && (revived || info.state !== "ended") && (
+      {!lowPower && auroraEnabled && auroraMounted && (revived || info.state !== "ended") && (
         <AuroraEffect
           seed={info.id}
           active={auroraActive}
-          alpha={0.75}
-          speed={0.55}
+          alpha={auroraAlpha}
+          speed={auroraSpeed}
         />
       )}
 
@@ -1355,6 +1359,38 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                   )}
                 </span>
               )}
+              {(() => {
+                // Permission-mode pill. Only show while Claude Code is the one
+                // driving the terminal — in other states the user can shift+tab
+                // to cycle modes silently and the value would lag, so we hide
+                // rather than misreport.
+                const ACTIVE = new Set(["working", "thinking", "subagent", "compacting", "clearing"]);
+                if (!ACTIVE.has(info.state)) return null;
+                const mode = info.permissionMode;
+                if (!mode || mode === "default") return null;
+                // Symbols + labels mirror Claude Code's own terminal indicators
+                // (e.g. "▮▮ plan mode on", "▶▶ auto mode on"). Colors trend from
+                // safe → risky: teal (read-only) → amber/yellow (auto-approve
+                // flavors) → red (bypass) → slate (locked-down).
+                const meta: Record<string, { label: string; symbol: string; cls: string; title: string }> = {
+                  plan:               { label: "PLAN",   symbol: "▮▮", cls: "bg-teal-500/15 text-teal-300",     title: "Plan mode — read-only research, no tools execute" },
+                  acceptEdits:        { label: "ACCEPT", symbol: "⏵⏵", cls: "bg-amber-500/15 text-amber-300",   title: "Accept edits — auto-approves file edits and safe filesystem ops" },
+                  auto:               { label: "AUTO",   symbol: "▶▶", cls: "bg-yellow-500/15 text-yellow-300", title: "Auto mode — every tool call goes through a safety classifier (research preview)" },
+                  bypassPermissions:  { label: "BYPASS", symbol: "⚠⚠", cls: "bg-red-500/15 text-red-300",       title: "Bypass permissions — every tool auto-approves; use only in isolated environments" },
+                  dontAsk:            { label: "LOCKED", symbol: "⊘",  cls: "bg-slate-500/15 text-slate-300",   title: "Don't-ask mode — auto-denies anything not pre-allowlisted" },
+                };
+                const m = meta[mode];
+                if (!m) return null;
+                return (
+                  <span
+                    className={`text-[0.5625rem] font-semibold tracking-wider px-1.5 py-0.5 rounded leading-none inline-flex items-center gap-1 ${m.cls}`}
+                    title={m.title}
+                  >
+                    <span aria-hidden className="opacity-90">{m.symbol}</span>
+                    {m.label}
+                  </span>
+                );
+              })()}
               {!hideTimer && timerDisplay !== "off" && !effectiveSlim && (
                 <span className={`text-[0.625rem] font-mono mono-nums ${isGlass ? "text-white/65" : "text-white/40"}`}>
                   {timerDisplay === "minutes"
