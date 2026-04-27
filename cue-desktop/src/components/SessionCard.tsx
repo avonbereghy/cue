@@ -917,15 +917,15 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   const activeGenMsRef = useRef(0);
   const lastTickMsRef = useRef<number | null>(null);
   // Cumulative active-generation thresholds for strings 1..5. The first
-  // string now also gets a short warm-up so the card doesn't snap straight
-  // to a deployed state the instant work starts. Upper strings stretch so
-  // 4 and 5 read as increasingly rare.
-  //   1st string →  1s    (short warm-up, unchanged)
-  //   2nd string → 60s    (2×30s)
-  //   3rd string →  3:00  (2×1:30)
-  //   4th string → 10:00  (2×5:00)
-  //   5th string → 20:00  (2×10:00)
-  const STRING_THRESHOLDS_MS = [1_000, 60_000, 180_000, 600_000, 1_200_000];
+  // string gets a short warm-up so the card doesn't snap straight to a
+  // deployed state the instant work starts. Upper strings stretch so 4 and
+  // 5 read as increasingly rare.
+  //   1st string →  1s    (short warm-up)
+  //   2nd string →  2:00
+  //   3rd string →  5:00
+  //   4th string → 10:00
+  //   5th string → 30:00
+  const STRING_THRESHOLDS_MS = [1_000, 120_000, 300_000, 600_000, 1_800_000];
 
   useEffect(() => {
     if (!isTurnOngoing) {
@@ -1255,6 +1255,12 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
               // Gated to duplicate workspaces (disambiguation case); click opens
               // the full PromptPopup.
               if (hidePromptPill || !isDuplicate || metrics.customTitle) return null;
+              // Branched sessions inherit the parent's user prompts; suppress
+              // the snippet so the "Branch from <id>" subtitle is the only cue.
+              // Detect via parser-derived id OR the "(Branch)" suffix as a
+              // fallback (works before the Rust binary is rebuilt).
+              if (metrics.branchedFromSessionId) return null;
+              if (cleanPromptText(metrics.customTitle)?.trimEnd().endsWith("(Branch)")) return null;
               if (metrics.lastPromptSessionId && metrics.lastPromptSessionId !== info.id) return null;
               const preferAssistant = info.state !== "thinking" && !!metrics.lastAssistantText;
               const rawText = preferAssistant
@@ -1403,23 +1409,59 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           </div>
 
 
-          {/* Agent subtitle — team agents (from JSONL or hook) or sessions with a custom title.
-              customTitle passes through cleanPromptText because Claude Code's
-              fork-session feature can seed it with raw <command-*> slash-command
-              wrappers from the originating message. */}
+          {/* Agent subtitle — team agents (from JSONL or hook), branched sessions,
+              or sessions with a custom title. customTitle passes through
+              cleanPromptText because Claude Code's fork-session feature can
+              seed it with raw <command-*> slash-command wrappers from the
+              originating message. */}
           {(() => {
             const teamName = info.teamName || metrics.teamName;
             const agentName = info.agentName || metrics.agentName;
+            // Branched sessions: prefer the parser-derived parent id, but
+            // fall back to detecting Claude Code's "(Branch)" suffix on
+            // customTitle so the inherited prompt text never leaks through
+            // even if the Rust binary hasn't been rebuilt yet. The parent
+            // session id is the first sessionId in the file (lastPromptSessionId).
+            const cleanedTitle = cleanPromptText(metrics.customTitle);
+            const branchedSuffix = cleanedTitle?.trimEnd().endsWith("(Branch)") ?? false;
+            const branchedFrom = metrics.branchedFromSessionId
+              ?? (branchedSuffix ? (metrics.lastPromptSessionId ?? "") : null);
             const subtitle = teamName
               ? `${agentName || "team agent"} · ${teamName}`
-              : (cleanPromptText(metrics.customTitle) || null);
-            return subtitle ? (
+              : branchedFrom !== null
+              ? `Branch from ${branchedFrom ? branchedFrom.slice(0, 8) : "session"}`
+              : (cleanedTitle || null);
+            if (!subtitle) return null;
+            const isBranchSubtitle = branchedFrom !== null && !teamName;
+            const copyParent = (e: React.MouseEvent) => {
+              e.stopPropagation();
+              if (!branchedFrom || !navigator.clipboard) return;
+              navigator.clipboard.writeText(branchedFrom).then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              }).catch(() => {});
+            };
+            return (
               <div style={{ position: "relative", height: 0, overflow: "visible", paddingLeft: "calc(20px + 0.5rem)", marginTop: "-0.5rem" }}>
-                <span style={{ fontSize: "0.65rem", color: titleHex, opacity: 0.55, fontWeight: 400, whiteSpace: "nowrap" }}>
-                  {subtitle}
-                </span>
+                {isBranchSubtitle && branchedFrom ? (
+                  <button
+                    type="button"
+                    onClick={copyParent}
+                    title={`Copy parent session ID: ${branchedFrom}`}
+                    aria-label={`Copy parent session ID ${branchedFrom}`}
+                    className="bg-transparent border-0 p-0 cursor-pointer"
+                    style={{ fontSize: "0.65rem", color: titleHex, opacity: 0.55, fontWeight: 400, whiteSpace: "nowrap" }}
+                  >
+                    {subtitle}
+                    {copied && <span style={{ marginLeft: "0.35em" }}>{"✓"}</span>}
+                  </button>
+                ) : (
+                  <span style={{ fontSize: "0.65rem", color: titleHex, opacity: 0.55, fontWeight: 400, whiteSpace: "nowrap" }}>
+                    {subtitle}
+                  </span>
+                )}
               </div>
-            ) : null;
+            );
           })()}
 
           {/* Rows 2-3 hidden in compact and slim mode */}

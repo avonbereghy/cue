@@ -107,6 +107,9 @@ export interface SessionMetrics {
   teamName?: string | null;
   /** Agent name from JSONL (team agent sessions) */
   agentName?: string | null;
+  /** Parent session ID when this session was forked via Claude Code's branch/fork feature.
+   *  When set, UI renders "Branch from <id>" as the subtitle. */
+  branchedFromSessionId?: string | null;
 }
 
 /** Pre-computed by Rust backend (EnrichedSession includes derived fields) */
