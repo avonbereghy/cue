@@ -19,7 +19,12 @@ fn main() {
             };
 
             if needs_build {
+                // Match tauri.conf.json's `bundle.macOS.minimumSystemVersion`;
+                // the Core Audio Taps API (AudioHardwareCreateProcessTap) was
+                // added in macOS 14.2, and CI runners default to an older
+                // deployment target that fails the availability check.
                 let status = std::process::Command::new("swiftc")
+                    .env("MACOSX_DEPLOYMENT_TARGET", "14.2")
                     .args([
                         "-O",
                         "-o",
