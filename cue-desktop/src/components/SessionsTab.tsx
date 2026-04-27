@@ -292,7 +292,11 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setRandomAnimation(s.randomAnimation ?? false);
     setSignalString(s.signalString ?? false);
     setSignalFrequency(s.signalFrequency ?? 1.0);
-    const mode = s.signalMode === "audio" ? "preset" : s.signalMode === "live" ? "simulated" : (s.signalMode ?? "simulated");
+    // Migrate legacy modes: "audio" → "preset" (renamed), "live" → "simulated"
+    // (live mode was retired with the Core Audio Taps abandonment).
+    const mode = s.signalMode === "audio" ? "preset"
+      : s.signalMode === "live" ? "simulated"
+      : (s.signalMode ?? "simulated");
     setSignalMode(mode);
     setSignalAlpha(s.signalAlpha ?? 0.7);
     setSignalAmplitude(s.signalAmplitude ?? 0.15);

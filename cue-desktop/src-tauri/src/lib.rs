@@ -9,7 +9,6 @@ pub mod config_counter;
 pub mod env_detect;
 pub mod git_status;
 pub mod jsonl_parser;
-pub mod live_audio;
 pub mod model_context;
 pub mod models;
 pub mod paths;
@@ -35,7 +34,6 @@ pub struct AppState {
     pub monitor: Arc<SessionMonitorState>,
     pub pending_permissions: Arc<permission_server::PendingRequests>,
     pub permission_metadata: Arc<Mutex<HashMap<String, models::PermissionRequest>>>,
-    pub live_audio: Arc<Mutex<live_audio::LiveAudioState>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1079,25 +1077,6 @@ fn check_settings_hooks(settings_path: &std::path::Path) -> (usize, usize, usize
 }
 
 // ---------------------------------------------------------------------------
-// Live Audio (Beta)
-// ---------------------------------------------------------------------------
-
-#[tauri::command]
-fn start_live_audio(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    live_audio::start(&app, &state.live_audio)
-}
-
-#[tauri::command]
-fn stop_live_audio(state: State<'_, AppState>) -> Result<(), String> {
-    live_audio::stop(&state.live_audio)
-}
-
-#[tauri::command]
-fn get_live_audio_status(state: State<'_, AppState>) -> live_audio::LiveAudioStatus {
-    live_audio::status(&state.live_audio)
-}
-
-// ---------------------------------------------------------------------------
 // Startup + Timer Setup
 // ---------------------------------------------------------------------------
 
@@ -1220,7 +1199,6 @@ pub fn run() {
             monitor: monitor.clone(),
             pending_permissions,
             permission_metadata,
-            live_audio: Arc::new(Mutex::new(live_audio::LiveAudioState::default())),
         })
         .invoke_handler(tauri::generate_handler![
             get_sessions,
@@ -1248,9 +1226,6 @@ pub fn run() {
             write_sandbox_sessions,
             clear_sandbox_sessions,
             take_window_screenshot,
-            start_live_audio,
-            stop_live_audio,
-            get_live_audio_status,
             get_hook_status,
             install_cue_hooks,
             uninstall_cue_hooks,
