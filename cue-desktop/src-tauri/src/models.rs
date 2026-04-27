@@ -283,17 +283,26 @@ pub struct SessionMetrics {
 
 impl SessionMetrics {
     pub fn total_tokens(&self) -> i64 {
-        self.input_tokens + self.output_tokens
+        self.input_tokens
+            + self.output_tokens
             + self.subagents.iter().map(|s| s.total_tokens()).sum::<i64>()
     }
 
     pub fn total_tool_uses(&self) -> i64 {
         self.tool_counts.values().sum::<i64>()
-            + self.subagents.iter().map(|s| s.total_tool_uses()).sum::<i64>()
+            + self
+                .subagents
+                .iter()
+                .map(|s| s.total_tool_uses())
+                .sum::<i64>()
     }
 
     pub fn top_tools(&self) -> Vec<(String, i64)> {
-        let mut tools: Vec<_> = self.tool_counts.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        let mut tools: Vec<_> = self
+            .tool_counts
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
         tools.sort_by(|a, b| b.1.cmp(&a.1));
         tools
     }
@@ -369,7 +378,11 @@ pub struct EnrichedSession {
 }
 
 impl EnrichedSession {
-    pub fn from_info_and_metrics(info: SessionInfo, metrics: SessionMetrics, supplemental: &SupplementalData) -> Self {
+    pub fn from_info_and_metrics(
+        info: SessionInfo,
+        metrics: SessionMetrics,
+        supplemental: &SupplementalData,
+    ) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -432,9 +445,7 @@ impl EnrichedSession {
         // Only rescue from terminal states — `working`/`thinking` already
         // reflect live activity, and `waiting`/`error`/`compacting`/`clearing`
         // must stay put to preserve user-attention signals.
-        if matches!(info.state.as_str(), "done" | "idle")
-            && info.active_subagents == 0
-        {
+        if matches!(info.state.as_str(), "done" | "idle") && info.active_subagents == 0 {
             let live_count = metrics
                 .subagents
                 .iter()
@@ -470,15 +481,15 @@ impl EnrichedSession {
             .unwrap_or_else(|| workspace_name.clone());
 
         let state_icon = match info.state.as_str() {
-            "working" => "\u{27F3}",   // ⟳
-            "thinking" => "\u{1F4AD}", // 💭
-            "waiting" => "\u{23F8}",   // ⏸
-            "error" => "\u{2717}",     // ✗
-            "subagent" => "\u{2934}",  // ⤴
+            "working" => "\u{27F3}",    // ⟳
+            "thinking" => "\u{1F4AD}",  // 💭
+            "waiting" => "\u{23F8}",    // ⏸
+            "error" => "\u{2717}",      // ✗
+            "subagent" => "\u{2934}",   // ⤴
             "compacting" => "\u{21BB}", // ↻
-            "clearing" => "\u{21E1}",  // ⇡
-            "idle" => "\u{25CB}",      // ○
-            _ => "\u{2713}",           // ✓
+            "clearing" => "\u{21E1}",   // ⇡
+            "idle" => "\u{25CB}",       // ○
+            _ => "\u{2713}",            // ✓
         }
         .to_string();
 
@@ -498,10 +509,7 @@ impl EnrichedSession {
 
         // duration_secs = active working time (since last idle/done/compacting).
         // Falls back to 0 for inactive sessions.
-        let duration_secs = supplemental
-            .active_since
-            .map(|ts| now - ts)
-            .unwrap_or(0.0);
+        let duration_secs = supplemental.active_since.map(|ts| now - ts).unwrap_or(0.0);
         let total_duration_secs = now - info.started_at;
 
         // Token source selection: the hook and the poll both read the
@@ -541,19 +549,18 @@ impl EnrichedSession {
         let provider = detect_provider(&effective_model);
 
         // Output speed: tokens/sec from delta between polls
-        let output_tokens_per_sec = if supplemental.prev_output_tokens > 0
-            && supplemental.prev_timestamp > 0.0
-        {
-            let delta_tokens = metrics.output_tokens - supplemental.prev_output_tokens;
-            let delta_secs = now - supplemental.prev_timestamp;
-            if delta_secs > 0.0 && delta_tokens > 0 {
-                delta_tokens as f64 / delta_secs
+        let output_tokens_per_sec =
+            if supplemental.prev_output_tokens > 0 && supplemental.prev_timestamp > 0.0 {
+                let delta_tokens = metrics.output_tokens - supplemental.prev_output_tokens;
+                let delta_secs = now - supplemental.prev_timestamp;
+                if delta_secs > 0.0 && delta_tokens > 0 {
+                    delta_tokens as f64 / delta_secs
+                } else {
+                    0.0
+                }
             } else {
                 0.0
-            }
-        } else {
-            0.0
-        };
+            };
 
         // Todo aggregation
         let todo_completed = metrics
@@ -586,7 +593,11 @@ impl EnrichedSession {
                     // Session /effort exists but global is cleared — session wins
                     // only if it's newer than the global-clear event, otherwise
                     // the clear implies "revert to auto".
-                    if session_ts >= global_ts { Some(s) } else { None }
+                    if session_ts >= global_ts {
+                        Some(s)
+                    } else {
+                        None
+                    }
                 }
                 (None, Some(g)) => Some(g),
                 (None, None) => None,
@@ -954,15 +965,33 @@ fn default_signal_effect() -> String {
     "string".to_string()
 }
 
-fn default_sand_intensity() -> f64 { 1.51 }
-fn default_sand_direction() -> f64 { -60.0 }
-fn default_sand_density() -> f64 { 2.0 }
-fn default_sand_speed() -> f64 { 0.26 }
-fn default_sand_grain_size() -> f64 { 0.4 }
-fn default_sand_turbulence() -> f64 { 0.9 }
-fn default_sand_alpha() -> f64 { 0.7 }
-fn default_aurora_alpha() -> f64 { 0.75 }
-fn default_aurora_speed() -> f64 { 0.55 }
+fn default_sand_intensity() -> f64 {
+    1.51
+}
+fn default_sand_direction() -> f64 {
+    -60.0
+}
+fn default_sand_density() -> f64 {
+    2.0
+}
+fn default_sand_speed() -> f64 {
+    0.26
+}
+fn default_sand_grain_size() -> f64 {
+    0.4
+}
+fn default_sand_turbulence() -> f64 {
+    0.9
+}
+fn default_sand_alpha() -> f64 {
+    0.7
+}
+fn default_aurora_alpha() -> f64 {
+    0.75
+}
+fn default_aurora_speed() -> f64 {
+    0.55
+}
 
 fn default_key_press_speed() -> f64 {
     0.35
@@ -1169,10 +1198,7 @@ mod tests {
             output_tokens: 2000,
             cache_creation_tokens: 100,
             cache_read_tokens: 900,
-            tool_counts: HashMap::from([
-                ("Bash".to_string(), 5),
-                ("Read".to_string(), 3),
-            ]),
+            tool_counts: HashMap::from([("Bash".to_string(), 5), ("Read".to_string(), 3)]),
             ..Default::default()
         };
         assert_eq!(m.total_tokens(), 3000);
@@ -1212,7 +1238,11 @@ mod tests {
     fn test_enriched_session_state_icons() {
         let make = |state: &str| {
             let info = make_test_info("test", "/tmp/test", state);
-            EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default())
+            EnrichedSession::from_info_and_metrics(
+                info,
+                SessionMetrics::default(),
+                &SupplementalData::default(),
+            )
         };
         assert_eq!(make("working").state_icon, "\u{27F3}");
         assert_eq!(make("waiting").state_icon, "\u{23F8}");
@@ -1231,13 +1261,21 @@ mod tests {
         let mut info = make_test_info("s1", "/tmp", "working");
         info.last_activity = now - 10.0;
         info.started_at = now - 100.0;
-        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default());
+        let es = EnrichedSession::from_info_and_metrics(
+            info,
+            SessionMetrics::default(),
+            &SupplementalData::default(),
+        );
         assert_eq!(es.info.state, "working");
 
         let mut info = make_test_info("s2", "/tmp", "done");
         info.last_activity = now - 500.0;
         info.started_at = now - 600.0;
-        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default());
+        let es = EnrichedSession::from_info_and_metrics(
+            info,
+            SessionMetrics::default(),
+            &SupplementalData::default(),
+        );
         assert_eq!(es.info.state, "done");
     }
 
@@ -1257,7 +1295,8 @@ mod tests {
             last_assistant_has_text: true,
             ..Default::default()
         };
-        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        let es =
+            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
         assert_eq!(es.info.state, "working");
         assert_eq!(es.state_display_name, "Working");
     }
@@ -1281,7 +1320,8 @@ mod tests {
             last_user_prompt_ts: Some(now - 1.0),
             ..Default::default()
         };
-        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        let es =
+            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
         assert_eq!(es.info.state, "thinking");
     }
 
@@ -1302,7 +1342,8 @@ mod tests {
             last_assistant_text_ts: Some(now - 1.0),
             ..Default::default()
         };
-        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        let es =
+            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
         assert_eq!(es.info.state, "working");
     }
 
@@ -1321,7 +1362,8 @@ mod tests {
             output_tokens: 5000, // thinking tokens — would false-positive on token count
             ..Default::default()
         };
-        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        let es =
+            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
         assert_eq!(es.info.state, "thinking");
     }
 
@@ -1340,7 +1382,8 @@ mod tests {
             last_assistant_has_text: true,
             ..Default::default()
         };
-        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        let es =
+            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
         assert_eq!(es.info.state, "waiting");
     }
 
@@ -1363,7 +1406,8 @@ mod tests {
             }],
             ..Default::default()
         };
-        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        let es =
+            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
         assert_eq!(es.info.state, "subagent");
         assert_eq!(es.info.active_subagents, 1);
     }
@@ -1385,7 +1429,8 @@ mod tests {
             }],
             ..Default::default()
         };
-        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        let es =
+            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
         assert_eq!(es.info.state, "done");
         assert_eq!(es.info.active_subagents, 0);
     }
@@ -1408,7 +1453,8 @@ mod tests {
             }],
             ..Default::default()
         };
-        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        let es =
+            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
         assert_eq!(es.info.state, "working");
     }
 
@@ -1428,7 +1474,8 @@ mod tests {
             }],
             ..Default::default()
         };
-        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        let es =
+            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
         assert_eq!(es.info.active_subagents, 3);
     }
 
@@ -1440,7 +1487,11 @@ mod tests {
             last_input_tokens: 500_000,
             ..Default::default()
         };
-        let es = EnrichedSession::from_info_and_metrics(info.clone(), metrics_opus, &SupplementalData::default());
+        let es = EnrichedSession::from_info_and_metrics(
+            info.clone(),
+            metrics_opus,
+            &SupplementalData::default(),
+        );
         assert_eq!(es.context_limit, 1_000_000);
         assert!((es.context_usage_percent - 0.5).abs() < 0.001);
 
@@ -1449,7 +1500,11 @@ mod tests {
             last_input_tokens: 500_000,
             ..Default::default()
         };
-        let es_syn = EnrichedSession::from_info_and_metrics(info.clone(), metrics_synthetic, &SupplementalData::default());
+        let es_syn = EnrichedSession::from_info_and_metrics(
+            info.clone(),
+            metrics_synthetic,
+            &SupplementalData::default(),
+        );
         assert_eq!(es_syn.context_limit, 1_000_000);
 
         let metrics_old = SessionMetrics {
@@ -1457,7 +1512,8 @@ mod tests {
             last_input_tokens: 100_000,
             ..Default::default()
         };
-        let es2 = EnrichedSession::from_info_and_metrics(info, metrics_old, &SupplementalData::default());
+        let es2 =
+            EnrichedSession::from_info_and_metrics(info, metrics_old, &SupplementalData::default());
         assert_eq!(es2.context_limit, 200_000);
     }
 
@@ -1526,13 +1582,23 @@ mod tests {
         let info = make_test_info("t", "/test", "working");
         let metrics = SessionMetrics {
             todo_items: vec![
-                TodoItem { content: "Task A".to_string(), status: "completed".to_string() },
-                TodoItem { content: "Task B".to_string(), status: "in_progress".to_string() },
-                TodoItem { content: "Task C".to_string(), status: "pending".to_string() },
+                TodoItem {
+                    content: "Task A".to_string(),
+                    status: "completed".to_string(),
+                },
+                TodoItem {
+                    content: "Task B".to_string(),
+                    status: "in_progress".to_string(),
+                },
+                TodoItem {
+                    content: "Task C".to_string(),
+                    status: "pending".to_string(),
+                },
             ],
             ..Default::default()
         };
-        let es = EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+        let es =
+            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
         assert_eq!(es.todo_total, 3);
         assert_eq!(es.todo_completed, 1);
         assert_eq!(es.todo_current.as_deref(), Some("Task B"));
@@ -1542,11 +1608,17 @@ mod tests {
     fn test_supplemental_data_populates_enriched_session() {
         let info = make_test_info("t", "/test", "working");
         let supplemental = SupplementalData {
-            git_status: Some(GitStatus { dirty: true, ahead: 2, behind: 1, ..Default::default() }),
+            git_status: Some(GitStatus {
+                dirty: true,
+                ahead: 2,
+                behind: 1,
+                ..Default::default()
+            }),
             claude_version: Some("CC v2.1.6".to_string()),
             ..Default::default()
         };
-        let es = EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &supplemental);
+        let es =
+            EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &supplemental);
         assert!(es.git_status.is_some());
         assert!(es.git_status.as_ref().unwrap().dirty);
         assert_eq!(es.git_status.as_ref().unwrap().ahead, 2);

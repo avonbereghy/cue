@@ -22,6 +22,12 @@ pub struct PendingRequests {
 /// along with the corresponding Tokio tasks and oneshot channels.
 const MAX_PENDING: usize = 64;
 
+impl Default for PendingRequests {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PendingRequests {
     pub fn new() -> Self {
         Self {
@@ -77,12 +83,10 @@ impl PendingRequests {
 }
 
 /// HTTP JSON response body for an Allow decision.
-pub const ALLOW_RESPONSE: &str =
-    r#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#;
+pub const ALLOW_RESPONSE: &str = r#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#;
 
 /// HTTP JSON response body for a Deny decision.
-pub const DENY_RESPONSE: &str =
-    r#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#;
+pub const DENY_RESPONSE: &str = r#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -172,14 +176,23 @@ mod tests {
     #[test]
     fn test_format_allow_response() {
         let parsed: serde_json::Value = serde_json::from_str(ALLOW_RESPONSE).unwrap();
-        assert_eq!(parsed["hookSpecificOutput"]["hookEventName"], "PermissionRequest");
-        assert_eq!(parsed["hookSpecificOutput"]["decision"]["behavior"], "allow");
+        assert_eq!(
+            parsed["hookSpecificOutput"]["hookEventName"],
+            "PermissionRequest"
+        );
+        assert_eq!(
+            parsed["hookSpecificOutput"]["decision"]["behavior"],
+            "allow"
+        );
     }
 
     #[test]
     fn test_format_deny_response() {
         let parsed: serde_json::Value = serde_json::from_str(DENY_RESPONSE).unwrap();
-        assert_eq!(parsed["hookSpecificOutput"]["hookEventName"], "PermissionRequest");
+        assert_eq!(
+            parsed["hookSpecificOutput"]["hookEventName"],
+            "PermissionRequest"
+        );
         assert_eq!(parsed["hookSpecificOutput"]["decision"]["behavior"], "deny");
     }
 

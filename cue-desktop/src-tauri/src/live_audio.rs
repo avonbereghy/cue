@@ -3,13 +3,13 @@
 //! Spawns `cue-audio-tap` (Swift CLI) which streams mono Float32 PCM to stdout.
 //! Reads the stream, runs FFT, and emits frequency band data as Tauri events.
 
+use rustfft::{num_complex::Complex, FftPlanner};
+use serde::Serialize;
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use rustfft::{FftPlanner, num_complex::Complex};
 use tauri::{AppHandle, Emitter, Manager};
-use serde::Serialize;
 
 const FFT_SIZE: usize = 2048;
 const SAMPLE_RATE: f32 = 48000.0;
@@ -34,20 +34,11 @@ pub struct LiveAudioStatus {
     pub error: Option<String>,
 }
 
+#[derive(Default)]
 pub struct LiveAudioState {
     child: Option<Child>,
     active: bool,
     error: Option<String>,
-}
-
-impl Default for LiveAudioState {
-    fn default() -> Self {
-        Self {
-            child: None,
-            active: false,
-            error: None,
-        }
-    }
 }
 
 impl Drop for LiveAudioState {
@@ -64,13 +55,17 @@ impl Drop for LiveAudioState {
 
 fn hann_window(size: usize) -> Vec<f32> {
     (0..size)
-        .map(|i| {
-            0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (size - 1) as f32).cos())
-        })
+        .map(|i| 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (size - 1) as f32).cos()))
         .collect()
 }
 
-fn band_energy(spectrum: &[f32], sample_rate: f32, fft_size: usize, low_hz: f32, high_hz: f32) -> f32 {
+fn band_energy(
+    spectrum: &[f32],
+    sample_rate: f32,
+    fft_size: usize,
+    low_hz: f32,
+    high_hz: f32,
+) -> f32 {
     let bin_width = sample_rate / fft_size as f32;
     let low_bin = (low_hz / bin_width).ceil() as usize;
     let high_bin = ((high_hz / bin_width).floor() as usize).min(spectrum.len() - 1);
@@ -112,15 +107,14 @@ pub fn start(app: &AppHandle, state: &Arc<Mutex<LiveAudioState>>) -> Result<(), 
         return Err("Live audio already active".into());
     }
 
-    let sidecar_path = find_sidecar_path(app)
-        .ok_or_else(|| {
-            log::error!("[live_audio] sidecar binary not found");
-            "cue-audio-tap sidecar binary not found".to_string()
-        })?;
+    let sidecar_path = find_sidecar_path(app).ok_or_else(|| {
+        log::error!("[live_audio] sidecar binary not found");
+        "cue-audio-tap sidecar binary not found".to_string()
+    })?;
     log::info!("[live_audio] sidecar path: {:?}", sidecar_path);
 
     let mut child = Command::new(&sidecar_path)
-        .stdin(Stdio::piped())  // Keep stdin open so sidecar can detect parent exit
+        .stdin(Stdio::piped()) // Keep stdin open so sidecar can detect parent exit
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -168,8 +162,8 @@ pub fn start(app: &AppHandle, state: &Arc<Mutex<LiveAudioState>>) -> Result<(), 
         let window = hann_window(FFT_SIZE);
         let mut sample_buf: Vec<f32> = Vec::with_capacity(FFT_SIZE * 2);
         let mut raw_buf = [0u8; 4096]; // 1024 samples worth
-        // Carry bytes from reads that ended mid-sample (n % 4 != 0). Without
-        // this, subsequent reads are byte-misaligned and every f32 is garbage.
+                                       // Carry bytes from reads that ended mid-sample (n % 4 != 0). Without
+                                       // this, subsequent reads are byte-misaligned and every f32 is garbage.
         let mut carry: Vec<u8> = Vec::with_capacity(4);
         let mut emit_count: u64 = 0;
 
@@ -185,8 +179,11 @@ pub fn start(app: &AppHandle, state: &Arc<Mutex<LiveAudioState>>) -> Result<(), 
                     for i in 0..sample_count {
                         let offset = i * 4;
                         let b = |k: usize| {
-                            if offset + k < carry.len() { carry[offset + k] }
-                            else { raw_buf[offset + k - carry.len()] }
+                            if offset + k < carry.len() {
+                                carry[offset + k]
+                            } else {
+                                raw_buf[offset + k - carry.len()]
+                            }
                         };
                         let bytes = [b(0), b(1), b(2), b(3)];
                         sample_buf.push(f32::from_le_bytes(bytes));
@@ -215,9 +212,12 @@ pub fn start(app: &AppHandle, state: &Arc<Mutex<LiveAudioState>>) -> Result<(), 
                             .map(|c| (c.re * c.re + c.im * c.im).sqrt() / FFT_SIZE as f32)
                             .collect();
 
-                        let bass = band_energy(&spectrum, SAMPLE_RATE, FFT_SIZE, BASS_LOW, BASS_HIGH);
-                        let mids = band_energy(&spectrum, SAMPLE_RATE, FFT_SIZE, MIDS_LOW, MIDS_HIGH);
-                        let treble = band_energy(&spectrum, SAMPLE_RATE, FFT_SIZE, TREBLE_LOW, TREBLE_HIGH);
+                        let bass =
+                            band_energy(&spectrum, SAMPLE_RATE, FFT_SIZE, BASS_LOW, BASS_HIGH);
+                        let mids =
+                            band_energy(&spectrum, SAMPLE_RATE, FFT_SIZE, MIDS_LOW, MIDS_HIGH);
+                        let treble =
+                            band_energy(&spectrum, SAMPLE_RATE, FFT_SIZE, TREBLE_LOW, TREBLE_HIGH);
 
                         // Normalize to 0-1 range (empirical scaling)
                         let scale = 40.0;
@@ -229,8 +229,14 @@ pub fn start(app: &AppHandle, state: &Arc<Mutex<LiveAudioState>>) -> Result<(), 
 
                         let _ = app_handle.emit("live-audio-data", data.clone());
                         emit_count += 1;
-                        if emit_count <= 5 || emit_count % 500 == 0 {
-                            log::info!("[live_audio] emit #{}: bass={:.3} mids={:.3} treble={:.3}", emit_count, data.bass, data.mids, data.treble);
+                        if emit_count <= 5 || emit_count.is_multiple_of(500) {
+                            log::info!(
+                                "[live_audio] emit #{}: bass={:.3} mids={:.3} treble={:.3}",
+                                emit_count,
+                                data.bass,
+                                data.mids,
+                                data.treble
+                            );
                         }
                     }
                 }
@@ -247,10 +253,13 @@ pub fn start(app: &AppHandle, state: &Arc<Mutex<LiveAudioState>>) -> Result<(), 
             guard.error = Some("Sidecar process exited".into());
             guard.child = None;
         }
-        let _ = app_handle.emit("live-audio-status", LiveAudioStatus {
-            active: false,
-            error: Some("Sidecar process exited".into()),
-        });
+        let _ = app_handle.emit(
+            "live-audio-status",
+            LiveAudioStatus {
+                active: false,
+                error: Some("Sidecar process exited".into()),
+            },
+        );
     });
 
     Ok(())

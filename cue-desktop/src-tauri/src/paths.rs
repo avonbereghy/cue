@@ -9,8 +9,7 @@ use std::path::PathBuf;
 /// Path to sessions.json — the hook-written status file.
 pub fn sessions_json_path() -> PathBuf {
     if cfg!(target_os = "macos") {
-        home_dir()
-            .join("Library/Application Support/Cue/sessions.json")
+        home_dir().join("Library/Application Support/Cue/sessions.json")
     } else if cfg!(target_os = "windows") {
         appdata_local().join("Cue").join("sessions.json")
     } else {
@@ -22,8 +21,7 @@ pub fn sessions_json_path() -> PathBuf {
 /// Path to settings.json — app preferences.
 pub fn settings_path() -> PathBuf {
     if cfg!(target_os = "macos") {
-        home_dir()
-            .join("Library/Application Support/com.cueapp/settings.json")
+        home_dir().join("Library/Application Support/com.cueapp/settings.json")
     } else if cfg!(target_os = "windows") {
         appdata_local().join("Cue").join("settings.json")
     } else {
@@ -39,8 +37,7 @@ pub fn claude_projects_path() -> PathBuf {
 /// Directory for saved signal presets (extracted frequency envelopes).
 pub fn presets_dir() -> PathBuf {
     if cfg!(target_os = "macos") {
-        home_dir()
-            .join("Library/Application Support/com.cueapp/presets")
+        home_dir().join("Library/Application Support/com.cueapp/presets")
     } else if cfg!(target_os = "windows") {
         appdata_local().join("Cue").join("presets")
     } else {
@@ -52,8 +49,7 @@ pub fn presets_dir() -> PathBuf {
 /// Lives alongside sessions.json in the same data directory.
 pub fn rate_limits_path() -> PathBuf {
     if cfg!(target_os = "macos") {
-        home_dir()
-            .join("Library/Application Support/Cue/rate_limits.json")
+        home_dir().join("Library/Application Support/Cue/rate_limits.json")
     } else if cfg!(target_os = "windows") {
         appdata_local().join("Cue").join("rate_limits.json")
     } else {
