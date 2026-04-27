@@ -898,14 +898,11 @@ export function SettingsView() {
                   options={[
                     { id: "simulated", label: "Simulated" },
                     { id: "preset", label: "Preset" },
-                    // Live mode disabled — Core Audio Taps permission issue (see logged problem)
-                    // ...(navigator.platform?.includes("Mac") ? [{ id: "live", label: "Live \u00b7 Beta" }] : []),
                   ]}
                   onChange={(v) => setSettings({ ...settings, signalMode: v })}
                 />
               </SettingRow>
 
-              {/* {signalMode === "live" && <LiveAudioMeters />} */}
 
               <SettingRow label="Bands" description="Frequency bands used to drive the effect" onReset={(!settings.signalBass || !settings.signalMids || !settings.signalTreble) ? () => setSettings({ ...settings, signalBass: true, signalMids: true, signalTreble: true }) : undefined}>
                 <div className="flex items-center gap-3">
