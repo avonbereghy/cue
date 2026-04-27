@@ -273,6 +273,12 @@ pub struct SessionMetrics {
     /// another session's `/effort high` updates the global default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort_level_ts: Option<f64>,
+    /// Parent session ID when this session was forked via Claude Code's
+    /// branch/fork feature. Detected by the `(Branch)` suffix Claude Code
+    /// appends to the seeded customTitle. When set, the UI shows
+    /// "Branch from <id>" as the subtitle instead of the inherited prompt text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branched_from_session_id: Option<String>,
 }
 
 impl SessionMetrics {
