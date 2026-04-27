@@ -1,0 +1,49 @@
+# PR/push verification: typecheck, lint, and unit tests on every push.
+# Does not produce build artifacts — see release.yml for that.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rust:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cue-desktop/src-tauri -> target
+      - name: cargo fmt
+        working-directory: cue-desktop/src-tauri
+        run: cargo fmt --check
+      - name: cargo clippy
+        working-directory: cue-desktop/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo test
+        working-directory: cue-desktop/src-tauri
+        run: cargo test
+
+  frontend:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: cue-desktop/package-lock.json
+      - name: Install
+        working-directory: cue-desktop
+        run: npm ci
+      - name: Typecheck
+        working-directory: cue-desktop
+        run: npx tsc --noEmit
+      - name: Build
+        working-directory: cue-desktop
+        run: npm run build

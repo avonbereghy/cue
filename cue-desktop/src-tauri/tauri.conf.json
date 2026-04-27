@@ -42,7 +42,8 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app"],
+    "targets": ["app", "dmg", "nsis", "msi", "deb", "appimage"],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -56,11 +57,12 @@
       },
       "wix": {
         "language": "en-US"
-      }
+      },
+      "signCommand": "signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /sha1 %WINDOWS_CERTIFICATE_THUMBPRINT% %1"
     },
     "linux": {
       "deb": {
-        "depends": ["libwebkit2gtk-4.1-0"],
+        "depends": ["libwebkit2gtk-4.1-0", "libayatana-appindicator3-1"],
         "section": "utils",
         "desktopTemplate": "cue.desktop"
       },
@@ -70,7 +72,10 @@
     },
     "macOS": {
       "frameworks": [],
-      "minimumSystemVersion": "14.2"
+      "minimumSystemVersion": "14.2",
+      "signingIdentity": "-",
+      "hardenedRuntime": true,
+      "entitlements": "macos/Cue.entitlements"
     },
     "resources": [
       "sidecar/cue-audio-tap"
@@ -78,5 +83,15 @@
     "publisher": "Cue",
     "shortDescription": "Cross-platform Claude Code session monitor",
     "category": "DeveloperTool"
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/cueapp/cue/releases/latest/download/latest.json"
+      ],
+      "pubkey": "REPLACE_WITH_TAURI_UPDATER_PUBKEY",
+      "dialog": true
+    }
   }
 }
