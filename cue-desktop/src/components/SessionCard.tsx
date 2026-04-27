@@ -1120,7 +1120,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
         entryAnim ? `session-card--enter-${entryAnim}` : ""
       } ${
         effectiveCompact ? "px-2.5 py-1.5 space-y-0"
-        : signalString && (signalMode === "preset" || signalMode === "audio" || signalMode === "live") ? "px-4 pt-3 pb-1 space-y-4" : "px-3 pt-2 pb-0.5 space-y-2"
+        : signalString && (signalMode === "preset" || signalMode === "audio") ? "px-4 pt-3 pb-1 space-y-4" : "px-3 pt-2 pb-0.5 space-y-2"
       } ${effectiveSlim && !effectiveCompact ? "flex flex-col" : ""} ${
         compactMode ? "cursor-pointer" : ""
       }`}

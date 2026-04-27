@@ -3,7 +3,6 @@ import { usePageVisible } from "@/hooks/usePageVisible";
 import { useOnScreen } from "@/hooks/useOnScreen";
 import { getFrequencyData, getFrequencyDataAtTime, getCurrentTime, getDuration, isPlaying, getOnsets } from "@/lib/presetEngine";
 import { setDisturbances, clearDisturbances, type FluxDisturbance } from "@/lib/fluxDisturbance";
-import { listen } from "@tauri-apps/api/event";
 
 /**
  * Signal String — animated separator with two modes:
@@ -305,7 +304,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     return () => clearTimeout(timer);
   }, [stateIsActive, stringsStayDeployed]);
 
-  const isAudio = signalMode === "preset" || signalMode === "audio" || signalMode === "live";
+  const isAudio = signalMode === "preset" || signalMode === "audio";
   // Track when session became inactive for decay timing
   const deactivatedAtRef = useRef<number | null>(null);
   // Driven oscillator state: position + velocity per mode per band (max 3 bands × 6 modes)
@@ -412,18 +411,6 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     { active: false, t0: 0, amp: 0, dir: -1 },
     { active: false, t0: 0, amp: 0, dir: 1 },
   ]);
-
-  // Live audio data from system audio capture (Beta)
-  const liveDataRef = useRef<{ bass: number; mids: number; treble: number }>({ bass: 0, mids: 0, treble: 0 });
-  useEffect(() => {
-    if (signalMode !== "live") return;
-    let cancelled = false;
-    let unlisten: (() => void) | null = null;
-    listen<{ bass: number; mids: number; treble: number }>("live-audio-data", (event) => {
-      liveDataRef.current = event.payload;
-    }).then((fn) => { if (cancelled) fn(); else unlisten = fn; });
-    return () => { cancelled = true; unlisten?.(); };
-  }, [signalMode]);
 
   useEffect(() => {
     const clearAllTimers = () => {
@@ -1221,17 +1208,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         // Per-session offset: derive random position + speed from session ID
         let freqData: Uint8Array;
         let t: number;
-        if (cfg.signalMode === "live") {
-          // Live mode: synthesize frequency bins from 3-band data
-          const ld = liveDataRef.current;
-          const bins = new Uint8Array(128);
-          // Bass: bins 0-10, Mids: bins 11-40, Treble: bins 41-127
-          for (let i = 0; i < 11; i++) bins[i] = Math.min(255, Math.floor(ld.bass * 255));
-          for (let i = 11; i < 41; i++) bins[i] = Math.min(255, Math.floor(ld.mids * 255));
-          for (let i = 41; i < 128; i++) bins[i] = Math.min(255, Math.floor(ld.treble * 255));
-          freqData = bins;
-          t = now / 1000;
-        } else if (signalOffset > 0 && sessionId) {
+        if (signalOffset > 0 && sessionId) {
           // Hash session ID to get deterministic random values
           let hash = 0;
           for (let i = 0; i < sessionId.length; i++) {
