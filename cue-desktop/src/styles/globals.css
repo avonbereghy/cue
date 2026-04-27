@@ -985,6 +985,19 @@ html[data-glass] .session-card--error {
   border-radius: 3px;
 }
 
+/* Sessions list — only show a thumb when the user is actively scrolling.
+   `overflow-y-auto` already drops the gutter when content fits; this hides
+   the macOS-Always scrollbar gray strip the rest of the time. */
+.sessions-scroll::-webkit-scrollbar { width: 6px; }
+.sessions-scroll::-webkit-scrollbar-track { background: transparent; }
+.sessions-scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+}
+.sessions-scroll:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+}
+
 .tray-row {
   transition: background-color 120ms ease;
   cursor: default;

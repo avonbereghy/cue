@@ -860,6 +860,28 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
         }
     }
 
+    // Detect Claude Code's branch/fork feature: when a session is forked,
+    // the new file inherits the parent's entries (carrying the parent's
+    // sessionId) and gains a custom-title row whose customTitle ends with
+    // "(Branch)" (Claude Code appends the marker after the seeded prompt).
+    // Replace the inherited-prompt customTitle with the parent session ID so
+    // the subtitle reads "Branch from <id>" instead of leaking the original
+    // user message.
+    if let Some(ref title) = m.custom_title {
+        if title.trim_end().ends_with("(Branch)") {
+            let file_sid = path.file_stem().and_then(|s| s.to_str());
+            let parent_sid = entries
+                .iter()
+                .filter_map(|e| e.jsonl_session_id.as_deref())
+                .find(|sid| Some(*sid) != file_sid)
+                .map(String::from);
+            if let Some(pid) = parent_sid {
+                m.branched_from_session_id = Some(pid);
+                m.custom_title = None;
+            }
+        }
+    }
+
     // Discover subagents: {session_stem}/subagents/*.jsonl
     if let Some(parent_dir) = path.parent() {
         if let Some(session_stem) = path.file_stem().and_then(|s| s.to_str()) {
@@ -1098,6 +1120,70 @@ mod tests {
         assert_eq!(metrics.model, "claude-opus-4-6"); // last model wins
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Branched/forked sessions: Claude Code seeds the customTitle with the
+    /// originating user message + " (Branch)" suffix, and inherited entries
+    /// retain the parent's sessionId. The parser must replace the inherited
+    /// prompt text with the parent session ID and clear customTitle so the
+    /// UI renders "Branch from <id>" instead of leaking user input.
+    #[test]
+    fn test_branched_session_detection() {
+        let parent_sid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let new_sid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        let lines = format!(
+            "{}\n{}\n{}",
+            // Inherited entry from parent (carries parent's sessionId)
+            format!(
+                r#"{{"type":"user","timestamp":1.0,"sessionId":"{}","message":{{"role":"user","content":"original"}}}}"#,
+                parent_sid
+            ),
+            // Branch marker — customTitle ends with "(Branch)"
+            format!(
+                r#"{{"type":"custom-title","timestamp":2.0,"customTitle":"original prompt text (Branch)","sessionId":"{}"}}"#,
+                new_sid
+            ),
+            // New entry written under the new session
+            format!(
+                r#"{{"type":"user","timestamp":3.0,"sessionId":"{}","message":{{"role":"user","content":"continue"}}}}"#,
+                new_sid
+            ),
+        );
+
+        let dir = std::env::temp_dir().join(format!("cue_branch_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{}.jsonl", new_sid));
+        std::fs::write(&path, lines).unwrap();
+
+        let m = parse_jsonl_to_session_metrics(&path).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(m.branched_from_session_id.as_deref(), Some(parent_sid));
+        assert!(m.custom_title.is_none(), "custom_title should be cleared on branched sessions");
+    }
+
+    /// Non-branched custom titles (deliberate `/title` calls) must remain
+    /// untouched — the "(Branch)" check should not match plain user titles.
+    #[test]
+    fn test_non_branched_custom_title_preserved() {
+        let sid = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+        let lines = format!(
+            r#"{{"type":"custom-title","timestamp":1.0,"customTitle":"my-feature","sessionId":"{}"}}"#,
+            sid
+        );
+
+        let dir = std::env::temp_dir().join(format!("cue_branch_neg_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{}.jsonl", sid));
+        std::fs::write(&path, lines).unwrap();
+
+        let m = parse_jsonl_to_session_metrics(&path).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(m.branched_from_session_id.is_none());
+        assert_eq!(m.custom_title.as_deref(), Some("my-feature"));
     }
 
     #[test]
