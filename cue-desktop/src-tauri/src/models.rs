@@ -303,7 +303,7 @@ impl SessionMetrics {
             .iter()
             .map(|(k, v)| (k.clone(), *v))
             .collect();
-        tools.sort_by(|a, b| b.1.cmp(&a.1));
+        tools.sort_by_key(|t| std::cmp::Reverse(t.1));
         tools
     }
 
