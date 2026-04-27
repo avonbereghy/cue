@@ -124,13 +124,10 @@ impl SessionMonitorState {
         // Check both started_at and last_activity so sessions that were
         // already idle when Cue opened aren't hidden until their next event.
         let launched_at = self.launched_at;
-        let active = sort_sessions(
-            status.sessions.into_values().filter(|s| {
-                (s.last_activity >= launched_at || s.started_at >= launched_at)
-                    && security::sanitize_workspace_path(&s.workspace).is_ok()
-            }),
-        );
-
+        let active = sort_sessions(status.sessions.into_values().filter(|s| {
+            (s.last_activity >= launched_at || s.started_at >= launched_at)
+                && security::sanitize_workspace_path(&s.workspace).is_ok()
+        }));
 
         // Deduplicate sessions sharing the same workspace that started within
         // 3s of each other. Collapses phantom sessions (e.g. from agent teams)
@@ -148,10 +145,14 @@ impl SessionMonitorState {
             // Collect team session IDs so we never merge them
             let team_ids: std::collections::HashSet<String> = {
                 let cache = self.metrics_cache.lock().unwrap();
-                active.iter().filter(|s| {
-                    s.team_name.is_some()
-                        || cache.get(&s.id).map_or(false, |m| m.team_name.is_some())
-                }).map(|s| s.id.clone()).collect()
+                active
+                    .iter()
+                    .filter(|s| {
+                        s.team_name.is_some()
+                            || cache.get(&s.id).is_some_and(|m| m.team_name.is_some())
+                    })
+                    .map(|s| s.id.clone())
+                    .collect()
             };
             let mut deduped: Vec<SessionInfo> = Vec::new();
             for session in active {
@@ -165,8 +166,7 @@ impl SessionMonitorState {
                         && (s.started_at - session.started_at).abs() < 3.0
                 }) {
                     if state_priority(&session.state) > state_priority(&existing.state)
-                        || (state_priority(&session.state)
-                            == state_priority(&existing.state)
+                        || (state_priority(&session.state) == state_priority(&existing.state)
                             && session.last_activity > existing.last_activity)
                     {
                         let stable_id = existing.id.clone();
@@ -195,8 +195,8 @@ impl SessionMonitorState {
                         let metrics = cache.get(&s.id);
                         // Only promote teammates (have teamName on entries), not the
                         // team lead which only has agentName via agent-name entry.
-                        let is_teammate = s.team_name.is_some()
-                            || metrics.map_or(false, |m| m.team_name.is_some());
+                        let is_teammate =
+                            s.team_name.is_some() || metrics.is_some_and(|m| m.team_name.is_some());
                         if is_teammate && (now_secs - s.last_activity) > 30.0 {
                             s.state = "done".to_string();
                         }
@@ -222,10 +222,7 @@ impl SessionMonitorState {
                 .collect();
             let mut sys = self.sysinfo_system.lock().unwrap();
             if !pids_to_check.is_empty() {
-                sys.refresh_processes(
-                    sysinfo::ProcessesToUpdate::Some(&pids_to_check),
-                    false,
-                );
+                sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&pids_to_check), false);
             }
             let mut identity = self.process_identity.lock().unwrap();
             // Drop cache entries for sessions no longer present.
@@ -285,7 +282,10 @@ impl SessionMonitorState {
         let active_since_snapshot = {
             let mut active_since = self.active_since.lock().unwrap();
             let is_active_state = |st: &str| -> bool {
-                matches!(st, "working" | "thinking" | "waiting" | "error" | "subagent")
+                matches!(
+                    st,
+                    "working" | "thinking" | "waiting" | "error" | "subagent"
+                )
             };
             let current_ids: std::collections::HashSet<&str> =
                 active.iter().map(|s| s.id.as_str()).collect();
@@ -327,10 +327,8 @@ impl SessionMonitorState {
                 .into_iter()
                 .map(|session| {
                     let metrics = cache.get(&session.id).cloned().unwrap_or_default();
-                    let (prev_output, prev_ts) = speed_cache
-                        .get(&session.id)
-                        .cloned()
-                        .unwrap_or((0, 0.0));
+                    let (prev_output, prev_ts) =
+                        speed_cache.get(&session.id).cloned().unwrap_or((0, 0.0));
                     let active_since_ts = active_since_snapshot.get(&session.id).copied();
                     let supplemental = SupplementalData {
                         git_status: git_cache.get(&session.workspace).map(|(s, _)| s.clone()),
@@ -428,10 +426,7 @@ impl SessionMonitorState {
                 {
                     let mut speed_cache = self.output_speed_cache.lock().unwrap();
                     // Store current output_tokens as "previous" for next poll
-                    speed_cache.insert(
-                        session.info.id.clone(),
-                        (metrics.output_tokens, now_ts),
-                    );
+                    speed_cache.insert(session.info.id.clone(), (metrics.output_tokens, now_ts));
                 }
 
                 self.metrics_cache
@@ -471,10 +466,8 @@ impl SessionMonitorState {
         let now = SystemTime::now();
 
         // Collect unique workspaces
-        let mut workspaces: Vec<String> = sessions
-            .iter()
-            .map(|s| s.info.workspace.clone())
-            .collect();
+        let mut workspaces: Vec<String> =
+            sessions.iter().map(|s| s.info.workspace.clone()).collect();
         workspaces.sort();
         workspaces.dedup();
 
@@ -683,10 +676,7 @@ mod tests {
 
     #[test]
     fn test_encode_workspace_path_unix() {
-        assert_eq!(
-            encode_workspace_path("/Users/dev/App"),
-            "-Users-dev-App"
-        );
+        assert_eq!(encode_workspace_path("/Users/dev/App"), "-Users-dev-App");
     }
 
     #[test]
@@ -838,7 +828,10 @@ mod tests {
         }
     }
 
-    fn metrics_with_end_turn(end_turn_ts: Option<f64>, pending: bool) -> crate::models::SessionMetrics {
+    fn metrics_with_end_turn(
+        end_turn_ts: Option<f64>,
+        pending: bool,
+    ) -> crate::models::SessionMetrics {
         crate::models::SessionMetrics {
             last_end_turn_ts: end_turn_ts,
             pending_tool_use: pending,
@@ -874,7 +867,15 @@ mod tests {
     fn test_no_demote_for_non_working_states() {
         // Gate on {working, thinking} — don't touch subagent, waiting, etc.
         let m = metrics_with_end_turn(Some(200.0), false);
-        for st in ["subagent", "waiting", "compacting", "clearing", "idle", "done", "error"] {
+        for st in [
+            "subagent",
+            "waiting",
+            "compacting",
+            "clearing",
+            "idle",
+            "done",
+            "error",
+        ] {
             assert!(
                 !should_demote_turn_ended(st, Some(100.0), Some(&m)),
                 "state {} should not be demoted",

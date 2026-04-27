@@ -19,14 +19,12 @@ const SNIPPET_CHAR_CAP: usize = 2000;
 /// Truncate `s` to at most `SNIPPET_CHAR_CAP` Unicode scalar values without
 /// splitting a multi-byte code point. Appends an ellipsis if truncation ran.
 fn cap_snippet(s: &str) -> String {
-    let mut count = 0usize;
     let mut end_byte = s.len();
-    for (idx, _) in s.char_indices() {
+    for (count, (idx, _)) in s.char_indices().enumerate() {
         if count == SNIPPET_CHAR_CAP {
             end_byte = idx;
             break;
         }
-        count += 1;
     }
     if end_byte < s.len() {
         let mut out = String::with_capacity(end_byte + 1);
@@ -107,7 +105,11 @@ pub fn parse_jsonl_file(path: &Path) -> Vec<ParsedEntry> {
     // Check file size
     if let Ok(metadata) = std::fs::metadata(path) {
         if metadata.len() > MAX_FILE_SIZE {
-            log::warn!("Skipping oversized JSONL file: {:?} ({} bytes)", path, metadata.len());
+            log::warn!(
+                "Skipping oversized JSONL file: {:?} ({} bytes)",
+                path,
+                metadata.len()
+            );
             return Vec::new();
         }
     }
@@ -170,8 +172,14 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
     }
 
     // Extract team agent metadata (present on every entry for team-spawned sessions)
-    entry.team_name = obj.get("teamName").and_then(|v| v.as_str()).map(String::from);
-    entry.agent_name = obj.get("agentName").and_then(|v| v.as_str()).map(String::from);
+    entry.team_name = obj
+        .get("teamName")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    entry.agent_name = obj
+        .get("agentName")
+        .and_then(|v| v.as_str())
+        .map(String::from);
 
     // Track git branch from any message that has it
     if let Some(branch) = obj.get("gitBranch").and_then(|v| v.as_str()) {
@@ -181,7 +189,10 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
     }
 
     // Extract agent identifiers (for subagent JSONL files)
-    entry.agent_id = obj.get("agentId").and_then(|v| v.as_str()).map(String::from);
+    entry.agent_id = obj
+        .get("agentId")
+        .and_then(|v| v.as_str())
+        .map(String::from);
     entry.slug = obj.get("slug").and_then(|v| v.as_str()).map(String::from);
 
     // Count user messages and extract prompt text.
@@ -381,7 +392,9 @@ fn parse_task_tool(tool_name: &str, input: Option<&Value>, entry: &mut ParsedEnt
                     other => other,
                 };
                 if let Some(task_id) = obj.get("taskId").and_then(|v| v.as_str()) {
-                    entry.task_status_updates.push((task_id.to_string(), normalized.to_string()));
+                    entry
+                        .task_status_updates
+                        .push((task_id.to_string(), normalized.to_string()));
                 }
             }
         }
@@ -454,15 +467,14 @@ fn extract_user_prompt_text(obj: &serde_json::Map<String, Value>) -> Option<Stri
         s.to_string()
     } else if let Some(arr) = content.as_array() {
         // Find the first text block
-        arr.iter()
-            .find_map(|block| {
-                let obj = block.as_object()?;
-                if obj.get("type")?.as_str()? == "text" {
-                    obj.get("text")?.as_str().map(String::from)
-                } else {
-                    None
-                }
-            })?
+        arr.iter().find_map(|block| {
+            let obj = block.as_object()?;
+            if obj.get("type")?.as_str()? == "text" {
+                obj.get("text")?.as_str().map(String::from)
+            } else {
+                None
+            }
+        })?
     } else {
         return None;
     };
@@ -625,15 +637,21 @@ pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::Subagent
         return None;
     }
 
-    let mut m = crate::models::SubagentMetrics::default();
-
     // Check if the file was modified recently (within 60s = active)
-    m.is_active = std::fs::metadata(jsonl_path)
+    let is_active = std::fs::metadata(jsonl_path)
         .and_then(|meta| meta.modified())
         .map(|mod_time| {
-            mod_time.elapsed().map(|elapsed| elapsed.as_secs() < 60).unwrap_or(false)
+            mod_time
+                .elapsed()
+                .map(|elapsed| elapsed.as_secs() < 60)
+                .unwrap_or(false)
         })
         .unwrap_or(false);
+
+    let mut m = crate::models::SubagentMetrics {
+        is_active,
+        ..Default::default()
+    };
 
     // Extract agentId and slug from first entry that has them
     for entry in &entries {
@@ -766,8 +784,9 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
 
             // Context usage = input tokens + output tokens for the last message
             // (output tokens become part of conversation history for the next turn)
-            m.last_input_tokens =
-                entry.input_tokens + entry.cache_creation_tokens + entry.cache_read_tokens
+            m.last_input_tokens = entry.input_tokens
+                + entry.cache_creation_tokens
+                + entry.cache_read_tokens
                 + entry.output_tokens;
 
             // Latest assistant entry's text-content status wins.
@@ -898,7 +917,8 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
                     }
                 }
                 // Sort by description for stable display order
-                m.subagents.sort_by(|a, b| a.description.cmp(&b.description));
+                m.subagents
+                    .sort_by(|a, b| a.description.cmp(&b.description));
             }
         }
     }
@@ -916,13 +936,16 @@ mod tests {
 
     const ASSISTANT_WITH_USAGE: &str = r#"{"type":"assistant","timestamp":1710000000.0,"message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":1000,"output_tokens":500,"cache_creation_input_tokens":200,"cache_read_input_tokens":800},"content":[{"type":"tool_use","name":"Bash"},{"type":"tool_use","name":"Read"},{"type":"tool_use","name":"Bash"}]}}"#;
 
-    const USER_MESSAGE: &str = r#"{"type":"user","timestamp":1710000001.0,"message":{"role":"user","content":"hello"}}"#;
+    const USER_MESSAGE: &str =
+        r#"{"type":"user","timestamp":1710000001.0,"message":{"role":"user","content":"hello"}}"#;
 
-    const CUSTOM_TITLE: &str = r#"{"type":"custom-title","timestamp":1710000002.0,"customTitle":"Auth Refactor"}"#;
+    const CUSTOM_TITLE: &str =
+        r#"{"type":"custom-title","timestamp":1710000002.0,"customTitle":"Auth Refactor"}"#;
 
     const ISO_TIMESTAMP: &str = r#"{"type":"assistant","isoTimestamp":"2024-03-10T12:00:00Z","message":{"model":"claude-opus-4-6","usage":{"input_tokens":2000,"output_tokens":1000},"content":[]}}"#;
 
-    const GIT_BRANCH: &str = r#"{"type":"user","timestamp":1710000003.0,"gitBranch":"feat/dashboard"}"#;
+    const GIT_BRANCH: &str =
+        r#"{"type":"user","timestamp":1710000003.0,"gitBranch":"feat/dashboard"}"#;
 
     const MALFORMED: &str = r#"{"type":invalid json here"#;
 
@@ -980,10 +1003,7 @@ mod tests {
     fn test_parse_custom_title() {
         let entries = parse_jsonl_content(CUSTOM_TITLE);
         assert_eq!(entries.len(), 1);
-        assert_eq!(
-            entries[0].custom_title.as_deref(),
-            Some("Auth Refactor")
-        );
+        assert_eq!(entries[0].custom_title.as_deref(), Some("Auth Refactor"));
     }
 
     /// Regression: Claude Code's fork-session feature can seed customTitle
@@ -1014,10 +1034,7 @@ mod tests {
     fn test_parse_git_branch() {
         let entries = parse_jsonl_content(GIT_BRANCH);
         assert_eq!(entries.len(), 1);
-        assert_eq!(
-            entries[0].git_branch.as_deref(),
-            Some("feat/dashboard")
-        );
+        assert_eq!(entries[0].git_branch.as_deref(), Some("feat/dashboard"));
     }
 
     #[test]
@@ -1074,8 +1091,8 @@ mod tests {
             r#"{"type":"user","timestamp":2.0,"message":{"role":"user","content":"hi"}}"#,
             r#"{"type":"user","timestamp":3.0,"message":{"role":"user","content":"<command-name>/effort</command-name><command-args>high</command-args>"}}"#,
         ].join("\n");
-        let tmp = std::env::temp_dir()
-            .join(format!("cue_effort_test_{}.jsonl", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("cue_effort_test_{}.jsonl", std::process::id()));
         std::fs::write(&tmp, lines).unwrap();
         let m = parse_jsonl_to_session_metrics(&tmp).unwrap();
         let _ = std::fs::remove_file(&tmp);
@@ -1131,24 +1148,19 @@ mod tests {
     fn test_branched_session_detection() {
         let parent_sid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
         let new_sid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
-        let lines = format!(
-            "{}\n{}\n{}",
-            // Inherited entry from parent (carries parent's sessionId)
-            format!(
-                r#"{{"type":"user","timestamp":1.0,"sessionId":"{}","message":{{"role":"user","content":"original"}}}}"#,
-                parent_sid
-            ),
-            // Branch marker — customTitle ends with "(Branch)"
-            format!(
-                r#"{{"type":"custom-title","timestamp":2.0,"customTitle":"original prompt text (Branch)","sessionId":"{}"}}"#,
-                new_sid
-            ),
-            // New entry written under the new session
-            format!(
-                r#"{{"type":"user","timestamp":3.0,"sessionId":"{}","message":{{"role":"user","content":"continue"}}}}"#,
-                new_sid
-            ),
+        // Inherited entry from parent (carries parent's sessionId)
+        let inherited = format!(
+            r#"{{"type":"user","timestamp":1.0,"sessionId":"{parent_sid}","message":{{"role":"user","content":"original"}}}}"#
         );
+        // Branch marker — customTitle ends with "(Branch)"
+        let marker = format!(
+            r#"{{"type":"custom-title","timestamp":2.0,"customTitle":"original prompt text (Branch)","sessionId":"{new_sid}"}}"#
+        );
+        // New entry written under the new session
+        let new_entry = format!(
+            r#"{{"type":"user","timestamp":3.0,"sessionId":"{new_sid}","message":{{"role":"user","content":"continue"}}}}"#
+        );
+        let lines = format!("{inherited}\n{marker}\n{new_entry}");
 
         let dir = std::env::temp_dir().join(format!("cue_branch_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1160,7 +1172,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(m.branched_from_session_id.as_deref(), Some(parent_sid));
-        assert!(m.custom_title.is_none(), "custom_title should be cleared on branched sessions");
+        assert!(
+            m.custom_title.is_none(),
+            "custom_title should be cleared on branched sessions"
+        );
     }
 
     /// Non-branched custom titles (deliberate `/title` calls) must remain
@@ -1193,15 +1208,11 @@ mod tests {
         assert!((e1[0].timestamp.unwrap() - 1710000000.5).abs() < 0.001);
 
         // ISO string in timestamp field
-        let e2 = parse_jsonl_content(
-            r#"{"type":"user","timestamp":"2024-03-10T12:00:00+00:00"}"#,
-        );
+        let e2 = parse_jsonl_content(r#"{"type":"user","timestamp":"2024-03-10T12:00:00+00:00"}"#);
         assert!(e2[0].timestamp.is_some());
 
         // isoTimestamp field
-        let e3 = parse_jsonl_content(
-            r#"{"type":"user","isoTimestamp":"2024-03-10T12:00:00Z"}"#,
-        );
+        let e3 = parse_jsonl_content(r#"{"type":"user","isoTimestamp":"2024-03-10T12:00:00Z"}"#);
         assert!(e3[0].timestamp.is_some());
     }
 
@@ -1212,7 +1223,10 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(entries[0].has_pending_tool_use);
         assert_eq!(entries[0].running_tool_name.as_deref(), Some("Read"));
-        assert_eq!(entries[0].running_tool_target.as_deref(), Some("src/main.rs"));
+        assert_eq!(
+            entries[0].running_tool_target.as_deref(),
+            Some("src/main.rs")
+        );
     }
 
     #[test]
@@ -1220,7 +1234,10 @@ mod tests {
         let line = r#"{"type":"assistant","timestamp":1710000000.0,"message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50},"content":[{"type":"tool_use","name":"Bash","input":{"command":"npm run build"}}],"stop_reason":"tool_use"}}"#;
         let entries = parse_jsonl_content(line);
         assert_eq!(entries[0].running_tool_name.as_deref(), Some("Bash"));
-        assert_eq!(entries[0].running_tool_target.as_deref(), Some("npm run build"));
+        assert_eq!(
+            entries[0].running_tool_target.as_deref(),
+            Some("npm run build")
+        );
     }
 
     #[test]
@@ -1452,7 +1469,7 @@ mod tests {
 
     #[test]
     fn cap_snippet_truncates_long_text_with_ellipsis() {
-        let s: String = std::iter::repeat('a').take(super::SNIPPET_CHAR_CAP + 500).collect();
+        let s: String = std::iter::repeat_n('a', super::SNIPPET_CHAR_CAP + 500).collect();
         let out = super::cap_snippet(&s);
         // SNIPPET_CHAR_CAP ASCII chars + a single '…' on the end.
         assert_eq!(out.chars().count(), super::SNIPPET_CHAR_CAP + 1);
@@ -1464,7 +1481,7 @@ mod tests {
         // Multi-byte chars: each '🌊' is 4 bytes, and we want to make sure
         // truncation counts code points (not bytes) so the result never
         // splits a code point.
-        let s: String = std::iter::repeat('🌊').take(super::SNIPPET_CHAR_CAP + 10).collect();
+        let s: String = std::iter::repeat_n('🌊', super::SNIPPET_CHAR_CAP + 10).collect();
         let out = super::cap_snippet(&s);
         // Valid UTF-8 (String::from_utf8 would have panicked on a bad split).
         assert!(out.is_char_boundary(out.len()));
@@ -1474,7 +1491,7 @@ mod tests {
 
     #[test]
     fn cap_snippet_exact_cap_no_ellipsis() {
-        let s: String = std::iter::repeat('x').take(super::SNIPPET_CHAR_CAP).collect();
+        let s: String = std::iter::repeat_n('x', super::SNIPPET_CHAR_CAP).collect();
         let out = super::cap_snippet(&s);
         assert_eq!(out, s);
         assert!(!out.ends_with('…'));
@@ -1484,5 +1501,4 @@ mod tests {
     fn cap_snippet_empty_is_empty() {
         assert_eq!(super::cap_snippet(""), "");
     }
-
 }

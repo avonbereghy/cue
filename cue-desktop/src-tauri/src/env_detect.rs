@@ -96,8 +96,8 @@ fn detect_appindicator(desktop_env: &Option<String>) -> bool {
 
     // Check user-local extension directory
     if let Some(home) = dirs::home_dir() {
-        let ext_dir = home
-            .join(".local/share/gnome-shell/extensions/appindicatorsupport@rgcjonas.gmail.com");
+        let ext_dir =
+            home.join(".local/share/gnome-shell/extensions/appindicatorsupport@rgcjonas.gmail.com");
         if ext_dir.exists() {
             return true;
         }
@@ -179,7 +179,9 @@ pub const HOOK_EVENTS: &[(&str, &str)] = &[
 ];
 
 /// Shell metacharacters that must not appear in hook paths.
-const SHELL_METACHARACTERS: &[char] = &[';', '|', '&', '`', '(', ')', '>', '<', '\n', '\r', '\'', '"'];
+const SHELL_METACHARACTERS: &[char] = &[
+    ';', '|', '&', '`', '(', ')', '>', '<', '\n', '\r', '\'', '"',
+];
 
 /// Resolve and validate a hook path. Rejects shell metacharacters and
 /// expands `~` or `$HOME`-style references to the actual home directory.
@@ -190,7 +192,11 @@ fn resolve_hook_path(raw: &str) -> Result<PathBuf, String> {
     }
 
     // Reject $ unless it's $HOME at the start (which we expand below)
-    if raw.contains('$') && !raw.starts_with("$HOME/") && !raw.starts_with("$HOME\\") && raw != "$HOME" {
+    if raw.contains('$')
+        && !raw.starts_with("$HOME/")
+        && !raw.starts_with("$HOME\\")
+        && raw != "$HOME"
+    {
         return Err("Hook path contains invalid characters".to_string());
     }
 
@@ -210,7 +216,10 @@ fn resolve_hook_path(raw: &str) -> Result<PathBuf, String> {
         home.join(rest)
     } else if raw == "~" {
         home.clone()
-    } else if let Some(rest) = raw.strip_prefix("$HOME/").or_else(|| raw.strip_prefix("$HOME\\")) {
+    } else if let Some(rest) = raw
+        .strip_prefix("$HOME/")
+        .or_else(|| raw.strip_prefix("$HOME\\"))
+    {
         home.join(rest)
     } else if let Some(rest) = raw.strip_prefix("%USERPROFILE%") {
         home.join(rest.trim_start_matches(['/', '\\']))
@@ -243,8 +252,7 @@ pub fn configure_hooks(hook_path: &str) -> Result<(), String> {
     let mut settings: serde_json::Value = if settings_path.exists() {
         let content = std::fs::read_to_string(&settings_path)
             .map_err(|e| format!("Failed to read settings: {}", e))?;
-        serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse settings: {}", e))?
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse settings: {}", e))?
     } else {
         serde_json::json!({})
     };
@@ -363,8 +371,7 @@ pub fn install_hooks() -> Result<(), String> {
     let mut settings: serde_json::Value = if settings_path.exists() {
         let content = std::fs::read_to_string(&settings_path)
             .map_err(|e| format!("Failed to read settings: {}", e))?;
-        serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse settings: {}", e))?
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse settings: {}", e))?
     } else {
         serde_json::json!({})
     };
@@ -389,12 +396,12 @@ pub fn install_hooks() -> Result<(), String> {
         }
 
         let event_hooks = hooks.get_mut(*event).unwrap();
-        let arr = event_hooks.as_array_mut().ok_or("hooks entry is not an array")?;
+        let arr = event_hooks
+            .as_array_mut()
+            .ok_or("hooks entry is not an array")?;
 
         // Remove any existing cue-hook entries first (clean reinstall)
-        arr.retain(|entry| {
-            !entry_contains_cue_hook(entry)
-        });
+        arr.retain(|entry| !entry_contains_cue_hook(entry));
 
         // Insert cue-hook as the first entry so state updates happen before
         // slower hooks (retenir, symphony-audit, etc.)
@@ -433,8 +440,8 @@ pub fn uninstall_hooks() -> Result<(), String> {
 
     let content = std::fs::read_to_string(&settings_path)
         .map_err(|e| format!("Failed to read settings: {}", e))?;
-    let mut settings: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse settings: {}", e))?;
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse settings: {}", e))?;
 
     if let Some(hooks) = settings.get_mut("hooks").and_then(|h| h.as_object_mut()) {
         for (_event, entries) in hooks.iter_mut() {
@@ -462,14 +469,17 @@ pub fn uninstall_hooks() -> Result<(), String> {
 
 /// Check if a hook entry contains a cue-hook command.
 fn entry_contains_cue_hook(entry: &serde_json::Value) -> bool {
-    entry.get("hooks")
+    entry
+        .get("hooks")
         .and_then(|h| h.as_array())
-        .map(|arr| arr.iter().any(|h| {
-            h.get("command")
-                .and_then(|c| c.as_str())
-                .map(|c| c.contains("cue-hook"))
-                .unwrap_or(false)
-        }))
+        .map(|arr| {
+            arr.iter().any(|h| {
+                h.get("command")
+                    .and_then(|c| c.as_str())
+                    .map(|c| c.contains("cue-hook"))
+                    .unwrap_or(false)
+            })
+        })
         .unwrap_or(false)
 }
 
@@ -577,8 +587,7 @@ mod tests {
     #[test]
     fn test_hook_events_mappings() {
         // Verify the state mappings match OnboardingWizard manual instructions
-        let events: std::collections::HashMap<&str, &str> =
-            HOOK_EVENTS.iter().copied().collect();
+        let events: std::collections::HashMap<&str, &str> = HOOK_EVENTS.iter().copied().collect();
         assert_eq!(events["SessionStart"], "idle");
         assert_eq!(events["PreToolUse"], "working");
         assert_eq!(events["PostToolUse"], "working");
@@ -670,7 +679,11 @@ mod tests {
         ];
         for input in cases {
             let result = resolve_hook_path(input);
-            assert!(result.is_err(), "Should reject metacharacters in: {}", input);
+            assert!(
+                result.is_err(),
+                "Should reject metacharacters in: {}",
+                input
+            );
             assert!(
                 result.unwrap_err().contains("invalid characters"),
                 "Error message should mention invalid characters"
@@ -712,7 +725,10 @@ mod tests {
         assert!(result.is_ok());
         let expanded = result.unwrap();
         // Should NOT start with ~, should be an absolute path
-        assert!(expanded.is_absolute(), "Tilde should be expanded to absolute path");
+        assert!(
+            expanded.is_absolute(),
+            "Tilde should be expanded to absolute path"
+        );
         assert!(
             !expanded.to_string_lossy().starts_with('~'),
             "Tilde should be expanded"
@@ -727,10 +743,7 @@ mod tests {
     fn test_resolve_hook_path_valid_absolute() {
         let result = resolve_hook_path("/usr/local/bin/cue-hook");
         assert!(result.is_ok());
-        assert_eq!(
-            result.unwrap(),
-            PathBuf::from("/usr/local/bin/cue-hook")
-        );
+        assert_eq!(result.unwrap(), PathBuf::from("/usr/local/bin/cue-hook"));
     }
 
     #[test]

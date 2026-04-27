@@ -22,11 +22,15 @@ fn main() {
                 let status = std::process::Command::new("swiftc")
                     .args([
                         "-O",
-                        "-o", binary.to_str().unwrap(),
+                        "-o",
+                        binary.to_str().unwrap(),
                         swift_src.to_str().unwrap(),
-                        "-framework", "CoreAudio",
-                        "-framework", "AudioToolbox",
-                        "-framework", "Accelerate",
+                        "-framework",
+                        "CoreAudio",
+                        "-framework",
+                        "AudioToolbox",
+                        "-framework",
+                        "Accelerate",
                     ])
                     .status()
                     .expect("Failed to run swiftc — is Xcode installed?");

@@ -21,12 +21,7 @@ pub const LARGE_CONTEXT_WINDOW: i64 = 1_000_000;
 
 /// Baked-in fallback. Used when we can't find or parse the `claude` binary.
 /// Substring matches against the (lowercased) model id.
-const FALLBACK_1M_SUBSTRINGS: &[&str] = &[
-    "sonnet-4",
-    "opus-4-5",
-    "opus-4-6",
-    "opus-4-7",
-];
+const FALLBACK_1M_SUBSTRINGS: &[&str] = &["sonnet-4", "opus-4-5", "opus-4-6", "opus-4-7"];
 
 static ONE_M_SUBSTRINGS: OnceLock<Vec<String>> = OnceLock::new();
 
@@ -64,12 +59,18 @@ fn env_override() -> Option<i64> {
 fn detect_1m_substrings() -> Vec<String> {
     match extract_from_claude_binary() {
         Some(v) if !v.is_empty() => {
-            log::info!("model_context: extracted 1M model list from claude binary: {:?}", v);
+            log::info!(
+                "model_context: extracted 1M model list from claude binary: {:?}",
+                v
+            );
             v
         }
         _ => {
             log::debug!("model_context: falling back to baked-in 1M model list");
-            FALLBACK_1M_SUBSTRINGS.iter().map(|s| s.to_string()).collect()
+            FALLBACK_1M_SUBSTRINGS
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
         }
     }
 }
@@ -169,8 +170,7 @@ fn looks_like_model_id(s: &str) -> bool {
         return false;
     }
     let lower = s.to_ascii_lowercase();
-    let has_family =
-        lower.contains("opus") || lower.contains("sonnet") || lower.contains("haiku");
+    let has_family = lower.contains("opus") || lower.contains("sonnet") || lower.contains("haiku");
     let has_digit = s.chars().any(|c| c.is_ascii_digit());
     has_family && has_digit
 }
@@ -236,7 +236,7 @@ mod tests {
         let mut src: Vec<u8> = Vec::new();
         src.extend_from_slice(br#"_.includes("opus-4-7")"#);
         // Push it far away from any `1e6`.
-        src.extend(std::iter::repeat(b'.').take(2000));
+        src.extend(std::iter::repeat_n(b'.', 2000));
         src.extend_from_slice(b"1e6");
         let subs = scan_for_1m_models(&src);
         assert!(subs.is_empty(), "expected no match, got {:?}", subs);
@@ -286,11 +286,7 @@ mod tests {
         // report the override. We can't safely mutate process env in parallel
         // tests, so just call the parser-equivalent logic here.
         // (Leaving as a smoke test for the happy path.)
-        let n: Option<i64> = "500000"
-            .trim()
-            .parse::<i64>()
-            .ok()
-            .filter(|n| *n > 0);
+        let n: Option<i64> = "500000".trim().parse::<i64>().ok().filter(|n| *n > 0);
         assert_eq!(n, Some(500_000));
         let bad: Option<i64> = "-1".trim().parse::<i64>().ok().filter(|n| *n > 0);
         assert_eq!(bad, None);

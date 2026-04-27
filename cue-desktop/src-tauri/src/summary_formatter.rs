@@ -196,9 +196,18 @@ mod tests {
     fn test_missing_file_path_keys() {
         let input = json!({"other_key": "value"});
 
-        assert_eq!(format_tool_summary("Read", &input), "Read: `(unknown file)`");
-        assert_eq!(format_tool_summary("Edit", &input), "Edit: `(unknown file)`");
-        assert_eq!(format_tool_summary("Write", &input), "Write: `(unknown file)`");
+        assert_eq!(
+            format_tool_summary("Read", &input),
+            "Read: `(unknown file)`"
+        );
+        assert_eq!(
+            format_tool_summary("Edit", &input),
+            "Edit: `(unknown file)`"
+        );
+        assert_eq!(
+            format_tool_summary("Write", &input),
+            "Write: `(unknown file)`"
+        );
     }
 
     #[test]
