@@ -646,6 +646,7 @@ mod tests {
             team_name: None,
             agent_name: None,
             pid: None,
+            permission_mode: None,
         }
     }
 
