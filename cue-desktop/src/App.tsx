@@ -7,6 +7,7 @@ import { SignalSettingsPage } from "./components/SignalSettingsPage";
 import { KeyboardPage } from "./components/KeyboardPanel";
 import { ThemePickerPage } from "./components/ThemePickerPage";
 import { TrayPopoverPage } from "./components/TrayPopover";
+import { runUpdateCheck } from "./lib/updater";
 import type { Settings } from "./lib/types";
 
 function App() {
@@ -31,6 +32,12 @@ function App() {
     invoke<Settings>("get_settings")
       .then((settings) => {
         setOnboardingComplete(settings.onboardingComplete);
+        // Auto-update check fires only on the main window, after onboarding
+        // is already complete — skipped on first launch so the wizard can
+        // run uninterrupted.
+        if (settings.onboardingComplete) {
+          void runUpdateCheck();
+        }
       })
       .catch((err) => {
         console.error("Failed to load settings:", err);
