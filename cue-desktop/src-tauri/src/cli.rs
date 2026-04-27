@@ -109,9 +109,10 @@ fn load_sessions() -> Vec<EnrichedSession> {
     };
 
     let active = sort_sessions(
-        status.sessions.into_values().filter(|s| {
-            security::sanitize_workspace_path(&s.workspace).is_ok()
-        }),
+        status
+            .sessions
+            .into_values()
+            .filter(|s| security::sanitize_workspace_path(&s.workspace).is_ok()),
     );
 
     let projects_path = paths::claude_projects_path();
@@ -146,7 +147,11 @@ fn load_sessions() -> Vec<EnrichedSession> {
 
 /// Resolve JSONL log file path and parse metrics for a session.
 /// Mirrors the path resolution logic from session_monitor::jsonl_path.
-fn resolve_jsonl_metrics(session_id: &str, workspace: &str, projects_path: &Path) -> SessionMetrics {
+fn resolve_jsonl_metrics(
+    session_id: &str,
+    workspace: &str,
+    projects_path: &Path,
+) -> SessionMetrics {
     let filename = format!("{}.jsonl", session_id);
 
     // Try exact workspace path and each parent directory
@@ -253,15 +258,18 @@ fn format_context_bar(percent: f64, width: usize) -> String {
     let empty = width - filled;
     format!(
         "{}{}",
-        "\u{2588}".repeat(filled),  // █
-        "\u{2591}".repeat(empty),   // ░
+        "\u{2588}".repeat(filled), // █
+        "\u{2591}".repeat(empty),  // ░
     )
 }
 
 fn format_cache_percent(metrics: &SessionMetrics) -> Option<String> {
     let total = metrics.cache_creation_tokens + metrics.cache_read_tokens;
     if total > 0 {
-        Some(format!("{}%", (metrics.cache_hit_rate() * 100.0).round() as i64))
+        Some(format!(
+            "{}%",
+            (metrics.cache_hit_rate() * 100.0).round() as i64
+        ))
     } else {
         None
     }
@@ -385,17 +393,12 @@ fn print_pretty_rich(sessions: &[EnrichedSession], show_paths: bool, use_color: 
     let total_messages: i64 = sessions.iter().map(|s| s.metrics.message_count).sum();
     let total_tokens: i64 = sessions.iter().map(|s| s.metrics.total_tokens()).sum();
 
+    println!("{}", bold("Cue Sessions", use_color));
     println!(
-        "{}",
-        bold("Cue Sessions", use_color)
-    );
-    println!(
-        "{} {} sessions  {} {} messages  {} {} tokens",
+        "{} {} sessions  \u{1F4AC} {} messages  \u{2195} {} tokens",
         color("\u{25CF}", GREEN, use_color), // ●
-        sessions.len(),
-        "\u{1F4AC}", // 💬
-        total_messages,
-        "\u{2195}",  // ↕
+        sessions.len(),                      // 💬
+        total_messages,                      // ↕
         format_tokens(total_tokens),
     );
     println!();
@@ -411,7 +414,10 @@ fn print_pretty_rich(sessions: &[EnrichedSession], show_paths: bool, use_color: 
         };
         let badge = &s.state_display_name;
         let duration = format_duration(s.duration_secs);
-        let branch_str = s.metrics.git_branch.as_ref()
+        let branch_str = s
+            .metrics
+            .git_branch
+            .as_ref()
             .map(|b| format!("  {}", dim(&format!("[{}]", b), use_color)))
             .unwrap_or_default();
 
@@ -432,18 +438,12 @@ fn print_pretty_rich(sessions: &[EnrichedSession], show_paths: bool, use_color: 
         };
         let msgs = format!(
             "\u{1F4AC} {}/{}",
-            s.metrics.user_message_count,
-            s.metrics.message_count
+            s.metrics.user_message_count, s.metrics.message_count
         );
         let tokens_in = format!("\u{2193} {} in", format_tokens(s.metrics.input_tokens));
         let tokens_out = format!("\u{2191} {} out", format_tokens(s.metrics.output_tokens));
 
-        let mut detail_parts = vec![
-            dim(id_short, use_color),
-            msgs,
-            tokens_in,
-            tokens_out,
-        ];
+        let mut detail_parts = vec![dim(id_short, use_color), msgs, tokens_in, tokens_out];
 
         let total_tools = s.metrics.total_tool_uses();
         if total_tools > 0 {
@@ -476,11 +476,7 @@ fn print_pretty_rich(sessions: &[EnrichedSession], show_paths: bool, use_color: 
                 format_tokens(s.context_limit),
             );
 
-            let mut ctx_parts = vec![
-                format!("Context {}", bar),
-                pct,
-                ctx_tokens,
-            ];
+            let mut ctx_parts = vec![format!("Context {}", bar), pct, ctx_tokens];
 
             if let Some(cache_pct) = format_cache_percent(&s.metrics) {
                 ctx_parts.push(format!("Cache {}", cache_pct));
@@ -519,8 +515,7 @@ fn print_pretty_compact(sessions: &[EnrichedSession], show_paths: bool, use_colo
         };
         let msgs = format!(
             "{}/{}",
-            s.metrics.user_message_count,
-            s.metrics.message_count,
+            s.metrics.user_message_count, s.metrics.message_count,
         );
         let tokens_in = format!("{}\u{2193}", format_tokens(s.metrics.input_tokens));
         let tokens_out = format!("{}\u{2191}", format_tokens(s.metrics.output_tokens));
@@ -535,8 +530,17 @@ fn print_pretty_compact(sessions: &[EnrichedSession], show_paths: bool, use_colo
 
         println!(
             "{}  {:<16} {:<8} {}  {:>5}  {:>6} {:>6}  {:>4}  {:>10}  {:>10}  {:>6}",
-            icon, title, badge, dim(id_short, use_color),
-            msgs, tokens_in, tokens_out, tools, model, duration, ctx_pct,
+            icon,
+            title,
+            badge,
+            dim(id_short, use_color),
+            msgs,
+            tokens_in,
+            tokens_out,
+            tools,
+            model,
+            duration,
+            ctx_pct,
         );
     }
 }
@@ -559,10 +563,7 @@ mod tests {
 
     #[test]
     fn test_try_run_cli_status_returns_some() {
-        let args = vec![
-            "Cue".to_string(),
-            "--status".to_string(),
-        ];
+        let args = vec!["Cue".to_string(), "--status".to_string()];
         assert!(try_run_cli_inner(&args).is_some());
     }
 
@@ -589,19 +590,13 @@ mod tests {
 
     #[test]
     fn test_try_run_cli_unrelated_args_returns_none() {
-        let args = vec![
-            "Cue".to_string(),
-            "--some-other-flag".to_string(),
-        ];
+        let args = vec!["Cue".to_string(), "--some-other-flag".to_string()];
         assert!(try_run_cli_inner(&args).is_none());
     }
 
     #[test]
     fn test_try_run_cli_show_paths_without_status_returns_none() {
-        let args = vec![
-            "Cue".to_string(),
-            "--show-paths".to_string(),
-        ];
+        let args = vec!["Cue".to_string(), "--show-paths".to_string()];
         assert!(try_run_cli_inner(&args).is_none());
     }
 
@@ -653,16 +648,22 @@ mod tests {
     #[test]
     fn test_workspace_display_hides_path_by_default() {
         let info = make_test_info("t", "/Users/dev/Projects/WebApp", "working");
-        let enriched =
-            EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default());
+        let enriched = EnrichedSession::from_info_and_metrics(
+            info,
+            SessionMetrics::default(),
+            &SupplementalData::default(),
+        );
         assert_eq!(workspace_display(&enriched, false), "WebApp");
     }
 
     #[test]
     fn test_workspace_display_shows_path_when_flag_set() {
         let info = make_test_info("t", "/Users/dev/Projects/WebApp", "working");
-        let enriched =
-            EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default());
+        let enriched = EnrichedSession::from_info_and_metrics(
+            info,
+            SessionMetrics::default(),
+            &SupplementalData::default(),
+        );
         assert_eq!(
             workspace_display(&enriched, true),
             "/Users/dev/Projects/WebApp"
@@ -741,19 +742,28 @@ mod tests {
     #[test]
     fn test_format_context_bar_zero() {
         let bar = format_context_bar(0.0, 10);
-        assert_eq!(bar, "\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}");
+        assert_eq!(
+            bar,
+            "\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}"
+        );
     }
 
     #[test]
     fn test_format_context_bar_half() {
         let bar = format_context_bar(0.5, 10);
-        assert_eq!(bar, "\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}");
+        assert_eq!(
+            bar,
+            "\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2591}\u{2591}\u{2591}\u{2591}\u{2591}"
+        );
     }
 
     #[test]
     fn test_format_context_bar_full() {
         let bar = format_context_bar(1.0, 10);
-        assert_eq!(bar, "\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}");
+        assert_eq!(
+            bar,
+            "\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}"
+        );
     }
 
     // -- cache percent tests --
@@ -824,10 +834,14 @@ mod tests {
             let mut info = make_test_info(id, "/tmp/test", state);
             info.last_activity = 1000.0;
             info.started_at = started;
-            EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default())
+            EnrichedSession::from_info_and_metrics(
+                info,
+                SessionMetrics::default(),
+                &SupplementalData::default(),
+            )
         };
 
-        let mut sessions = vec![
+        let mut sessions = [
             make("done1", "done", 100.0),
             make("working1", "working", 200.0),
             make("idle1", "idle", 150.0),
@@ -844,9 +858,8 @@ mod tests {
             };
             let pa = priority(a);
             let pb = priority(b);
-            pa.cmp(&pb).then_with(|| {
-                b.info.started_at.total_cmp(&a.info.started_at)
-            })
+            pa.cmp(&pb)
+                .then_with(|| b.info.started_at.total_cmp(&a.info.started_at))
         });
 
         // Active states first (waiting started later so it's first within group)
@@ -883,9 +896,11 @@ mod tests {
         let mut info = make_test_info("test-123", "/home/user/my-project", "working");
         info.last_activity = now;
         info.started_at = now - 100.0;
-        let mut supplemental = SupplementalData::default();
-        supplemental.active_since = Some(now - 50.0); // active for 50s
-        let sessions = vec![EnrichedSession::from_info_and_metrics(
+        let supplemental = SupplementalData {
+            active_since: Some(now - 50.0), // active for 50s
+            ..Default::default()
+        };
+        let sessions = [EnrichedSession::from_info_and_metrics(
             info,
             SessionMetrics::default(),
             &supplemental,
@@ -924,8 +939,10 @@ mod tests {
 
         // Write a minimal JSONL file with usage data
         let jsonl = concat!(
-            r#"{"type":"user","timestamp":1710000000.0,"message":{"role":"user","content":"hi"}}"#, "\n",
-            r#"{"type":"assistant","timestamp":1710000001.0,"message":{"usage":{"input_tokens":1000,"output_tokens":500}}}"#, "\n",
+            r#"{"type":"user","timestamp":1710000000.0,"message":{"role":"user","content":"hi"}}"#,
+            "\n",
+            r#"{"type":"assistant","timestamp":1710000001.0,"message":{"usage":{"input_tokens":1000,"output_tokens":500}}}"#,
+            "\n",
         );
         std::fs::write(project_dir.join("sess-1.jsonl"), jsonl).unwrap();
 
@@ -940,7 +957,11 @@ mod tests {
     #[test]
     fn test_id_truncation() {
         let full_id = "1616b203abcdef1234567890";
-        let short = if full_id.len() >= 8 { &full_id[..8] } else { full_id };
+        let short = if full_id.len() >= 8 {
+            &full_id[..8]
+        } else {
+            full_id
+        };
         assert_eq!(short, "1616b203");
     }
 }

@@ -6,8 +6,8 @@ use crate::models::SystemMemory;
 pub fn get_system_memory_with(sys: &mut sysinfo::System) -> SystemMemory {
     sys.refresh_memory();
     let total = sys.total_memory() / (1024 * 1024); // bytes → MB
-    // Use available_memory() to match Activity Monitor: used = total - available
-    // sysinfo's used_memory() includes file cache which inflates the number.
+                                                    // Use available_memory() to match Activity Monitor: used = total - available
+                                                    // sysinfo's used_memory() includes file cache which inflates the number.
     let available = sys.available_memory() / (1024 * 1024);
     let used = total.saturating_sub(available);
     SystemMemory {
@@ -52,7 +52,9 @@ pub fn get_claude_version() -> Option<String> {
 /// with the file's modification timestamp (unix secs). The mtime is used to
 /// decide whether a per-session `/effort` entry or the global default is fresher.
 pub fn get_claude_default_effort() -> (Option<String>, Option<f64>) {
-    let Some(home) = dirs::home_dir() else { return (None, None) };
+    let Some(home) = dirs::home_dir() else {
+        return (None, None);
+    };
     let path = home.join(".claude/settings.json");
     let mtime = std::fs::metadata(&path)
         .ok()
@@ -62,7 +64,11 @@ pub fn get_claude_default_effort() -> (Option<String>, Option<f64>) {
     let level = std::fs::read_to_string(&path)
         .ok()
         .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
-        .and_then(|v| v.get("effortLevel")?.as_str().map(|s| s.trim().to_lowercase()))
+        .and_then(|v| {
+            v.get("effortLevel")?
+                .as_str()
+                .map(|s| s.trim().to_lowercase())
+        })
         .filter(|s| !s.is_empty());
     (level, mtime)
 }

@@ -15,7 +15,10 @@ const STALE_TMP_AGE_SECS: u64 = 3600;
 /// redirecting the write to the symlink's target.
 pub fn atomic_write(target: &Path, contents: &[u8]) -> io::Result<()> {
     let parent = target.parent().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "target has no parent directory")
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "target has no parent directory",
+        )
     })?;
     fs::create_dir_all(parent)?;
 
@@ -25,10 +28,7 @@ pub fn atomic_write(target: &Path, contents: &[u8]) -> io::Result<()> {
         .unwrap_or(0);
     let tmp_name = format!(
         "{}.tmp.{}.{}",
-        target
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy(),
+        target.file_name().unwrap_or_default().to_string_lossy(),
         std::process::id(),
         nanos,
     );
@@ -96,7 +96,10 @@ pub fn sanitize_workspace_path(path: &str) -> io::Result<PathBuf> {
                 "path contains control characters",
             ));
         }
-        if matches!(ch, '"' | '\'' | '`' | '$' | ';' | '|' | '&' | '\\' | '\n' | '\r') {
+        if matches!(
+            ch,
+            '"' | '\'' | '`' | '$' | ';' | '|' | '&' | '\\' | '\n' | '\r'
+        ) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "path contains disallowed metacharacter",
@@ -301,7 +304,10 @@ mod tests {
     fn test_sanitize_workspace_path_allows_dotdot_in_name() {
         // ".." embedded in a directory name like "my..project" is NOT a traversal
         let result = sanitize_workspace_path("/Users/dev/my..project/src");
-        assert!(result.is_ok(), "Directory name containing '..' should be allowed");
+        assert!(
+            result.is_ok(),
+            "Directory name containing '..' should be allowed"
+        );
     }
 
     #[test]
@@ -318,15 +324,15 @@ mod tests {
         // Every one of these, if accepted, would allow injection in
         // AppleScript or cmd.exe string contexts downstream.
         let bad = [
-            "/tmp/x\"y",   // double quote
-            "/tmp/x'y",   // single quote
-            "/tmp/x`y",   // backtick
-            "/tmp/x$y",   // dollar
-            "/tmp/x;y",   // semicolon
-            "/tmp/x|y",   // pipe
-            "/tmp/x&y",   // ampersand
-            "/tmp/x\\y",  // backslash
-            "/tmp/x\ny",  // newline
+            "/tmp/x\"y", // double quote
+            "/tmp/x'y",  // single quote
+            "/tmp/x`y",  // backtick
+            "/tmp/x$y",  // dollar
+            "/tmp/x;y",  // semicolon
+            "/tmp/x|y",  // pipe
+            "/tmp/x&y",  // ampersand
+            "/tmp/x\\y", // backslash
+            "/tmp/x\ny", // newline
         ];
         for p in bad {
             let result = sanitize_workspace_path(p);

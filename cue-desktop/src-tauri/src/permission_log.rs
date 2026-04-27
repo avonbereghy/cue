@@ -41,8 +41,7 @@ fn append_entry(path: &Path, entry: &PermissionLogEntry) -> Result<(), String> {
         .open(path)
         .map_err(|e| format!("Failed to open permission log: {}", e))?;
 
-    writeln!(file, "{}", line)
-        .map_err(|e| format!("Failed to write log entry: {}", e))?;
+    writeln!(file, "{}", line).map_err(|e| format!("Failed to write log entry: {}", e))?;
 
     file.sync_all()
         .map_err(|e| format!("Failed to fsync permission log: {}", e))?;

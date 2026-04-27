@@ -49,11 +49,7 @@ pub fn count_config(workspace: &str) -> ConfigCounts {
             if let Some(mcp) = settings.get("mcpServers").and_then(|v| v.as_object()) {
                 counts.mcp_servers = mcp
                     .iter()
-                    .filter(|(_, v)| {
-                        !v.get("disabled")
-                            .and_then(|d| d.as_bool())
-                            .unwrap_or(false)
-                    })
+                    .filter(|(_, v)| !v.get("disabled").and_then(|d| d.as_bool()).unwrap_or(false))
                     .count() as i64;
             }
             // Count hook event types configured
@@ -70,11 +66,7 @@ pub fn count_config(workspace: &str) -> ConfigCounts {
             if let Some(mcp) = settings.get("mcpServers").and_then(|v| v.as_object()) {
                 counts.mcp_servers += mcp
                     .iter()
-                    .filter(|(_, v)| {
-                        !v.get("disabled")
-                            .and_then(|d| d.as_bool())
-                            .unwrap_or(false)
-                    })
+                    .filter(|(_, v)| !v.get("disabled").and_then(|d| d.as_bool()).unwrap_or(false))
                     .count() as i64;
             }
         }

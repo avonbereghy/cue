@@ -4,23 +4,23 @@
 //! All file I/O, JSONL parsing, and timer logic lives here.
 //! The React frontend is a pure rendering layer.
 
+pub mod cli;
+pub mod config_counter;
+pub mod env_detect;
+pub mod git_status;
+pub mod jsonl_parser;
+pub mod live_audio;
+pub mod model_context;
 pub mod models;
 pub mod paths;
+pub mod permission_log;
+pub mod permission_server;
 pub mod security;
-pub mod jsonl_parser;
 pub mod session_monitor;
 pub mod settings;
-pub mod tray;
-pub mod cli;
-pub mod env_detect;
-pub mod permission_server;
-pub mod permission_log;
 pub mod summary_formatter;
-pub mod git_status;
-pub mod config_counter;
-pub mod live_audio;
 pub mod system_info;
-pub mod model_context;
+pub mod tray;
 
 use models::{EnrichedSession, Settings};
 use session_monitor::SessionMonitorState;
@@ -51,7 +51,8 @@ fn set_native_appearance(window: &tauri::WebviewWindow, dark: bool) {
     if let Ok(handle) = window.window_handle() {
         if let RawWindowHandle::AppKit(h) = handle.as_raw() {
             unsafe {
-                let ns_view: &objc2::runtime::AnyObject = &*(h.ns_view.as_ptr() as *const objc2::runtime::AnyObject);
+                let ns_view: &objc2::runtime::AnyObject =
+                    &*(h.ns_view.as_ptr() as *const objc2::runtime::AnyObject);
                 let ns_window: *const objc2::runtime::AnyObject = objc2::msg_send![ns_view, window];
                 let appearance_name = if dark {
                     objc2_foundation::NSString::from_str("NSAppearanceNameDarkAqua")
@@ -59,7 +60,8 @@ fn set_native_appearance(window: &tauri::WebviewWindow, dark: bool) {
                     objc2_foundation::NSString::from_str("NSAppearanceNameAqua")
                 };
                 let ns_appearance_class = objc2::runtime::AnyClass::get(c"NSAppearance").unwrap();
-                let appearance: *const objc2::runtime::AnyObject = objc2::msg_send![ns_appearance_class, appearanceNamed: &*appearance_name];
+                let appearance: *const objc2::runtime::AnyObject =
+                    objc2::msg_send![ns_appearance_class, appearanceNamed: &*appearance_name];
                 let _: () = objc2::msg_send![ns_window, setAppearance: appearance];
             }
         }
@@ -149,13 +151,17 @@ fn open_keyboard(app: AppHandle) -> Result<(), String> {
         let _ = win.set_focus();
         return Ok(());
     }
-    tauri::WebviewWindowBuilder::new(&app, "keyboard", WebviewUrl::App("index.html#/keyboard".into()))
-        .title("Keyboard")
-        .inner_size(240.0, 360.0)
-        .resizable(false)
-        .always_on_top(true)
-        .build()
-        .map_err(|e| e.to_string())?;
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "keyboard",
+        WebviewUrl::App("index.html#/keyboard".into()),
+    )
+    .title("Keyboard")
+    .inner_size(240.0, 360.0)
+    .resizable(false)
+    .always_on_top(true)
+    .build()
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -165,13 +171,17 @@ fn open_theme_picker(app: AppHandle) -> Result<(), String> {
         let _ = win.set_focus();
         return Ok(());
     }
-    tauri::WebviewWindowBuilder::new(&app, "theme-picker", WebviewUrl::App("index.html#/theme-picker".into()))
-        .title("Themes")
-        .inner_size(240.0, 360.0)
-        .resizable(false)
-        .always_on_top(true)
-        .build()
-        .map_err(|e| e.to_string())?;
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "theme-picker",
+        WebviewUrl::App("index.html#/theme-picker".into()),
+    )
+    .title("Themes")
+    .inner_size(240.0, 360.0)
+    .resizable(false)
+    .always_on_top(true)
+    .build()
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -182,12 +192,16 @@ fn open_signal_settings(app: AppHandle) -> Result<(), String> {
         let _ = win.set_focus();
         return Ok(());
     }
-    tauri::WebviewWindowBuilder::new(&app, "signal-settings", WebviewUrl::App("index.html#/signal-settings".into()))
-        .title("Signal Settings")
-        .inner_size(700.0, 600.0)
-        .resizable(true)
-        .build()
-        .map_err(|e| e.to_string())?;
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "signal-settings",
+        WebviewUrl::App("index.html#/signal-settings".into()),
+    )
+    .title("Signal Settings")
+    .inner_size(700.0, 600.0)
+    .resizable(true)
+    .build()
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -294,8 +308,10 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
         if let Ok(handle) = window.window_handle() {
             if let RawWindowHandle::AppKit(h) = handle.as_raw() {
                 unsafe {
-                    let ns_view: &objc2::runtime::AnyObject = &*(h.ns_view.as_ptr() as *const objc2::runtime::AnyObject);
-                    let ns_window: *const objc2::runtime::AnyObject = objc2::msg_send![ns_view, window];
+                    let ns_view: &objc2::runtime::AnyObject =
+                        &*(h.ns_view.as_ptr() as *const objc2::runtime::AnyObject);
+                    let ns_window: *const objc2::runtime::AnyObject =
+                        objc2::msg_send![ns_view, window];
                     let ns_window: &objc2::runtime::AnyObject = &*ns_window;
 
                     if enabled {
@@ -303,7 +319,8 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                         set_native_appearance(window, true);
 
                         // Make window non-opaque so vibrancy can blur the desktop
-                        let _: () = objc2::msg_send![ns_window, setOpaque: objc2::runtime::Bool::NO];
+                        let _: () =
+                            objc2::msg_send![ns_window, setOpaque: objc2::runtime::Bool::NO];
                         // Dark warm fallback instead of clearColor — during Stage Manager
                         // transitions the vibrancy hasn't composited yet; this color
                         // prevents a pure black flash. Matched to typical warm wallpaper tones.
@@ -314,20 +331,26 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                         let _: () = objc2::msg_send![ns_window, setBackgroundColor: bg];
 
                         // Get the current contentView (contains the webview)
-                        let old_content: *mut objc2::runtime::AnyObject = objc2::msg_send![ns_window, contentView];
+                        let old_content: *mut objc2::runtime::AnyObject =
+                            objc2::msg_send![ns_window, contentView];
 
                         // Check if contentView is already an NSVisualEffectView (re-entry guard)
-                        let ve_class = objc2::runtime::AnyClass::get(c"NSVisualEffectView").unwrap();
-                        let already: objc2::runtime::Bool = objc2::msg_send![&*old_content, isKindOfClass: ve_class];
+                        let ve_class =
+                            objc2::runtime::AnyClass::get(c"NSVisualEffectView").unwrap();
+                        let already: objc2::runtime::Bool =
+                            objc2::msg_send![&*old_content, isKindOfClass: ve_class];
                         if already.as_bool() {
                             log::debug!("Already wrapped in NSVisualEffectView, skipping");
                             return;
                         }
 
                         // Create NSVisualEffectView with the same frame
-                        let frame: objc2_foundation::NSRect = objc2::msg_send![&*old_content, frame];
-                        let ve_view: *mut objc2::runtime::AnyObject = objc2::msg_send![ve_class, alloc];
-                        let ve_view: *mut objc2::runtime::AnyObject = objc2::msg_send![ve_view, initWithFrame: frame];
+                        let frame: objc2_foundation::NSRect =
+                            objc2::msg_send![&*old_content, frame];
+                        let ve_view: *mut objc2::runtime::AnyObject =
+                            objc2::msg_send![ve_class, alloc];
+                        let ve_view: *mut objc2::runtime::AnyObject =
+                            objc2::msg_send![ve_view, initWithFrame: frame];
 
                         // Material: HudWindow (13) — dark frosted glass
                         let _: () = objc2::msg_send![&*ve_view, setMaterial: 13_isize];
@@ -352,13 +375,19 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                         let w = window.clone();
                         tauri::async_runtime::spawn(async move {
                             for delay_ms in [50, 200, 500, 1000, 2000, 4000] {
-                                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms))
+                                    .await;
                                 // Make WKWebView layer transparent
                                 let _ = w.with_webview(|wv| {
                                     let wkwebview: *mut std::ffi::c_void = wv.inner().cast();
-                                    let obj: &objc2::runtime::AnyObject = &*(wkwebview as *const objc2::runtime::AnyObject);
+                                    let obj: &objc2::runtime::AnyObject =
+                                        &*(wkwebview as *const objc2::runtime::AnyObject);
                                     let sel = objc2::sel!(_setDrawsBackground:);
-                                    let _: () = objc2::runtime::MessageReceiver::send_message(obj, sel, (objc2::runtime::Bool::NO,));
+                                    let _: () = objc2::runtime::MessageReceiver::send_message(
+                                        obj,
+                                        sel,
+                                        (objc2::runtime::Bool::NO,),
+                                    );
                                 });
                                 // Force CSS backgrounds transparent via JS injection
                                 let _ = w.eval(
@@ -371,31 +400,43 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                         });
                     } else {
                         // Unwrap: if contentView is NSVisualEffectView, extract the webview
-                        let content: *mut objc2::runtime::AnyObject = objc2::msg_send![ns_window, contentView];
-                        let ve_class = objc2::runtime::AnyClass::get(c"NSVisualEffectView").unwrap();
-                        let is_ve: objc2::runtime::Bool = objc2::msg_send![&*content, isKindOfClass: ve_class];
+                        let content: *mut objc2::runtime::AnyObject =
+                            objc2::msg_send![ns_window, contentView];
+                        let ve_class =
+                            objc2::runtime::AnyClass::get(c"NSVisualEffectView").unwrap();
+                        let is_ve: objc2::runtime::Bool =
+                            objc2::msg_send![&*content, isKindOfClass: ve_class];
                         if is_ve.as_bool() {
                             // Get the first subview (the original contentView/webview)
-                            let subviews: *const objc2::runtime::AnyObject = objc2::msg_send![&*content, subviews];
+                            let subviews: *const objc2::runtime::AnyObject =
+                                objc2::msg_send![&*content, subviews];
                             let count: usize = objc2::msg_send![subviews, count];
                             if count > 0 {
-                                let original: *mut objc2::runtime::AnyObject = objc2::msg_send![subviews, objectAtIndex: 0_usize];
+                                let original: *mut objc2::runtime::AnyObject =
+                                    objc2::msg_send![subviews, objectAtIndex: 0_usize];
                                 let _: () = objc2::msg_send![&*original, removeFromSuperview];
                                 let _: () = objc2::msg_send![ns_window, setContentView: &*original];
                             }
                         }
                         // Restore opaque window
-                        let _: () = objc2::msg_send![ns_window, setOpaque: objc2::runtime::Bool::YES];
+                        let _: () =
+                            objc2::msg_send![ns_window, setOpaque: objc2::runtime::Bool::YES];
                         let nscolor_class = objc2::runtime::AnyClass::get(c"NSColor").unwrap();
-                        let dark_color: *const objc2::runtime::AnyObject = objc2::msg_send![nscolor_class, windowBackgroundColor];
+                        let dark_color: *const objc2::runtime::AnyObject =
+                            objc2::msg_send![nscolor_class, windowBackgroundColor];
                         let _: () = objc2::msg_send![ns_window, setBackgroundColor: dark_color];
 
                         // Re-enable WKWebView background drawing
                         let _ = window.with_webview(|wv| {
                             let wkwebview: *mut std::ffi::c_void = wv.inner().cast();
-                            let obj: &objc2::runtime::AnyObject = &*(wkwebview as *const objc2::runtime::AnyObject);
+                            let obj: &objc2::runtime::AnyObject =
+                                &*(wkwebview as *const objc2::runtime::AnyObject);
                             let sel = objc2::sel!(_setDrawsBackground:);
-                            let _: () = objc2::runtime::MessageReceiver::send_message(obj, sel, (objc2::runtime::Bool::YES,));
+                            let _: () = objc2::runtime::MessageReceiver::send_message(
+                                obj,
+                                sel,
+                                (objc2::runtime::Bool::YES,),
+                            );
                         });
 
                         // Clear the inline styles that glass mode injected — without this,
@@ -404,7 +445,7 @@ fn toggle_vibrancy(window: &tauri::WebviewWindow, enabled: bool) {
                         let _ = window.eval(
                             "document.documentElement.style.removeProperty('background');\
                              document.documentElement.style.removeProperty('--app-bg');\
-                             document.body.style.removeProperty('background');"
+                             document.body.style.removeProperty('background');",
                         );
 
                         // Re-apply saved theme to fix title bar appearance.
@@ -453,7 +494,12 @@ fn record_permission_decision(
     decision: models::PermissionDecision,
     label: &str,
 ) -> Result<(), String> {
-    log::info!("Permission {}: session={}, request={}", label.to_lowercase(), session_id, request_id);
+    log::info!(
+        "Permission {}: session={}, request={}",
+        label.to_lowercase(),
+        session_id,
+        request_id
+    );
     state.pending_permissions.resolve(request_id, decision)?;
 
     if let Some(req) = state.permission_metadata.lock().unwrap().remove(request_id) {
@@ -479,7 +525,13 @@ fn approve_permission(
     session_id: String,
     request_id: String,
 ) -> Result<(), String> {
-    record_permission_decision(&state, &session_id, &request_id, models::PermissionDecision::Allow, "Allow")
+    record_permission_decision(
+        &state,
+        &session_id,
+        &request_id,
+        models::PermissionDecision::Allow,
+        "Allow",
+    )
 }
 
 #[tauri::command]
@@ -488,7 +540,13 @@ fn deny_permission(
     session_id: String,
     request_id: String,
 ) -> Result<(), String> {
-    record_permission_decision(&state, &session_id, &request_id, models::PermissionDecision::Deny, "Deny")
+    record_permission_decision(
+        &state,
+        &session_id,
+        &request_id,
+        models::PermissionDecision::Deny,
+        "Deny",
+    )
 }
 
 #[tauri::command]
@@ -526,7 +584,10 @@ fn write_sandbox_sessions(sessions: Vec<SandboxSessionPayload>) -> Result<(), St
     // that later flows into revive_session's spawn_terminal_with_resume.
     for s in &sessions {
         if !s.id.starts_with("sandbox-") {
-            return Err(format!("Sandbox session ID must start with 'sandbox-': {}", s.id));
+            return Err(format!(
+                "Sandbox session ID must start with 'sandbox-': {}",
+                s.id
+            ));
         }
         security::sanitize_workspace_path(&s.workspace).map_err(|e| e.to_string())?;
     }
@@ -537,7 +598,9 @@ fn write_sandbox_sessions(sessions: Vec<SandboxSessionPayload>) -> Result<(), St
         .and_then(|c| serde_json::from_str(&c).ok())
         .unwrap_or_else(|| serde_json::json!({ "sessions": {} }));
 
-    let map = status["sessions"].as_object_mut().ok_or("Invalid sessions.json")?;
+    let map = status["sessions"]
+        .as_object_mut()
+        .ok_or("Invalid sessions.json")?;
 
     // Remove stale sandbox entries
     map.retain(|k, _| !k.starts_with("sandbox-"));
@@ -556,16 +619,22 @@ fn write_sandbox_sessions(sessions: Vec<SandboxSessionPayload>) -> Result<(), St
         map.insert(s.id.clone(), entry);
     }
 
-    security::atomic_write(&path, serde_json::to_string_pretty(&status)
-        .map_err(|e| e.to_string())?.as_bytes())
-        .map_err(|e| e.to_string())
+    security::atomic_write(
+        &path,
+        serde_json::to_string_pretty(&status)
+            .map_err(|e| e.to_string())?
+            .as_bytes(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Remove all sandbox sessions from sessions.json. Called on sandbox exit.
 #[tauri::command]
 fn clear_sandbox_sessions() -> Result<(), String> {
     let path = paths::sessions_json_path();
-    if !path.exists() { return Ok(()); }
+    if !path.exists() {
+        return Ok(());
+    }
 
     let mut status: serde_json::Value = std::fs::read_to_string(&path)
         .ok()
@@ -576,9 +645,13 @@ fn clear_sandbox_sessions() -> Result<(), String> {
         map.retain(|k, _| !k.starts_with("sandbox-"));
     }
 
-    security::atomic_write(&path, serde_json::to_string_pretty(&status)
-        .map_err(|e| e.to_string())?.as_bytes())
-        .map_err(|e| e.to_string())
+    security::atomic_write(
+        &path,
+        serde_json::to_string_pretty(&status)
+            .map_err(|e| e.to_string())?
+            .as_bytes(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Capture the main window to ~/Desktop/Cue-<timestamp>.png using screencapture.
@@ -591,7 +664,7 @@ fn take_window_screenshot(app: AppHandle) -> Result<String, String> {
     let pos = window.outer_position().map_err(|e| e.to_string())?;
     let size = window.outer_size().map_err(|e| e.to_string())?;
     let scale = window.scale_factor().map_err(|e| e.to_string())?;
-    if !(scale > 0.0) {
+    if !scale.is_finite() || scale <= 0.0 {
         return Err(format!("Invalid scale factor: {}", scale));
     }
 
@@ -612,8 +685,8 @@ fn take_window_screenshot(app: AppHandle) -> Result<String, String> {
 
     let status = std::process::Command::new("screencapture")
         .args([
-            "-x",                                              // no shutter sound
-            &format!("-R{},{},{},{}", lx, ly, lw, lh),        // region (logical coords)
+            "-x",                                      // no shutter sound
+            &format!("-R{},{},{},{}", lx, ly, lw, lh), // region (logical coords)
             &dest,
         ])
         .status()
@@ -651,13 +724,11 @@ fn revive_session(session_id: String, workspace: String) -> Result<(), String> {
 #[tauri::command]
 fn save_preset(preset: models::SignalPreset) -> Result<(), String> {
     let dir = paths::presets_dir();
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("Failed to create presets dir: {}", e))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create presets dir: {}", e))?;
     let path = dir.join(format!("{}.json", preset.id));
-    let data = serde_json::to_vec(&preset)
-        .map_err(|e| format!("Failed to serialize preset: {}", e))?;
-    security::atomic_write(&path, &data)
-        .map_err(|e| format!("Failed to save preset: {}", e))
+    let data =
+        serde_json::to_vec(&preset).map_err(|e| format!("Failed to serialize preset: {}", e))?;
+    security::atomic_write(&path, &data).map_err(|e| format!("Failed to save preset: {}", e))
 }
 
 #[tauri::command]
@@ -667,8 +738,8 @@ fn list_presets() -> Result<Vec<models::PresetSummary>, String> {
         return Ok(Vec::new());
     }
     let mut summaries = Vec::new();
-    let entries = std::fs::read_dir(&dir)
-        .map_err(|e| format!("Failed to read presets dir: {}", e))?;
+    let entries =
+        std::fs::read_dir(&dir).map_err(|e| format!("Failed to read presets dir: {}", e))?;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().map(|e| e == "json").unwrap_or(false) {
@@ -692,10 +763,8 @@ fn list_presets() -> Result<Vec<models::PresetSummary>, String> {
 fn load_preset(id: String) -> Result<models::SignalPreset, String> {
     validate_alphanumeric_id(&id, "preset ID")?;
     let path = paths::presets_dir().join(format!("{}.json", id));
-    let data = std::fs::read(&path)
-        .map_err(|e| format!("Failed to read preset: {}", e))?;
-    serde_json::from_slice(&data)
-        .map_err(|e| format!("Failed to parse preset: {}", e))
+    let data = std::fs::read(&path).map_err(|e| format!("Failed to read preset: {}", e))?;
+    serde_json::from_slice(&data).map_err(|e| format!("Failed to parse preset: {}", e))
 }
 
 #[tauri::command]
@@ -703,8 +772,7 @@ fn delete_preset(id: String) -> Result<(), String> {
     validate_alphanumeric_id(&id, "preset ID")?;
     let path = paths::presets_dir().join(format!("{}.json", id));
     if path.exists() {
-        std::fs::remove_file(&path)
-            .map_err(|e| format!("Failed to delete preset: {}", e))?;
+        std::fs::remove_file(&path).map_err(|e| format!("Failed to delete preset: {}", e))?;
     }
     Ok(())
 }
@@ -713,15 +781,13 @@ fn delete_preset(id: String) -> Result<(), String> {
 fn rename_preset(id: String, name: String) -> Result<(), String> {
     validate_alphanumeric_id(&id, "preset ID")?;
     let path = paths::presets_dir().join(format!("{}.json", id));
-    let data = std::fs::read(&path)
-        .map_err(|e| format!("Failed to read preset: {}", e))?;
-    let mut preset: models::SignalPreset = serde_json::from_slice(&data)
-        .map_err(|e| format!("Failed to parse preset: {}", e))?;
+    let data = std::fs::read(&path).map_err(|e| format!("Failed to read preset: {}", e))?;
+    let mut preset: models::SignalPreset =
+        serde_json::from_slice(&data).map_err(|e| format!("Failed to parse preset: {}", e))?;
     preset.name = name;
-    let updated = serde_json::to_vec(&preset)
-        .map_err(|e| format!("Failed to serialize preset: {}", e))?;
-    security::atomic_write(&path, &updated)
-        .map_err(|e| format!("Failed to save preset: {}", e))
+    let updated =
+        serde_json::to_vec(&preset).map_err(|e| format!("Failed to serialize preset: {}", e))?;
+    security::atomic_write(&path, &updated).map_err(|e| format!("Failed to save preset: {}", e))
 }
 
 #[cfg(target_os = "macos")]
@@ -775,8 +841,14 @@ fn spawn_terminal_with_resume(session_id: &str, workspace: &str) -> Result<(), S
 fn spawn_terminal_with_resume(session_id: &str, workspace: &str) -> Result<(), String> {
     std::process::Command::new("cmd")
         .args([
-            "/c", "start", "cmd", "/k",
-            &format!("cd /d \"{}\" && claude --resume \"{}\"", workspace, session_id),
+            "/c",
+            "start",
+            "cmd",
+            "/k",
+            &format!(
+                "cd /d \"{}\" && claude --resume \"{}\"",
+                workspace, session_id
+            ),
         ])
         .spawn()
         .map_err(|e| format!("Failed to open terminal: {}", e))?;
@@ -824,7 +896,11 @@ fn get_hook_status() -> Vec<HookStatusCheck> {
     checks.push(HookStatusCheck {
         label: "Claude Code".into(),
         ok: claude_dir.exists(),
-        detail: if claude_dir.exists() { "~/.claude found".into() } else { "~/.claude not found".into() },
+        detail: if claude_dir.exists() {
+            "~/.claude found".into()
+        } else {
+            "~/.claude not found".into()
+        },
     });
 
     // 2. Hook runner
@@ -874,7 +950,8 @@ fn get_hook_status() -> Vec<HookStatusCheck> {
 
     // 5. sessions.json exists + freshness
     let sessions_path = paths::sessions_json_path();
-    let sessions_age = sessions_path.metadata()
+    let sessions_age = sessions_path
+        .metadata()
         .and_then(|m| m.modified())
         .ok()
         .and_then(|t| std::time::SystemTime::now().duration_since(t).ok())
@@ -893,7 +970,8 @@ fn get_hook_status() -> Vec<HookStatusCheck> {
 
     // 6. Settings hooks — check all required events are registered
     let settings_path = home.join(".claude/settings.json");
-    let (hooks_registered, hooks_with_timeout, total_expected) = check_settings_hooks(&settings_path);
+    let (hooks_registered, hooks_with_timeout, total_expected) =
+        check_settings_hooks(&settings_path);
     let hooks_ok = hooks_registered == total_expected;
     let timeouts_ok = hooks_with_timeout == hooks_registered;
     checks.push(HookStatusCheck {
@@ -907,7 +985,10 @@ fn get_hook_status() -> Vec<HookStatusCheck> {
         detail: if timeouts_ok {
             format!("All {} hooks have timeouts", hooks_with_timeout)
         } else {
-            format!("{}/{} hooks have timeouts", hooks_with_timeout, hooks_registered)
+            format!(
+                "{}/{} hooks have timeouts",
+                hooks_with_timeout, hooks_registered
+            )
         },
     });
 
@@ -951,33 +1032,41 @@ fn check_settings_hooks(settings_path: &std::path::Path) -> (usize, usize, usize
     for (event, _state) in env_detect::HOOK_EVENTS {
         if let Some(entries) = hooks.get(*event).and_then(|v| v.as_array()) {
             let has_cue = entries.iter().any(|entry| {
-                entry.get("hooks")
+                entry
+                    .get("hooks")
                     .and_then(|h| h.as_array())
-                    .map(|arr| arr.iter().any(|h| {
-                        h.get("command")
-                            .and_then(|c| c.as_str())
-                            .map(|c| c.contains("cue-hook"))
-                            .unwrap_or(false)
-                    }))
+                    .map(|arr| {
+                        arr.iter().any(|h| {
+                            h.get("command")
+                                .and_then(|c| c.as_str())
+                                .map(|c| c.contains("cue-hook"))
+                                .unwrap_or(false)
+                        })
+                    })
                     .unwrap_or(false)
             });
             if has_cue {
                 registered += 1;
                 // Check if any cue-hook entry has a timeout
                 let has_timeout = entries.iter().any(|entry| {
-                    let is_cue = entry.get("hooks")
+                    let is_cue = entry
+                        .get("hooks")
                         .and_then(|h| h.as_array())
-                        .map(|arr| arr.iter().any(|h| {
-                            h.get("command")
-                                .and_then(|c| c.as_str())
-                                .map(|c| c.contains("cue-hook"))
-                                .unwrap_or(false)
-                        }))
+                        .map(|arr| {
+                            arr.iter().any(|h| {
+                                h.get("command")
+                                    .and_then(|c| c.as_str())
+                                    .map(|c| c.contains("cue-hook"))
+                                    .unwrap_or(false)
+                            })
+                        })
                         .unwrap_or(false);
-                    is_cue && entry.get("hooks")
-                        .and_then(|h| h.as_array())
-                        .map(|arr| arr.iter().any(|h| h.get("timeout").is_some()))
-                        .unwrap_or(false)
+                    is_cue
+                        && entry
+                            .get("hooks")
+                            .and_then(|h| h.as_array())
+                            .map(|arr| arr.iter().any(|h| h.get("timeout").is_some()))
+                            .unwrap_or(false)
                 });
                 if has_timeout {
                     with_timeout += 1;
@@ -1046,9 +1135,12 @@ fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
             let result = tokio::task::spawn_blocking(move || {
                 m.poll_status();
                 m.enriched_sessions.lock().unwrap().clone()
-            }).await;
+            })
+            .await;
             match result {
-                Ok(sessions) => { let _ = app_poll.emit("sessions-updated", &sessions); }
+                Ok(sessions) => {
+                    let _ = app_poll.emit("sessions-updated", &sessions);
+                }
                 Err(e) => log::warn!("poll_status blocking task failed: {}", e),
             }
         }
@@ -1064,7 +1156,8 @@ fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
             let _ = tokio::task::spawn_blocking(move || {
                 m.refresh_metrics();
                 m.refresh_supplemental();
-            }).await;
+            })
+            .await;
         }
     });
 
@@ -1074,7 +1167,8 @@ fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
         let _ = tokio::task::spawn_blocking(move || {
             let version = system_info::get_claude_version();
             *m.claude_version.lock().unwrap() = version;
-        }).await;
+        })
+        .await;
     });
 }
 
@@ -1094,7 +1188,9 @@ pub fn run() {
     // or similar and may leak workspace paths, prompts, or assistant text —
     // log location only, never the payload, per CLAUDE.md security rules.
     std::panic::set_hook(Box::new(|info| {
-        let location = info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
         log::error!(
             "Panic at {}: application error (details suppressed for privacy)",
             location.unwrap_or_else(|| "unknown".to_string())
@@ -1183,7 +1279,8 @@ pub fn run() {
                     if *focused {
                         if window.label() == "main" {
                             if let Some(state) = window.try_state::<AppState>() {
-                                let sessions = state.monitor.enriched_sessions.lock().unwrap().clone();
+                                let sessions =
+                                    state.monitor.enriched_sessions.lock().unwrap().clone();
                                 let _ = window.emit("sessions-updated", &sessions);
                             }
                         }
@@ -1208,7 +1305,11 @@ pub fn run() {
                 toggle_vibrancy(&window, is_glass);
 
                 // Set theme AFTER vibrancy — glass forces dark, others follow system
-                let effective_dark = if is_glass { true } else { system_theme == Theme::Dark };
+                let effective_dark = if is_glass {
+                    true
+                } else {
+                    system_theme == Theme::Dark
+                };
                 set_native_appearance(&window, effective_dark);
             }
 
@@ -1340,7 +1441,7 @@ async fn handle_permission_connection(
     // Hard caps — this server talks only to the local Python hook. Anything
     // larger than these bounds is either a bug or a local-DoS attempt.
     const MAX_HEADER_BYTES: usize = 8 * 1024;
-    const MAX_BODY_BYTES: usize = 1 * 1024 * 1024;
+    const MAX_BODY_BYTES: usize = 1024 * 1024;
 
     // Read until we have the \r\n\r\n header terminator or MAX_HEADER_BYTES.
     // A single `read` is not guaranteed to deliver a full header block; fragmented
@@ -1380,14 +1481,16 @@ async fn handle_permission_connection(
     // Reject any Origin header too — the legit Python hook sends none.
     let host_ok = header_str.lines().any(|line| {
         let lower = line.to_lowercase();
-        if !lower.starts_with("host:") { return false; }
+        if !lower.starts_with("host:") {
+            return false;
+        }
         let val = lower.split(':').skip(1).collect::<Vec<_>>().join(":");
         let val = val.trim();
         val.starts_with("127.0.0.1") || val.starts_with("localhost")
     });
-    let has_origin = header_str.lines().any(|line| {
-        line.to_lowercase().starts_with("origin:")
-    });
+    let has_origin = header_str
+        .lines()
+        .any(|line| line.to_lowercase().starts_with("origin:"));
     if !host_ok || has_origin {
         let response = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
         let _ = stream.write_all(response.as_bytes()).await;
@@ -1658,34 +1761,32 @@ fn setup_tray(
                 show_tray_popover(tray.app_handle(), rect);
             }
         })
-        .on_menu_event(move |app, event| {
-            match event.id().as_ref() {
-                "dashboard" => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
+        .on_menu_event(move |app, event| match event.id().as_ref() {
+            "dashboard" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
                 }
-                "settings" => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                        let _ = app.emit("navigate-settings", ());
-                    }
-                }
-                "show-title-bar" => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.set_decorations(true);
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                        let _ = app.emit("frameless-changed", false);
-                    }
-                }
-                "quit" => {
-                    app.exit(0);
-                }
-                _ => {}
             }
+            "settings" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                    let _ = app.emit("navigate-settings", ());
+                }
+            }
+            "show-title-bar" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_decorations(true);
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                    let _ = app.emit("frameless-changed", false);
+                }
+            }
+            "quit" => {
+                app.exit(0);
+            }
+            _ => {}
         })
         .build(handle)?;
 
@@ -1765,12 +1866,9 @@ fn build_tray_menu(
             s.state_icon, s.workspace_name, duration, tokens
         );
         builder = builder.item(
-            &MenuItemBuilder::with_id(
-                format!("session-{}", s.info.id),
-                &label,
-            )
-            .enabled(false)
-            .build(handle)?,
+            &MenuItemBuilder::with_id(format!("session-{}", s.info.id), &label)
+                .enabled(false)
+                .build(handle)?,
         );
     }
 

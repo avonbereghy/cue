@@ -102,9 +102,8 @@ mod tests {
         let content = serde_json::to_string_pretty(&settings).unwrap();
         crate::security::atomic_write(&path, content.as_bytes()).unwrap();
 
-        let loaded: Settings = serde_json::from_str(
-            &std::fs::read_to_string(&path).unwrap()
-        ).unwrap();
+        let loaded: Settings =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
 
         assert_eq!(loaded.title_animation, "glow");
         assert!((loaded.animation_speed - 0.8).abs() < f64::EPSILON);
@@ -130,7 +129,10 @@ mod tests {
         };
         s.theme_customizations.insert(
             "neon".to_string(),
-            ThemeCustomization { sand_intensity: 0.8, ..Default::default() },
+            ThemeCustomization {
+                sand_intensity: 0.8,
+                ..Default::default()
+            },
         );
         apply_migrations(&mut s);
         assert!(s.theme_customizations.is_empty());
@@ -148,10 +150,8 @@ mod tests {
             sand_intensity: 9.99, // deliberately non-default
             ..Default::default()
         };
-        s.theme_customizations.insert(
-            "neon".to_string(),
-            ThemeCustomization::default(),
-        );
+        s.theme_customizations
+            .insert("neon".to_string(), ThemeCustomization::default());
         apply_migrations(&mut s);
         // Nothing should have changed: both customizations and sand value retained.
         assert!(!s.theme_customizations.is_empty());

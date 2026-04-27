@@ -32,28 +32,73 @@ fn color_for_state(state: &str, blink_on: bool) -> Rgba {
     match state {
         "working" => {
             let a = if blink_on { 255 } else { 38 }; // 0.15 * 255 ≈ 38
-            Rgba { r: 255, g: 255, b: 255, a } // white (flashing)
+            Rgba {
+                r: 255,
+                g: 255,
+                b: 255,
+                a,
+            } // white (flashing)
         }
         "thinking" => {
             let a = if blink_on { 255 } else { 38 };
-            Rgba { r: 232, g: 123, b: 53, a } // ember orange (flashing)
+            Rgba {
+                r: 232,
+                g: 123,
+                b: 53,
+                a,
+            } // ember orange (flashing)
         }
-        "waiting" => Rgba { r: 255, g: 204, b: 0, a: 255 }, // yellow (255,204,0)
-        "error" => Rgba { r: 255, g: 69, b: 58, a: 255 },   // red (255,69,58)
+        "waiting" => Rgba {
+            r: 255,
+            g: 204,
+            b: 0,
+            a: 255,
+        }, // yellow (255,204,0)
+        "error" => Rgba {
+            r: 255,
+            g: 69,
+            b: 58,
+            a: 255,
+        }, // red (255,69,58)
         "subagent" => {
             let a = if blink_on { 255 } else { 38 };
-            Rgba { r: 124, g: 197, b: 255, a } // vibrant light blue (blinking) — matches Claude Code agent/shell accent
+            Rgba {
+                r: 124,
+                g: 197,
+                b: 255,
+                a,
+            } // vibrant light blue (blinking) — matches Claude Code agent/shell accent
         }
         "compacting" => {
             let a = if blink_on { 220 } else { 50 };
-            Rgba { r: 139, g: 159, b: 212, a } // periwinkle (Claude Code compacting tint)
+            Rgba {
+                r: 139,
+                g: 159,
+                b: 212,
+                a,
+            } // periwinkle (Claude Code compacting tint)
         }
         "clearing" => {
             let a = if blink_on { 220 } else { 50 };
-            Rgba { r: 196, g: 144, b: 180, a } // rose mauve (blinking)
+            Rgba {
+                r: 196,
+                g: 144,
+                b: 180,
+                a,
+            } // rose mauve (blinking)
         }
-        "idle" => Rgba { r: 212, g: 165, b: 116, a: 178 }, // warm sand at 70%
-        _ => Rgba { r: 48, g: 209, b: 88, a: 255 },  // green (48,209,88) done/default
+        "idle" => Rgba {
+            r: 212,
+            g: 165,
+            b: 116,
+            a: 178,
+        }, // warm sand at 70%
+        _ => Rgba {
+            r: 48,
+            g: 209,
+            b: 88,
+            a: 255,
+        }, // green (48,209,88) done/default
     }
 }
 
@@ -83,13 +128,7 @@ fn paint_for_color(color: &Rgba) -> tiny_skia::Paint<'static> {
 }
 
 /// Draw a filled circle onto a tiny-skia Pixmap.
-fn draw_filled_circle(
-    pixmap: &mut tiny_skia::Pixmap,
-    cx: f32,
-    cy: f32,
-    radius: f32,
-    color: &Rgba,
-) {
+fn draw_filled_circle(pixmap: &mut tiny_skia::Pixmap, cx: f32, cy: f32, radius: f32, color: &Rgba) {
     let path = circle_path(cx, cy, radius);
     let paint = paint_for_color(color);
     pixmap.fill_path(
@@ -218,7 +257,12 @@ fn render_pixmap(
         let stroke_w = 1.5 * scale;
         let inset = 0.75 * scale;
         let radius = (safe_size as f32 / 2.0) - inset - stroke_w / 2.0;
-        let color = Rgba { r: 255, g: 255, b: 255, a: 255 };
+        let color = Rgba {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+        };
         draw_stroked_circle(&mut pixmap, cx, cy, radius, stroke_w, &color);
     } else {
         let active_cols = ((count as f32) / MAX_PER_COLUMN as f32).ceil() as usize;
@@ -239,7 +283,12 @@ fn render_pixmap(
             if high_contrast {
                 // Fill with state color, then stroke with white
                 draw_filled_circle(&mut pixmap, cx, cy, r, &color);
-                let white = Rgba { r: 255, g: 255, b: 255, a: 255 };
+                let white = Rgba {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    a: 255,
+                };
                 draw_stroked_circle(&mut pixmap, cx, cy, r, 1.0 * scale, &white);
             } else {
                 draw_filled_circle(&mut pixmap, cx, cy, r, &color);
@@ -283,12 +332,7 @@ impl IconCache {
     }
 
     /// Convenience method — returns a cloned `Vec<u8>` of the cached icon.
-    pub fn get_icon(
-        &mut self,
-        sessions: &[EnrichedSession],
-        blink_on: bool,
-        size: u32,
-    ) -> Vec<u8> {
+    pub fn get_icon(&mut self, sessions: &[EnrichedSession], blink_on: bool, size: u32) -> Vec<u8> {
         self.get_or_render(sessions, blink_on, size).to_vec()
     }
 
@@ -343,7 +387,11 @@ mod tests {
             pid: None,
             permission_mode: None,
         };
-        EnrichedSession::from_info_and_metrics(info, SessionMetrics::default(), &SupplementalData::default())
+        EnrichedSession::from_info_and_metrics(
+            info,
+            SessionMetrics::default(),
+            &SupplementalData::default(),
+        )
     }
 
     fn verify_png(data: &[u8]) {
