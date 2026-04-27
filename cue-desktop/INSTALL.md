@@ -9,6 +9,12 @@ Cue is a cross-platform desktop app that monitors your Claude Code sessions and 
 
 ## macOS
 
+### DMG installer (recommended)
+
+1. Download `Cue_x.y.z_universal.dmg` from the latest release.
+2. Open the DMG and drag **Cue** into your Applications folder.
+3. Launch from Applications. Signed and notarized builds open without Gatekeeper warnings; auto-update is enabled.
+
 ### Build from source
 
 ```bash
@@ -23,6 +29,8 @@ Then copy the app to your Applications folder:
 cp -R src-tauri/target/release/bundle/macos/Cue.app ~/Applications/
 open ~/Applications/Cue.app
 ```
+
+Local builds are ad-hoc-signed. macOS will show a Gatekeeper warning on first launch — right-click the app and choose **Open**, or run `xattr -dr com.apple.quarantine ~/Applications/Cue.app`.
 
 The onboarding wizard configures the Claude Code hooks automatically on first launch.
 

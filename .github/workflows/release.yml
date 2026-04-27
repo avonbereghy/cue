@@ -1,0 +1,106 @@
+# Release pipeline: builds Cue for macOS (Apple Silicon + Intel), Windows,
+# and Linux on every `v*` tag push, signs/notarizes per platform, generates
+# Tauri updater artifacts, and uploads everything to a GitHub Release.
+#
+# Required repository secrets (configure in GitHub Settings → Secrets):
+#   APPLE_CERTIFICATE              — base64 of Developer ID Application .p12
+#   APPLE_CERTIFICATE_PASSWORD     — password for the .p12
+#   APPLE_SIGNING_IDENTITY         — e.g. "Developer ID Application: Foo Bar (TEAMID)"
+#   APPLE_ID                       — Apple ID email
+#   APPLE_PASSWORD                 — app-specific password (notarytool)
+#   APPLE_TEAM_ID                  — 10-char team id
+#   WINDOWS_CERTIFICATE            — base64 of code-signing .pfx
+#   WINDOWS_CERTIFICATE_PASSWORD   — password for the .pfx
+#   TAURI_SIGNING_PRIVATE_KEY      — Tauri updater private key (`tauri signer generate`)
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD — password for the Tauri signing key
+#
+# Trigger: push a tag `vX.Y.Z` (must match package.json/Cargo.toml/tauri.conf.json
+# version). The workflow creates a draft release; review it, then publish manually.
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-14
+            args: '--target aarch64-apple-darwin'
+          - platform: macos-14
+            args: '--target x86_64-apple-darwin'
+          - platform: ubuntu-22.04
+            args: ''
+          - platform: windows-latest
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-14' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cue-desktop/src-tauri -> target
+
+      - name: Install Linux deps
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: cue-desktop/package-lock.json
+
+      - name: Install npm deps
+        working-directory: cue-desktop
+        run: npm ci
+
+      - name: Build & publish (Tauri Action)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS signing & notarization
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows signing
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
+          # Tauri updater signing
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: cue-desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Cue ${{ github.ref_name }}'
+          releaseBody: 'See the assets below to download and install. Auto-update will pull this release on next launch for already-installed users.'
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+          # latest.json is the manifest tauri-plugin-updater fetches; the
+          # action generates and uploads it alongside the bundles.
+          updaterJsonPreferNsis: true
