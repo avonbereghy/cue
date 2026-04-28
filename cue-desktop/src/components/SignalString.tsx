@@ -235,6 +235,12 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // app is in foreground. Off-screen cards used to keep running physics +
   // canvas draws at 60fps; this gate collapses them to zero cost.
   const renderActive = pageVisible && onScreen;
+  // Mirror into a ref so the RAF callback can self-terminate within one frame
+  // when the gate flips, without waiting for React to schedule the effect
+  // cleanup. Without this, an in-flight `draw()` queued before the gate
+  // change still ran one extra frame against a hidden/off-screen canvas.
+  const renderActiveRef = useRef(renderActive);
+  renderActiveRef.current = renderActive;
 
   // Smoothly interpolated string color (r,g,b) — transitions between states
   const currentColorRef = useRef<{ r: number; g: number; b: number } | null>(null);
@@ -817,6 +823,14 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     const ERASE_RECTS_REBUILD_MS = 200;
 
     const draw = (now: number) => {
+      // Self-terminate when the visibility gate has flipped to false. The
+      // useEffect cleanup also cancels animRef, but a frame already queued
+      // before the cleanup runs would otherwise execute one final pass on a
+      // hidden/off-screen canvas. Bail before any work and skip rescheduling.
+      if (!renderActiveRef.current) {
+        animRef.current = 0;
+        return;
+      }
       const cfg = configRef.current;
       const { signalAlpha, signalAmplitude, signalEcho, frequency,
         signalBass, signalMids, signalTreble,
