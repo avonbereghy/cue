@@ -1112,7 +1112,7 @@ fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
     // still wakes up React's reconciler even though `React.memo` ultimately
     // bails out. Hashing the JSON is far cheaper than crossing the bridge.
     tauri::async_runtime::spawn(async move {
-        use std::hash::{Hash, Hasher};
+        use std::hash::Hasher;
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
         let mut last_emit_hash: Option<u64> = None;
         loop {
@@ -1133,7 +1133,7 @@ fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
                         }
                     };
                     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                    payload.hash(&mut hasher);
+                    hasher.write(&payload);
                     let hash = hasher.finish();
                     if last_emit_hash == Some(hash) {
                         continue;
