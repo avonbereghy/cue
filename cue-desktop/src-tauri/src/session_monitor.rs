@@ -357,11 +357,27 @@ impl SessionMonitorState {
 
     /// Parse JSONL conversation logs for token metrics (called every ~5s).
     pub fn refresh_metrics(&self) {
-        let sessions = self.enriched_sessions.lock().unwrap().clone();
+        // Only clone the three fields the loop actually needs (id, workspace,
+        // state) instead of the full EnrichedSession vector — at every 5s tick
+        // a 20-session list previously copied ~40 KB of nested supplemental
+        // data through the allocator for no reason.
+        let session_keys: Vec<(String, String, String)> = {
+            let guard = self.enriched_sessions.lock().unwrap();
+            guard
+                .iter()
+                .map(|s| {
+                    (
+                        s.info.id.clone(),
+                        s.info.workspace.clone(),
+                        s.info.state.clone(),
+                    )
+                })
+                .collect()
+        };
         let projects_path = paths::claude_projects_path();
 
-        for session in &sessions {
-            let path = self.jsonl_path(&session.info.id, &session.info.workspace, &projects_path);
+        for (id, workspace, state) in &session_keys {
+            let path = self.jsonl_path(id, workspace, &projects_path);
 
             if !Path::new(&path).exists() {
                 continue;
@@ -371,7 +387,7 @@ impl SessionMonitorState {
             // capture subagent token changes in real-time. For inactive sessions,
             // check file mod times before reparsing.
             let is_active = matches!(
-                session.info.state.as_str(),
+                state.as_str(),
                 "working" | "thinking" | "subagent" | "waiting"
             );
 
@@ -380,7 +396,7 @@ impl SessionMonitorState {
                 if let Ok(metadata) = std::fs::metadata(&path) {
                     if let Ok(mod_time) = metadata.modified() {
                         let mut mod_dates = self.file_mod_dates.lock().unwrap();
-                        if let Some(cached) = mod_dates.get(&session.info.id) {
+                        if let Some(cached) = mod_dates.get(id) {
                             if *cached == mod_time {
                                 // Parent unchanged — also check subagents dir
                                 let session_stem = Path::new(&path)
@@ -397,7 +413,7 @@ impl SessionMonitorState {
                                     .and_then(|d| std::fs::metadata(d).ok())
                                     .and_then(|m| m.modified().ok())
                                     .map(|sub_mod| {
-                                        let sub_key = format!("{}-subagents", session.info.id);
+                                        let sub_key = format!("{}-subagents", id);
                                         let changed = mod_dates
                                             .get(&sub_key)
                                             .map(|c| *c != sub_mod)
@@ -414,7 +430,7 @@ impl SessionMonitorState {
                                 }
                             }
                         }
-                        mod_dates.insert(session.info.id.clone(), mod_time);
+                        mod_dates.insert(id.clone(), mod_time);
                     }
                 }
                 if should_skip {
@@ -424,7 +440,7 @@ impl SessionMonitorState {
 
             let metrics = {
                 let mut cache_guard = self.jsonl_entry_cache.lock().unwrap();
-                let entry_cache = cache_guard.entry(session.info.id.clone()).or_default();
+                let entry_cache = cache_guard.entry(id.clone()).or_default();
                 jsonl_parser::parse_jsonl_to_session_metrics_cached(Path::new(&path), entry_cache)
             };
             if let Some(metrics) = metrics {
@@ -436,13 +452,13 @@ impl SessionMonitorState {
                 {
                     let mut speed_cache = self.output_speed_cache.lock().unwrap();
                     // Store current output_tokens as "previous" for next poll
-                    speed_cache.insert(session.info.id.clone(), (metrics.output_tokens, now_ts));
+                    speed_cache.insert(id.clone(), (metrics.output_tokens, now_ts));
                 }
 
                 self.metrics_cache
                     .lock()
                     .unwrap()
-                    .insert(session.info.id.clone(), metrics);
+                    .insert(id.clone(), metrics);
             }
         }
     }
