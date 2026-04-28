@@ -1757,4 +1757,53 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
     }
+
+    #[test]
+    fn entry_cache_clears_when_file_disappears() {
+        let dir = std::env::temp_dir().join(format!("cue-jsonl-gone-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.jsonl");
+        let _ = std::fs::remove_file(&path);
+
+        let line =
+            r#"{"type":"user","timestamp":1710000000.0,"message":{"content":"first"}}"#;
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+
+        let mut cache = super::JsonlEntryCache::default();
+        super::refresh_entry_cache(&path, &mut cache);
+        assert_eq!(cache.entries.len(), 1);
+
+        std::fs::remove_file(&path).unwrap();
+        super::refresh_entry_cache(&path, &mut cache);
+        assert_eq!(cache.entries.len(), 0, "missing file must drop cached entries");
+        assert_eq!(cache.file_size, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn entry_cache_refuses_to_follow_symlink() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!("cue-jsonl-symlink-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let real = dir.join("real.jsonl");
+        let link = dir.join("link.jsonl");
+        let _ = std::fs::remove_file(&real);
+        let _ = std::fs::remove_file(&link);
+
+        let line =
+            r#"{"type":"user","timestamp":1710000000.0,"message":{"content":"first"}}"#;
+        std::fs::write(&real, format!("{line}\n")).unwrap();
+        symlink(&real, &link).unwrap();
+
+        // Confirm the symlink is what std::fs::metadata follows…
+        assert!(std::fs::metadata(&link).is_ok());
+
+        let mut cache = super::JsonlEntryCache::default();
+        super::refresh_entry_cache(&link, &mut cache);
+        // …but our reader refuses to open through it, so no entries land.
+        assert_eq!(cache.entries.len(), 0, "O_NOFOLLOW must reject symlinked target");
+
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_file(&real);
+    }
 }
