@@ -344,13 +344,30 @@ impl IconCache {
 
     fn cache_key(sessions: &[EnrichedSession], blink_on: bool, size: u32) -> String {
         let mut key = String::new();
+        let mut has_blinking = false;
         for (i, session) in sessions.iter().enumerate().take(MAX_SESSIONS) {
             if i > 0 {
                 key.push(',');
             }
-            key.push_str(&session.info.state);
+            let state = session.info.state.as_str();
+            if matches!(
+                state,
+                "working" | "thinking" | "subagent" | "compacting" | "clearing"
+            ) {
+                has_blinking = true;
+            }
+            key.push_str(state);
         }
-        key.push_str(&format!("|{}|{}", blink_on, size));
+        // Only fold the blink phase into the cache key when at least one
+        // session is actually blinking. Otherwise the dot grid is a static
+        // image and the 500 ms blink toggle would otherwise cache-miss every
+        // tick — re-rasterizing PNGs and reallocating buffers for no visible
+        // change.
+        if has_blinking {
+            key.push_str(&format!("|{}|{}", blink_on, size));
+        } else {
+            key.push_str(&format!("||{}", size));
+        }
         key
     }
 }
@@ -489,6 +506,25 @@ mod tests {
         let _ = cache.get_or_render(&sessions, true, 64);
         cache.invalidate();
         assert!(cache.last_key.is_none());
+    }
+
+    #[test]
+    fn test_icon_cache_key_ignores_blink_when_no_blinking_state() {
+        // No blinking states present — blink_on toggling shouldn't change
+        // the cache key, so the 500ms tray timer doesn't burn re-renders.
+        let sessions = vec![make_session("idle"), make_session("waiting")];
+        let key_on = IconCache::cache_key(&sessions, true, 64);
+        let key_off = IconCache::cache_key(&sessions, false, 64);
+        assert_eq!(key_on, key_off, "static states must produce stable key");
+    }
+
+    #[test]
+    fn test_icon_cache_key_uses_blink_when_blinking_state_present() {
+        // Add one blinking session — now blink_on must influence the key.
+        let sessions = vec![make_session("working"), make_session("idle")];
+        let key_on = IconCache::cache_key(&sessions, true, 64);
+        let key_off = IconCache::cache_key(&sessions, false, 64);
+        assert_ne!(key_on, key_off, "blink phase must split keys when blinking");
     }
 
     #[test]
