@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -2558,7 +2558,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                         {originalIdx + 1}
                       </div>
                     )}
-                    <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} fluxEnabled={lowPower ? false : fluxEnabled} fluxAlpha={fluxAlpha} fluxIntensity={fluxIntensity} fluxDensity={fluxDensity} fluxSpeed={fluxSpeed} fluxLineLength={fluxLineLength} fluxTurbulence={fluxTurbulence} auroraEnabled={lowPower ? false : auroraEnabled} auroraAlpha={auroraAlpha} auroraSpeed={auroraSpeed} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} stringDeployAngle={stringDeployAngle} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} showToolCallComets={showToolCallComets} timerDisplay={timerDisplay} lowPower={lowPower} />
+                    <SessionCard {...cardSettings} session={effectiveSession} />
                   </div>
 
                   {/* Per-session state controls — hidden in screenshot mode */}
@@ -2644,8 +2644,11 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const hasTeamChildren = teamChildren.length > 0;
   const showBranchView = branchView && hasTeamChildren && !compactMode;
 
-  // Collect card settings for BranchView passthrough
-  const cardSettings: CardSettings = {
+  // Collect card settings for BranchView and SessionCard passthrough.
+  // Memoized so SessionCard's React.memo only re-checks props when an actual
+  // setting changes — prevents the ~60 strict-equality comparisons per card
+  // that previously ran on every parent render (timer ticks, polling, etc.).
+  const cardSettings: CardSettings = useMemo(() => ({
     titleAnimation, animationSpeed, randomAnimation,
     signalString: lowPower ? false : signalString,
     signalFrequency, signalMode, signalAlpha, signalAmplitude, signalEcho,
@@ -2662,7 +2665,59 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     cordRetractForce, stringSpread, stringDeployAngle, keyPressSpeed, keyReleaseSpeed,
     compactMode, slimMode, contextThreshold, contextDisplay,
     showToolPills, showCurrentTool, showConfigCounts, showToolCallComets, timerDisplay,
-  };
+    lowPower,
+  }), [
+    titleAnimation, animationSpeed, randomAnimation,
+    signalString, signalFrequency, signalMode, signalAlpha, signalAmplitude, signalEcho,
+    signalBass, signalMids, signalTreble, signalColorDark, signalColorLight,
+    signalOffset, signalEffect,
+    sandEnabled, sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize,
+    sandTurbulence, sandAlpha,
+    fluxEnabled, fluxAlpha, fluxIntensity, fluxDensity, fluxSpeed, fluxLineLength, fluxTurbulence,
+    auroraEnabled, auroraAlpha, auroraSpeed,
+    cordRetractDelay, cordDeployForce, cordRetractForce, stringSpread, stringDeployAngle,
+    keyPressSpeed, keyReleaseSpeed,
+    compactMode, slimMode, contextThreshold, contextDisplay,
+    showToolPills, showCurrentTool, showConfigCounts, showToolCallComets, timerDisplay,
+    lowPower,
+  ]);
+
+  // Per-session expand-cycle handlers cached by id so SessionCard's React.memo
+  // sees a stable function reference across parent re-renders. Built lazily
+  // inside the .map() — the captured sessionId never changes, and
+  // `setExpandOverrides` itself is identity-stable from React.
+  const expandCyclersRef = useRef(new Map<string, () => void>());
+  const cycleExpandById = useCallback((sessionId: string) => {
+    setExpandOverrides((prev) => {
+      const current = prev[sessionId] ?? 0;
+      const next = (current + 1) % 3;
+      if (next === 0) {
+        const copy = { ...prev };
+        delete copy[sessionId];
+        return copy;
+      }
+      return { ...prev, [sessionId]: next };
+    });
+  }, []);
+  const getExpandCycle = useCallback((sessionId: string) => {
+    let fn = expandCyclersRef.current.get(sessionId);
+    if (!fn) {
+      fn = () => {
+        setExpandOverrides((prev) => {
+          const current = prev[sessionId] ?? 0;
+          const next = (current + 1) % 3;
+          if (next === 0) {
+            const copy = { ...prev };
+            delete copy[sessionId];
+            return copy;
+          }
+          return { ...prev, [sessionId]: next };
+        });
+      };
+      expandCyclersRef.current.set(sessionId, fn);
+    }
+    return fn;
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Normal mode render
@@ -2693,14 +2748,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
               cardSettings={cardSettings}
               compactMode={compactMode}
               expandOverrides={expandOverrides}
-              onExpandCycle={(id) => {
-                setExpandOverrides((prev) => {
-                  const current = prev[id] ?? 0;
-                  const next = (current + 1) % 3;
-                  if (next === 0) { const copy = { ...prev }; delete copy[id]; return copy; }
-                  return { ...prev, [id]: next };
-                });
-              }}
+              onExpandCycle={cycleExpandById}
             />
           ) : (() => {
             // Compute which displayTitles appear more than once
@@ -2725,18 +2773,13 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
             return (
               <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="relative space-y-2" style={{ zIndex: idx + 1 }}>
-                <SessionCard session={effectiveSession} titleAnimation={titleAnimation} animationSpeed={animationSpeed} randomAnimation={randomAnimation} signalString={lowPower ? false : signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={lowPower ? "string" : signalEffect} sandEnabled={lowPower ? false : sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} fluxEnabled={lowPower ? false : fluxEnabled} fluxAlpha={fluxAlpha} fluxIntensity={fluxIntensity} fluxDensity={fluxDensity} fluxSpeed={fluxSpeed} fluxLineLength={fluxLineLength} fluxTurbulence={fluxTurbulence} auroraEnabled={lowPower ? false : auroraEnabled} auroraAlpha={auroraAlpha} auroraSpeed={auroraSpeed} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} stringDeployAngle={stringDeployAngle} keyPressSpeed={keyPressSpeed} keyReleaseSpeed={keyReleaseSpeed} compactMode={compactMode} slimMode={slimMode} contextThreshold={contextThreshold} contextDisplay={contextDisplay} showToolPills={showToolPills} showCurrentTool={showCurrentTool} showConfigCounts={showConfigCounts} showToolCallComets={showToolCallComets} timerDisplay={timerDisplay} lowPower={lowPower} isDuplicate={duplicateTitles.has(session.displayTitle)} expandOverride={compactMode ? expandOverrides[session.info.id] : undefined} onExpandCycle={compactMode ? () => {
-                  setExpandOverrides((prev) => {
-                    const current = prev[session.info.id] ?? 0;
-                    const next = (current + 1) % 3;
-                    if (next === 0) {
-                      const copy = { ...prev };
-                      delete copy[session.info.id];
-                      return copy;
-                    }
-                    return { ...prev, [session.info.id]: next };
-                  });
-                } : undefined} />
+                <SessionCard
+                  {...cardSettings}
+                  session={effectiveSession}
+                  isDuplicate={duplicateTitles.has(session.displayTitle)}
+                  expandOverride={compactMode ? expandOverrides[session.info.id] : undefined}
+                  onExpandCycle={compactMode ? getExpandCycle(session.info.id) : undefined}
+                />
 
                 {/* Permission section (when enabled and has activity) */}
                 {!compactMode && permissionsEnabled && hasPermissionActivity && (
@@ -2818,7 +2861,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                   return (
                     <div key={revived.session.info.id} className={`revived-card-wrapper relative ${pulseClass}`}>
                       <div key={clicks} className="revived-overlay" />
-                      <SessionCard session={revived.session} titleAnimation="none" signalString={signalString} signalFrequency={signalFrequency} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={signalEffect} sandEnabled={sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} fluxEnabled={fluxEnabled} fluxAlpha={fluxAlpha} fluxIntensity={fluxIntensity} fluxDensity={fluxDensity} fluxSpeed={fluxSpeed} fluxLineLength={fluxLineLength} fluxTurbulence={fluxTurbulence} auroraEnabled={auroraEnabled} auroraAlpha={auroraAlpha} auroraSpeed={auroraSpeed} revived />
+                      <SessionCard {...cardSettings} session={revived.session} titleAnimation="none" revived />
                       {/* Full blur overlay */}
                       <div className="absolute inset-0 z-8 rounded-lg overflow-hidden" style={{ backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }} />
                       {/* Title re-rendered on top of blur in original position */}
