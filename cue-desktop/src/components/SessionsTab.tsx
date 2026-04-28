@@ -2759,6 +2759,15 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             const duplicateTitles = new Set(
               [...titleCounts.entries()].filter(([, count]) => count > 1).map(([title]) => title)
             );
+            // Drop expand-cycle handlers for sessions that no longer exist so
+            // the ref'd Map doesn't accumulate one closure per session id ever
+            // observed during a long Cue lifetime.
+            if (expandCyclersRef.current.size > sortedWithChildren.length) {
+              const liveIds = new Set(sortedWithChildren.map((s) => s.info.id));
+              for (const id of expandCyclersRef.current.keys()) {
+                if (!liveIds.has(id)) expandCyclersRef.current.delete(id);
+              }
+            }
             return sortedWithChildren.map((session, idx) => {
             const pending = pendingBySession[session.info.id] ?? [];
             const history = permissionHistory[session.info.id] ?? [];
