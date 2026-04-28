@@ -147,6 +147,13 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) {
     let metadata = match std::fs::metadata(path) {
         Ok(m) => m,
         Err(e) => {
+            // If the file is gone (session deleted, log cleaned), drop the
+            // cached entries so a later poll doesn't keep yielding metrics
+            // synthesized from a transcript that no longer exists.
+            if e.kind() == std::io::ErrorKind::NotFound {
+                cache.file_size = 0;
+                cache.entries.clear();
+            }
             log::debug!("Failed to stat JSONL file {:?}: {}", path, e);
             return;
         }
