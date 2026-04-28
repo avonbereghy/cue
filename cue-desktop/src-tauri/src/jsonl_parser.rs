@@ -5,7 +5,9 @@
 
 use serde_json::Value;
 use std::collections::HashMap;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::time::SystemTime;
 
 /// Maximum file size we'll parse (500 MB).
 const MAX_FILE_SIZE: u64 = 500 * 1024 * 1024;
@@ -123,6 +125,116 @@ pub fn parse_jsonl_file(path: &Path) -> Vec<ParsedEntry> {
     };
 
     parse_jsonl_content(&content)
+}
+
+/// Cached parse state for a single JSONL file.
+///
+/// `file_size` is always advanced to a newline boundary so the next tail-read
+/// can `seek` directly to the next complete line. A trailing partial line (no
+/// final `\n`) is left for the next refresh — assistant messages can land
+/// mid-write and we don't want to parse half a JSON object.
+#[derive(Debug, Clone, Default)]
+pub struct JsonlEntryCache {
+    pub file_size: u64,
+    pub file_mtime: Option<SystemTime>,
+    pub entries: Vec<ParsedEntry>,
+}
+
+/// Append newly-written lines from `path` into `cache.entries`. On truncation
+/// or a backwards-moving mtime (file replaced/forked) the cache is reset and
+/// the file is fully re-read.
+fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) {
+    let metadata = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) => {
+            log::debug!("Failed to stat JSONL file {:?}: {}", path, e);
+            return;
+        }
+    };
+    let size = metadata.len();
+    let mtime = metadata.modified().ok();
+
+    if size > MAX_FILE_SIZE {
+        log::warn!(
+            "Skipping oversized JSONL file: {:?} ({} bytes)",
+            path,
+            size
+        );
+        cache.file_size = 0;
+        cache.file_mtime = mtime;
+        cache.entries.clear();
+        return;
+    }
+
+    let mtime_regressed = matches!(
+        (cache.file_mtime, mtime),
+        (Some(prev), Some(now)) if now < prev
+    );
+    if size < cache.file_size || mtime_regressed {
+        cache.file_size = 0;
+        cache.entries.clear();
+    }
+
+    if size == cache.file_size {
+        cache.file_mtime = mtime;
+        return;
+    }
+
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) => {
+            log::debug!("Failed to open JSONL file {:?}: {}", path, e);
+            return;
+        }
+    };
+    if cache.file_size > 0 {
+        if let Err(e) = file.seek(SeekFrom::Start(cache.file_size)) {
+            log::debug!("Seek failed on {:?}: {}", path, e);
+            cache.file_size = 0;
+            cache.entries.clear();
+            // Fall through and re-open at offset 0.
+            file = match std::fs::File::open(path) {
+                Ok(f) => f,
+                Err(e2) => {
+                    log::debug!("Re-open failed on {:?}: {}", path, e2);
+                    return;
+                }
+            };
+        }
+    }
+
+    let mut buf = String::new();
+    if let Err(e) = file.read_to_string(&mut buf) {
+        log::debug!("Read failed on {:?}: {}", path, e);
+        return;
+    }
+
+    // Only consume up to the last complete line so we never parse a half-
+    // written record. Whatever remains is left for the next refresh.
+    let consumed = if buf.ends_with('\n') {
+        buf.len()
+    } else {
+        match buf.rfind('\n') {
+            Some(idx) => idx + 1,
+            None => {
+                // No newline at all — the trailing partial line spans the
+                // entire delta; don't advance.
+                cache.file_mtime = mtime;
+                return;
+            }
+        }
+    };
+
+    for line in buf[..consumed].lines() {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(entry) = parse_line(line) {
+            cache.entries.push(entry);
+        }
+    }
+    cache.file_size += consumed as u64;
+    cache.file_mtime = mtime;
 }
 
 /// Parse JSONL content string into entries.
@@ -713,13 +825,31 @@ pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::Subagent
 /// Parse a JSONL file and extract aggregated SessionMetrics (for session_monitor).
 pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::SessionMetrics> {
     let entries = parse_jsonl_file(path);
+    aggregate_entries(&entries, path)
+}
+
+/// Same as `parse_jsonl_to_session_metrics`, but tails new lines incrementally
+/// using `cache` so unchanged sessions skip the read and long-running sessions
+/// skip re-parsing every prior line on each poll.
+pub fn parse_jsonl_to_session_metrics_cached(
+    path: &Path,
+    cache: &mut JsonlEntryCache,
+) -> Option<crate::models::SessionMetrics> {
+    refresh_entry_cache(path, cache);
+    aggregate_entries(&cache.entries, path)
+}
+
+fn aggregate_entries(
+    entries: &[ParsedEntry],
+    path: &Path,
+) -> Option<crate::models::SessionMetrics> {
     if entries.is_empty() {
         return None;
     }
 
     let mut m = crate::models::SessionMetrics::default();
 
-    for entry in &entries {
+    for entry in entries {
         // Session ID from JSONL metadata — first occurrence wins
         if m.last_prompt_session_id.is_none() {
             if let Some(ref sid) = entry.jsonl_session_id {
@@ -859,7 +989,7 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
     // TodoWrite (bulk_replace=true) replaces the entire list.
     // TaskCreate (bulk_replace=false) appends incrementally.
     // TaskUpdate status changes are applied after accumulation.
-    for entry in &entries {
+    for entry in entries {
         if !entry.todo_items.is_empty() {
             if entry.todo_is_bulk_replace {
                 m.todo_items = entry.todo_items.clone();
@@ -1500,5 +1630,110 @@ mod tests {
     #[test]
     fn cap_snippet_empty_is_empty() {
         assert_eq!(super::cap_snippet(""), "");
+    }
+
+    #[test]
+    fn entry_cache_tails_appended_lines() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("cue-jsonl-tail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.jsonl");
+        let _ = std::fs::remove_file(&path);
+
+        let line_a =
+            r#"{"type":"user","timestamp":1710000000.0,"message":{"content":"first"}}"#;
+        let line_b =
+            r#"{"type":"user","timestamp":1710000001.0,"message":{"content":"second"}}"#;
+
+        std::fs::write(&path, format!("{line_a}\n")).unwrap();
+
+        let mut cache = super::JsonlEntryCache::default();
+        super::refresh_entry_cache(&path, &mut cache);
+        assert_eq!(cache.entries.len(), 1);
+        let size_after_first = cache.file_size;
+        assert!(size_after_first > 0);
+
+        // Append a second line — only it should be parsed.
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(f, "{line_b}").unwrap();
+        drop(f);
+
+        super::refresh_entry_cache(&path, &mut cache);
+        assert_eq!(cache.entries.len(), 2);
+        assert!(cache.file_size > size_after_first);
+
+        // No-change refresh leaves entries alone.
+        let entries_before = cache.entries.len();
+        super::refresh_entry_cache(&path, &mut cache);
+        assert_eq!(cache.entries.len(), entries_before);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn entry_cache_resets_on_truncation() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("cue-jsonl-trunc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.jsonl");
+        let _ = std::fs::remove_file(&path);
+
+        let long_line =
+            r#"{"type":"user","timestamp":1710000000.0,"message":{"content":"first"}}"#;
+        std::fs::write(&path, format!("{long_line}\n{long_line}\n")).unwrap();
+
+        let mut cache = super::JsonlEntryCache::default();
+        super::refresh_entry_cache(&path, &mut cache);
+        assert_eq!(cache.entries.len(), 2);
+
+        // Truncate file to a single line — cache should reset and re-parse.
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        writeln!(f, "{long_line}").unwrap();
+        drop(f);
+
+        super::refresh_entry_cache(&path, &mut cache);
+        assert_eq!(cache.entries.len(), 1);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn entry_cache_holds_partial_trailing_line() {
+        let dir = std::env::temp_dir().join(format!("cue-jsonl-partial-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.jsonl");
+        let _ = std::fs::remove_file(&path);
+
+        let complete =
+            r#"{"type":"user","timestamp":1710000000.0,"message":{"content":"a"}}"#;
+        let partial = r#"{"type":"user","timestamp":1710000001.0,"messa"#;
+        std::fs::write(&path, format!("{complete}\n{partial}")).unwrap();
+
+        let mut cache = super::JsonlEntryCache::default();
+        super::refresh_entry_cache(&path, &mut cache);
+        // Only the complete line should be parsed; the partial waits.
+        assert_eq!(cache.entries.len(), 1);
+
+        // Finish the partial line + add another. Cache should pick both up.
+        let rest = r#"ge":{"content":"b"}}"#;
+        let third =
+            r#"{"type":"user","timestamp":1710000002.0,"message":{"content":"c"}}"#;
+        std::fs::write(
+            &path,
+            format!("{complete}\n{partial}{rest}\n{third}\n"),
+        )
+        .unwrap();
+
+        super::refresh_entry_cache(&path, &mut cache);
+        assert_eq!(cache.entries.len(), 3);
+
+        let _ = std::fs::remove_file(&path);
     }
 }
