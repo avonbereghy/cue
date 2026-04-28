@@ -140,6 +140,20 @@ pub struct JsonlEntryCache {
     pub entries: Vec<ParsedEntry>,
 }
 
+/// Open a JSONL file for reading, refusing to follow symlinks on Unix. Mirrors
+/// the write-path guard in `security::atomic_write` so a symlink dropped in
+/// `~/.claude/projects/` can't redirect the reader at e.g. `~/.ssh/known_hosts`.
+fn open_jsonl_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NOFOLLOW);
+    }
+    opts.open(path)
+}
+
 /// Append newly-written lines from `path` into `cache.entries`. On truncation
 /// or a backwards-moving mtime (file replaced/forked) the cache is reset and
 /// the file is fully re-read.
@@ -187,7 +201,7 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) {
         return;
     }
 
-    let mut file = match std::fs::File::open(path) {
+    let mut file = match open_jsonl_no_follow(path) {
         Ok(f) => f,
         Err(e) => {
             log::debug!("Failed to open JSONL file {:?}: {}", path, e);
@@ -200,7 +214,7 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) {
             cache.file_size = 0;
             cache.entries.clear();
             // Fall through and re-open at offset 0.
-            file = match std::fs::File::open(path) {
+            file = match open_jsonl_no_follow(path) {
                 Ok(f) => f,
                 Err(e2) => {
                     log::debug!("Re-open failed on {:?}: {}", path, e2);
