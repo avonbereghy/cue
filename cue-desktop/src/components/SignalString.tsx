@@ -823,6 +823,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     let eraseRectsNextRebuildAt = 0;
     const ERASE_RECTS_REBUILD_MS = 500;
     let contentObserver: ResizeObserver | null = null;
+    let contentMutationObserver: MutationObserver | null = null;
     if (contentRef?.current && typeof ResizeObserver !== "undefined") {
       contentObserver = new ResizeObserver(() => {
         eraseRectsDirty = true;
@@ -833,6 +834,23 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       // polling fallback.
       for (const child of Array.from(contentRef.current.children)) {
         contentObserver.observe(child);
+      }
+      // Catch rows that mount AFTER this effect set up — a state transition
+      // (thinking → working) inserts new content rows the original snapshot
+      // didn't see, and without this the polling fallback would be the only
+      // path to refresh the erase mask.
+      if (typeof MutationObserver !== "undefined") {
+        contentMutationObserver = new MutationObserver((mutations) => {
+          for (const m of mutations) {
+            for (const node of Array.from(m.addedNodes)) {
+              if (node instanceof Element) {
+                contentObserver?.observe(node);
+              }
+            }
+          }
+          eraseRectsDirty = true;
+        });
+        contentMutationObserver.observe(contentRef.current, { childList: true });
       }
     }
 
@@ -2216,6 +2234,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       cancelAnimationFrame(animRef.current);
       observer.disconnect();
       contentObserver?.disconnect();
+      contentMutationObserver?.disconnect();
     };
   // Only re-create the animation pipeline for structural changes.
   // Tuning props (alpha, amplitude, colors, etc.) are read from configRef each frame.
