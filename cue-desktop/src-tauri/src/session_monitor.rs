@@ -34,6 +34,10 @@ pub fn sort_sessions(sessions: impl IntoIterator<Item = SessionInfo>) -> Vec<Ses
 pub struct SessionMonitorState {
     pub enriched_sessions: Mutex<Vec<EnrichedSession>>,
     metrics_cache: Mutex<HashMap<String, SessionMetrics>>,
+    /// Per-session JSONL parse cache (offset + accumulated entries). Lets
+    /// `refresh_metrics` tail only newly-appended lines instead of re-reading
+    /// and re-parsing the entire transcript every 5s.
+    jsonl_entry_cache: Mutex<HashMap<String, jsonl_parser::JsonlEntryCache>>,
     file_mod_dates: Mutex<HashMap<String, SystemTime>>,
     resolved_paths: Mutex<HashMap<String, String>>,
     // Supplemental data caches
@@ -75,6 +79,7 @@ impl Default for SessionMonitorState {
         Self {
             enriched_sessions: Mutex::new(Vec::new()),
             metrics_cache: Mutex::new(HashMap::new()),
+            jsonl_entry_cache: Mutex::new(HashMap::new()),
             file_mod_dates: Mutex::new(HashMap::new()),
             resolved_paths: Mutex::new(HashMap::new()),
             rate_limits: Mutex::new(None),
@@ -417,7 +422,12 @@ impl SessionMonitorState {
                 }
             }
 
-            if let Some(metrics) = jsonl_parser::parse_jsonl_to_session_metrics(Path::new(&path)) {
+            let metrics = {
+                let mut cache_guard = self.jsonl_entry_cache.lock().unwrap();
+                let entry_cache = cache_guard.entry(session.info.id.clone()).or_default();
+                jsonl_parser::parse_jsonl_to_session_metrics_cached(Path::new(&path), entry_cache)
+            };
+            if let Some(metrics) = metrics {
                 // Track output speed: snapshot previous output_tokens before overwriting
                 let now_ts = SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)
