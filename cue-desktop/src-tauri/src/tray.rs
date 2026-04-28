@@ -5,6 +5,7 @@
 //! `tauri::tray::TrayIcon::set_icon`.
 
 use crate::models::EnrichedSession;
+use std::fmt::Write as _;
 
 // ---------------------------------------------------------------------------
 // Layout constants (matches Swift exactly)
@@ -364,9 +365,9 @@ impl IconCache {
         // tick — re-rasterizing PNGs and reallocating buffers for no visible
         // change.
         if has_blinking {
-            key.push_str(&format!("|{}|{}", blink_on, size));
+            let _ = write!(key, "|{}|{}", blink_on, size);
         } else {
-            key.push_str(&format!("||{}", size));
+            let _ = write!(key, "||{}", size);
         }
         key
     }
