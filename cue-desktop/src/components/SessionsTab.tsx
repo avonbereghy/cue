@@ -2764,9 +2764,11 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             // observed during a long Cue lifetime.
             if (expandCyclersRef.current.size > sortedWithChildren.length) {
               const liveIds = new Set(sortedWithChildren.map((s) => s.info.id));
+              const stale: string[] = [];
               for (const id of expandCyclersRef.current.keys()) {
-                if (!liveIds.has(id)) expandCyclersRef.current.delete(id);
+                if (!liveIds.has(id)) stale.push(id);
               }
+              for (const id of stale) expandCyclersRef.current.delete(id);
             }
             return sortedWithChildren.map((session, idx) => {
             const pending = pendingBySession[session.info.id] ?? [];
