@@ -815,12 +815,26 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
 
     // Cached erase-rect geometry. Previously rebuilt every frame by calling
     // getBoundingClientRect on every content row + child — an N-read forced
-    // layout per card per frame. Content layout shifts slowly (token ticks,
-    // state pills), so refreshing at ~5Hz is visually indistinguishable and
-    // collapses an entire layout-thrash hotspot.
+    // layout per card per frame. Now invalidated by a ResizeObserver on the
+    // content wrapper (catches layout-box changes at the moment they happen)
+    // and a slow polling fallback for sub-pixel reflows the observer misses.
     let cachedEraseRects: { x: number; y: number; w: number; h: number }[] = [];
+    let eraseRectsDirty = true;
     let eraseRectsNextRebuildAt = 0;
-    const ERASE_RECTS_REBUILD_MS = 200;
+    const ERASE_RECTS_REBUILD_MS = 500;
+    let contentObserver: ResizeObserver | null = null;
+    if (contentRef?.current && typeof ResizeObserver !== "undefined") {
+      contentObserver = new ResizeObserver(() => {
+        eraseRectsDirty = true;
+      });
+      contentObserver.observe(contentRef.current);
+      // Also observe direct children so we catch row-level reflows (e.g. a
+      // toolpill row widening when a tool starts) without relying on the
+      // polling fallback.
+      for (const child of Array.from(contentRef.current.children)) {
+        contentObserver.observe(child);
+      }
+    }
 
     const draw = (now: number) => {
       // Self-terminate when the visibility gate has flipped to false. The
@@ -1408,7 +1422,8 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         // waveform behind invisible layout elements in slim mode. Cache is
         // refreshed at ERASE_RECTS_REBUILD_MS cadence — see note above the
         // draw closure for why per-frame rebuilds were removed.
-        if (contentRef?.current && canvas && now >= eraseRectsNextRebuildAt) {
+        if (contentRef?.current && canvas && (eraseRectsDirty || now >= eraseRectsNextRebuildAt)) {
+          eraseRectsDirty = false;
           eraseRectsNextRebuildAt = now + ERASE_RECTS_REBUILD_MS;
           const fresh: { x: number; y: number; w: number; h: number }[] = [];
           const canvasRect = rectCacheRef.current ?? canvas.getBoundingClientRect();
@@ -2200,6 +2215,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     return () => {
       cancelAnimationFrame(animRef.current);
       observer.disconnect();
+      contentObserver?.disconnect();
     };
   // Only re-create the animation pipeline for structural changes.
   // Tuning props (alpha, amplitude, colors, etc.) are read from configRef each frame.
