@@ -204,17 +204,26 @@ export function BranchView({ sessions, cardSettings, compactMode, expandOverride
                 stateIcon: "○",
               }
             : family.parent;
+        // Stretch the family row so parent + children get more vertical
+        // breathing room as the team grows. Compact child rows are ~32px;
+        // we target ~60px per child plus a floor so a single-child family
+        // still feels roomy compared to a standalone card.
+        const familyMinHeight = Math.max(112, n * 60 + 24);
         return (
-          <div key={family.parent.info.id} className="flex items-stretch gap-2">
-            <div className="w-[45%] shrink-0">
-              {renderCard(parentForRender)}
+          <div
+            key={family.parent.info.id}
+            className="flex items-stretch gap-2"
+            style={{ minHeight: `${familyMinHeight}px` }}
+          >
+            <div className="w-[45%] shrink-0 flex">
+              <div className="flex-1">{renderCard(parentForRender)}</div>
             </div>
             {/* Connector line */}
             <div className="w-3 shrink-0 flex items-center">
               <div className="w-full h-px bg-white/15" />
             </div>
             {/* Children stacked vertically, each compact */}
-            <div className="flex-1 min-w-0 flex flex-col gap-1.5 justify-center">
+            <div className="flex-1 min-w-0 flex flex-col gap-2.5 justify-center">
               {family.children.map((child) => (
                 <div key={child.info.id} className="min-w-0">
                   {renderCard(child, true)}
