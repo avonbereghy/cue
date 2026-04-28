@@ -276,12 +276,12 @@ fn get_theme() -> String {
 
 #[tauri::command]
 fn get_system_memory(state: State<'_, AppState>) -> models::SystemMemory {
-    state.monitor.system_memory.lock().unwrap().clone()
+    state.monitor.supplemental.lock().unwrap().system_memory.clone()
 }
 
 #[tauri::command]
 fn get_claude_version(state: State<'_, AppState>) -> Option<String> {
-    state.monitor.claude_version.lock().unwrap().clone()
+    state.monitor.supplemental.lock().unwrap().claude_version.clone()
 }
 
 #[tauri::command]
@@ -1166,7 +1166,7 @@ fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
         let m = monitor.clone();
         let _ = tokio::task::spawn_blocking(move || {
             let version = system_info::get_claude_version();
-            *m.claude_version.lock().unwrap() = version;
+            m.supplemental.lock().unwrap().claude_version = version;
         })
         .await;
     });

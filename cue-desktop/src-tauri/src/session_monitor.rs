@@ -23,6 +23,21 @@ pub fn sort_sessions(sessions: impl IntoIterator<Item = SessionInfo>) -> Vec<Ses
     list
 }
 
+/// Bundle of supplemental info that the 5s timer refreshes together. Read in
+/// poll_status under one lock so the enrichment path doesn't have to acquire
+/// five separate guards back-to-back on every tick.
+#[derive(Default, Clone)]
+pub struct SupplementalCache {
+    pub rate_limits: Option<RateLimitInfo>,
+    pub system_memory: SystemMemory,
+    pub claude_version: Option<String>,
+    /// Global default effort level from `~/.claude/settings.json`.
+    pub claude_default_effort: Option<String>,
+    /// `~/.claude/settings.json` mtime (unix secs). Used to resolve which is
+    /// fresher: a session's last `/effort` command or the global default.
+    pub claude_default_effort_ts: Option<f64>,
+}
+
 /// Shared state for the session monitor.
 ///
 /// **Lock ordering invariant:** `poll_status` acquires supplemental caches
@@ -40,15 +55,10 @@ pub struct SessionMonitorState {
     jsonl_entry_cache: Mutex<HashMap<String, jsonl_parser::JsonlEntryCache>>,
     file_mod_dates: Mutex<HashMap<String, SystemTime>>,
     resolved_paths: Mutex<HashMap<String, String>>,
-    // Supplemental data caches
-    rate_limits: Mutex<Option<RateLimitInfo>>,
-    pub system_memory: Mutex<SystemMemory>,
-    pub claude_version: Mutex<Option<String>>,
-    /// Global default effort level from `~/.claude/settings.json`.
-    pub claude_default_effort: Mutex<Option<String>>,
-    /// `~/.claude/settings.json` mtime (unix secs). Used to resolve which is
-    /// fresher: a session's last `/effort` command or the global default.
-    pub claude_default_effort_ts: Mutex<Option<f64>>,
+    /// Bundled supplemental info refreshed by the 5s timer. Bundling lets
+    /// poll_status snapshot all five fields under a single lock acquisition
+    /// instead of taking + dropping five separate Mutex guards in sequence.
+    pub supplemental: Mutex<SupplementalCache>,
     git_status_cache: Mutex<HashMap<String, (GitStatus, SystemTime)>>,
     config_counts_cache: Mutex<HashMap<String, (ConfigCounts, SystemTime)>>,
     /// Tracks previous output_tokens per session for speed calculation
@@ -82,11 +92,7 @@ impl Default for SessionMonitorState {
             jsonl_entry_cache: Mutex::new(HashMap::new()),
             file_mod_dates: Mutex::new(HashMap::new()),
             resolved_paths: Mutex::new(HashMap::new()),
-            rate_limits: Mutex::new(None),
-            system_memory: Mutex::new(SystemMemory::default()),
-            claude_version: Mutex::new(None),
-            claude_default_effort: Mutex::new(None),
-            claude_default_effort_ts: Mutex::new(None),
+            supplemental: Mutex::new(SupplementalCache::default()),
             git_status_cache: Mutex::new(HashMap::new()),
             config_counts_cache: Mutex::new(HashMap::new()),
             output_speed_cache: Mutex::new(HashMap::new()),
@@ -319,11 +325,7 @@ impl SessionMonitorState {
 
         let enriched: Vec<_> = {
             let cache = self.metrics_cache.lock().unwrap();
-            let rate_limits = self.rate_limits.lock().unwrap().clone();
-            let system_memory = self.system_memory.lock().unwrap().clone();
-            let claude_version = self.claude_version.lock().unwrap().clone();
-            let claude_default_effort = self.claude_default_effort.lock().unwrap().clone();
-            let claude_default_effort_ts = *self.claude_default_effort_ts.lock().unwrap();
+            let supp = self.supplemental.lock().unwrap().clone();
             let git_cache = self.git_status_cache.lock().unwrap();
             let config_cache = self.config_counts_cache.lock().unwrap();
             let speed_cache = self.output_speed_cache.lock().unwrap();
@@ -338,11 +340,11 @@ impl SessionMonitorState {
                     let supplemental = SupplementalData {
                         git_status: git_cache.get(&session.workspace).map(|(s, _)| s.clone()),
                         config_counts: config_cache.get(&session.workspace).map(|(c, _)| c.clone()),
-                        rate_limits: rate_limits.clone(),
-                        system_memory: system_memory.clone(),
-                        claude_version: claude_version.clone(),
-                        claude_default_effort: claude_default_effort.clone(),
-                        claude_default_effort_ts,
+                        rate_limits: supp.rate_limits.clone(),
+                        system_memory: supp.system_memory.clone(),
+                        claude_version: supp.claude_version.clone(),
+                        claude_default_effort: supp.claude_default_effort.clone(),
+                        claude_default_effort_ts: supp.claude_default_effort_ts,
                         prev_output_tokens: prev_output,
                         prev_timestamp: prev_ts,
                         active_since: active_since_ts,
@@ -468,23 +470,28 @@ impl SessionMonitorState {
     pub fn refresh_supplemental(&self) {
         // Rate limits: read from bridge file
         let rate_path = paths::rate_limits_path();
-        if let Ok(content) = std::fs::read_to_string(&rate_path) {
-            if let Ok(rl) = serde_json::from_str::<RateLimitInfo>(&content) {
-                *self.rate_limits.lock().unwrap() = Some(rl);
-            }
-        }
+        let new_rate_limits = std::fs::read_to_string(&rate_path)
+            .ok()
+            .and_then(|content| serde_json::from_str::<RateLimitInfo>(&content).ok());
 
         // System memory using cached System instance (avoids re-allocation)
-        {
+        let new_system_memory = {
             let mut sys = self.sysinfo_system.lock().unwrap();
-            *self.system_memory.lock().unwrap() = system_info::get_system_memory_with(&mut sys);
-        }
+            system_info::get_system_memory_with(&mut sys)
+        };
 
         // Global default effort from ~/.claude/settings.json (cheap read, no subprocess)
+        let (new_default_effort, new_default_effort_ts) = system_info::get_claude_default_effort();
+
+        // Single guard acquisition for all five fields.
         {
-            let (level, ts) = system_info::get_claude_default_effort();
-            *self.claude_default_effort.lock().unwrap() = level;
-            *self.claude_default_effort_ts.lock().unwrap() = ts;
+            let mut supp = self.supplemental.lock().unwrap();
+            if let Some(rl) = new_rate_limits {
+                supp.rate_limits = Some(rl);
+            }
+            supp.system_memory = new_system_memory;
+            supp.claude_default_effort = new_default_effort;
+            supp.claude_default_effort_ts = new_default_effort_ts;
         }
 
         // Git status and config counts per workspace (with staleness caching)
