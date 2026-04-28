@@ -1105,9 +1105,16 @@ fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
     let monitor_poll = monitor.clone();
     let app_poll = app_handle.clone();
 
-    // Poll sessions.json every 1 second
+    // Poll sessions.json every 1 second.
+    //
+    // Skip the IPC emit when the serialized payload is byte-identical to the
+    // previous tick — at idle that's most ticks, and the frontend re-render
+    // still wakes up React's reconciler even though `React.memo` ultimately
+    // bails out. Hashing the JSON is far cheaper than crossing the bridge.
     tauri::async_runtime::spawn(async move {
+        use std::hash::{Hash, Hasher};
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
+        let mut last_emit_hash: Option<u64> = None;
         loop {
             interval.tick().await;
             let m = monitor_poll.clone();
@@ -1118,6 +1125,20 @@ fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
             .await;
             match result {
                 Ok(sessions) => {
+                    let payload = match serde_json::to_vec(&sessions) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            log::warn!("Failed to serialize sessions for emit: {}", e);
+                            continue;
+                        }
+                    };
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    payload.hash(&mut hasher);
+                    let hash = hasher.finish();
+                    if last_emit_hash == Some(hash) {
+                        continue;
+                    }
+                    last_emit_hash = Some(hash);
                     let _ = app_poll.emit("sessions-updated", &sessions);
                 }
                 Err(e) => log::warn!("poll_status blocking task failed: {}", e),
