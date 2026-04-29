@@ -608,6 +608,7 @@ export function SettingsView() {
       showToolCallComets: false,
       timerDisplay: "seconds",
       showInMenuBar: true,
+      menuBarStyle: "default",
       showInDock: true,
       startAtLogin: true,
       themeCustomizations: settings.themeCustomizations ?? {},
@@ -1070,6 +1071,17 @@ export function SettingsView() {
             checked={settings.showInMenuBar ?? true}
             onChange={() => setSettings({ ...settings, showInMenuBar: !(settings.showInMenuBar ?? true) })}
             label="Show in menu bar"
+          />
+        </SettingRow>
+        <SettingRow label="Menu bar style" description="Dot grid (up to 8), clock dial (up to 12), or context bar chart (up to 12)" onReset={(settings.menuBarStyle ?? "default") !== "default" ? () => setSettings({ ...settings, menuBarStyle: "default" }) : undefined}>
+          <Select
+            value={settings.menuBarStyle ?? "default"}
+            options={[
+              { id: "default", label: "Default" },
+              { id: "clock", label: "Clock" },
+              { id: "bars", label: "Bar Chart" },
+            ]}
+            onChange={(v) => setSettings({ ...settings, menuBarStyle: v })}
           />
         </SettingRow>
         <SettingRow label="Show in Dock" description="Display the Cue icon in the macOS Dock" onReset={!(settings.showInDock ?? true) ? () => setSettings({ ...settings, showInDock: true }) : undefined}>
