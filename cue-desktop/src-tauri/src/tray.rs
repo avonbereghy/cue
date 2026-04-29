@@ -505,19 +505,35 @@ pub fn render_bar_chart(sessions: &[EnrichedSession], tick: u32, size: u32) -> V
 
         let color = color_for_state(&session.info.state, true);
 
-        // Track outline — full bar extent, drawn first so the fill sits
-        // inside it. Tinted with the state colour at low alpha so it reads as
-        // "this bar's max" without competing with the filled portion.
-        let track_color = Rgba {
+        // Track — full bar extent, drawn first so the filled portion sits on
+        // top. We render two layers: a faint filled "channel" so the unfilled
+        // remainder is visibly darkened (reads like a real progress bar's
+        // background) plus a slightly stronger outline that defines the slot.
+        // Both are tinted with the state colour at low alpha so the track
+        // belongs to its bar without competing with the fill.
+        let track_path = rounded_rect_path(x, pad_y, bar_w, total_h, radius);
+        let track_fill = Rgba {
             r: color.r,
             g: color.g,
             b: color.b,
-            a: 110,
+            a: 55,
         };
-        let track_path = rounded_rect_path(x, pad_y, bar_w, total_h, radius);
+        pixmap.fill_path(
+            &track_path,
+            &paint_for_color(&track_fill),
+            tiny_skia::FillRule::Winding,
+            tiny_skia::Transform::identity(),
+            None,
+        );
+        let track_outline = Rgba {
+            r: color.r,
+            g: color.g,
+            b: color.b,
+            a: 130,
+        };
         pixmap.stroke_path(
             &track_path,
-            &paint_for_color(&track_color),
+            &paint_for_color(&track_outline),
             &track_stroke,
             tiny_skia::Transform::identity(),
             None,
