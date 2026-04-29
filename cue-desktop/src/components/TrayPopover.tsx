@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSessionMonitor } from "@/hooks/useSessionMonitor";
@@ -378,8 +378,29 @@ export function TrayPopoverPage() {
     [visibleSessions],
   );
 
+  // Resize the popover window to fit the session list. The Rust side caps at
+  // 80% of the monitor's height, so the inner list only scrolls past that
+  // threshold. We measure header + (unclipped list) + footer rather than
+  // root.scrollHeight because `.tray-list` has overflow:auto, which clips its
+  // own offsetHeight to the available flex space.
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const header = root.querySelector<HTMLElement>(".tray-header");
+    const list = root.querySelector<HTMLElement>(".tray-list");
+    const footer = root.querySelector<HTMLElement>(".tray-footer");
+    const SHELL_PADDING_PX = 14; // .tray-popover has padding:6 + 1px borders
+    const total =
+      (header?.offsetHeight ?? 0) +
+      (list?.scrollHeight ?? 0) +
+      (footer?.offsetHeight ?? 0) +
+      SHELL_PADDING_PX;
+    invoke("resize_tray_popover", { contentHeight: total }).catch(() => {});
+  }, [sorted]);
+
   return (
-    <div className="tray-popover" data-tray-light={isLight ? "1" : "0"}>
+    <div ref={rootRef} className="tray-popover" data-tray-light={isLight ? "1" : "0"}>
       <div className="tray-header">
         <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
           <span style={{
