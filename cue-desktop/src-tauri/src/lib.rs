@@ -27,7 +27,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, Theme, WebviewUrl};
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, Theme, WebviewUrl,
+};
 
 /// Application state managed by Tauri.
 pub struct AppState {
@@ -276,12 +278,24 @@ fn get_theme() -> String {
 
 #[tauri::command]
 fn get_system_memory(state: State<'_, AppState>) -> models::SystemMemory {
-    state.monitor.supplemental.lock().unwrap().system_memory.clone()
+    state
+        .monitor
+        .supplemental
+        .lock()
+        .unwrap()
+        .system_memory
+        .clone()
 }
 
 #[tauri::command]
 fn get_claude_version(state: State<'_, AppState>) -> Option<String> {
-    state.monitor.supplemental.lock().unwrap().claude_version.clone()
+    state
+        .monitor
+        .supplemental
+        .lock()
+        .unwrap()
+        .claude_version
+        .clone()
 }
 
 #[tauri::command]
