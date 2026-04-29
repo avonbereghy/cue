@@ -360,7 +360,12 @@ pub fn render_clock(sessions: &[EnrichedSession], blink_on: bool, size: u32) -> 
             // Hairline outline so adjacent wedges with similar colors are
             // separable. Semi-transparent black reads on both light and dark
             // menu bars without overwhelming the underlying state color.
-            let outline = Rgba { r: 0, g: 0, b: 0, a: 160 };
+            let outline = Rgba {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 160,
+            };
             let stroke_paint = paint_for_color(&outline);
             let stroke = tiny_skia::Stroke {
                 width: (safe_size as f32 / 44.0).max(0.75),
@@ -406,9 +411,19 @@ fn is_animating_state(state: &str) -> bool {
 fn shine_color_for(bar: &Rgba) -> Rgba {
     let brightness = (bar.r as u32 + bar.g as u32 + bar.b as u32) / 3;
     if brightness > 200 {
-        Rgba { r: 70, g: 70, b: 70, a: 170 }
+        Rgba {
+            r: 70,
+            g: 70,
+            b: 70,
+            a: 170,
+        }
     } else {
-        Rgba { r: 255, g: 255, b: 255, a: 150 }
+        Rgba {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 150,
+        }
     }
 }
 
@@ -430,7 +445,14 @@ fn rounded_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> tiny_skia::Path 
         pb.line_to(x + w - r, y);
         pb.cubic_to(x + w - r + kr, y, x + w, y + r - kr, x + w, y + r);
         pb.line_to(x + w, y + h - r);
-        pb.cubic_to(x + w, y + h - r + kr, x + w - r + kr, y + h, x + w - r, y + h);
+        pb.cubic_to(
+            x + w,
+            y + h - r + kr,
+            x + w - r + kr,
+            y + h,
+            x + w - r,
+            y + h,
+        );
         pb.line_to(x + r, y + h);
         pb.cubic_to(x + r - kr, y + h, x, y + h - r + kr, x, y + h - r);
         pb.line_to(x, y + r);
@@ -947,7 +969,10 @@ mod tests {
         let off = render_clock(&sessions, false, 44);
         verify_png(&on);
         verify_png(&off);
-        assert_ne!(on, off, "clock blink phase must alter pixels for blinking states");
+        assert_ne!(
+            on, off,
+            "clock blink phase must alter pixels for blinking states"
+        );
     }
 
     #[test]
