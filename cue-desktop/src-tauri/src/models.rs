@@ -878,6 +878,9 @@ pub struct Settings {
     /// Show the system tray (menu bar) icon. Defaults to true.
     #[serde(default = "default_true")]
     pub show_in_menu_bar: bool,
+    /// Menu bar icon style: "default" (dot grid) or "clock" (12-wedge clock).
+    #[serde(default = "default_menu_bar_style")]
+    pub menu_bar_style: String,
     /// Show the app in the macOS Dock / OS taskbar. Defaults to true.
     /// On macOS this toggles NSApplication's activation policy between
     /// `.regular` (Dock + main menu) and `.accessory` (menu-bar-only).
@@ -1033,6 +1036,10 @@ fn default_timer_display() -> String {
     "seconds".to_string()
 }
 
+fn default_menu_bar_style() -> String {
+    "default".to_string()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -1095,6 +1102,7 @@ impl Default for Settings {
             show_tool_call_comets: false,
             timer_display: "seconds".to_string(),
             show_in_menu_bar: true,
+            menu_bar_style: "default".to_string(),
             show_in_dock: true,
             start_at_login: true,
             theme_customizations: HashMap::new(),

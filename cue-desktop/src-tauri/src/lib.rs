@@ -1665,6 +1665,21 @@ async fn handle_permission_connection(
 // Tray Setup
 // ---------------------------------------------------------------------------
 
+/// Dispatch to the configured menu bar icon renderer.
+fn render_tray_icon(
+    style: &str,
+    sessions: &[EnrichedSession],
+    blink_on: bool,
+    tick: u32,
+    size: u32,
+) -> Vec<u8> {
+    match style {
+        "clock" => tray::render_clock(sessions, blink_on, size),
+        "bars" => tray::render_bar_chart(sessions, tick, size),
+        _ => tray::render_dot_grid(sessions, blink_on, size),
+    }
+}
+
 /// Sessions to surface in the tray. Excludes "ended" — those are revivable
 /// in the main app and shouldn't clutter the menu bar dots or popover.
 fn tray_active_sessions(sessions: &[EnrichedSession]) -> Vec<EnrichedSession> {
@@ -1735,7 +1750,8 @@ fn setup_tray(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let all_sessions = monitor.enriched_sessions.lock().unwrap().clone();
     let sessions = tray_active_sessions(&all_sessions);
-    let png_bytes = tray::render_dot_grid(&sessions, true, 44);
+    let style = settings::load_settings().menu_bar_style;
+    let png_bytes = render_tray_icon(&style, &sessions, true, 0, 44);
     let icon = tauri::image::Image::from_bytes(&png_bytes)?;
 
     let menu = build_tray_menu(handle, &sessions)?;
@@ -1911,34 +1927,29 @@ fn format_tokens_short(tokens: i64) -> String {
 // Blink Timer
 // ---------------------------------------------------------------------------
 
-/// Spawn a 0.5s blink timer that updates the tray icon when blinking sessions exist.
+/// Spawn the tray animation timer. Fires every 250 ms and increments a
+/// monotonic tick counter. The blink phase used by the dot/clock styles
+/// derives from this tick (toggling every 2 ticks = 500 ms, matching the
+/// historical rate); the bar-chart shine sweep uses the tick directly. The
+/// icon-key check inside `update_tray` suppresses re-renders on ticks where
+/// nothing about the icon actually changed.
 fn spawn_blink_timer(handle: AppHandle, monitor: Arc<SessionMonitorState>) {
-    let blink_on = Arc::new(Mutex::new(true));
+    let tick: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
     let last_menu_key: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let last_icon_key: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 
     tauri::async_runtime::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(250));
         loop {
             interval.tick().await;
 
             let all_sessions = monitor.enriched_sessions.lock().unwrap().clone();
             let sessions = tray_active_sessions(&all_sessions);
-            let has_blinking = sessions
-                .iter()
-                .any(|s| s.info.state == "working" || s.info.state == "subagent");
 
-            if !has_blinking {
-                // No blinking needed — only update if sessions changed
-                update_tray(&handle, &sessions, true, &last_menu_key, &last_icon_key);
-                continue;
-            }
-
-            // Toggle blink phase
             let current = {
-                let mut b = blink_on.lock().unwrap();
-                *b = !*b;
-                *b
+                let mut t = tick.lock().unwrap();
+                *t = t.wrapping_add(1);
+                *t
             };
 
             update_tray(&handle, &sessions, current, &last_menu_key, &last_icon_key);
@@ -1963,19 +1974,51 @@ fn menu_cache_key(sessions: &[EnrichedSession]) -> String {
     key
 }
 
+/// Sessions whose colour/alpha changes between the on and off blink phases.
+fn has_blinking_state(sessions: &[EnrichedSession]) -> bool {
+    sessions.iter().any(|s| {
+        matches!(
+            s.info.state.as_str(),
+            "working" | "thinking" | "subagent" | "compacting" | "clearing"
+        )
+    })
+}
+
 /// Update the tray icon, tooltip, and menu with current session data.
-/// The icon is only re-rendered when sessions or blink phase actually changes.
-/// The menu is only rebuilt when session data changes (not on blink ticks)
-/// to avoid dismissing an open menu on macOS.
+/// The icon is only re-rendered when sessions or animation phase actually
+/// changes. The menu is only rebuilt when session data changes (not on
+/// animation ticks) to avoid dismissing an open menu on macOS.
 fn update_tray(
     handle: &AppHandle,
     sessions: &[EnrichedSession],
-    blink_on: bool,
+    tick: u32,
     last_menu_key: &Arc<Mutex<String>>,
     last_icon_key: &Arc<Mutex<String>>,
 ) {
     let menu_key = menu_cache_key(sessions);
-    let icon_key = format!("{}:{}", menu_key, blink_on as u8);
+    let style = settings::load_settings().menu_bar_style;
+    // Preserve historical 500ms blink cadence under the 250ms tick.
+    let blink_on = (tick / 2) % 2 == 0;
+
+    // Only fold animation phase into the icon key when it actually affects
+    // pixels — otherwise unchanged states would re-render every 250ms.
+    let phase_key: String = match style.as_str() {
+        "bars" => {
+            if has_blinking_state(sessions) {
+                format!("s{}", tick % tray::BAR_SHINE_CYCLE)
+            } else {
+                "static".to_string()
+            }
+        }
+        _ => {
+            if has_blinking_state(sessions) {
+                format!("b{}", blink_on as u8)
+            } else {
+                "static".to_string()
+            }
+        }
+    };
+    let icon_key = format!("{}:{}:{}", menu_key, phase_key, style);
 
     let icon_changed = {
         let last = last_icon_key.lock().unwrap();
@@ -1985,7 +2028,7 @@ fn update_tray(
     if let Some(tray) = handle.tray_by_id("cue-tray") {
         // Only render + push a new PNG when the visual state actually changed
         if icon_changed {
-            let png_bytes = tray::render_dot_grid(sessions, blink_on, 44);
+            let png_bytes = render_tray_icon(&style, sessions, blink_on, tick, 44);
             if let Ok(icon) = tauri::image::Image::from_bytes(&png_bytes) {
                 let _ = tray.set_icon(Some(icon));
             }
