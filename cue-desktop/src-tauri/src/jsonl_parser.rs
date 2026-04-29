@@ -176,11 +176,7 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) {
     let mtime = metadata.modified().ok();
 
     if size > MAX_FILE_SIZE {
-        log::warn!(
-            "Skipping oversized JSONL file: {:?} ({} bytes)",
-            path,
-            size
-        );
+        log::warn!("Skipping oversized JSONL file: {:?} ({} bytes)", path, size);
         cache.file_size = 0;
         cache.file_mtime = mtime;
         cache.entries.clear();
@@ -1661,10 +1657,8 @@ mod tests {
         let path = dir.join("test.jsonl");
         let _ = std::fs::remove_file(&path);
 
-        let line_a =
-            r#"{"type":"user","timestamp":1710000000.0,"message":{"content":"first"}}"#;
-        let line_b =
-            r#"{"type":"user","timestamp":1710000001.0,"message":{"content":"second"}}"#;
+        let line_a = r#"{"type":"user","timestamp":1710000000.0,"message":{"content":"first"}}"#;
+        let line_b = r#"{"type":"user","timestamp":1710000001.0,"message":{"content":"second"}}"#;
 
         std::fs::write(&path, format!("{line_a}\n")).unwrap();
 
@@ -1702,8 +1696,7 @@ mod tests {
         let path = dir.join("test.jsonl");
         let _ = std::fs::remove_file(&path);
 
-        let long_line =
-            r#"{"type":"user","timestamp":1710000000.0,"message":{"content":"first"}}"#;
+        let long_line = r#"{"type":"user","timestamp":1710000000.0,"message":{"content":"first"}}"#;
         std::fs::write(&path, format!("{long_line}\n{long_line}\n")).unwrap();
 
         let mut cache = super::JsonlEntryCache::default();
@@ -1732,8 +1725,7 @@ mod tests {
         let path = dir.join("test.jsonl");
         let _ = std::fs::remove_file(&path);
 
-        let complete =
-            r#"{"type":"user","timestamp":1710000000.0,"message":{"content":"a"}}"#;
+        let complete = r#"{"type":"user","timestamp":1710000000.0,"message":{"content":"a"}}"#;
         let partial = r#"{"type":"user","timestamp":1710000001.0,"messa"#;
         std::fs::write(&path, format!("{complete}\n{partial}")).unwrap();
 
@@ -1744,13 +1736,8 @@ mod tests {
 
         // Finish the partial line + add another. Cache should pick both up.
         let rest = r#"ge":{"content":"b"}}"#;
-        let third =
-            r#"{"type":"user","timestamp":1710000002.0,"message":{"content":"c"}}"#;
-        std::fs::write(
-            &path,
-            format!("{complete}\n{partial}{rest}\n{third}\n"),
-        )
-        .unwrap();
+        let third = r#"{"type":"user","timestamp":1710000002.0,"message":{"content":"c"}}"#;
+        std::fs::write(&path, format!("{complete}\n{partial}{rest}\n{third}\n")).unwrap();
 
         super::refresh_entry_cache(&path, &mut cache);
         assert_eq!(cache.entries.len(), 3);
@@ -1765,8 +1752,7 @@ mod tests {
         let path = dir.join("test.jsonl");
         let _ = std::fs::remove_file(&path);
 
-        let line =
-            r#"{"type":"user","timestamp":1710000000.0,"message":{"content":"first"}}"#;
+        let line = r#"{"type":"user","timestamp":1710000000.0,"message":{"content":"first"}}"#;
         std::fs::write(&path, format!("{line}\n")).unwrap();
 
         let mut cache = super::JsonlEntryCache::default();
@@ -1775,7 +1761,11 @@ mod tests {
 
         std::fs::remove_file(&path).unwrap();
         super::refresh_entry_cache(&path, &mut cache);
-        assert_eq!(cache.entries.len(), 0, "missing file must drop cached entries");
+        assert_eq!(
+            cache.entries.len(),
+            0,
+            "missing file must drop cached entries"
+        );
         assert_eq!(cache.file_size, 0);
     }
 
@@ -1790,8 +1780,7 @@ mod tests {
         let _ = std::fs::remove_file(&real);
         let _ = std::fs::remove_file(&link);
 
-        let line =
-            r#"{"type":"user","timestamp":1710000000.0,"message":{"content":"first"}}"#;
+        let line = r#"{"type":"user","timestamp":1710000000.0,"message":{"content":"first"}}"#;
         std::fs::write(&real, format!("{line}\n")).unwrap();
         symlink(&real, &link).unwrap();
 
@@ -1801,7 +1790,11 @@ mod tests {
         let mut cache = super::JsonlEntryCache::default();
         super::refresh_entry_cache(&link, &mut cache);
         // …but our reader refuses to open through it, so no entries land.
-        assert_eq!(cache.entries.len(), 0, "O_NOFOLLOW must reject symlinked target");
+        assert_eq!(
+            cache.entries.len(),
+            0,
+            "O_NOFOLLOW must reject symlinked target"
+        );
 
         let _ = std::fs::remove_file(&link);
         let _ = std::fs::remove_file(&real);
