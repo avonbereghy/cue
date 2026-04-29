@@ -2098,7 +2098,7 @@ fn update_tray(
     let menu_key = menu_cache_key(sessions);
     let style = settings::load_settings().menu_bar_style;
     // Preserve historical 500ms blink cadence under the 250ms tick.
-    let blink_on = (tick / 2) % 2 == 0;
+    let blink_on = (tick / 2).is_multiple_of(2);
 
     // Only fold animation phase into the icon key when it actually affects
     // pixels — otherwise unchanged states would re-render every 250ms.
