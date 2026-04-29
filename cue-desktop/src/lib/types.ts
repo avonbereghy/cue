@@ -235,6 +235,8 @@ export interface Settings {
   timerDisplay: string;
   /** Show the system tray icon in the menu bar. Default: true. */
   showInMenuBar: boolean;
+  /** Menu bar icon style: "default" (dot grid) or "clock" (12-wedge clock). */
+  menuBarStyle: string;
   /** Show the app in the macOS Dock / OS taskbar. Default: true. */
   showInDock: boolean;
   /** Launch Cue automatically at login. Default: true. */
