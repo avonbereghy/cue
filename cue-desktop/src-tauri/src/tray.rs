@@ -523,9 +523,14 @@ pub fn render_bar_chart(sessions: &[EnrichedSession], tick: u32, size: u32) -> V
             None,
         );
 
-        // Filled bar — floor at one bar-width's worth so 0% context still
-        // shows up as a visible dot at the bottom of the track.
-        let bar_h = (ctx * total_h).max(bar_w);
+        // Filled bar — height is proportional to context usage. We floor at
+        // a thin sliver (~3px at 44px icon height) just so a 0% bar still
+        // shows up at the bottom of the track; the floor is intentionally
+        // much smaller than `bar_w` so real context percentages don't get
+        // clamped together (e.g. 14% and 23% must render at visibly
+        // different heights).
+        let min_h = (total_h * 0.08).max(2.5);
+        let bar_h = (ctx * total_h).max(min_h);
         let y = pad_y + total_h - bar_h;
         let bar_path = rounded_rect_path(x, y, bar_w, bar_h, radius);
         pixmap.fill_path(
@@ -873,6 +878,23 @@ mod tests {
         assert_ne!(
             low_png, high_png,
             "context fraction must affect rendered bar height"
+        );
+    }
+
+    #[test]
+    fn test_render_bars_low_context_pcts_render_distinct_heights() {
+        // Regression: with a floor pegged to bar_w, three sessions at 14%,
+        // 21%, 23% all clamped to the same height. Ensure low-but-different
+        // percentages produce visibly different pixmaps now.
+        let a = vec![make_session_with_context("idle", 0.14)];
+        let b = vec![make_session_with_context("idle", 0.23)];
+        let png_a = render_bar_chart(&a, 0, 44);
+        let png_b = render_bar_chart(&b, 0, 44);
+        verify_png(&png_a);
+        verify_png(&png_b);
+        assert_ne!(
+            png_a, png_b,
+            "14% and 23% context must render at different bar heights"
         );
     }
 
