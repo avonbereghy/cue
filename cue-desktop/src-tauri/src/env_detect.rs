@@ -183,6 +183,18 @@ const SHELL_METACHARACTERS: &[char] = &[
     ';', '|', '&', '`', '(', ')', '>', '<', '\n', '\r', '\'', '"',
 ];
 
+/// Verify a resolved hook-path string contains no shell metacharacters before
+/// it is interpolated into a hook command serialized to settings.json. Paths
+/// flow through dirs::home_dir() which is ultimately user-controlled via $HOME
+/// or %USERPROFILE%, so this is defense-in-depth against an exotic home dir
+/// that breaks the JSON command string at execution time.
+fn assert_safe_for_command(path: &str, label: &str) -> Result<(), String> {
+    if path.chars().any(|c| SHELL_METACHARACTERS.contains(&c)) {
+        return Err(format!("{} path contains invalid characters", label));
+    }
+    Ok(())
+}
+
 /// Resolve and validate a hook path. Rejects shell metacharacters and
 /// expands `~` or `$HOME`-style references to the actual home directory.
 fn resolve_hook_path(raw: &str) -> Result<PathBuf, String> {
@@ -366,6 +378,12 @@ pub fn install_hooks() -> Result<(), String> {
 
     let runner_str = runner.to_string_lossy();
     let hook_str = hook_path.to_string_lossy();
+
+    // Defense-in-depth: paths derived from $HOME/%USERPROFILE% should not
+    // contain shell metacharacters, but if they do we'd be writing a broken
+    // (or worse) command string into Claude Code's settings.json.
+    assert_safe_for_command(&runner_str, "hook-runner")?;
+    assert_safe_for_command(&hook_str, "cue-hook")?;
 
     // Read existing settings
     let mut settings: serde_json::Value = if settings_path.exists() {

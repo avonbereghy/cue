@@ -18,7 +18,8 @@
         "height": 900,
         "resizable": true,
         "fullscreen": false,
-        "transparent": true
+        "transparent": true,
+        "devtools": false
       },
       {
         "label": "tray-popover",
@@ -33,11 +34,12 @@
         "skipTaskbar": true,
         "visible": false,
         "focus": false,
-        "shadow": false
+        "shadow": false,
+        "devtools": false
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     }
   },
   "bundle": {
@@ -73,7 +75,7 @@
     "macOS": {
       "frameworks": [],
       "minimumSystemVersion": "14.2",
-      "signingIdentity": "-",
+      "signingIdentity": "Developer ID Application: BAWR Group LLC (NDPXRBQFU4)",
       "hardenedRuntime": true,
       "entitlements": "macos/Cue.entitlements"
     },
@@ -87,7 +89,7 @@
       "endpoints": [
         "https://github.com/ClaudeStage/cue/releases/latest/download/latest.json"
       ],
-      "pubkey": "REPLACE_WITH_TAURI_UPDATER_PUBKEY",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5RTU0ODU4QjAwNzM2NTMKUldSVE5nZXdXRWpsR2JUTmRQbUFvajROWldFTkZtbFhYYSt1amIreUd3L2dYWnozWVd4ZzNjZU8K",
       "dialog": true
     }
   }
