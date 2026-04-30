@@ -1042,21 +1042,27 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       }
       return ((h >>> 0) / 0xffffffff) * Math.PI * 2;
     };
-    const yBelow = Math.min(0.92, 0.5 + stringSpread * 2.0);
-    const yAbove = Math.max(0.08, 0.5 - stringSpread * 2.0);
-    // Strings 4 and 5 now run on opposing diagonals so together they form an X
-    // across the card — the working-string diagonal read, matching base bands
-    // (which render tilted via a canvas rotation in SignalString). stringSpread
-    // controls how far the corners push past the horizontal midline.
+    // Cards are much wider than tall, so tan(deployAngle) × aspect_ratio >> 1.
+    // Use the clamped extremes and let angle sign set which diagonal is which,
+    // so strings 4+5 always span corner-to-corner like the rotated base bands.
+    const tiltNeg = (stringDeployAngle ?? -16) <= 0; // negative → left lower, right higher
+    const yLow  = 0.90; // near bottom
+    const yHigh = 0.10; // near top
+    // String 4: same diagonal direction as base bands (negative angle = bottom-left→top-right)
+    const y4Start = tiltNeg ? yLow  : yHigh;
+    const y4End   = tiltNeg ? yHigh : yLow;
+    // String 5: opposite diagonal (forms an X with string 4)
+    const y5Start = tiltNeg ? yHigh : yLow;
+    const y5End   = tiltNeg ? yLow  : yHigh;
     const xPad = 0.05;
     const bands: ExtraBandSpec[] = [];
     if (stringCount >= 4) {
       bands.push({
         id: `${info.id}-work-4`,
         bandKind: "mids",
-        // bottom-left → top-right
-        axisStart: { xFrac: -xPad,    yFrac: yBelow },
-        axisEnd:   { xFrac: 1 + xPad, yFrac: yAbove },
+        // same diagonal as base bands
+        axisStart: { xFrac: -xPad,    yFrac: y4Start },
+        axisEnd:   { xFrac: 1 + xPad, yFrac: y4End },
         color,
         phaseJitter: jitterSeed(`${info.id}@work-4`),
         amplitudeMul: Math.pow(1.05, 3), // string 4
@@ -1066,16 +1072,16 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       bands.push({
         id: `${info.id}-work-5`,
         bandKind: "bass",
-        // top-left → bottom-right (opposite diagonal, forming an X with #4)
-        axisStart: { xFrac: -xPad,    yFrac: yAbove },
-        axisEnd:   { xFrac: 1 + xPad, yFrac: yBelow },
+        // opposite diagonal, forming an X with string 4
+        axisStart: { xFrac: -xPad,    yFrac: y5Start },
+        axisEnd:   { xFrac: 1 + xPad, yFrac: y5End },
         color,
         phaseJitter: jitterSeed(`${info.id}@work-5`),
         amplitudeMul: Math.pow(1.05, 4), // string 5
       });
     }
     return bands;
-  }, [canDeployStrings, stringCount, stringSpread, info.id, isDark, signalColorDark, signalColorLight]);
+  }, [canDeployStrings, stringCount, stringDeployAngle, info.id, isDark, signalColorDark, signalColorLight]);
 
   const combinedExtraBands = useMemo(
     () => [...subagentExtraBands, ...workingExtraBands],
