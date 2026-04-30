@@ -89,6 +89,13 @@ pub fn set_owner_only_permissions(path: &Path) -> io::Result<()> {
 pub fn sanitize_workspace_path(path: &str) -> io::Result<PathBuf> {
     // Reject NUL, control chars, and shell/applescript metacharacters that
     // cannot be safely interpolated into command strings anywhere downstream.
+    //
+    // Backslash is denied on Unix (no legitimate use in a path) but allowed on
+    // Windows where it is the path separator. cmd.exe-specific metacharacters
+    // (^, %, <, >, (, ), !) are not enforced here because the Windows revive
+    // path no longer interpolates workspace into a shell string — see
+    // spawn_terminal_with_resume in lib.rs, which uses Command::current_dir
+    // instead of building a cmd.exe command line.
     for ch in path.chars() {
         if ch == '\0' || ch.is_control() {
             return Err(io::Error::new(
@@ -96,10 +103,13 @@ pub fn sanitize_workspace_path(path: &str) -> io::Result<PathBuf> {
                 "path contains control characters",
             ));
         }
-        if matches!(
+        let is_metachar = matches!(
             ch,
-            '"' | '\'' | '`' | '$' | ';' | '|' | '&' | '\\' | '\n' | '\r'
-        ) {
+            '"' | '\'' | '`' | '$' | ';' | '|' | '&' | '\n' | '\r'
+        );
+        #[cfg(not(windows))]
+        let is_metachar = is_metachar || ch == '\\';
+        if is_metachar {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "path contains disallowed metacharacter",
