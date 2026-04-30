@@ -851,17 +851,15 @@ fn spawn_terminal_with_resume(session_id: &str, workspace: &str) -> Result<(), S
 
 #[cfg(target_os = "windows")]
 fn spawn_terminal_with_resume(session_id: &str, workspace: &str) -> Result<(), String> {
+    // session_id is validated as alphanumeric+dash by validate_alphanumeric_id,
+    // so it can flow safely through cmd.exe's quoting. workspace is NOT placed
+    // on the command line at all — cmd.exe metacharacter handling (^, %, <, >,
+    // (, ), !) is too fragile to rely on a string deny-list. Instead we set
+    // the working directory at the OS level via Command::current_dir, and
+    // `start ""` opens a new console window inheriting that cwd.
     std::process::Command::new("cmd")
-        .args([
-            "/c",
-            "start",
-            "cmd",
-            "/k",
-            &format!(
-                "cd /d \"{}\" && claude --resume \"{}\"",
-                workspace, session_id
-            ),
-        ])
+        .current_dir(workspace)
+        .args(["/c", "start", "", "claude", "--resume", session_id])
         .spawn()
         .map_err(|e| format!("Failed to open terminal: {}", e))?;
     Ok(())

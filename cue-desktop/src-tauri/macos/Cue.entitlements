@@ -5,11 +5,5 @@
     <!-- WKWebView/WebKit JIT under hardened runtime -->
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-    <true/>
-    <!-- Tauri's auto-update replaces the app bundle in place; needed under
-         hardened runtime so the running app can swap its own binary. -->
-    <key>com.apple.security.cs.disable-library-validation</key>
-    <true/>
 </dict>
 </plist>
