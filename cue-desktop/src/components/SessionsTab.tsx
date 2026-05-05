@@ -6,6 +6,10 @@ import type { EnrichedSession, Settings, SignalPreset } from "@/lib/types";
 import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, setGate as setGateEngine } from "@/lib/presetEngine";
 import { SessionCard } from "./SessionCard";
 import { BranchView } from "./BranchView";
+import {
+  isAnyTransitionInFlight,
+  subscribeTransitions,
+} from "@/lib/transitionRegistry";
 import type { CardSettings } from "./BranchView";
 import { PermissionPrompt } from "./PermissionPrompt";
 import { PermissionHistory } from "./PermissionHistory";
@@ -1651,22 +1655,49 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   }
 
   // Reorder trigger: fires on turn end OR invariant violation. Debounced
-  // 200ms so near-simultaneous transitions collapse into one FLIP animation.
-  // Uses `turnEndTimerRef.current === null` as the coalescing guard so we
-  // don't endlessly reschedule while the invariant keeps being true each
-  // render — the first detection schedules, subsequent renders no-op until
-  // the timer fires. Between triggers, the display stays pinned.
+  // 300ms — past the SessionCard `commitHandoff` window (250ms) so the
+  // card's `displayState` has finished swapping by the time the FLIP
+  // shuffle starts. The registry check below provides a tighter guarantee;
+  // the timer is the belt-and-suspenders.
+  //
+  // Cards mid-state-transition register in `transitionRegistry`; we defer
+  // firing while ANY card is in flight. When the last one clears we
+  // re-evaluate via the subscription below.
+  const fireDeferredReorder = useCallback(() => {
+    if (isAnimatingRef.current) return;
+    if (isAnyTransitionInFlight()) return;
+    const curKey = committedOrderRef.current.join(",");
+    const desKey = desiredOrderRef.current.join(",");
+    if (curKey === desKey) return;
+    committedOrderRef.current = [...desiredOrderRef.current];
+    setReorderTick((t) => t + 1);
+  }, []);
+
+  // Reuse the module-scope pendingReorderRef declared earlier — same
+  // "fire when unblocked" semantic for both animation-in-flight and
+  // transition-registry-in-flight paths.
   if ((turnEndDetected || invariantViolated) && autoReorder && turnEndTimerRef.current === null) {
     turnEndTimerRef.current = setTimeout(() => {
       turnEndTimerRef.current = null;
-      if (isAnimatingRef.current) return;
-      const curKey = committedOrderRef.current.join(",");
-      const desKey = desiredOrderRef.current.join(",");
-      if (curKey === desKey) return;
-      committedOrderRef.current = [...desiredOrderRef.current];
-      setReorderTick((t) => t + 1);
-    }, 200);
+      if (isAnyTransitionInFlight()) {
+        // A card is mid-state-transition. Mark a pending reorder; the
+        // registry subscription will fire it when the last card clears.
+        pendingReorderRef.current = true;
+        return;
+      }
+      fireDeferredReorder();
+    }, 300);
   }
+
+  // When the transition registry empties, fire the pending reorder if any.
+  useEffect(() => {
+    return subscribeTransitions(() => {
+      if (!pendingReorderRef.current) return;
+      if (isAnyTransitionInFlight()) return;
+      pendingReorderRef.current = false;
+      fireDeferredReorder();
+    });
+  }, [fireDeferredReorder]);
 
   // Quiescence timer: when ALL sessions have been settled for 5s,
   // do the full priority rearrange.
@@ -1689,6 +1720,15 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         quiesceTimerRef.current = setTimeout(() => {
           quiesceTimerRef.current = null;
           if (isAnimatingRef.current) return; // don't fire into a live animation
+          // Defer if any card is still mid-state-transition. A card showing
+          // working visuals while info.state === "idle" would otherwise be
+          // counted as settled by `allSettled` and cause a FLIP into a live
+          // smooth-exit. The transition-registry subscription elsewhere
+          // will retry once the last card clears.
+          if (isAnyTransitionInFlight()) {
+            pendingReorderRef.current = true;
+            return;
+          }
           const fireTime = Date.now();
           if (!allSettled(activeSessionsRef.current, fireTime)) return;
           committedOrderRef.current = desiredOrderRef.current;
@@ -1995,13 +2035,27 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             duration: RISE_DUR,
             delay: RISE_DELAY,
             easing: SPAWN_EASING,
-            // `both`: hold start state during delay AND end state after, so
-            // the card doesn't snap back to its pre-paint translateY(100%)
-            // in the tick between animation end and cleanup clearing inline
-            // styles.
-            fill: "both",
+            // `backwards`: hold the pre-paint translateY(100%) during the
+            // delay so the card doesn't peek through. We DON'T use `both`
+            // because the post-end fill fights with state-class CSS
+            // transitions on `.session-card` (opacity / transform), causing
+            // a flash when `cleanupSpawnState` clears the inline transform.
+            // The `finished` promise + cleanup below bake the final
+            // identity transform synchronously instead.
+            fill: "backwards",
           },
         );
+        // Synchronously bake identity transform/opacity once the rise
+        // settles — this replaces the WAAPI fill-forwards hold so the next
+        // tick (where `cleanupSpawnState` clears inline styles) doesn't
+        // snap the card back to its pre-paint translated position.
+        riseAnim.finished
+          .then(() => {
+            if (!cardInner.isConnected) return;
+            cardInner.style.opacity = "1";
+            cardInner.style.transform = "translateY(0px) scale(1)";
+          })
+          .catch(() => {});
         spawnAnims.push(riseAnim);
       }
       if (spawnAnims.length > 0) {

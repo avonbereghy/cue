@@ -33,11 +33,19 @@ function effortTextClass(level: string): string {
 import type { EnrichedSession } from "@/lib/types";
 import { STATE_HEX, STATE_HEX_LIGHT, STATE_DOT_HEX, STATE_DOT_HEX_LIGHT, STATE_BADGE_HEX, STATE_BADGE_HEX_LIGHT } from "@/lib/types";
 import { formatTokens, formatDuration, formatClockTime, formatElapsedCompact, cleanPromptText } from "@/lib/format";
-import { SignalString, hexToRgb } from "./SignalString";
-import type { StrikePulse, CometPulse, ExtraBandSpec } from "./SignalString";
-import { FluxEffect, FLUX_EXIT_MS } from "./FluxEffect";
+import { SignalString } from "./SignalString";
+import type { StrikePulse, CometPulse } from "./SignalString";
+import { FluxEffect } from "./FluxEffect";
 import { AuroraEffect, AURORA_EXIT_MS } from "./AuroraEffect";
+import { CompactTankEffect } from "./CompactTankEffect";
 import { StatusDot } from "./StatusDot";
+import { beginTransition, endTransition } from "@/lib/transitionRegistry";
+
+/** Compact-tank fade-in window (ms) when entering compacting. */
+const COMPACT_TANK_ENTER_MS = 600;
+/** Compact-tank fade-out window (ms) when leaving compacting. The canvas
+ *  stays mounted until this elapses so the periwinkle wash doesn't pop. */
+const COMPACT_TANK_EXIT_MS = 800;
 import { FlipNumber } from "./FlipNumber";
 import { SpoolContextBar } from "./SpoolContextBar";
 
@@ -249,32 +257,26 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   // The string sweep + reveal hold now happen BEFORE displayState flips out
   // of thinking (see handoff choreography above), so flux active flips false
   // in lock-step with the press-down. No extra sweep delay here.
+  // Persist the FluxEffect's WebGL context once first mounted: across a
+  // typical session a user cycles thinking↔working many times, and recompiling
+  // shaders each time costs 50–200ms on low-end hardware (visible as a blank
+  // frame). Keep the canvas mounted; toggle `fluxActive` to drive the
+  // shader's enter/exit growth ramp. The canvas itself is hidden via
+  // `display:none` in CSS while active=false long enough that the retract
+  // has fully played out.
   const [fluxMounted, setFluxMounted] = useState(displayState === "thinking");
   const [fluxActive, setFluxActive] = useState(displayState === "thinking");
-  const fluxUnmountTimerRef = useRef<number | null>(null);
   useEffect(() => {
     const isThinking = displayState === "thinking";
-    const clearTimers = () => {
-      if (fluxUnmountTimerRef.current !== null) {
-        window.clearTimeout(fluxUnmountTimerRef.current);
-        fluxUnmountTimerRef.current = null;
-      }
-    };
     if (isThinking) {
-      clearTimers();
       setFluxMounted(true);
       setFluxActive(true);
-    } else if (fluxMounted) {
-      // displayState just left thinking → begin retract immediately.
-      // The strings have already finished their sweep during Phase A/B.
+    } else {
+      // Begin retract; leave the component mounted so the next thinking
+      // entry doesn't re-pay the WebGL context-creation cost.
       setFluxActive(false);
-      fluxUnmountTimerRef.current = window.setTimeout(() => {
-        setFluxMounted(false);
-        fluxUnmountTimerRef.current = null;
-      }, FLUX_EXIT_MS + 80);
     }
-    return clearTimers;
-  }, [displayState, fluxMounted]);
+  }, [displayState]);
 
   // Aurora linger: same pattern as flux, but gated on the `done` state. Stays
   // mounted briefly after the state changes so the fade-out can play out.
@@ -302,6 +304,67 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     }
     return clearAuroraTimer;
   }, [displayState, auroraMounted]);
+
+  // Compact-tank linger: same enter/exit ramp pattern as flux/aurora. Mount
+  // when entering compacting; ramp alpha 0→1 over COMPACT_TANK_ENTER_MS; on
+  // exit ramp 1→0 over COMPACT_TANK_EXIT_MS, then unmount. Without this the
+  // periwinkle wash popped in/out abruptly (and previously didn't render at
+  // all because CompactTankEffect was never imported).
+  const [compactTankMounted, setCompactTankMounted] = useState(displayState === "compacting");
+  const [compactTankAlpha, setCompactTankAlpha] = useState(displayState === "compacting" ? 1 : 0);
+  const compactTankRafRef = useRef<number | null>(null);
+  const compactTankUnmountRef = useRef<number | null>(null);
+  useEffect(() => {
+    const cancelRamp = () => {
+      if (compactTankRafRef.current !== null) {
+        cancelAnimationFrame(compactTankRafRef.current);
+        compactTankRafRef.current = null;
+      }
+    };
+    const cancelUnmount = () => {
+      if (compactTankUnmountRef.current !== null) {
+        window.clearTimeout(compactTankUnmountRef.current);
+        compactTankUnmountRef.current = null;
+      }
+    };
+    const rampTo = (target: number, durationMs: number) => {
+      cancelRamp();
+      const startA = compactTankAlpha;
+      const startT = performance.now();
+      const step = () => {
+        const t = Math.min(1, (performance.now() - startT) / durationMs);
+        // ease-out cubic for a soft fade tail
+        const eased = 1 - Math.pow(1 - t, 3);
+        setCompactTankAlpha(startA + (target - startA) * eased);
+        if (t < 1) {
+          compactTankRafRef.current = requestAnimationFrame(step);
+        } else {
+          compactTankRafRef.current = null;
+        }
+      };
+      compactTankRafRef.current = requestAnimationFrame(step);
+    };
+
+    if (displayState === "compacting") {
+      cancelUnmount();
+      setCompactTankMounted(true);
+      rampTo(1, COMPACT_TANK_ENTER_MS);
+    } else if (compactTankMounted) {
+      rampTo(0, COMPACT_TANK_EXIT_MS);
+      cancelUnmount();
+      compactTankUnmountRef.current = window.setTimeout(() => {
+        setCompactTankMounted(false);
+        compactTankUnmountRef.current = null;
+      }, COMPACT_TANK_EXIT_MS + 60);
+    }
+    return () => {
+      cancelRamp();
+      cancelUnmount();
+    };
+    // intentionally only re-run on displayState; we close over compactTankAlpha
+    // for the start value but don't want to retrigger on each ramp tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayState]);
 
   // Unmount-only cleanup for the handoff timer.
   useEffect(() => {
@@ -464,16 +527,19 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     if (handoffCommitTimerRef.current !== null) {
       window.clearTimeout(handoffCommitTimerRef.current);
     }
+    // Mark this card mid-transition so the SessionsTab FLIP shuffle defers
+    // until the smooth-exit window finishes. Cleared in the smoothExit
+    // settle timer below.
+    beginTransition(info.id);
     handoffCommitTimerRef.current = window.setTimeout(() => {
       const target = latestStateRef.current;
       handoffCommitTimerRef.current = null;
-      // If state flipped back to thinking between schedule and fire, bail —
-      // the main effect will re-stage a fresh commit when strings reconnect.
-      // Broader "not working/subagent" guards are wrong: this callback is
-      // also scheduled for working/subagent → idle/done exits (line ~574),
-      // and bailing there leaves labelState/displayState stuck on "working"
-      // while strings, flux, and dust all animate to the idle state.
-      if (target === "thinking") return;
+      if (target === "thinking") {
+        // Bail — main effect will re-stage. Release the registry latch since
+        // we're not actually committing this transition.
+        endTransition(info.id);
+        return;
+      }
       if (smoothExitTimerRef.current !== null) window.clearTimeout(smoothExitTimerRef.current);
       setSmoothExit(true);
       setLabelState(target);
@@ -485,9 +551,16 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       smoothExitTimerRef.current = window.setTimeout(() => {
         setSmoothExit(false);
         smoothExitTimerRef.current = null;
+        endTransition(info.id);
       }, 2700);
     }, delayMs);
-  }, []);
+  }, [info.id]);
+
+  // Safety: clear registry on unmount so a card that disappears mid-handoff
+  // doesn't permanently block the shuffle.
+  useEffect(() => {
+    return () => endTransition(info.id);
+  }, [info.id]);
 
   // SignalString fires this once per deploy cycle when all three bands have
   // fully landed. That's our cue to commit the working-state swap after a
@@ -886,17 +959,15 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   }, [aggregatedToolUses, info.state, showToolCallComets]);
 
   // ─── Progressive working strings ──────────────────────────────────────
-  // One string deploys on entering a turn. A new string is added for every
-  // 10 seconds of active generation (working / thinking / subagent), up to
-  // a max of 5. Waiting / error pauses freeze the clock; the counter is
-  // preserved through them and resumes when active again. Turn-end states
-  // (idle / done / compacting / clearing / ended) reset the counter to 0.
-  //
-  //   count = min(5, 1 + floor(activeGenMs / 10_000))
+  // One string deploys on entering a turn. Additional strings spawn as the
+  // turn accumulates active-generation time, up to a hard cap of 3 — one
+  // per audio band (mids, bass, treble). Waiting / error pauses freeze the
+  // clock; the counter is preserved through them and resumes when active
+  // again. Turn-end states (idle / done / compacting / clearing / ended)
+  // reset the counter to 0.
   //
   // Strings 1–3 gate the bass/mids/treble base bands (SignalString deploys
-  // in priority [mids, bass, treble]). Strings 4–5 render as mids-physics
-  // extra bands at wider vertical offsets.
+  // in priority [mids, bass, treble]).
   // Reset on turn-end states from EITHER signal. displayState has sticky
   // handoff logic that can hold "working" briefly after info.state has already
   // flipped to compacting/idle/done — without also checking info.state, the
@@ -916,16 +987,13 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   // promoted until we return to working.
   const activeGenMsRef = useRef(0);
   const lastTickMsRef = useRef<number | null>(null);
-  // Cumulative active-generation thresholds for strings 1..5. The first
+  // Cumulative active-generation thresholds for strings 1..3. The first
   // string gets a short warm-up so the card doesn't snap straight to a
-  // deployed state the instant work starts. Upper strings stretch so 4 and
-  // 5 read as increasingly rare.
+  // deployed state the instant work starts.
   //   1st string →  1s    (short warm-up)
   //   2nd string →  2:00
   //   3rd string →  5:00
-  //   4th string → 10:00
-  //   5th string → 30:00
-  const STRING_THRESHOLDS_MS = [1_000, 120_000, 300_000, 600_000, 1_800_000];
+  const STRING_THRESHOLDS_MS = [1_000, 120_000, 300_000];
 
   useEffect(() => {
     if (!isTurnOngoing) {
@@ -963,12 +1031,12 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       for (const ms of STRING_THRESHOLDS_MS) {
         if (elapsed >= ms) target += 1;
       }
-      // Hard cap at 5 working strings per session (subagents add their own
-      // bands on top of this ceiling — they're accounted for separately).
-      target = Math.min(5, target);
+      // Hard cap at 3 working strings per session — one per audio band
+      // (subagents add their own extra bands on top, accounted separately).
+      target = Math.min(3, target);
       setStringCount(c => {
         const next = c < target ? target : c;
-        return Math.min(5, next);
+        return Math.min(3, next);
       });
     };
     tick();
@@ -980,8 +1048,8 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   // available, regardless of whether the previous turn fired its done/idle
   // transition. If userMessageCount ticks up, force the counter back to zero
   // so a leaked accumulator from a stuck previous turn (e.g., Claude Code
-  // process died before Stop hook fired) doesn't pre-deploy 4–5 strings on
-  // a turn that's only been working for seconds.
+  // process died before Stop hook fired) doesn't pre-deploy strings on a
+  // turn that's only been working for seconds.
   const prevUserMsgCountRef = useRef(metrics.userMessageCount);
   useEffect(() => {
     if (metrics.userMessageCount > prevUserMsgCountRef.current) {
@@ -1003,19 +1071,17 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     displayState === "thinking" ||
     displayState === "waiting" ||
     displayState === "error";
-  const baseBandsTarget = isMidTurn ? Math.min(stringCount, 3) : 0;
+  const baseBandsTarget = isMidTurn ? stringCount : 0;
 
   // Amplitude progression: each new string that spawns during a long working
   // session is 5% louder than the one before (compounded). String N gets a
-  // multiplier of 1.05^(N-1). String 1 = 1.0, 2 = 1.05, 3 = 1.1025, 4 = ~1.158,
-  // 5 = ~1.2155. Multipliers are assigned to each string at the moment it
-  // appears and persist for the rest of the turn. Deploy order is
-  // [mids, bass, treble] (see BAND_PRIORITY inside SignalString), so:
+  // multiplier of 1.05^(N-1). String 1 = 1.0, 2 = 1.05, 3 = 1.1025.
+  // Multipliers are assigned to each string at the moment it appears and
+  // persist for the rest of the turn. Deploy order is [mids, bass, treble]
+  // (see BAND_PRIORITY inside SignalString), so:
   //   string 1 → mids   (bandIdx 1) → 1.0
   //   string 2 → bass   (bandIdx 0) → 1.05
   //   string 3 → treble (bandIdx 2) → 1.1025
-  // Strings 4 and 5 are extra bands — their multiplier rides on the
-  // ExtraBandSpec.amplitudeMul field set below.
   const AMP_STEP = 1.05;
   const baseBandsAmpMuls: [number, number, number] = [
     AMP_STEP,           // bandIdx 0 (bass)   = string 2
@@ -1023,70 +1089,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     AMP_STEP * AMP_STEP, // bandIdx 2 (treble) = string 3
   ];
 
-  // Strings 4 and 5 — extras that inherit the active signal theme color and
-  // each get their own phase jitter so they wobble out of lockstep with the
-  // base bands. String 4 follows mids physics; string 5 follows bass physics
-  // — giving them different audio drives is what makes them look distinct
-  // from each other, since phase jitter alone won't separate two bands fed by
-  // the same audio envelope. Positioned at widened vertical offsets above/
-  // below the base-band trio.
-  const workingExtraBands = useMemo(() => {
-    if (!canDeployStrings || stringCount <= 3) return [];
-    const hex = isDark ? signalColorDark : signalColorLight;
-    const color = hexToRgb(hex);
-    const jitterSeed = (s: string) => {
-      let h = 2166136261 >>> 0;
-      for (let i = 0; i < s.length; i++) {
-        h ^= s.charCodeAt(i);
-        h = Math.imul(h, 16777619);
-      }
-      return ((h >>> 0) / 0xffffffff) * Math.PI * 2;
-    };
-    // Cards are much wider than tall, so tan(deployAngle) × aspect_ratio >> 1.
-    // Use the clamped extremes and let angle sign set which diagonal is which,
-    // so strings 4+5 always span corner-to-corner like the rotated base bands.
-    const tiltNeg = (stringDeployAngle ?? -16) <= 0; // negative → left lower, right higher
-    const yLow  = 0.90; // near bottom
-    const yHigh = 0.10; // near top
-    // String 4: same diagonal direction as base bands (negative angle = bottom-left→top-right)
-    const y4Start = tiltNeg ? yLow  : yHigh;
-    const y4End   = tiltNeg ? yHigh : yLow;
-    // String 5: opposite diagonal (forms an X with string 4)
-    const y5Start = tiltNeg ? yHigh : yLow;
-    const y5End   = tiltNeg ? yLow  : yHigh;
-    const xPad = 0.05;
-    const bands: ExtraBandSpec[] = [];
-    if (stringCount >= 4) {
-      bands.push({
-        id: `${info.id}-work-4`,
-        bandKind: "mids",
-        // same diagonal as base bands
-        axisStart: { xFrac: -xPad,    yFrac: y4Start },
-        axisEnd:   { xFrac: 1 + xPad, yFrac: y4End },
-        color,
-        phaseJitter: jitterSeed(`${info.id}@work-4`),
-        amplitudeMul: Math.pow(1.05, 3), // string 4
-      });
-    }
-    if (stringCount >= 5) {
-      bands.push({
-        id: `${info.id}-work-5`,
-        bandKind: "bass",
-        // opposite diagonal, forming an X with string 4
-        axisStart: { xFrac: -xPad,    yFrac: y5Start },
-        axisEnd:   { xFrac: 1 + xPad, yFrac: y5End },
-        color,
-        phaseJitter: jitterSeed(`${info.id}@work-5`),
-        amplitudeMul: Math.pow(1.05, 4), // string 5
-      });
-    }
-    return bands;
-  }, [canDeployStrings, stringCount, stringDeployAngle, info.id, isDark, signalColorDark, signalColorLight]);
-
-  const combinedExtraBands = useMemo(
-    () => [...subagentExtraBands, ...workingExtraBands],
-    [subagentExtraBands, workingExtraBands],
-  );
+  const combinedExtraBands = subagentExtraBands;
 
   const maxTools = isNarrow ? 3 : 6;
   const topTools = Object.entries(metrics.toolCounts)
@@ -1152,6 +1155,17 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           active={auroraActive}
           alpha={auroraAlpha}
           speed={auroraSpeed}
+        />
+      )}
+
+      {/* Compact tank — periwinkle glass wash that drains right→left while
+          compacting. Fades in/out via compactTankAlpha (ease-out) so leaving
+          compacting doesn't pop. fillRef is owned by the parent's drain loop
+          so we don't re-render the canvas every frame. */}
+      {!lowPower && compactTankMounted && (revived || info.state !== "ended") && (
+        <CompactTankEffect
+          fillRef={compactFillRef}
+          alpha={compactTankAlpha}
         />
       )}
 
