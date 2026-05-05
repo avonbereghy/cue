@@ -373,9 +373,15 @@ impl SessionMonitorState {
                                 }
                             }
                         }
-                    } else if matches!(s.state.as_str(), "idle" | "done" | "ended") {
-                        // Turn ended — clear the latch so the next prompt can
-                        // re-promote independently.
+                    } else if !matches!(s.state.as_str(), "thinking" | "working" | "subagent") {
+                        // Anything that isn't a handoffable continuation of
+                        // the current turn (idle / done / ended / error /
+                        // waiting / compacting / clearing) clears the latch
+                        // so the NEXT thinking entry waits for a fresh
+                        // text-after-prompt signal before being promoted.
+                        // Without this, a session that errors out and
+                        // immediately retries with a stale prompt_ts in
+                        // metrics could skip the visual handoff entirely.
                         promoted.remove(&s.id);
                     }
 
