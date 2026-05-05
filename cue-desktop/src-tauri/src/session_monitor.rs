@@ -334,46 +334,34 @@ impl SessionMonitorState {
                     // floor expires.
                     if s.state == "compacting" {
                         floor.insert(s.id.clone(), now_secs + 1.5);
-                    } else if let Some(&until) = floor.get(&s.id) {
-                        if until > now_secs {
-                            // Extend display: hook moved off compacting too
-                            // quickly for the poll cadence to catch it.
-                            s.state = "compacting".to_string();
-                        } else {
-                            floor.remove(&s.id);
-                        }
+                    } else if floor_extends(&s.state, floor.get(&s.id).copied(), now_secs) {
+                        // Extend display: hook moved off compacting too
+                        // quickly for the poll cadence to catch it.
+                        s.state = "compacting".to_string();
+                    } else {
+                        floor.remove(&s.id);
                     }
 
                     // ── Thinking→working promotion latch ───────────────
-                    if s.state == "thinking" {
-                        if let Some(metrics) = metrics {
-                            let prompt_ts = metrics.last_user_prompt_ts.unwrap_or(0.0);
-                            let already = promoted.get(&s.id).copied().unwrap_or(0.0);
-                            // Already promoted for this prompt — keep working.
-                            if already > 0.0 && (already - prompt_ts).abs() < 0.001 {
-                                s.state = "working".to_string();
-                            } else if metrics.last_assistant_has_text {
-                                let text_ts = metrics.last_assistant_text_ts.unwrap_or(0.0);
-                                let text_after_prompt = match (
-                                    metrics.last_assistant_text_ts,
-                                    metrics.last_user_prompt_ts,
-                                ) {
-                                    (Some(t), Some(p)) => t >= p,
-                                    _ => true,
-                                };
-                                if text_after_prompt {
-                                    s.state = "working".to_string();
-                                    promoted.insert(s.id.clone(), prompt_ts);
-                                    log::debug!(
-                                        "promote-latch id={} prompt_ts={} text_ts={}",
-                                        s.id,
-                                        prompt_ts,
-                                        text_ts,
-                                    );
-                                }
-                            }
+                    let decision = promote_decision(
+                        &s.state,
+                        promoted.get(&s.id).copied(),
+                        metrics.and_then(|m| m.last_user_prompt_ts),
+                        metrics.and_then(|m| m.last_assistant_text_ts),
+                        metrics.is_some_and(|m| m.last_assistant_has_text),
+                    );
+                    match decision {
+                        PromoteDecision::Held => {
+                            s.state = "working".to_string();
                         }
-                    } else if !matches!(s.state.as_str(), "thinking" | "working" | "subagent") {
+                        PromoteDecision::Promote { prompt_ts } => {
+                            s.state = "working".to_string();
+                            promoted.insert(s.id.clone(), prompt_ts);
+                            log::debug!("promote-latch id={} prompt_ts={}", s.id, prompt_ts);
+                        }
+                        PromoteDecision::Keep => {}
+                    }
+                    if !matches!(s.state.as_str(), "thinking" | "working" | "subagent") {
                         // Anything that isn't a handoffable continuation of
                         // the current turn (idle / done / ended / error /
                         // waiting / compacting / clearing) clears the latch
@@ -818,6 +806,58 @@ fn should_demote_turn_ended(
     end_turn_ts > boundary
 }
 
+/// Outcome of the per-poll thinking→working latch decision. Pure so tests
+/// can pin the exact bouncing scenarios (delayed text, stale prompt).
+#[derive(Debug, PartialEq)]
+pub(crate) enum PromoteDecision {
+    /// Keep state as-is (not thinking, or no signal yet).
+    Keep,
+    /// Promote thinking→working AND record the prompt_ts in the latch.
+    Promote { prompt_ts: f64 },
+    /// Latch already held this prompt — keep the card on working without
+    /// re-checking the JSONL signal.
+    Held,
+}
+
+/// Pure predicate for the thinking→working promotion latch. `current_state`
+/// is the post-floor state. `latched_prompt_ts` is what's currently in the
+/// `promoted_for_prompt` map (None if no entry).
+pub(crate) fn promote_decision(
+    current_state: &str,
+    latched_prompt_ts: Option<f64>,
+    last_user_prompt_ts: Option<f64>,
+    last_assistant_text_ts: Option<f64>,
+    last_assistant_has_text: bool,
+) -> PromoteDecision {
+    if current_state != "thinking" {
+        return PromoteDecision::Keep;
+    }
+    let prompt_ts = last_user_prompt_ts.unwrap_or(0.0);
+    if let Some(already) = latched_prompt_ts {
+        if already > 0.0 && (already - prompt_ts).abs() < 0.001 {
+            return PromoteDecision::Held;
+        }
+    }
+    if !last_assistant_has_text {
+        return PromoteDecision::Keep;
+    }
+    let text_after_prompt = match (last_assistant_text_ts, last_user_prompt_ts) {
+        (Some(t), Some(p)) => t >= p,
+        _ => true, // tolerate older entries missing one or both timestamps
+    };
+    if text_after_prompt {
+        PromoteDecision::Promote { prompt_ts }
+    } else {
+        PromoteDecision::Keep
+    }
+}
+
+/// Pure predicate for "should we extend the compacting display floor?"
+/// `until` is the floor's expiry ts (None if no floor active).
+pub(crate) fn floor_extends(state: &str, until: Option<f64>, now: f64) -> bool {
+    state != "compacting" && until.is_some_and(|u| u > now)
+}
+
 fn resolve_liveness(
     pid: u32,
     live_start: Option<u64>,
@@ -938,6 +978,104 @@ mod tests {
     fn test_session_monitor_state_new() {
         let state = SessionMonitorState::new();
         assert!(state.enriched_sessions.lock().unwrap().is_empty());
+    }
+
+    // ── promote_decision: thinking→working latch ────────────────────────
+
+    #[test]
+    fn promote_keeps_non_thinking_states() {
+        // Latch only acts on `thinking` — never overrides working/idle/etc.
+        for st in &["working", "idle", "done", "waiting", "error", "subagent"] {
+            assert_eq!(
+                promote_decision(st, None, Some(100.0), Some(200.0), true),
+                PromoteDecision::Keep,
+            );
+        }
+    }
+
+    #[test]
+    fn promote_held_when_latch_matches_prompt() {
+        // The bounce-prevention path: same prompt_ts already promoted →
+        // keep working without re-checking the JSONL signal (which may be
+        // mid-flush and absent).
+        let d = promote_decision("thinking", Some(50.0), Some(50.0), None, false);
+        assert_eq!(d, PromoteDecision::Held);
+    }
+
+    #[test]
+    fn promote_held_ignores_zero_latch() {
+        // Default 0.0 latch must not match a 0.0 prompt_ts (no real prompt).
+        let d = promote_decision("thinking", Some(0.0), Some(0.0), None, false);
+        assert_eq!(d, PromoteDecision::Keep);
+    }
+
+    #[test]
+    fn promote_fires_when_text_after_prompt() {
+        // Prompt at t=10, text at t=15 → user-visible reply has begun.
+        let d = promote_decision("thinking", None, Some(10.0), Some(15.0), true);
+        assert_eq!(d, PromoteDecision::Promote { prompt_ts: 10.0 });
+    }
+
+    #[test]
+    fn promote_keeps_when_text_predates_prompt() {
+        // The previous turn's assistant text is still in JSONL after the
+        // new UserPromptSubmit. Don't false-promote.
+        let d = promote_decision("thinking", None, Some(20.0), Some(15.0), true);
+        assert_eq!(d, PromoteDecision::Keep);
+    }
+
+    #[test]
+    fn promote_keeps_when_no_text_block() {
+        // Pure extended-thinking response — output_tokens accumulating in
+        // `thinking` blocks, no `text` block yet.
+        let d = promote_decision("thinking", None, Some(10.0), None, false);
+        assert_eq!(d, PromoteDecision::Keep);
+    }
+
+    #[test]
+    fn promote_tolerates_missing_timestamps() {
+        // Old hook entries that lack last_assistant_text_ts must still
+        // promote — the back-compat path matches the original behavior.
+        let d = promote_decision("thinking", None, None, None, true);
+        assert!(matches!(d, PromoteDecision::Promote { .. }));
+    }
+
+    #[test]
+    fn promote_held_survives_text_disappearing() {
+        // Once latched, transient JSONL flush misses don't unflip the
+        // decision — that was the original bouncing bug.
+        let latched = Some(42.0);
+        let d = promote_decision(
+            "thinking",
+            latched,
+            Some(42.0),
+            None,   // text_ts not visible this poll
+            false,  // last_assistant_has_text temporarily false
+        );
+        assert_eq!(d, PromoteDecision::Held);
+    }
+
+    // ── floor_extends: compacting display floor ─────────────────────────
+
+    #[test]
+    fn floor_extends_when_state_left_compacting_within_window() {
+        assert!(floor_extends("working", Some(100.5), 100.0));
+    }
+
+    #[test]
+    fn floor_does_not_extend_after_window_expired() {
+        assert!(!floor_extends("idle", Some(99.0), 100.0));
+    }
+
+    #[test]
+    fn floor_does_not_extend_when_no_floor_set() {
+        assert!(!floor_extends("idle", None, 100.0));
+    }
+
+    #[test]
+    fn floor_does_not_extend_when_state_already_compacting() {
+        // The hook is currently writing compacting → no need to mask.
+        assert!(!floor_extends("compacting", Some(101.0), 100.0));
     }
 
     #[test]
