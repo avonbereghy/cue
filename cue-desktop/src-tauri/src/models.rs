@@ -397,71 +397,11 @@ impl EnrichedSession {
             info.agent_name = metrics.agent_name.clone();
         }
 
-        // Promote thinking → working when user-visible response prose has begun.
-        // Claude Code only fires PreToolUse → working hooks on tool calls; for
-        // text-only responses the card would otherwise sit on `thinking` until
-        // Stop fires and snaps it to `idle`. We detect the transition via the
-        // last assistant message's `text` content block (extended-thinking
-        // tokens land in `thinking` blocks, so output_tokens alone would
-        // false-positive during a still-thinking response).
-        //
-        // Guard: the text must be from the CURRENT turn. When a new prompt
-        // fires UserPromptSubmit → thinking, the previous turn's assistant
-        // text is still in the JSONL and `last_assistant_has_text` stays
-        // true. Comparing timestamps ensures we only promote once the
-        // model has actually started replying to the latest prompt.
-        if info.state == "thinking" && metrics.last_assistant_has_text {
-            let text_ts = metrics.last_assistant_text_ts;
-            let prompt_ts = metrics.last_user_prompt_ts;
-            let text_after_prompt = match (text_ts, prompt_ts) {
-                (Some(t), Some(p)) => t >= p,
-                // Missing either timestamp: fall back to the old behaviour so
-                // sessions whose JSONL predates this field still work.
-                _ => true,
-            };
-            // Diagnostic for the thinking→working→thinking bounce
-            // investigation. Demoted from `info` to `debug` so it no longer
-            // spams the release log on every poll — can still be surfaced
-            // with `RUST_LOG=cue_desktop=debug` when investigating the
-            // JSONL-flush race.
-            log::debug!(
-                "promote-check id={} lastActivity={:.3} prompt_ts={:?} text_ts={:?} text_after_prompt={} promoting={}",
-                info.id,
-                info.last_activity,
-                prompt_ts,
-                text_ts,
-                text_after_prompt,
-                text_after_prompt,
-            );
-            if text_after_prompt {
-                info.state = "working".to_string();
-            }
-        }
-
-        // Missed-SubagentStop rescue: if the hook counter says 0 but a
-        // subagent JSONL wrote an entry within the last 10 seconds, a
-        // SubagentStart/Stop pair drifted out of sync (common with
-        // background agents whose hook events can fire unbalanced).
-        // Only rescue from terminal states — `working`/`thinking` already
-        // reflect live activity, and `waiting`/`error`/`compacting`/`clearing`
-        // must stay put to preserve user-attention signals.
-        if matches!(info.state.as_str(), "done" | "idle") && info.active_subagents == 0 {
-            let live_count = metrics
-                .subagents
-                .iter()
-                .filter(|s| s.is_recently_live(now, 10.0))
-                .count() as i64;
-            if live_count > 0 {
-                log::info!(
-                    "subagent-rescue id={} state={}→subagent live_count={}",
-                    info.id,
-                    info.state,
-                    live_count,
-                );
-                info.state = "subagent".to_string();
-                info.active_subagents = live_count;
-            }
-        }
+        // Note: thinking→working promotion and done/idle→subagent rescue
+        // are now applied in `session_monitor::poll_status` with per-session
+        // latching to prevent the per-poll bounce that occurred when these
+        // mutations re-evaluated on every poll. `info.state` arriving here
+        // is already authoritative.
 
         let workspace_name = std::path::Path::new(&info.workspace)
             .file_name()
@@ -889,6 +829,14 @@ pub struct Settings {
     /// Launch Cue automatically when the user logs in. Defaults to true.
     #[serde(default = "default_true")]
     pub start_at_login: bool,
+    /// Enable a global shortcut that toggles the tray popover. Off by default
+    /// because global shortcuts can collide with other apps.
+    #[serde(default)]
+    pub tray_shortcut_enabled: bool,
+    /// Tauri-format global shortcut for the tray-popover toggle, e.g.
+    /// "CmdOrCtrl+Shift+C". Validated and re-registered on every settings save.
+    #[serde(default = "default_tray_shortcut")]
+    pub tray_shortcut: String,
     /// Per-theme appearance customizations saved by the user, keyed by theme ID
     #[serde(default)]
     pub theme_customizations: HashMap<String, ThemeCustomization>,
@@ -1040,6 +988,10 @@ fn default_menu_bar_style() -> String {
     "default".to_string()
 }
 
+fn default_tray_shortcut() -> String {
+    "CmdOrCtrl+Shift+C".to_string()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -1105,6 +1057,8 @@ impl Default for Settings {
             menu_bar_style: "default".to_string(),
             show_in_dock: true,
             start_at_login: true,
+            tray_shortcut_enabled: false,
+            tray_shortcut: "CmdOrCtrl+Shift+C".to_string(),
             theme_customizations: HashMap::new(),
             settings_version: crate::settings::CURRENT_SETTINGS_VERSION,
         }
@@ -1287,205 +1241,9 @@ mod tests {
         assert_eq!(es.info.state, "done");
     }
 
-    #[test]
-    fn test_thinking_promoted_to_working_when_text_present() {
-        // Card sat on `thinking` waiting for Claude Code's PreToolUse hook to
-        // fire — but text-only responses never trigger it. JSONL polling
-        // detects the `text` content block and promotes the displayed state.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs_f64();
-        let mut info = make_test_info("s", "/tmp", "thinking");
-        info.last_activity = now;
-        info.started_at = now - 10.0;
-        let metrics = SessionMetrics {
-            last_assistant_has_text: true,
-            ..Default::default()
-        };
-        let es =
-            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
-        assert_eq!(es.info.state, "working");
-        assert_eq!(es.state_display_name, "Working");
-    }
-
-    #[test]
-    fn test_thinking_stays_when_text_is_from_previous_turn() {
-        // UserPromptSubmit just fired, but the previous turn's assistant
-        // message is still the latest text-carrying entry in the JSONL.
-        // The promoter must NOT flip straight to working — the user should
-        // see the thinking state until the new turn actually produces text.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs_f64();
-        let mut info = make_test_info("s", "/tmp", "thinking");
-        info.last_activity = now;
-        info.started_at = now - 60.0;
-        let metrics = SessionMetrics {
-            last_assistant_has_text: true,
-            last_assistant_text_ts: Some(now - 30.0),
-            last_user_prompt_ts: Some(now - 1.0),
-            ..Default::default()
-        };
-        let es =
-            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
-        assert_eq!(es.info.state, "thinking");
-    }
-
-    #[test]
-    fn test_thinking_promotes_when_text_is_from_current_turn() {
-        // Prompt fired at t-5s, a text block appeared at t-1s → that's the
-        // current turn's reply beginning. Promote as expected.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs_f64();
-        let mut info = make_test_info("s", "/tmp", "thinking");
-        info.last_activity = now;
-        info.started_at = now - 60.0;
-        let metrics = SessionMetrics {
-            last_assistant_has_text: true,
-            last_user_prompt_ts: Some(now - 5.0),
-            last_assistant_text_ts: Some(now - 1.0),
-            ..Default::default()
-        };
-        let es =
-            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
-        assert_eq!(es.info.state, "working");
-    }
-
-    #[test]
-    fn test_thinking_stays_when_only_thinking_blocks() {
-        // Pure extended-thinking response (no text yet) must NOT promote.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs_f64();
-        let mut info = make_test_info("s", "/tmp", "thinking");
-        info.last_activity = now;
-        info.started_at = now - 10.0;
-        let metrics = SessionMetrics {
-            last_assistant_has_text: false,
-            output_tokens: 5000, // thinking tokens — would false-positive on token count
-            ..Default::default()
-        };
-        let es =
-            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
-        assert_eq!(es.info.state, "thinking");
-    }
-
-    #[test]
-    fn test_text_present_does_not_override_non_thinking_states() {
-        // The promotion rule is scoped to `thinking` only — never overrides
-        // working/waiting/idle/etc.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs_f64();
-        let mut info = make_test_info("s", "/tmp", "waiting");
-        info.last_activity = now;
-        info.started_at = now - 10.0;
-        let metrics = SessionMetrics {
-            last_assistant_has_text: true,
-            ..Default::default()
-        };
-        let es =
-            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
-        assert_eq!(es.info.state, "waiting");
-    }
-
-    #[test]
-    fn test_done_rescued_to_subagent_when_jsonl_active() {
-        // Hook counter says 0 subagents, state is "done", but a subagent
-        // JSONL wrote an entry a few seconds ago — a SubagentStop was
-        // missed (e.g. background agent). Promote to "subagent" and
-        // surface the live count so the UI blinks.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs_f64();
-        let mut info = make_test_info("s", "/tmp", "done");
-        info.active_subagents = 0;
-        let metrics = SessionMetrics {
-            subagents: vec![SubagentMetrics {
-                ended_at: Some(now - 3.0),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let es =
-            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
-        assert_eq!(es.info.state, "subagent");
-        assert_eq!(es.info.active_subagents, 1);
-    }
-
-    #[test]
-    fn test_done_not_rescued_when_subagent_stale() {
-        // JSONL hasn't been written to for minutes — agent is truly done.
-        // Must not bounce the card back to "subagent".
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs_f64();
-        let mut info = make_test_info("s", "/tmp", "done");
-        info.active_subagents = 0;
-        let metrics = SessionMetrics {
-            subagents: vec![SubagentMetrics {
-                ended_at: Some(now - 120.0),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let es =
-            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
-        assert_eq!(es.info.state, "done");
-        assert_eq!(es.info.active_subagents, 0);
-    }
-
-    #[test]
-    fn test_working_not_overridden_by_rescue() {
-        // Active states must never flip to "subagent" via the rescue path —
-        // that was the prior regression (frontend showing Subagents(2) when
-        // hook said working, subs=0).
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs_f64();
-        let mut info = make_test_info("s", "/tmp", "working");
-        info.active_subagents = 0;
-        let metrics = SessionMetrics {
-            subagents: vec![SubagentMetrics {
-                ended_at: Some(now - 2.0),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let es =
-            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
-        assert_eq!(es.info.state, "working");
-    }
-
-    #[test]
-    fn test_rescue_skipped_when_hook_counter_already_positive() {
-        // Counter is trusted; rescue path only acts when counter==0.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs_f64();
-        let mut info = make_test_info("s", "/tmp", "done");
-        info.active_subagents = 3;
-        let metrics = SessionMetrics {
-            subagents: vec![SubagentMetrics {
-                ended_at: Some(now - 2.0),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let es =
-            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
-        assert_eq!(es.info.active_subagents, 3);
-    }
+    // NOTE: thinking→working promotion and done/idle→subagent rescue
+    // tests were moved to `session_monitor.rs` once those mutations migrated
+    // out of `from_info_and_metrics` to enable per-session latching.
 
     #[test]
     fn test_context_limit_by_model() {

@@ -198,6 +198,18 @@ html[data-theme="light"]:not([data-glass]) .dot-pulse {
   85%            { transform: translateX(0)       rotate(0deg); }
 }
 
+/* StatusDot crossfade between state shapes — paired keyframes the
+   wrapper switches between when state changes. Slight scale on entry
+   prevents the new dot from feeling like a hard cut. */
+@keyframes status-dot-fade-in {
+  0%   { opacity: 0; transform: scale(0.86); }
+  100% { opacity: 1; transform: scale(1); }
+}
+@keyframes status-dot-fade-out {
+  0%   { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.08); }
+}
+
 /* Working title animations — per-character */
 
 /* Rotate Flip (split-flap board) */
