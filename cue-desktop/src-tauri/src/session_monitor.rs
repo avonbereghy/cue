@@ -404,7 +404,13 @@ impl SessionMonitorState {
                                         .filter(|a| a.is_recently_live(now_secs, 10.0))
                                         .count() as i64;
                                     if live > 0 {
-                                        log::info!(
+                                        // Demoted from info→debug: session ids
+                                        // map 1:1 to JSONL files / conversation
+                                        // records, and the privacy posture only
+                                        // shows leaf workspace names. Surface
+                                        // with RUST_LOG=cue_desktop=debug when
+                                        // investigating rescue cycles.
+                                        log::debug!(
                                             "subagent-rescue-latched id={} state={}→subagent live={}",
                                             s.id, s.state, live
                                         );
