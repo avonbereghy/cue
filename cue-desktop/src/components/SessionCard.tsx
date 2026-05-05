@@ -312,6 +312,13 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   // all because CompactTankEffect was never imported).
   const [compactTankMounted, setCompactTankMounted] = useState(displayState === "compacting");
   const [compactTankAlpha, setCompactTankAlpha] = useState(displayState === "compacting" ? 1 : 0);
+  // Live alpha mirror: the ramp uses this ref as its start value so the exit
+  // ramp picks up wherever the enter ramp left off, even if the enter ramp
+  // never completed before the user flipped out of compacting. Reading the
+  // state directly would close over a stale render value (the effect is
+  // intentionally not retriggered on alpha changes).
+  const compactTankAlphaRef = useRef(compactTankAlpha);
+  compactTankAlphaRef.current = compactTankAlpha;
   const compactTankRafRef = useRef<number | null>(null);
   const compactTankUnmountRef = useRef<number | null>(null);
   useEffect(() => {
@@ -329,7 +336,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     };
     const rampTo = (target: number, durationMs: number) => {
       cancelRamp();
-      const startA = compactTankAlpha;
+      const startA = compactTankAlphaRef.current;
       const startT = performance.now();
       const step = () => {
         const t = Math.min(1, (performance.now() - startT) / durationMs);
@@ -361,8 +368,6 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       cancelRamp();
       cancelUnmount();
     };
-    // intentionally only re-run on displayState; we close over compactTankAlpha
-    // for the start value but don't want to retrigger on each ramp tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayState]);
 
