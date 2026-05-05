@@ -2118,7 +2118,13 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             ],
             { duration: SWAP_DUR, easing: SWAP_EASING, fill: "forwards" },
           );
-          await Promise.all([aU.finished, aL.finished]);
+          // .finished rejects with AbortError if the animation is canceled
+          // mid-flight (element removed, gen bumped). Swallow per-animation
+          // so the shared lock + cleanup paths still run.
+          await Promise.all([
+            aU.finished.catch(() => null),
+            aL.finished.catch(() => null),
+          ]);
           if (animationGenRef.current !== gen) return;
 
           // Bake the end state into inline transform, then cancel the WAAPI
