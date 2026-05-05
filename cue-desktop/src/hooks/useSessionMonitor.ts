@@ -28,12 +28,16 @@ export function useSessionMonitor(): EnrichedSession[] {
       pendingRef.current = null;
       if (cancelled || next === null) return;
       setSessions(next);
-      lastUpdateRef.current = Date.now();
     };
 
     const apply = (next: EnrichedSession[]) => {
       if (cancelled) return;
       pendingRef.current = next;
+      // Reset the staleness clock immediately on receipt — the coalesce
+      // window only delays the React commit, not the fact that fresh data
+      // arrived. If lastUpdateRef stayed stale during the 16ms window the
+      // poll fallback would race against it.
+      lastUpdateRef.current = Date.now();
       if (flushTimerRef.current !== null) return;
       flushTimerRef.current = window.setTimeout(flush, COALESCE_MS);
     };

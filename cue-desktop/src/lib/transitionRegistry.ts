@@ -36,10 +36,6 @@ export function isAnyTransitionInFlight(): boolean {
   return inFlight.size > 0;
 }
 
-export function inFlightCount(): number {
-  return inFlight.size;
-}
-
 /**
  * Subscribe to changes in the registry. Returns an unsubscribe fn. Called
  * by `SessionsTab` so that, when the last in-flight card clears, it can
