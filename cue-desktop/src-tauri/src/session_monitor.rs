@@ -75,6 +75,21 @@ pub struct SessionMonitorState {
     /// (working/thinking/waiting/error/subagent). Cleared on idle/done/compacting.
     /// Used to compute the "active duration" timer shown on session cards.
     active_since: Mutex<HashMap<String, f64>>,
+    /// Latches the most recent `last_user_prompt_ts` for which we promoted
+    /// thinking→working. Subsequent polls within the same turn skip
+    /// re-evaluation, eliminating the bounce caused by JSONL flush timing
+    /// variance between polls.
+    promoted_for_prompt: Mutex<HashMap<String, f64>>,
+    /// Latches the `ended_at` timestamp of the most recent subagent JSONL
+    /// entry that triggered a done/idle→subagent rescue. The 10s rescue
+    /// window won't re-fire for the same `ended_at`, preventing the bounce
+    /// where a single just-finished subagent re-rescues on every poll.
+    subagent_rescued_for: Mutex<HashMap<String, f64>>,
+    /// Per-session "compacting visible at least until" floor. When the hook
+    /// writes `compacting`, we set this 1500ms in the future so the frontend
+    /// always observes at least one tick of compacting even if a subsequent
+    /// `working` write lands within the same poll window.
+    compacting_floor: Mutex<HashMap<String, f64>>,
     /// Cue's launch timestamp (seconds since UNIX epoch) — only sessions
     /// with activity after this are shown. Starts empty, reads forwards only.
     launched_at: f64,
@@ -99,6 +114,9 @@ impl Default for SessionMonitorState {
             sysinfo_system: Mutex::new(sysinfo::System::new()),
             process_identity: Mutex::new(HashMap::new()),
             active_since: Mutex::new(HashMap::new()),
+            promoted_for_prompt: Mutex::new(HashMap::new()),
+            subagent_rescued_for: Mutex::new(HashMap::new()),
+            compacting_floor: Mutex::new(HashMap::new()),
             launched_at,
         }
     }
@@ -282,6 +300,121 @@ impl SessionMonitorState {
                     if should_demote_turn_ended(&s.state, s.state_changed_at, metrics) {
                         s.state = "idle".to_string();
                     }
+                    s
+                })
+                .collect()
+        };
+
+        // Latched promotions/rescues/floors. Each transform reads + writes
+        // its own mutex so per-session decisions persist across polls and
+        // don't re-fire on every tick. Crucially: this is the ONLY place
+        // the thinking→working promotion and done→subagent rescue mutate
+        // state — `EnrichedSession::from_info_and_metrics` no longer
+        // re-evaluates them, which removes the per-poll bounce surface.
+        let active: Vec<_> = {
+            let cache = self.metrics_cache.lock().unwrap();
+            let mut promoted = self.promoted_for_prompt.lock().unwrap();
+            let mut rescued = self.subagent_rescued_for.lock().unwrap();
+            let mut floor = self.compacting_floor.lock().unwrap();
+            let current_ids: std::collections::HashSet<&str> =
+                active.iter().map(|s| s.id.as_str()).collect();
+            promoted.retain(|id, _| current_ids.contains(id.as_str()));
+            rescued.retain(|id, _| current_ids.contains(id.as_str()));
+            floor.retain(|id, _| current_ids.contains(id.as_str()));
+
+            active
+                .into_iter()
+                .map(|mut s| {
+                    let metrics = cache.get(&s.id);
+
+                    // ── Compacting floor ───────────────────────────────
+                    // When the hook writes `compacting`, set a 1500ms floor.
+                    // Otherwise, if a non-active state would replace a still-
+                    // valid floor, hold the card on `compacting` until the
+                    // floor expires.
+                    if s.state == "compacting" {
+                        floor.insert(s.id.clone(), now_secs + 1.5);
+                    } else if let Some(&until) = floor.get(&s.id) {
+                        if until > now_secs {
+                            // Extend display: hook moved off compacting too
+                            // quickly for the poll cadence to catch it.
+                            s.state = "compacting".to_string();
+                        } else {
+                            floor.remove(&s.id);
+                        }
+                    }
+
+                    // ── Thinking→working promotion latch ───────────────
+                    if s.state == "thinking" {
+                        if let Some(metrics) = metrics {
+                            let prompt_ts = metrics.last_user_prompt_ts.unwrap_or(0.0);
+                            let already = promoted.get(&s.id).copied().unwrap_or(0.0);
+                            // Already promoted for this prompt — keep working.
+                            if already > 0.0 && (already - prompt_ts).abs() < 0.001 {
+                                s.state = "working".to_string();
+                            } else if metrics.last_assistant_has_text {
+                                let text_ts = metrics.last_assistant_text_ts.unwrap_or(0.0);
+                                let text_after_prompt = match (
+                                    metrics.last_assistant_text_ts,
+                                    metrics.last_user_prompt_ts,
+                                ) {
+                                    (Some(t), Some(p)) => t >= p,
+                                    _ => true,
+                                };
+                                if text_after_prompt {
+                                    s.state = "working".to_string();
+                                    promoted.insert(s.id.clone(), prompt_ts);
+                                    log::debug!(
+                                        "promote-latch id={} prompt_ts={} text_ts={}",
+                                        s.id,
+                                        prompt_ts,
+                                        text_ts,
+                                    );
+                                }
+                            }
+                        }
+                    } else if matches!(s.state.as_str(), "idle" | "done" | "ended") {
+                        // Turn ended — clear the latch so the next prompt can
+                        // re-promote independently.
+                        promoted.remove(&s.id);
+                    }
+
+                    // ── Subagent rescue latch ──────────────────────────
+                    // Only fire on a NEW ended_at; same value won't re-rescue.
+                    if matches!(s.state.as_str(), "done" | "idle") && s.active_subagents == 0 {
+                        if let Some(metrics) = metrics {
+                            let latest_ended = metrics
+                                .subagents
+                                .iter()
+                                .filter_map(|a| a.ended_at)
+                                .filter(|t| (now_secs - t) < 10.0 && (now_secs - t) >= 0.0)
+                                .fold(0.0_f64, f64::max);
+                            if latest_ended > 0.0 {
+                                let already = rescued.get(&s.id).copied().unwrap_or(0.0);
+                                if (latest_ended - already).abs() > 0.001 {
+                                    let live = metrics
+                                        .subagents
+                                        .iter()
+                                        .filter(|a| a.is_recently_live(now_secs, 10.0))
+                                        .count() as i64;
+                                    if live > 0 {
+                                        log::info!(
+                                            "subagent-rescue-latched id={} state={}→subagent live={}",
+                                            s.id, s.state, live
+                                        );
+                                        s.state = "subagent".to_string();
+                                        s.active_subagents = live;
+                                        rescued.insert(s.id.clone(), latest_ended);
+                                    }
+                                }
+                            }
+                        }
+                    } else if !matches!(s.state.as_str(), "done" | "idle" | "subagent") {
+                        // Active states clear the rescue latch so the NEXT
+                        // done/idle window can rescue if needed.
+                        rescued.remove(&s.id);
+                    }
+
                     s
                 })
                 .collect()

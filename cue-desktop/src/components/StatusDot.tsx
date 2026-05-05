@@ -1,5 +1,77 @@
-/** Semantic status indicators — each state gets a distinct shape + animation. */
+import React, { useEffect, useRef, useState } from "react";
+
+/** Crossfade duration (ms) when state changes. Short enough that the icon
+ *  doesn't lag behind the rest of the card; long enough to avoid the visible
+ *  pop that comes from instantly swapping out one SVG shape for another. */
+const STATUS_DOT_FADE_MS = 280;
+
+/** Semantic status indicators — each state gets a distinct shape + animation.
+ *  The outer wrapper crossfades between the previous and current shape so
+ *  rapid state changes (thinking↔working, working→idle) read as a smooth
+ *  transition rather than a hard SVG component swap. */
 export function StatusDot({ state, color }: { state: string; color: string }) {
+  const [prevState, setPrevState] = useState<string | null>(null);
+  const [prevColor, setPrevColor] = useState(color);
+  const stateRef = useRef(state);
+  const colorRef = useRef(color);
+  const fadeTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (state === stateRef.current) {
+      // State unchanged — let color updates flow through without re-fading.
+      colorRef.current = color;
+      return;
+    }
+    if (fadeTimerRef.current !== null) {
+      window.clearTimeout(fadeTimerRef.current);
+    }
+    setPrevState(stateRef.current);
+    setPrevColor(colorRef.current);
+    stateRef.current = state;
+    colorRef.current = color;
+    fadeTimerRef.current = window.setTimeout(() => {
+      setPrevState(null);
+      fadeTimerRef.current = null;
+    }, STATUS_DOT_FADE_MS);
+    return () => {
+      if (fadeTimerRef.current !== null) {
+        window.clearTimeout(fadeTimerRef.current);
+        fadeTimerRef.current = null;
+      }
+    };
+  }, [state, color]);
+
+  return (
+    <span
+      className="inline-flex items-center justify-center relative shrink-0"
+      style={{ width: 12, height: 12 }}
+      aria-hidden="true"
+    >
+      {prevState !== null && prevState !== state && (
+        <span
+          key={`prev-${prevState}`}
+          className="absolute inset-0 inline-flex items-center justify-center"
+          style={{
+            animation: `status-dot-fade-out ${STATUS_DOT_FADE_MS}ms cubic-bezier(0.4, 0, 0.2, 1) both`,
+          }}
+        >
+          <StatusDotShape state={prevState} color={prevColor} />
+        </span>
+      )}
+      <span
+        key={`cur-${state}`}
+        className="absolute inset-0 inline-flex items-center justify-center"
+        style={{
+          animation: `status-dot-fade-in ${STATUS_DOT_FADE_MS}ms cubic-bezier(0.4, 0, 0.2, 1) both`,
+        }}
+      >
+        <StatusDotShape state={state} color={color} />
+      </span>
+    </span>
+  );
+}
+
+function StatusDotShape({ state, color }: { state: string; color: string }) {
   const S = 12; // render size px
 
   switch (state) {
@@ -105,6 +177,3 @@ export function StatusDot({ state, color }: { state: string; color: string }) {
       );
   }
 }
-
-// React import needed for CSSProperties
-import React from "react";

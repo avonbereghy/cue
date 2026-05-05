@@ -113,11 +113,12 @@ void main(){
   // Faint grain breaks WebGL banding on the smooth gradient.
   col += (hash(gl_FragCoord.xy + u_time) - 0.5) * 0.012;
 
-  // Premultiplied-style alpha so overlaying the card doesn't wash to white —
-  // the alpha rises with the noise value so dim areas stay transparent and
-  // bright currents feel volumetric against the card surface.
+  // Standard (non-premultiplied) alpha. The alpha rises with the noise
+  // value so dim areas stay transparent and bright currents feel volumetric
+  // against the card surface. Aligned with FluxEffect so a co-mount
+  // transition doesn't produce halo artifacts.
   float a = (0.35 + 0.55 * v) * u_fade;
-  gl_FragColor = vec4(col * a, a);
+  gl_FragColor = vec4(col, a);
 }
 `;
 
@@ -181,9 +182,12 @@ export function AuroraEffect({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
+    // Both Aurora and Flux are now non-premultiplied so they can safely
+    // co-mount during cross-state transitions (e.g. thinking→done) without
+    // the compositor producing wrong color math at the overlap.
     const gl = canvas.getContext("webgl", {
       alpha: true,
-      premultipliedAlpha: true,
+      premultipliedAlpha: false,
       antialias: false,
       preserveDrawingBuffer: false,
     });
@@ -232,7 +236,7 @@ export function AuroraEffect({
 
     gl.useProgram(prog);
     gl.enable(gl.BLEND);
-    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); // premultiplied
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
     return () => {
       cancelAnimationFrame(rafRef.current);
