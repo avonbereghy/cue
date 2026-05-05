@@ -527,6 +527,14 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     if (handoffCommitTimerRef.current !== null) {
       window.clearTimeout(handoffCommitTimerRef.current);
     }
+    // If a previous handoff is still in its smoothExit settle window, its
+    // pending timer would fire endTransition on this same id while we
+    // believe the new handoff still owns the registry slot. Cancel it so
+    // only the new handoff's settle timer ends the transition.
+    if (smoothExitTimerRef.current !== null) {
+      window.clearTimeout(smoothExitTimerRef.current);
+      smoothExitTimerRef.current = null;
+    }
     // Mark this card mid-transition so the SessionsTab FLIP shuffle defers
     // until the smooth-exit window finishes. Cleared in the smoothExit
     // settle timer below.
