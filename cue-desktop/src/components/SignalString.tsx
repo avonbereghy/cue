@@ -218,12 +218,6 @@ export interface ExtraBandSpec {
    * moment. Stable per id (seeded by the caller).
    */
   phaseJitter?: number;
-  /**
-   * Per-band amplitude multiplier applied post-tanh. Used to give strings 4/5
-   * (progressive working strings) their compounded 5% amplitude bumps.
-   * Defaults to 1.
-   */
-  amplitudeMul?: number;
 }
 
 export function SignalString({ state, frequency = 1.0, revived = false, pulses, comets, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 0.5, cordDeployForce = 1.0, cordRetractForce = 1.0, stringSpread = 0.15, stringDeployAngle = -16, sessionId = "", contentRef, keyReleaseSpeed: _keyReleaseSpeed = 0.4, onStringsConnected, extraBands, suppressBaseBands = false, baseBandsTarget = 3, baseBandsAmpMuls = [1, 1, 1] }: SignalStringProps) {
@@ -250,16 +244,17 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // Smooth blend between string (0) and sand (1) effects — crossfades during state transitions
   const sandBlendRef = useRef(state === "idle" ? 1.0 : 0.0);
 
-  // Base strings deploy during working and subagent only. Thinking does not
-  // deploy strings on its own — but if a turn already deployed them (working
-  // → thinking), they stay deployed via the stringsStayDeployed branch below.
-  // The thinking→working handoff sweeps in any not-yet-deployed bands.
+  // Base strings deploy during working and subagent only. Thinking owns the
+  // flux design and should not have working strings showing — entering thinking
+  // retracts whatever was deployed; entering working again redeploys them OVER
+  // the still-mounted flux, and the SessionCard handoff fades the flux out
+  // only after strings land.
   const stateIsActive = state === "working" || state === "subagent";
-  // Strings should stay deployed (no retract) mid-turn. Thinking is part of
-  // an ongoing turn (working↔thinking cycles); error/waiting are transient
-  // pauses. Only idle/done/compacting/clearing/ended end the turn and retract.
+  // Strings stay deployed (no retract) only for transient blocked states where
+  // the turn is still in progress. Error/waiting are user-attention pauses;
+  // thinking now goes through the retract path so the flux design reads clean.
   const stringsStayDeployed =
-    state === "error" || state === "waiting" || state === "thinking";
+    state === "error" || state === "waiting";
   // Track whether we deactivated from thinking (sand-only) — strings should not retract
   const deactivatedFromThinkingRef = useRef(false);
   // Delayed deactivation: keep strings active while the audio fades out,
@@ -325,12 +320,13 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // Tracks when the session went inactive — drives wind ramp-down and gravity transition
   const sandDeactivatedAtRef = useRef<number | null>(null);
   // Deploy priority for progressive working strings.
-  // Index 0 is the FIRST band that deploys (mids = visually central). As
-  // `baseBandsTarget` grows 1→3 we enable one more band in this order.
-  //   priority[0] = mids  (central, where a single string belongs)
-  //   priority[1] = bass  (above center)
-  //   priority[2] = treble (below center)
-  const BAND_PRIORITY = [1, 0, 2] as const;
+  // Index 0 is the FIRST band that deploys. Order is now bass → mids → treble
+  // so the strings come out low-to-high, matching the natural acoustic reading
+  // of the spread.
+  //   priority[0] = bass    (above center)
+  //   priority[1] = mids    (center)
+  //   priority[2] = treble  (below center)
+  const BAND_PRIORITY = [0, 1, 2] as const;
   const bandEnabled = (bandIdx: number, target: number) =>
     BAND_PRIORITY.indexOf(bandIdx as 0 | 1 | 2) < target;
   const baseBandsTargetRef = useRef(baseBandsTarget);
@@ -822,6 +818,16 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     let eraseRectsDirty = true;
     let eraseRectsNextRebuildAt = 0;
     const ERASE_RECTS_REBUILD_MS = 500;
+
+    // Scratch buffers reused across frames to avoid per-frame allocation in the
+    // string render hot loop. The (m, x) tables are rebuilt every frame because
+    // amplitude factors and width can change; sizing them as scratch keeps GC
+    // pressure off the main thread. Grown on demand.
+    let scratchSinA = new Float64Array(0);
+    let scratchCosA = new Float64Array(0);
+    const scratchTemporals = new Float64Array(8);
+    const scratchSinB = new Float64Array(8);
+    const scratchCosB = new Float64Array(8);
     let contentObserver: ResizeObserver | null = null;
     let contentMutationObserver: MutationObserver | null = null;
     if (contentRef?.current && typeof ResizeObserver !== "undefined") {
@@ -1529,6 +1535,31 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             };
           }
 
+          // Precompute per-(x, m) spatial trig once per band per frame. The
+          // standing-wave argument A = nEff·π·xNorm + m·0.55·sin(π·xNorm)
+          // depends only on (x, m), not on trail or t. The traveling wave is
+          // sin(A - B) where B = travel·tOff·n is per-(m, trail) — expanded
+          // below as sinA·cosB − cosA·sinB so the trail loop multiplies
+          // cached values instead of calling sin() per pixel.
+          const numPts = (w >> 1) + 1;
+          const tableSize = numPts * band.numModes;
+          if (scratchSinA.length < tableSize) {
+            scratchSinA = new Float64Array(tableSize);
+            scratchCosA = new Float64Array(tableSize);
+          }
+          const sinAtab = scratchSinA;
+          const cosAtab = scratchCosA;
+          for (let xi = 0; xi < numPts; xi++) {
+            const piX = (Math.PI * (xi * 2)) / w;
+            const midMod = Math.sin(piX);
+            const base = xi * band.numModes;
+            for (let m = 0; m < band.numModes; m++) {
+              const A = modeConsts[m].nEff * piX + m * 0.55 * midMod;
+              sinAtab[base + m] = Math.sin(A);
+              cosAtab[base + m] = Math.cos(A);
+            }
+          }
+
           for (let trail = 0; trail < numTrails; trail++) {
             const tOff = t - trail * trailSpacing;
             const alpha = 1.0 - (trail / numTrails);
@@ -1538,28 +1569,32 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             // Skip invisible trails
             if (op < 0.005) continue;
 
+            // Per-trail per-mode time-only factors. `temporal` and the B
+            // angle in sin(A - B) depend on tOff and m, not on x — so we
+            // pull them out of the x loop entirely.
+            for (let m = 0; m < band.numModes; m++) {
+              const mc = modeConsts[m];
+              scratchTemporals[m] = Math.cos(tOff * (band.speed + m * 0.35) + band.phaseOff + m * 1.9);
+              const B = band.travel * tOff * mc.n;
+              scratchSinB[m] = Math.sin(B);
+              scratchCosB[m] = Math.cos(B);
+            }
+
             // Build path once, draw twice (glow + core) for trail 0
             const points: number[] = [];
-            for (let x = 0; x <= w; x += 2) {
-              let sum = 0;
+            for (let xi = 0; xi < numPts; xi++) {
+              const x = xi * 2;
               const xNorm = x / w;
-              // Edge-softened per-mode spatial phase. Without this, every mode's
-              // standing wave is sin(nπx) → modes 3, 6, 9 all have nodes at x=1/3
-              // and 2/3, so all trails collapse to the center axis at those two
-              // x values and stack into visible bright "dots". Multiplying by
-              // sin(πx) keeps the phase offset zero at x=0 and x=1 (so strings
-              // still land on their anchors) while scrambling the node
-              // positions in the middle.
-              const midMod = Math.sin(Math.PI * xNorm);
+              let sum = 0;
+              const tableBase = xi * band.numModes;
 
               for (let m = 0; m < band.numModes; m++) {
-                const mc = modeConsts[m];
-                const spatialPhase = m * 0.55 * midMod;
-                const standing = Math.sin(mc.nEff * Math.PI * xNorm + spatialPhase);
-                const traveling = Math.sin(mc.nEff * Math.PI * xNorm + spatialPhase - band.travel * tOff * mc.n);
-                const spatial = standing * 0.6 + traveling * 0.4;
-                const temporal = Math.cos(tOff * (band.speed + m * 0.35) + band.phaseOff + m * 1.9);
-                sum += mc.mAmp * spatial * temporal;
+                const sA = sinAtab[tableBase + m];
+                const cA = cosAtab[tableBase + m];
+                // standing = sinA; traveling = sin(A - B) = sA·cB − cA·sB
+                const traveling = sA * scratchCosB[m] - cA * scratchSinB[m];
+                const spatial = sA * 0.6 + traveling * 0.4;
+                sum += modeConsts[m].mAmp * spatial * scratchTemporals[m];
               }
 
               // Add breathing noise — persists even when inactive (not scaled by decayEnvelope)
@@ -1740,13 +1775,13 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
               return;
             }
 
-            // Skip drawing if invisible. Extra bands (subagents, working
-            // strings 4-5) have an independent lifecycle from the base bands,
-            // so the base-band suppression branch of `drawStrings` doesn't
-            // apply — when a session enters `subagent` directly from idle,
-            // base bands stay suppressed, but the subagent line should still
-            // render. Gate on the conditions that genuinely apply to extras:
-            // sand not covering the card, and the band has clip to draw.
+            // Skip drawing if invisible. Extra bands (subagent strings) have
+            // an independent lifecycle from the base bands, so the base-band
+            // suppression branch of `drawStrings` doesn't apply — when a
+            // session enters `subagent` directly from idle, base bands stay
+            // suppressed, but the subagent line should still render. Gate on
+            // the conditions that genuinely apply to extras: sand not
+            // covering the card, and the band has clip to draw.
             const sandCoveringExtras = sandBlendRef.current >= 0.99;
             if (sandCoveringExtras || st.clipFraction <= 0.001) return;
 
@@ -1790,6 +1825,30 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             // let tipPy = 0;
             // let tipReady = false;
 
+            // Precompute per-(i, m) spatial trig once per string per frame, up
+            // to the clip cap. Same identity as base-band: standing = sinA;
+            // traveling = sin(A - B) = sinA·cosB − cosA·sinB. Buffer is shared
+            // with the base-band loop and only grows.
+            const lastI = Math.min(nPts, Math.floor(st.clipFraction * nPts));
+            const xtraTableSize = (lastI + 1) * cfgBand.numModes;
+            if (scratchSinA.length < xtraTableSize) {
+              scratchSinA = new Float64Array(xtraTableSize);
+              scratchCosA = new Float64Array(xtraTableSize);
+            }
+            const xtraSinA = scratchSinA;
+            const xtraCosA = scratchCosA;
+            for (let i = 0; i <= lastI; i++) {
+              const piX = (Math.PI * i) / nPts;
+              const midMod = Math.sin(piX);
+              const base = i * cfgBand.numModes;
+              for (let m = 0; m < cfgBand.numModes; m++) {
+                const A = modeConsts[m].nEff * piX + m * 0.55 * midMod;
+                xtraSinA[base + m] = Math.sin(A);
+                xtraCosA[base + m] = Math.cos(A);
+              }
+            }
+
+            const phaseJ = st.spec.phaseJitter ?? 0;
             for (let trail = 0; trail < numTrails; trail++) {
               const tOff = t - trail * trailSpacing;
               const alphaT = 1.0 - (trail / numTrails);
@@ -1797,24 +1856,28 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
               const op = alphaT * alphaT * cfgBand.opacity * signalAlpha * echoFade;
               if (op < 0.005) continue;
 
+              // Per-trail per-mode time-only factors (independent of i).
+              for (let m = 0; m < cfgBand.numModes; m++) {
+                const mc = modeConsts[m];
+                scratchTemporals[m] = Math.cos(tOff * (cfgBand.speed + m * 0.35) + cfgBand.phaseOff + phaseJ + m * 1.9);
+                const B = cfgBand.travel * tOff * mc.n;
+                scratchSinB[m] = Math.sin(B);
+                scratchCosB[m] = Math.cos(B);
+              }
+
               ctx.beginPath();
-              for (let i = 0; i <= nPts; i++) {
+              for (let i = 0; i <= lastI; i++) {
                 const tParam = i / nPts;        // 0..1 along axis
                 const u = tParam * axisLen;     // axis distance
-                if (tParam > st.clipFraction) break; // clip tip
 
                 let sum = 0;
-                // Edge-softened per-mode spatial phase — see note in base-band
-                // render loop. Prevents trail stacking at x=1/3, 2/3.
-                const midMod = Math.sin(Math.PI * tParam);
+                const tableBase = i * cfgBand.numModes;
                 for (let m = 0; m < cfgBand.numModes; m++) {
-                  const mc = modeConsts[m];
-                  const spatialPhase = m * 0.55 * midMod;
-                  const standing = Math.sin(mc.nEff * Math.PI * tParam + spatialPhase);
-                  const traveling = Math.sin(mc.nEff * Math.PI * tParam + spatialPhase - cfgBand.travel * tOff * mc.n);
-                  const spatial = standing * 0.6 + traveling * 0.4;
-                  const temporal = Math.cos(tOff * (cfgBand.speed + m * 0.35) + cfgBand.phaseOff + (st.spec.phaseJitter ?? 0) + m * 1.9);
-                  sum += mc.mAmp * spatial * temporal;
+                  const sA = xtraSinA[tableBase + m];
+                  const cA = xtraCosA[tableBase + m];
+                  const traveling = sA * scratchCosB[m] - cA * scratchSinB[m];
+                  const spatial = sA * 0.6 + traveling * 0.4;
+                  sum += modeConsts[m].mAmp * spatial * scratchTemporals[m];
                 }
                 const breath = breathe(tParam, tOff, decayEnvelope > 0.01 ? avgAmp : 0);
 
@@ -1832,8 +1895,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
                   }
                 }
 
-                const ampMulX = st.spec.amplitudeMul ?? 1;
-                const v = Math.tanh((sum * decayEnvelope + breath + whipContrib) * cfgBand.gain) * halfDisp * ampMulX;
+                const v = Math.tanh((sum * decayEnvelope + breath + whipContrib) * cfgBand.gain) * halfDisp;
                 const px = sx + u * tanX + v * nrmX;
                 const py = sy + u * tanY + v * nrmY;
                 if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);

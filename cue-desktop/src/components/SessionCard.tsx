@@ -681,17 +681,19 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     // commit with smoothExit stretching the tint/border/shadow morph over
     // 2.5s so the card's CSS eases in lockstep with the strings' decay.
     //
-    // Retract targets are exactly the "strings retracted" group in
-    // SignalString: idle, done, compacting, clearing, ended. Explicitly NOT
-    // thinking (strings stay deployed through working↔thinking), and NOT
-    // error/waiting (sticky-deployed — handled by the sticky-entry branch
+    // Retract targets include `thinking` now: working/subagent → thinking
+    // retracts the strings AND lets the flux design take over the card.
+    // The thinking→working handoff (line 643) sweeps strings back in over
+    // the still-mounted flux and only fades flux after they land.
+    // Error/waiting are sticky-deployed (handled by the sticky-entry branch
     // above, which fires before this one).
     const isRetractTarget =
       info.state === "idle" ||
       info.state === "done" ||
       info.state === "compacting" ||
       info.state === "clearing" ||
-      info.state === "ended";
+      info.state === "ended" ||
+      info.state === "thinking";
     const isActiveExit =
       (displayState === "working" || displayState === "subagent") &&
       isRetractTarget;
