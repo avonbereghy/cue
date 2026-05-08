@@ -235,6 +235,42 @@ impl SessionMonitorState {
                 .collect()
         };
 
+        // JSONL-presence check: demote liveness-sensitive sessions whose
+        // ~/.claude/projects/<encoded-ws>/<id>.jsonl file no longer exists.
+        // This catches the case where Claude Code rotates its session id
+        // mid-process (e.g. /clear, new conversation in the same window) and
+        // the prior id's transcript is gone — sysinfo liveness can't see it
+        // because the rotated id shares the live pid, and the hook's Stop
+        // event for the old id either never fires or gets clobbered by the
+        // new id's events. JSONL deletion is the authoritative deterministic
+        // signal that Claude Code dropped that session id; no timer needed.
+        let active: Vec<_> = {
+            let projects_path = paths::claude_projects_path();
+            let mut active_since = self.active_since.lock().unwrap();
+            let mut identity = self.process_identity.lock().unwrap();
+            active
+                .into_iter()
+                .map(|mut s| {
+                    if !is_liveness_sensitive(&s.state) {
+                        return s;
+                    }
+                    if !self.jsonl_exists_on_disk(&s.id, &s.workspace, &projects_path) {
+                        log::debug!(
+                            "session {} demoted: JSONL missing for state={}",
+                            s.id,
+                            s.state
+                        );
+                        s.state = "idle".to_string();
+                        s.active_subagents = 0;
+                        s.permission_mode = None;
+                        active_since.remove(&s.id);
+                        identity.remove(&s.id);
+                    }
+                    s
+                })
+                .collect()
+        };
+
         // Liveness check: demote sessions whose owning Claude Code process has
         // died. This catches hooks that never fired a resolving event — e.g.
         // a crash during a tool call or an interrupted /compact leaves the
@@ -682,6 +718,68 @@ impl SessionMonitorState {
     /// Claude Code uses the git root (not necessarily the CWD) as the project directory,
     /// so we try the exact workspace encoding first, then walk up parent directories,
     /// and finally search all project directories as a fallback.
+    /// Authoritative check for whether Claude Code's JSONL transcript for
+    /// this session id currently exists on disk. Walks workspace ancestors
+    /// (matching `jsonl_path`'s resolution strategy) and falls back to a
+    /// scan of all project dirs. On a hit, populates the `resolved_paths`
+    /// cache so `jsonl_path` won't re-walk on its next call.
+    ///
+    /// Distinct from `jsonl_path`, which always returns *some* string —
+    /// useful when the caller wants to retry, but unsuitable for "does the
+    /// session id still exist as far as Claude Code is concerned?" checks.
+    fn jsonl_exists_on_disk(
+        &self,
+        session_id: &str,
+        workspace: &str,
+        projects_path: &Path,
+    ) -> bool {
+        // If we already resolved a path for this id, just stat it. A deleted
+        // JSONL still leaves the cached string in place; `Path::exists()`
+        // returning false is exactly the signal we want.
+        if let Some(cached) = self.resolved_paths.lock().unwrap().get(session_id).cloned() {
+            return Path::new(&cached).exists();
+        }
+
+        let filename = format!("{}.jsonl", session_id);
+
+        let mut path = PathBuf::from(workspace);
+        loop {
+            let path_str = path.to_string_lossy().to_string();
+            if path_str.is_empty() || path_str == "/" {
+                break;
+            }
+            let candidate = projects_path
+                .join(encode_workspace_path(&path_str))
+                .join(&filename);
+            if candidate.exists() {
+                self.resolved_paths
+                    .lock()
+                    .unwrap()
+                    .insert(session_id.to_string(), candidate.to_string_lossy().to_string());
+                return true;
+            }
+            match path.parent() {
+                Some(parent) if parent != path => path = parent.to_path_buf(),
+                _ => break,
+            }
+        }
+
+        if let Ok(dirs) = std::fs::read_dir(projects_path) {
+            for entry in dirs.flatten() {
+                let candidate = entry.path().join(&filename);
+                if candidate.exists() {
+                    self.resolved_paths
+                        .lock()
+                        .unwrap()
+                        .insert(session_id.to_string(), candidate.to_string_lossy().to_string());
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
     fn jsonl_path(&self, session_id: &str, workspace: &str, projects_path: &Path) -> String {
         // Check cache
         {
@@ -1226,6 +1324,56 @@ mod tests {
         assert_eq!(sorted[0].id, "s1"); // started_at = 900
         assert_eq!(sorted[1].id, "s2"); // started_at = 950
         assert_eq!(sorted[2].id, "s3"); // started_at = 970
+    }
+
+    #[test]
+    fn test_jsonl_exists_on_disk_present() {
+        let dir = std::env::temp_dir().join("cue_test_exists_present");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let project_dir = dir.join("-Users-dev-App");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(project_dir.join("sess-a.jsonl"), "{}").unwrap();
+
+        let state = SessionMonitorState::new();
+        assert!(state.jsonl_exists_on_disk("sess-a", "/Users/dev/App", &dir));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_jsonl_exists_on_disk_missing() {
+        let dir = std::env::temp_dir().join("cue_test_exists_missing");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = SessionMonitorState::new();
+        assert!(!state.jsonl_exists_on_disk("sess-gone", "/Users/dev/App", &dir));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_jsonl_exists_on_disk_detects_deletion_after_cache() {
+        // Reproduces the session-id rotation case: a session id that was
+        // resolvable once gets its JSONL deleted by Claude Code. The cached
+        // path remains but the file is gone — the helper must report false.
+        let dir = std::env::temp_dir().join("cue_test_exists_after_delete");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let project_dir = dir.join("-Users-dev-App");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let jsonl = project_dir.join("sess-rotated.jsonl");
+        std::fs::write(&jsonl, "{}").unwrap();
+
+        let state = SessionMonitorState::new();
+        // First call resolves and caches.
+        assert!(state.jsonl_exists_on_disk("sess-rotated", "/Users/dev/App", &dir));
+        // Now Claude Code rotates the id and removes the file.
+        std::fs::remove_file(&jsonl).unwrap();
+        assert!(!state.jsonl_exists_on_disk("sess-rotated", "/Users/dev/App", &dir));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
