@@ -611,6 +611,8 @@ export function SettingsView() {
       menuBarStyle: "default",
       showInDock: true,
       startAtLogin: true,
+      trayShortcutEnabled: false,
+      trayShortcut: "CmdOrCtrl+Shift+C",
       themeCustomizations: settings.themeCustomizations ?? {},
     };
     setSettings(defaults);
@@ -1098,6 +1100,27 @@ export function SettingsView() {
             label="Start at login"
           />
         </SettingRow>
+        <SettingRow label="Tray toggle shortcut" description="Open or close the tray popover with a global keyboard shortcut" onReset={(settings.trayShortcutEnabled ?? false) ? () => setSettings({ ...settings, trayShortcutEnabled: false }) : undefined}>
+          <Toggle
+            checked={settings.trayShortcutEnabled ?? false}
+            onChange={() => setSettings({ ...settings, trayShortcutEnabled: !(settings.trayShortcutEnabled ?? false) })}
+            label="Tray toggle shortcut"
+          />
+        </SettingRow>
+        {(settings.trayShortcutEnabled ?? false) && (
+          <SettingRow label="Shortcut binding" description={'Tauri-format accelerator (e.g. "CmdOrCtrl+Shift+C", "Alt+Space")'} onReset={(settings.trayShortcut ?? "") !== "CmdOrCtrl+Shift+C" ? () => setSettings({ ...settings, trayShortcut: "CmdOrCtrl+Shift+C" }) : undefined}>
+            <input
+              type="text"
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+              value={settings.trayShortcut ?? "CmdOrCtrl+Shift+C"}
+              onChange={(e) => setSettings({ ...settings, trayShortcut: e.target.value })}
+              className="w-44 px-2 py-1 rounded-md bg-white/10 border border-white/15 text-white/90 text-sm font-mono focus:outline-none focus:border-white/30"
+              placeholder="CmdOrCtrl+Shift+C"
+            />
+          </SettingRow>
+        )}
       </section>
 
       {/* Beta Features */}
