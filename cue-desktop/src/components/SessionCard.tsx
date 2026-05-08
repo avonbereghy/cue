@@ -37,15 +37,10 @@ import { SignalString } from "./SignalString";
 import type { StrikePulse, CometPulse } from "./SignalString";
 import { FluxEffect } from "./FluxEffect";
 import { AuroraEffect, AURORA_EXIT_MS } from "./AuroraEffect";
-import { CompactTankEffect } from "./CompactTankEffect";
+// CompactTankEffect intentionally not imported — the periwinkle wash is
+// disabled. State color + spool drain already cover the compacting cue.
 import { StatusDot } from "./StatusDot";
 import { beginTransition, endTransition } from "@/lib/transitionRegistry";
-
-/** Compact-tank fade-in window (ms) when entering compacting. */
-const COMPACT_TANK_ENTER_MS = 600;
-/** Compact-tank fade-out window (ms) when leaving compacting. The canvas
- *  stays mounted until this elapses so the periwinkle wash doesn't pop. */
-const COMPACT_TANK_EXIT_MS = 800;
 import { FlipNumber } from "./FlipNumber";
 import { SpoolContextBar } from "./SpoolContextBar";
 
@@ -304,72 +299,6 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     }
     return clearAuroraTimer;
   }, [displayState, auroraMounted]);
-
-  // Compact-tank linger: same enter/exit ramp pattern as flux/aurora. Mount
-  // when entering compacting; ramp alpha 0→1 over COMPACT_TANK_ENTER_MS; on
-  // exit ramp 1→0 over COMPACT_TANK_EXIT_MS, then unmount. Without this the
-  // periwinkle wash popped in/out abruptly (and previously didn't render at
-  // all because CompactTankEffect was never imported).
-  const [compactTankMounted, setCompactTankMounted] = useState(displayState === "compacting");
-  const [compactTankAlpha, setCompactTankAlpha] = useState(displayState === "compacting" ? 1 : 0);
-  // Live alpha mirror: the ramp uses this ref as its start value so the exit
-  // ramp picks up wherever the enter ramp left off, even if the enter ramp
-  // never completed before the user flipped out of compacting. Reading the
-  // state directly would close over a stale render value (the effect is
-  // intentionally not retriggered on alpha changes).
-  const compactTankAlphaRef = useRef(compactTankAlpha);
-  compactTankAlphaRef.current = compactTankAlpha;
-  const compactTankRafRef = useRef<number | null>(null);
-  const compactTankUnmountRef = useRef<number | null>(null);
-  useEffect(() => {
-    const cancelRamp = () => {
-      if (compactTankRafRef.current !== null) {
-        cancelAnimationFrame(compactTankRafRef.current);
-        compactTankRafRef.current = null;
-      }
-    };
-    const cancelUnmount = () => {
-      if (compactTankUnmountRef.current !== null) {
-        window.clearTimeout(compactTankUnmountRef.current);
-        compactTankUnmountRef.current = null;
-      }
-    };
-    const rampTo = (target: number, durationMs: number) => {
-      cancelRamp();
-      const startA = compactTankAlphaRef.current;
-      const startT = performance.now();
-      const step = () => {
-        const t = Math.min(1, (performance.now() - startT) / durationMs);
-        // ease-out cubic for a soft fade tail
-        const eased = 1 - Math.pow(1 - t, 3);
-        setCompactTankAlpha(startA + (target - startA) * eased);
-        if (t < 1) {
-          compactTankRafRef.current = requestAnimationFrame(step);
-        } else {
-          compactTankRafRef.current = null;
-        }
-      };
-      compactTankRafRef.current = requestAnimationFrame(step);
-    };
-
-    if (displayState === "compacting") {
-      cancelUnmount();
-      setCompactTankMounted(true);
-      rampTo(1, COMPACT_TANK_ENTER_MS);
-    } else if (compactTankMounted) {
-      rampTo(0, COMPACT_TANK_EXIT_MS);
-      cancelUnmount();
-      compactTankUnmountRef.current = window.setTimeout(() => {
-        setCompactTankMounted(false);
-        compactTankUnmountRef.current = null;
-      }, COMPACT_TANK_EXIT_MS + 60);
-    }
-    return () => {
-      cancelRamp();
-      cancelUnmount();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [displayState]);
 
   // Unmount-only cleanup for the handoff timer.
   useEffect(() => {
@@ -1173,16 +1102,9 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
         />
       )}
 
-      {/* Compact tank — periwinkle glass wash that drains right→left while
-          compacting. Fades in/out via compactTankAlpha (ease-out) so leaving
-          compacting doesn't pop. fillRef is owned by the parent's drain loop
-          so we don't re-render the canvas every frame. */}
-      {!lowPower && compactTankMounted && (revived || info.state !== "ended") && (
-        <CompactTankEffect
-          fillRef={compactFillRef}
-          alpha={compactTankAlpha}
-        />
-      )}
+      {/* Compact tank periwinkle wash intentionally disabled — the spool
+          drain + state color already convey compacting. Restore by
+          re-importing CompactTankEffect and reinstating the alpha ramp. */}
 
       {/* Signal String / Sand — renders behind all content */}
       {signalString && (revived || info.state !== "ended") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} comets={cometsRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={signalEffect} sandEnabled={sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} stringDeployAngle={stringDeployAngle} sessionId={info.id} contentRef={contentRef} keyReleaseSpeed={keyReleaseSpeed} onStringsConnected={handleStringsConnected} extraBands={combinedExtraBands} suppressBaseBands={suppressBaseBands} baseBandsTarget={baseBandsTarget} baseBandsAmpMuls={baseBandsAmpMuls} />}
