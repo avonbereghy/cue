@@ -13,6 +13,7 @@
     "core:window:allow-set-min-size",
     "core:window:allow-set-decorations",
     "updater:default",
-    "process:default"
+    "process:default",
+    "global-shortcut:default"
   ]
 }

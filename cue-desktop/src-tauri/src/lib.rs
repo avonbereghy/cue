@@ -36,6 +36,13 @@ pub struct AppState {
     pub monitor: Arc<SessionMonitorState>,
     pub pending_permissions: Arc<permission_server::PendingRequests>,
     pub permission_metadata: Arc<Mutex<HashMap<String, models::PermissionRequest>>>,
+    /// Last-known screen rect of the tray icon, captured on every click. Used
+    /// to anchor the popover when the user opens it via the global shortcut
+    /// before clicking the icon at all.
+    pub last_tray_rect: Arc<Mutex<Option<tauri::Rect>>>,
+    /// Currently-registered global shortcut string, so we know what to
+    /// unregister before applying a new settings value.
+    pub registered_shortcut: Arc<Mutex<Option<String>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +270,7 @@ fn update_settings(app: tauri::AppHandle, new_settings: Settings) -> Result<(), 
     // theme and causes a white flash.
     settings::save_settings(&new_settings)?;
     apply_visibility_settings(&app, &new_settings);
+    apply_shortcut_settings(&app, &new_settings);
     let _ = app.emit("settings-changed", &new_settings);
     Ok(())
 }
@@ -1228,10 +1236,22 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    use tauri_plugin_global_shortcut::ShortcutState;
+                    if event.state() == ShortcutState::Pressed {
+                        toggle_tray_popover_via_shortcut(app);
+                    }
+                })
+                .build(),
+        )
         .manage(AppState {
             monitor: monitor.clone(),
             pending_permissions,
             permission_metadata,
+            last_tray_rect: Arc::new(Mutex::new(None)),
+            registered_shortcut: Arc::new(Mutex::new(None)),
         })
         .invoke_handler(tauri::generate_handler![
             get_sessions,
@@ -1370,7 +1390,9 @@ pub fn run() {
             setup_tray(&handle, &monitor_tray)?;
 
             // --- Menu-bar / Dock / login settings ---
-            apply_visibility_settings(&handle, &settings::load_settings());
+            let startup_settings = settings::load_settings();
+            apply_visibility_settings(&handle, &startup_settings);
+            apply_shortcut_settings(&handle, &startup_settings);
 
             // --- Blink timer (0.5s) ---
             spawn_blink_timer(handle.clone(), monitor_tray.clone());
@@ -1783,7 +1805,11 @@ fn setup_tray(
                 ..
             } = event
             {
-                show_tray_popover(tray.app_handle(), rect);
+                let app = tray.app_handle();
+                if let Some(state) = app.try_state::<AppState>() {
+                    *state.last_tray_rect.lock().unwrap() = Some(rect);
+                }
+                show_tray_popover(app, rect);
             }
         })
         .on_menu_event(move |app, event| match event.id().as_ref() {
@@ -1954,6 +1980,89 @@ fn show_tray_popover(app: &AppHandle, rect: tauri::Rect) {
     let _ = popover.show();
     let _ = popover.set_focus();
     let _ = app.emit("tray-popover-shown", ());
+
+    // Cache the rect we just used so a subsequent global-shortcut invocation
+    // can re-anchor at the same spot without waiting for another click.
+    if let Some(state) = app.try_state::<AppState>() {
+        *state.last_tray_rect.lock().unwrap() = Some(rect);
+    }
+}
+
+/// Toggle the tray popover from a global shortcut. If the popover is visible,
+/// hide it. Otherwise re-open it at the last-known tray-icon rect, falling
+/// back to the top-right of the primary monitor when the user has never
+/// clicked the tray icon yet.
+fn toggle_tray_popover_via_shortcut(app: &AppHandle) {
+    let popover = match app.get_webview_window("tray-popover") {
+        Some(w) => w,
+        None => return,
+    };
+    if let Ok(true) = popover.is_visible() {
+        let _ = popover.hide();
+        return;
+    }
+    let rect = app
+        .try_state::<AppState>()
+        .and_then(|s| *s.last_tray_rect.lock().unwrap())
+        .unwrap_or_else(|| fallback_tray_rect(&popover));
+    show_tray_popover(app, rect);
+}
+
+/// Synthesize a tray-icon rect at the top-right of the popover's current
+/// monitor. Used when no real click rect has been observed yet — the popover
+/// opens just under the menu bar at the right edge, matching where most
+/// users keep menu-bar utilities.
+fn fallback_tray_rect(popover: &tauri::WebviewWindow) -> tauri::Rect {
+    use tauri::{LogicalPosition, LogicalSize};
+    let scale = popover.scale_factor().unwrap_or(1.0);
+    let monitor_w = popover
+        .current_monitor()
+        .ok()
+        .flatten()
+        .map(|m| m.size().width as f64 / scale)
+        .unwrap_or(1440.0);
+    // Tray icons live near the right edge on macOS; 28px in from the right
+    // approximates a single-icon offset. Y=2 puts the synthetic icon "bottom"
+    // at the menu bar so show_tray_popover's 6px gap leaves it just below.
+    tauri::Rect {
+        position: LogicalPosition::new(monitor_w - 28.0, 2.0).into(),
+        size: LogicalSize::new(24.0, 24.0).into(),
+    }
+}
+
+/// Apply the user's tray-shortcut settings — unregister any existing
+/// shortcut, then register the configured one if `tray_shortcut_enabled`.
+/// Idempotent: safe to call on every settings save.
+fn apply_shortcut_settings(handle: &AppHandle, settings: &models::Settings) {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let state = match handle.try_state::<AppState>() {
+        Some(s) => s,
+        None => return,
+    };
+    let gs = handle.global_shortcut();
+
+    // Unregister whatever we had previously, so the new value cleanly replaces it.
+    let mut current = state.registered_shortcut.lock().unwrap();
+    if let Some(old) = current.take() {
+        let _ = gs.unregister(old.as_str());
+    }
+
+    if !settings.tray_shortcut_enabled {
+        return;
+    }
+    let raw = settings.tray_shortcut.trim();
+    if raw.is_empty() {
+        return;
+    }
+    match gs.register(raw) {
+        Ok(()) => {
+            *current = Some(raw.to_string());
+            log::info!("Registered tray-toggle shortcut: {}", raw);
+        }
+        Err(e) => {
+            log::warn!("Failed to register shortcut '{}': {}", raw, e);
+        }
+    }
 }
 
 /// Build the tray context menu from current session data.

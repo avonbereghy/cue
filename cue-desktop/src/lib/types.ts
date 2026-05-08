@@ -241,6 +241,10 @@ export interface Settings {
   showInDock: boolean;
   /** Launch Cue automatically at login. Default: true. */
   startAtLogin: boolean;
+  /** Enable a global shortcut that toggles the tray popover. Default: false. */
+  trayShortcutEnabled: boolean;
+  /** Tauri-format global shortcut, e.g. "CmdOrCtrl+Shift+C". */
+  trayShortcut: string;
   /** Per-theme appearance customizations saved by the user, keyed by theme ID */
   themeCustomizations: Record<string, ThemeCustomization>;
 }
