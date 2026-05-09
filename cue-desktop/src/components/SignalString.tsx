@@ -320,13 +320,13 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // Tracks when the session went inactive — drives wind ramp-down and gravity transition
   const sandDeactivatedAtRef = useRef<number | null>(null);
   // Deploy priority for progressive working strings.
-  // Index 0 is the FIRST band that deploys. Order is now bass → mids → treble
-  // so the strings come out low-to-high, matching the natural acoustic reading
-  // of the spread.
-  //   priority[0] = bass    (above center)
+  // Index 0 is the FIRST band that deploys. Order is now treble → mids → bass
+  // so the strings come out high-to-low — the brightest band leads, then the
+  // mids fill, then the bass anchors.
+  //   priority[0] = treble  (below center)
   //   priority[1] = mids    (center)
-  //   priority[2] = treble  (below center)
-  const BAND_PRIORITY = [0, 1, 2] as const;
+  //   priority[2] = bass    (above center)
+  const BAND_PRIORITY = [2, 1, 0] as const;
   const bandEnabled = (bandIdx: number, target: number) =>
     BAND_PRIORITY.indexOf(bandIdx as 0 | 1 | 2) < target;
   const baseBandsTargetRef = useRef(baseBandsTarget);
@@ -339,8 +339,10 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // the staggered deploy for whichever bands baseBandsTarget currently enables.
   const clipFractionsRef = useRef(new Float64Array(3));
   const clipVelsRef = useRef(new Float64Array(3));
-  // Per-band ready flags and timers — staggered: band 0 first, band 1 after 400ms, band 2 after 520ms
-  const bandStaggerMs = [0, 400, 520];
+  // Per-band ready flags and timers — indexed by physical band [bass, mids,
+  // treble]. With the treble→mids→bass deploy order, treble (band 2) fires
+  // first, mids (band 1) at 400ms, bass (band 0) at 520ms.
+  const bandStaggerMs = [520, 400, 0];
   const retractTimersRef = useRef<(number | null)[]>([null, null, null]);
   const retractReadyRef = useRef<boolean[]>([true, true, true]);
   const deployTimersRef = useRef<(number | null)[]>([null, null, null]);
@@ -437,7 +439,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       // baseBandsTarget). Disabled bands stay at clipFraction=0 and will be
       // deployed later by the progressive-deploy effect if the target grows.
       deployReadyRef.current = [false, false, false];
-      const bandNudge = [0.35, 0.15, 0.15]; // first band gets a stronger initial push
+      const bandNudge = [0.15, 0.15, 0.35]; // first band (treble) gets a stronger initial push
       for (let i = 0; i < 3; i++) {
         if (!bandEnabled(i, baseBandsTargetRef.current)) continue;
         const delay = 850 + bandStaggerMs[i];
@@ -464,7 +466,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       } else {
         // Staggered retract: band 0 first, band 1 after 500ms, band 2 after 600ms
         retractReadyRef.current = [false, false, false];
-        const whipAmps = [2.2, 1.6, 1.1];
+        const whipAmps = [1.1, 1.6, 2.2]; // treble retracts first; biggest whip on the leader
         for (let i = 0; i < 3; i++) {
           const delay = cordRetractDelay * 1000 + bandStaggerMs[i];
           retractTimersRef.current[i] = window.setTimeout(() => {
@@ -541,7 +543,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           retractTimersRef.current[i] = null;
         }
       }
-      const bandNudge = [0.35, 0.15, 0.15];
+      const bandNudge = [0.15, 0.15, 0.35];
       for (let i = 0; i < 3; i++) {
         // Respect progressive deploy: only kick off bands the parent currently
         // wants (baseBandsTarget). The remainder stay at clipFraction=0 until
@@ -576,7 +578,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   useEffect(() => {
     if (!stateIsActive) return;
     const target = baseBandsTarget;
-    const bandNudge = [0.35, 0.15, 0.15];
+    const bandNudge = [0.15, 0.15, 0.35];
     for (let i = 0; i < 3; i++) {
       const enabled = bandEnabled(i, target);
       if (enabled) {
@@ -744,7 +746,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         }
       }
       retractReadyRef.current = [false, false, false];
-      const whipAmps = [2.2, 1.6, 1.1];
+      const whipAmps = [1.1, 1.6, 2.2]; // treble retracts first; biggest whip on the leader
       for (let i = 0; i < 3; i++) {
         const delay = 100 + bandStaggerMs[i];
         retractTimersRef.current[i] = window.setTimeout(() => {
@@ -773,7 +775,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             deployTimersRef.current[i] = null;
           }
         }
-        const bandNudge = [0.35, 0.15, 0.15];
+        const bandNudge = [0.15, 0.15, 0.35];
         for (let i = 0; i < 3; i++) {
           const delay = 150 + bandStaggerMs[i];
           deployTimersRef.current[i] = window.setTimeout(() => {
