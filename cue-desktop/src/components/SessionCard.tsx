@@ -957,8 +957,22 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       // tab hidden, or a turn-end transition was missed). Treat that gap as a
       // turn boundary and reset the counter rather than silently preserving
       // it across what was effectively a different turn.
+      //
+      // BUT: if we're currently in working/subagent (a live turn), we KNOW
+      // we're mid-turn — a giant gap was throttling, not a missed boundary.
+      // Resetting in that case tears down already-deployed strings (the
+      // progressive base-band effect snaps clipFraction to 0 when
+      // baseBandsTarget falls to 0) and they only redeploy after another 1s
+      // of active-gen time — and only if the next tick actually lands within
+      // 8s, which it won't if throttling persists. Clamp the gap and carry
+      // on instead.
       const gap = now - last;
       if (gap > 8_000) {
+        if (isPromoting) {
+          // Mid-turn — preserve counter, don't backdate the missed time.
+          lastTickMsRef.current = now;
+          return;
+        }
         activeGenMsRef.current = 0;
         setStringCount(c => (c === 0 ? c : 0));
         lastTickMsRef.current = now;

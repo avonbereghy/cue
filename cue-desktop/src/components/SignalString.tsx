@@ -756,8 +756,12 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       baseSuppressRetractedRef.current = true;
     } else if (baseSuppressRetractedRef.current) {
       // Suppression released — if the session is still in an active state,
-      // redeploy the base bands from zero. Otherwise let the regular isActive
-      // flow take over.
+      // redeploy the base bands from zero. Otherwise leave the latch armed:
+      // a later return to working/subagent without a thinking→working handoff
+      // (which would catch this via its own redeploy block) would otherwise
+      // have nothing to trigger redeploy. The next firing of this effect
+      // (e.g., displayState toggling subagent→non-subagent again) will retry
+      // the redeploy, or the next thinking→working handoff will do it.
       if (stateRef.current === "working" || stateRef.current === "subagent") {
         clipFractionsRef.current.fill(0);
         clipVelsRef.current.fill(0);
@@ -778,8 +782,9 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             deployTimersRef.current[i] = null;
           }, delay);
         }
+        baseSuppressRetractedRef.current = false;
       }
-      baseSuppressRetractedRef.current = false;
+      // else: keep the latch armed for the next opportunity to redeploy.
     }
   }, [suppressBaseBands, cordDeployForce]);
 
