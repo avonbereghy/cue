@@ -1122,6 +1122,33 @@ fn startup_checks() {
 
 /// Spawn background timers for polling and metrics refresh.
 fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
+    // Eager prime on app start: run one full pass (metrics + supplemental +
+    // poll_status) before the periodic loops settle in. The 1s interval below
+    // ticks immediately too, but this gives us belt-and-suspenders coverage so
+    // an initial sessions.json snapshot lands as early as possible — and any
+    // sessions that were already running when Cue launched are evaluated by
+    // the state-aware filter without waiting on a timer schedule.
+    {
+        let monitor_prime = monitor.clone();
+        let app_prime = app_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            let m = monitor_prime.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                m.refresh_metrics();
+                m.refresh_supplemental();
+                m.poll_status();
+                m.enriched_sessions.lock().unwrap().clone()
+            })
+            .await;
+            match result {
+                Ok(sessions) => {
+                    let _ = app_prime.emit("sessions-updated", &sessions);
+                }
+                Err(e) => log::warn!("Eager startup poll failed: {}", e),
+            }
+        });
+    }
+
     let monitor_poll = monitor.clone();
     let app_poll = app_handle.clone();
 
