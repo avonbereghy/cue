@@ -6,18 +6,22 @@
 
 import type { SignalPreset } from "./types";
 
-const PRESET_SAMPLE_RATE = 60; // envelope samples per second
+export const PRESET_SAMPLE_RATE = 60; // envelope samples per second
+
+export interface DecodedPcm {
+  /** Mono Float32 PCM at the original audio sample rate. */
+  mono: Float32Array;
+  /** Original audio sample rate (samples/sec). */
+  sampleRate: number;
+  /** Duration in seconds. */
+  duration: number;
+}
 
 /**
- * Extract a SignalPreset from an audio file.
- * @param file - The audio file to process
- * @param name - Display name for the preset
- * @returns A complete SignalPreset ready to save
+ * Decode an audio file to mono PCM. Does not play audio — purely numeric.
  */
-export async function extractPreset(file: File, name: string): Promise<SignalPreset> {
+export async function decodeFile(file: File): Promise<DecodedPcm> {
   const arrayBuffer = await file.arrayBuffer();
-
-  // Decode audio to raw PCM — this doesn't play anything
   const audioCtx = new AudioContext();
   let audioBuffer: AudioBuffer;
   try {
@@ -25,14 +29,27 @@ export async function extractPreset(file: File, name: string): Promise<SignalPre
   } finally {
     await audioCtx.close();
   }
+  return {
+    mono: mixToMono(audioBuffer),
+    sampleRate: audioBuffer.sampleRate,
+    duration: audioBuffer.duration,
+  };
+}
 
-  const sr = audioBuffer.sampleRate;
-  const duration = audioBuffer.duration;
+/**
+ * Extract a SignalPreset from already-decoded mono PCM.
+ * Used by the source editor (which decodes once then re-extracts on every param change)
+ * and the one-shot upload path (via {@link extractPreset}).
+ */
+export function extractFromPcm(
+  mono: Float32Array,
+  sampleRate: number,
+  name: string,
+): SignalPreset {
+  const sr = sampleRate;
+  const duration = mono.length / sr;
   const totalEnvelopeSamples = Math.ceil(duration * PRESET_SAMPLE_RATE);
   const chunkSize = Math.floor(sr / PRESET_SAMPLE_RATE);
-
-  // Mix to mono
-  const mono = mixToMono(audioBuffer);
 
   // 4-pole cascaded IIR low-pass filters for steep band separation (24dB/oct)
   // Bass: < ~300 Hz, Mids: 300-4000 Hz, Treble: > 4000 Hz
@@ -106,13 +123,24 @@ export async function extractPreset(file: File, name: string): Promise<SignalPre
   };
 }
 
+/**
+ * One-shot: decode a file and extract a SignalPreset.
+ * @param file - The audio file to process
+ * @param name - Display name for the preset
+ */
+export async function extractPreset(file: File, name: string): Promise<SignalPreset> {
+  const { mono, sampleRate } = await decodeFile(file);
+  return extractFromPcm(mono, sampleRate, name);
+}
+
 /** Mix an AudioBuffer down to a mono Float32Array. */
 function mixToMono(buffer: AudioBuffer): Float32Array {
   const length = buffer.length;
   const channels = buffer.numberOfChannels;
 
   if (channels === 1) {
-    return buffer.getChannelData(0);
+    // Copy so callers can mutate without affecting the AudioBuffer
+    return new Float32Array(buffer.getChannelData(0));
   }
 
   const mono = new Float32Array(length);
