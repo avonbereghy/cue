@@ -866,13 +866,16 @@ pub fn encode_workspace_path(workspace: &str) -> String {
 }
 
 /// States that indicate the owning Claude Code process should still be alive.
-/// Terminal states (idle, done, error, ended) and states the user is explicitly
-/// interacting with (waiting) are excluded — the former don't claim activity,
-/// the latter stay put until the user responds.
+/// Terminal states (idle, done, error, ended) are excluded — they don't claim
+/// activity. `waiting` is included because a stale waiting prompt whose
+/// process has died is just as misleading as a stale working state — if the
+/// liveness check fails, it gets demoted to idle and falls through the
+/// launched_at gate. A genuinely live waiting prompt has both an alive parent
+/// PID and a JSONL on disk, so it survives both checks intact.
 fn is_liveness_sensitive(state: &str) -> bool {
     matches!(
         state,
-        "working" | "thinking" | "subagent" | "compacting" | "clearing"
+        "working" | "thinking" | "subagent" | "compacting" | "clearing" | "waiting"
     )
 }
 
@@ -1104,9 +1107,12 @@ mod tests {
         assert!(is_liveness_sensitive("subagent"));
         assert!(is_liveness_sensitive("compacting"));
         assert!(is_liveness_sensitive("clearing"));
+        // `waiting` is liveness-sensitive: a stale prompt whose process died
+        // shouldn't linger forever. A live waiting prompt has both PID + JSONL
+        // intact, so liveness leaves it alone.
+        assert!(is_liveness_sensitive("waiting"));
         assert!(!is_liveness_sensitive("idle"));
         assert!(!is_liveness_sensitive("done"));
-        assert!(!is_liveness_sensitive("waiting"));
         assert!(!is_liveness_sensitive("error"));
     }
 
