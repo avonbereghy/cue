@@ -405,6 +405,13 @@ fn is_animating_state(state: &str) -> bool {
     )
 }
 
+/// State strings that fill the full pillar height in the bar-chart icon
+/// regardless of context usage. Reserved for high-attention or mid-operation
+/// states so they read clearly in the menu bar.
+fn fills_full_pillar(state: &str) -> bool {
+    matches!(state, "waiting" | "error" | "compacting")
+}
+
 /// Pick a shine overlay color that contrasts with the bar's own color.
 /// Bright bars (e.g. the white "working" state) get a darker gray glint so
 /// the shine is visible; darker / muted bars get a translucent white glint.
@@ -567,8 +574,16 @@ pub fn render_bar_chart(sessions: &[EnrichedSession], tick: u32, size: u32) -> V
         // much smaller than `bar_w` so real context percentages don't get
         // clamped together (e.g. 14% and 23% must render at visibly
         // different heights).
+        //
+        // States that demand attention (waiting, error) or are mid-system
+        // operation (compacting) override context entirely and fill the
+        // whole pillar so they're impossible to miss in the menu bar.
         let min_h = (total_h * 0.08).max(2.5);
-        let bar_h = (ctx * total_h).max(min_h);
+        let bar_h = if fills_full_pillar(&session.info.state) {
+            total_h
+        } else {
+            (ctx * total_h).max(min_h)
+        };
         let y = pad_y + total_h - bar_h;
         let bar_path = rounded_rect_path(x, y, bar_w, bar_h, radius);
         pixmap.fill_path(
@@ -917,6 +932,35 @@ mod tests {
             low_png, high_png,
             "context fraction must affect rendered bar height"
         );
+    }
+
+    #[test]
+    fn test_render_bars_attention_states_fill_pillar() {
+        // waiting/error/compacting should ignore context % and fill the
+        // whole pillar. A low-context attention bar must therefore render
+        // differently from a low-context idle bar (idle is short, attention
+        // is full-height).
+        for state in ["waiting", "error", "compacting"] {
+            let attention = vec![make_session_with_context(state, 0.05)];
+            let idle = vec![make_session_with_context("idle", 0.05)];
+            let attention_full = vec![make_session_with_context(state, 1.0)];
+            // Low-context attention must look different from low-context idle
+            // (filled vs nearly-empty).
+            assert_ne!(
+                render_bar_chart(&attention, 0, 44),
+                render_bar_chart(&idle, 0, 44),
+                "{} should fill pillar regardless of context",
+                state
+            );
+            // 5% and 100% context for an attention state should be identical
+            // — both fill the pillar.
+            assert_eq!(
+                render_bar_chart(&attention, 0, 44),
+                render_bar_chart(&attention_full, 0, 44),
+                "{} should ignore context entirely",
+                state
+            );
+        }
     }
 
     #[test]
