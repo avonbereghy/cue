@@ -149,13 +149,19 @@ impl SessionMonitorState {
             }
         };
 
-        // Only show sessions that appeared after Cue launched.
-        // Check both started_at and last_activity so sessions that were
-        // already idle when Cue opened aren't hidden until their next event.
+        // Admission filter:
+        //   - Active states (working/thinking/subagent/compacting/clearing) and
+        //     `waiting` bypass the launched_at gate. The hook is event-driven, so
+        //     a session mid-generation when Cue starts has stale timestamps even
+        //     though it's very much alive — the PID + JSONL liveness checks
+        //     below are the right signal for those.
+        //   - Terminal/quiescent states (idle/done/error/ended) keep the gate
+        //     so prior-run ghosts don't pile up. The post-demotion sweep below
+        //     re-applies this to any session demoted from an active state.
         let launched_at = self.launched_at;
         let active = sort_sessions(status.sessions.into_values().filter(|s| {
-            (s.last_activity >= launched_at || s.started_at >= launched_at)
-                && security::sanitize_workspace_path(&s.workspace).is_ok()
+            security::sanitize_workspace_path(&s.workspace).is_ok()
+                && admit_session(&s.state, s.started_at, s.last_activity, launched_at)
         }));
 
         // Deduplicate sessions sharing the same workspace that started within
@@ -340,6 +346,15 @@ impl SessionMonitorState {
                 })
                 .collect()
         };
+
+        // Post-demotion sweep: re-apply the launched_at gate to any session
+        // that's no longer in a bypass state. Without this, a session admitted
+        // via `bypasses_launch_gate` and then demoted (dead PID, missing JSONL,
+        // turn-ended) would surface as a stale idle entry from a prior run.
+        let active: Vec<SessionInfo> = active
+            .into_iter()
+            .filter(|s| admit_session(&s.state, s.started_at, s.last_activity, launched_at))
+            .collect();
 
         // Latched promotions/rescues/floors. Each transform reads + writes
         // its own mutex so per-session decisions persist across polls and
@@ -861,6 +876,29 @@ fn is_liveness_sensitive(state: &str) -> bool {
     )
 }
 
+/// States that deserve to bypass the `launched_at` admission gate.
+/// Liveness-sensitive states have a strong signal (live PID + alive JSONL)
+/// that the later checks in `poll_status` will use to demote stale entries,
+/// so the launch-time filter would just suppress real in-progress sessions
+/// that started before Cue did. `waiting` is included because user-attention
+/// states should never be hidden — the user has to respond. Terminal states
+/// (`idle`, `done`, `error`, `ended`) keep the launched_at gate to avoid
+/// resurfacing ghosts from prior Cue runs.
+fn bypasses_launch_gate(state: &str) -> bool {
+    is_liveness_sensitive(state) || state == "waiting"
+}
+
+/// Decide whether a session should be admitted to the active list.
+/// Active/waiting states bypass the launched_at gate; quiescent states
+/// keep it so prior-run entries don't pile up. Used both at entry and
+/// after demotions to clean up sessions that fell out of bypass states.
+fn admit_session(state: &str, started_at: f64, last_activity: f64, launched_at: f64) -> bool {
+    if bypasses_launch_gate(state) {
+        return true;
+    }
+    last_activity >= launched_at || started_at >= launched_at
+}
+
 /// Result of comparing a session's recorded pid against live process state.
 enum LivenessOutcome {
     /// Process is alive and matches the expected identity (or we're capturing
@@ -1076,6 +1114,60 @@ mod tests {
     fn test_session_monitor_state_new() {
         let state = SessionMonitorState::new();
         assert!(state.enriched_sessions.lock().unwrap().is_empty());
+    }
+
+    // ── admission filter ────────────────────────────────────────────────
+    // Cue's launch-time admission gate is state-aware: active/waiting
+    // states bypass it (the PID + JSONL liveness checks downstream are the
+    // real gate), terminal states keep it so prior-run ghosts don't surface.
+
+    #[test]
+    fn test_bypasses_launch_gate_active_states() {
+        for s in ["working", "thinking", "subagent", "compacting", "clearing", "waiting"] {
+            assert!(bypasses_launch_gate(s), "state {} should bypass", s);
+        }
+    }
+
+    #[test]
+    fn test_bypasses_launch_gate_terminal_states() {
+        for s in ["idle", "done", "error", "ended"] {
+            assert!(!bypasses_launch_gate(s), "state {} should not bypass", s);
+        }
+    }
+
+    #[test]
+    fn test_admit_active_session_with_old_timestamps() {
+        // Working session that started before Cue launched and hasn't fired
+        // a hook event since (mid-generation) must still be admitted.
+        let launched = 1000.0;
+        assert!(admit_session("working", 500.0, 600.0, launched));
+        assert!(admit_session("thinking", 500.0, 600.0, launched));
+        assert!(admit_session("subagent", 0.0, 0.0, launched));
+    }
+
+    #[test]
+    fn test_admit_waiting_session_with_old_timestamps() {
+        // User-attention state — must surface regardless of launch time.
+        assert!(admit_session("waiting", 100.0, 100.0, 9999.0));
+    }
+
+    #[test]
+    fn test_filter_terminal_session_before_launch() {
+        // Stale idle/done/error from a prior run must stay hidden.
+        let launched = 1000.0;
+        assert!(!admit_session("idle", 500.0, 600.0, launched));
+        assert!(!admit_session("done", 500.0, 600.0, launched));
+        assert!(!admit_session("error", 500.0, 600.0, launched));
+        assert!(!admit_session("ended", 500.0, 600.0, launched));
+    }
+
+    #[test]
+    fn test_admit_terminal_session_with_recent_activity() {
+        // Idle/done sessions whose last hook event is post-launch should
+        // surface — their activity proves they're still relevant.
+        let launched = 1000.0;
+        assert!(admit_session("idle", 500.0, 1500.0, launched));
+        assert!(admit_session("done", 1100.0, 1100.0, launched));
     }
 
     // ── promote_decision: thinking→working latch ────────────────────────
