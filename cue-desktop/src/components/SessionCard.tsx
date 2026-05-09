@@ -911,7 +911,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   // reset the counter to 0.
   //
   // Strings 1–3 gate the bass/mids/treble base bands (SignalString deploys
-  // in priority [mids, bass, treble]).
+  // in priority [treble, mids, bass]).
   // Reset on turn-end states from EITHER signal. displayState has sticky
   // handoff logic that can hold "working" briefly after info.state has already
   // flipped to compacting/idle/done — without also checking info.state, the
@@ -1035,11 +1035,11 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   // session is 5% louder than the one before (compounded). String N gets a
   // multiplier of 1.05^(N-1). String 1 = 1.0, 2 = 1.05, 3 = 1.1025.
   // Multipliers are assigned to each string at the moment it appears and
-  // persist for the rest of the turn. Deploy order is [mids, bass, treble]
+  // persist for the rest of the turn. Deploy order is [treble, mids, bass]
   // (see BAND_PRIORITY inside SignalString), so:
-  //   string 1 → mids   (bandIdx 1) → 1.0
-  //   string 2 → bass   (bandIdx 0) → 1.05
-  //   string 3 → treble (bandIdx 2) → 1.1025
+  //   string 1 → treble (bandIdx 2) → 1.0
+  //   string 2 → mids   (bandIdx 1) → 1.05
+  //   string 3 → bass   (bandIdx 0) → 1.1025
   const AMP_STEP = 1.05;
   const baseBandsAmpMuls: [number, number, number] = [
     AMP_STEP,           // bandIdx 0 (bass)   = string 2
