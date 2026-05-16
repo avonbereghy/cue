@@ -5,6 +5,7 @@ Called by Claude Code hooks with: cue-hook <idle|working|waiting|done|remove>
 Receives hook JSON on stdin (contains session_id, cwd, etc.)
 """
 import json
+import re
 import sys
 import os
 import time
@@ -119,28 +120,114 @@ _SESSION_SCHEMA = {
 }
 
 
+# Allowlist for session ids used as path components downstream
+# (~/.claude/projects/<encoded-ws>/<id>.jsonl). Tighter than the UUID
+# grammar so it stays forward-compatible with ULID or other opaque ids
+# Claude Code may emit later. Mirrors security::validate_session_id on
+# the Rust side — keep the two regexes synchronised.
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def _is_valid_session_id(sid):
+    """True if `sid` is safe to use as a path component and as a key in
+    sessions.json. Rejects empty, oversized, separator, traversal, NUL,
+    and control characters."""
+    return isinstance(sid, str) and bool(_SESSION_ID_RE.match(sid))
+
+
 def _validate_sessions(data):
-    """Validate sessions.json structure. Return sanitised dict or empty sessions."""
+    """Normalize sessions.json top-level structure WITHOUT dropping
+    malformed individual entries.
+
+    Earlier versions of this function discarded any entry that didn't
+    match `_SESSION_SCHEMA` exactly. That ran on every hook invocation,
+    so a single bad entry — from a Cue version skew, a manual edit, or
+    a future field-type change — would be silently wiped the next time
+    ANY OTHER session fired a hook. From the user's perspective: a
+    real, live session disappeared off the dashboard with no error.
+
+    Per-event writes always overwrite the target entry with a fully
+    fresh record (the per-event code path doesn't trust the existing
+    shape beyond `.get()`s), so preserving malformed entries on disk
+    is safe and recoverable.
+    """
     if not isinstance(data, dict):
         return {"sessions": {}}
     sessions = data.get("sessions")
     if not isinstance(sessions, dict):
         return {"sessions": {}}
+    # Drop entries whose key isn't a usable session id, and entries
+    # whose value isn't even a dict — those can never be looked up
+    # safely by `.get()` downstream. Everything else is preserved
+    # verbatim; downstream `.get()`s tolerate missing fields.
+    preserved = {
+        sid: entry
+        for sid, entry in sessions.items()
+        if _is_valid_session_id(sid) and isinstance(entry, dict)
+    }
+    return {"sessions": preserved}
 
-    valid = {}
-    for sid, entry in sessions.items():
-        if not isinstance(entry, dict):
-            continue
-        ok = True
-        for key, expected in _SESSION_SCHEMA.items():
-            val = entry.get(key)
-            if not isinstance(val, expected):
-                ok = False
-                break
-        if ok:
-            valid[sid] = entry
 
-    return {"sessions": valid}
+def _subagent_jsonls_active(transcript_path, now, window_secs=30.0):
+    """True if any subagent JSONL under the session's subagents/ dir
+    has been modified within `window_secs`. Used by the stale-subagent
+    self-heal to verify the subagents are truly gone before zeroing
+    `activeSubagents`.
+
+    Subagent JSONLs live at `<projects>/<encoded-ws>/<session_stem>/subagents/*.jsonl`
+    per jsonl_parser.rs's discovery rule. We only stat — no read — so
+    this is cheap to run from the hook.
+    """
+    if not transcript_path:
+        return False
+    try:
+        parent_dir = os.path.dirname(transcript_path)
+        session_stem = os.path.splitext(os.path.basename(transcript_path))[0]
+        subagents_dir = os.path.join(parent_dir, session_stem, "subagents")
+        if not os.path.isdir(subagents_dir):
+            return False
+        for name in os.listdir(subagents_dir):
+            if not name.endswith(".jsonl"):
+                continue
+            try:
+                mtime = os.path.getmtime(os.path.join(subagents_dir, name))
+            except OSError:
+                continue
+            if (now - mtime) < window_secs:
+                return True
+    except OSError:
+        pass
+    return False
+
+
+def _maybe_clear_stale_subagent_counter(existing, transcript_path, now):
+    """Self-heal a leaked `activeSubagents` counter.
+
+    If a session has been pinned on `state == "subagent"` with
+    `activeSubagents > 0` for more than 60 seconds AND no subagent
+    JSONL has been touched in the last 30 seconds, the SubagentStop
+    event was missed. Resetting `activeSubagents` in place lets this
+    incoming hook event transition the state normally instead of being
+    re-overridden back to "subagent" by the override at the bottom of
+    the write path.
+
+    Mutates `existing` in place. The Rust backend has a symmetric
+    in-memory demoter (`should_demote_stale_subagent`); this is the
+    persisted side so the next event sees a clean counter and the
+    drift loop doesn't re-arm.
+    """
+    if existing.get("state") != "subagent":
+        return
+    if existing.get("activeSubagents", 0) <= 0:
+        return
+    state_changed = existing.get("stateChangedAt")
+    if not isinstance(state_changed, (int, float)):
+        return
+    if (now - state_changed) <= 60.0:
+        return
+    if _subagent_jsonls_active(transcript_path, now):
+        return
+    existing["activeSubagents"] = 0
 
 
 def _quick_state_write(session_id, workspace, source, subprocess_label,
@@ -152,6 +239,10 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
     This is a fast-path write so the dashboard shows 'waiting' while the
     permission prompt is displayed, rather than staying stuck on 'working'.
     """
+    # Reject malicious / typo'd session ids before they reach disk
+    # — the id is later joined into a file path on the Rust side.
+    if not _is_valid_session_id(session_id):
+        return
     try:
         with open(LOCK_FILE, "a+b") as lock:
             lock.seek(0)
@@ -163,6 +254,13 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
                 except Exception:
                     status = {"sessions": {}}
 
+                # Normalize structure but preserve malformed entries
+                # rather than silently dropping them — symmetric to the
+                # main write path. Without this call, malformed entries
+                # could survive the quick-write only to be erased by the
+                # main path 5 minutes later.
+                status = _validate_sessions(status)
+
                 existing = status["sessions"].get(session_id, {})
 
                 # Same stale-waiting guard as the main write path
@@ -171,11 +269,22 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
                     return  # A newer hook already wrote
 
                 now = time.time()
+                # stateChangedAt: this IS a state change (we're writing
+                # "waiting"). Carry forward only if the previous entry
+                # was already in waiting — otherwise we're transitioning.
+                prev_state = existing.get("state", "")
+                prev_changed = existing.get("stateChangedAt")
+                state_changed_at = (
+                    prev_changed
+                    if (prev_state == "waiting" and isinstance(prev_changed, (int, float)))
+                    else now
+                )
                 entry = {
                     "id": session_id,
                     "workspace": existing.get("workspace", workspace),
                     "state": "waiting",
                     "lastActivity": now,
+                    "stateChangedAt": state_changed_at,
                     "startedAt": existing.get("startedAt", now),
                     "source": existing.get("source", source),
                     "activeSubagents": existing.get("activeSubagents", 0),
@@ -481,6 +590,13 @@ def main():
         hook_data = {}
 
     session_id = hook_data.get("session_id", f"pid-{os.getppid()}")
+    # Reject session ids that aren't safe to use as a path component.
+    # Untrusted-input boundary: the id is later joined into Rust's JSONL
+    # file path (`<projects>/<encoded-ws>/<session_id>.jsonl`); a writer
+    # supplying `..`, `/`, NUL, or absolute-path content would let Rust
+    # read files outside the projects directory.
+    if not _is_valid_session_id(session_id):
+        return
     workspace = hook_data.get("cwd", os.getcwd())
     source = _detect_source()
     subprocess_label = _detect_subprocess()
@@ -625,17 +741,25 @@ def main():
                     if existing_activity > hook_start_time:
                         return  # A newer hook already wrote — don't clobber it
 
+                # Self-heal a leaked subagent counter BEFORE we read it.
+                # If the session has been pinned on "subagent" for >60s with
+                # no subagent JSONL activity, the SubagentStop was missed —
+                # reset so this event can transition normally instead of
+                # being re-overridden back to "subagent" below.
+                _maybe_clear_stale_subagent_counter(existing, transcript_path, now)
+
                 # Subagent counter: increment on start, decrement on stop.
-                # Leaked counters (denied agent, crash, missed SubagentStop) are
-                # handled by the Rust backend's process-liveness check: if the
-                # owning Claude Code PID dies, the session is demoted to idle.
+                # Per CLAUDE.md the override applies to `working`/`done`/`idle`
+                # only — `waiting` and `error` need user attention and must
+                # NOT be silently clobbered by subagent activity.
                 active_subs = existing.get("activeSubagents", 0)
                 if action in ("done", "idle"):
-                    # Guard: don't let done/idle overwrite "waiting" state.
-                    # The user hasn't responded yet — only forward-progressing
-                    # events (working, thinking, error, remove) should clear it.
+                    # Guard: done/idle must not overwrite states that need
+                    # user attention. `waiting` already had a guard; `error`
+                    # is added per the schema contract (CLAUDE.md states
+                    # both are NOT overridden by counter logic).
                     existing_state = existing.get("state", "")
-                    if existing_state == "waiting":
+                    if existing_state in ("waiting", "error"):
                         return
 
                     if active_subs > 0:
@@ -646,24 +770,42 @@ def main():
                         # Turn ended by asking user a question — show waiting
                         action = "waiting"
                 elif action == "subagent":
-                    active_subs += 1
+                    # Don't clobber `error` or `waiting` with a subagent
+                    # override on increment; preserve the user-attention
+                    # state and just bump the counter under it.
+                    if existing.get("state") in ("waiting", "error"):
+                        active_subs += 1
+                        action = existing["state"]
+                    else:
+                        active_subs += 1
                 elif action == "subagent_stop":
                     active_subs = max(0, active_subs - 1)
-                    if active_subs > 0:
+                    if existing.get("state") in ("waiting", "error"):
+                        # User-attention states must never be clobbered by
+                        # subagent activity, whether or not the counter is
+                        # exhausted. Persist the decremented counter under
+                        # the preserved state. (Previously this branch
+                        # `return`'d early when existing was waiting, which
+                        # froze the on-disk counter and re-armed the
+                        # subagent-override trap once waiting resolved.)
+                        action = existing["state"]
+                    elif active_subs > 0:
+                        # Counter still positive — show subagent.
                         action = "subagent"
-                    elif existing.get("state") == "waiting":
-                        # Main session is waiting for user — don't clobber it
-                        # when the last subagent stops.
-                        return
                     else:
                         # If the main turn already ended (Stop fired while
                         # subagents were still running and was overridden to
                         # "subagent"), go straight to idle.
                         action = "idle" if _turn_has_finished(transcript_path) else "working"
 
-                # While subagents are active, override "working"/"thinking" to show
-                # subagent state. Waiting and error are NOT overridden.
-                if active_subs > 0 and action in ("working", "thinking"):
+                # While subagents are active, override "working" to "subagent"
+                # so the card surfaces the parallel work. Per CLAUDE.md schema:
+                #   - `thinking` is NOT overridden — the orange thinking beat
+                #     must propagate so the Rust thinking→working latch can
+                #     promote on the first assistant text.
+                #   - `waiting` and `error` are NOT overridden — they need
+                #     user attention.
+                if active_subs > 0 and action == "working":
                     action = "subagent"
 
                 # Keep the original workspace from SessionStart — prevents
