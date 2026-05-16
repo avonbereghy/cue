@@ -1,0 +1,16 @@
+{
+  "base_commit": "3292322b48f57479864cf2ba4903cd319b7f0f93",
+  "n": 4,
+  "scope": "state changes and state identification (session_monitor.rs, jsonl_parser.rs, models.rs, hooks/cue-hook)",
+  "focus": null,
+  "severity": "high",
+  "lenses": ["security", "reliability", "correctness", "tests"],
+  "lenses_dropped": ["db", "api", "prompts", "deps", "performance", "types", "observability", "dx"],
+  "started_at": "2026-05-16T14:32:00-07:00",
+  "lens_statuses": {
+    "security": "pending",
+    "reliability": "pending",
+    "correctness": "pending",
+    "tests": "pending"
+  }
+}

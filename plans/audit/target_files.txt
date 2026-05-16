@@ -1,0 +1,4 @@
+cue-desktop/src-tauri/src/session_monitor.rs
+cue-desktop/src-tauri/src/jsonl_parser.rs
+cue-desktop/src-tauri/src/models.rs
+hooks/cue-hook
