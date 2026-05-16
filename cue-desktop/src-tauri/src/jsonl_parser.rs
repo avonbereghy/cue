@@ -1799,4 +1799,102 @@ mod tests {
         let _ = std::fs::remove_file(&link);
         let _ = std::fs::remove_file(&real);
     }
+
+    // ── Hostile-input hardening (F-tests-009) ──────────────────────────
+    // The parser sits on the untrusted-input boundary: any malformed JSONL
+    // line that crashes it empties SessionMetrics and lets the downstream
+    // turn-ended / stale-subagent demoters miss their `Some(metrics)` gate.
+
+    #[test]
+    fn parse_loads_malformed_fixture_skips_bad_keeps_good() {
+        // The fixtures/malformed.jsonl file contains two valid lines and
+        // two malformed lines. parse must skip the bad ones without
+        // returning an error or losing the good entries.
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/malformed.jsonl");
+        let entries = super::parse_jsonl_file(&fixture);
+        assert_eq!(entries.len(), 2, "expected 2 valid entries from fixture");
+    }
+
+    #[test]
+    fn parse_handles_embedded_null_byte() {
+        // A line containing a NUL inside the JSON value must not crash
+        // the parser; the line should either parse (NUL is valid in a
+        // JSON string) or be skipped. Either way, surrounding lines
+        // must parse normally.
+        let pre = r#"{"type":"user","timestamp":1.0,"message":{"content":"a"}}"#;
+        let mid = "{\"type\":\"user\",\"timestamp\":2.0,\"message\":{\"content\":\"a\0b\"}}";
+        let post = r#"{"type":"user","timestamp":3.0,"message":{"content":"c"}}"#;
+        let content = format!("{}\n{}\n{}", pre, mid, post);
+        let entries = super::parse_jsonl_content(&content);
+        // At minimum the two unambiguously-valid lines must come through.
+        assert!(entries.len() >= 2, "got {} entries", entries.len());
+    }
+
+    #[test]
+    fn parse_handles_wrong_shape_json() {
+        // Valid JSON, wrong shape (missing `type`, unrelated fields).
+        // Parser must skip the unusable line rather than panic, and
+        // continue parsing surrounding valid lines.
+        let pre = r#"{"type":"user","timestamp":1.0,"message":{"content":"hi"}}"#;
+        let wrong = r#"{"unrelated":"field","number":42}"#;
+        let post = r#"{"type":"user","timestamp":3.0,"message":{"content":"bye"}}"#;
+        let content = format!("{}\n{}\n{}", pre, wrong, post);
+        let entries = super::parse_jsonl_content(&content);
+        // The two real user messages survive. Whether the wrong-shape
+        // line is included as a typeless entry or skipped is parser
+        // policy; we don't pin it — we only guarantee no panic and the
+        // valid entries arrive.
+        let user_count = entries.iter().filter(|e| e.entry_type == "user").count();
+        assert_eq!(user_count, 2, "expected 2 user entries");
+    }
+
+    #[test]
+    fn parse_handles_leading_malformed_line() {
+        // A failure on line 1 must not abort the whole scan.
+        let content = "this is not json at all\n{\"type\":\"user\",\"timestamp\":1.0,\"message\":{\"content\":\"ok\"}}";
+        let entries = super::parse_jsonl_content(content);
+        assert_eq!(entries.len(), 1, "expected 1 valid entry");
+        assert_eq!(entries[0].entry_type, "user");
+    }
+
+    #[test]
+    fn parse_handles_oversized_single_line() {
+        // A pathologically large but still well-formed JSON line should
+        // parse without panic. Memory pressure is acceptable; a crash
+        // would kill the poll thread.
+        let big_text: String = "x".repeat(64 * 1024); // 64 KiB
+        let line = format!(
+            r#"{{"type":"user","timestamp":1.0,"message":{{"content":"{}"}}}}"#,
+            big_text
+        );
+        let entries = super::parse_jsonl_content(&line);
+        assert_eq!(entries.len(), 1);
+    }
+
+    // ── Per-entry pending_tool_use contract (F-tests-010) ──────────────
+    // The aggregator-level test `test_metrics_pending_tool_use_suppresses_end_turn`
+    // verifies the END state, but the foundation invariant is per-entry:
+    // an assistant entry with stop_reason == "tool_use" must set
+    // has_pending_tool_use=true AND has_end_turn=false. If a refactor
+    // flipped has_end_turn to true on pending entries, today's aggregator
+    // test still passes (the pending short-circuit hides the stale ts),
+    // but once the pending tool_use resolves the stale ts becomes load-
+    // bearing and `should_demote_turn_ended` fires on a working session.
+
+    #[test]
+    fn test_pending_tool_use_entry_does_not_flag_end_turn() {
+        let pending = r#"{"type":"assistant","timestamp":3.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x.rs"}}],"stop_reason":"tool_use"}}"#;
+        let entries = super::parse_jsonl_content(pending);
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert!(
+            entry.has_pending_tool_use,
+            "stop_reason=tool_use must set has_pending_tool_use"
+        );
+        assert!(
+            !entry.has_end_turn,
+            "stop_reason=tool_use must NOT set has_end_turn"
+        );
+    }
 }
