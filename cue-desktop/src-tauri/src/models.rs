@@ -1390,4 +1390,67 @@ mod tests {
         assert_eq!(es.git_status.as_ref().unwrap().ahead, 2);
         assert_eq!(es.claude_version.as_deref(), Some("CC v2.1.6"));
     }
+
+    // ── SubagentMetrics::is_recently_live ──────────────────────────────
+    // Drives the subagent rescue latch in session_monitor.rs. The strict
+    // bounds matter: `<` at the upper window plus `>= 0.0` at the lower
+    // bound guard against re-rescuing the same finished agent and against
+    // clock-skew negatives that would disable the latch entirely.
+
+    fn subagent_with_ended_at(ended_at: Option<f64>) -> SubagentMetrics {
+        SubagentMetrics {
+            agent_id: "test".to_string(),
+            description: "test".to_string(),
+            slug: "test".to_string(),
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            model: String::new(),
+            tool_counts: HashMap::new(),
+            message_count: 0,
+            is_active: false,
+            started_at: None,
+            ended_at,
+        }
+    }
+
+    #[test]
+    fn test_is_recently_live_returns_false_without_ended_at() {
+        let agent = subagent_with_ended_at(None);
+        assert!(!agent.is_recently_live(1000.0, 10.0));
+    }
+
+    #[test]
+    fn test_is_recently_live_returns_true_inside_window() {
+        // ended_at 5s ago, window 10s → live.
+        let agent = subagent_with_ended_at(Some(995.0));
+        assert!(agent.is_recently_live(1000.0, 10.0));
+    }
+
+    #[test]
+    fn test_is_recently_live_returns_false_at_window_boundary() {
+        // Exactly at boundary: now - ended_at == 10.0. Strict `<` makes
+        // this false. Documents the contract: the rescue latch must not
+        // re-fire on a session whose last write was the full window ago.
+        let agent = subagent_with_ended_at(Some(990.0));
+        assert!(!agent.is_recently_live(1000.0, 10.0));
+    }
+
+    #[test]
+    fn test_is_recently_live_returns_true_just_inside_window() {
+        // 9.999s ago → still inside.
+        let agent = subagent_with_ended_at(Some(990.001));
+        assert!(agent.is_recently_live(1000.0, 10.0));
+    }
+
+    #[test]
+    fn test_is_recently_live_returns_false_for_future_ended_at() {
+        // Future timestamp (clock skew). Without the `>= 0.0` guard a
+        // tiny negative `now - ended_at` would compare-less-than `window`
+        // and falsely register as live, breaking the latch every time
+        // sysinfo's clock briefly drifts.
+        let agent = subagent_with_ended_at(Some(1001.0));
+        assert!(!agent.is_recently_live(1000.0, 10.0));
+    }
 }
