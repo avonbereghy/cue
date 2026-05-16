@@ -214,6 +214,42 @@ pub fn cleanup_stale_tmp_files(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Validate a session id intended to be used as a path component (e.g. when
+/// composing `<projects>/<encoded_ws>/<session_id>.jsonl`).
+///
+/// `sessions.json` is treated as untrusted input per the project's security
+/// rules: a writer could supply an `id` containing `..`, `/`, `\`, NUL, or
+/// absolute-path-like content that would let `Path::join` redirect downstream
+/// file reads outside the projects directory. Claude Code emits UUID-shaped
+/// ids; this allowlist enforces that shape and is intentionally tighter than
+/// the UUID grammar so it stays forward-compatible if Claude Code switches
+/// to short ULIDs or similar opaque ids — anything matching
+/// `[A-Za-z0-9_-]{1,128}` is fine.
+pub fn validate_session_id(id: &str) -> io::Result<()> {
+    if id.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "session id is empty",
+        ));
+    }
+    if id.len() > 128 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "session id exceeds 128 chars",
+        ));
+    }
+    for ch in id.chars() {
+        let ok = ch.is_ascii_alphanumeric() || ch == '-' || ch == '_';
+        if !ok {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("session id contains disallowed character: {:?}", ch),
+            ));
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -222,6 +258,75 @@ pub fn cleanup_stale_tmp_files(dir: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn test_validate_session_id_accepts_uuid_shape() {
+        // Real claude code session ids look like this.
+        assert!(validate_session_id("579ecced-3a4b-4f02-8e9d-1d6c8a5e2b1f").is_ok());
+        assert!(validate_session_id("6c3720c3-1234-abcd-ef00-deadbeefcafe").is_ok());
+    }
+
+    #[test]
+    fn test_validate_session_id_accepts_alphanumeric_with_dashes_and_underscores() {
+        assert!(validate_session_id("abc_123-XYZ").is_ok());
+        assert!(validate_session_id("A").is_ok());
+        // 128 chars exactly — at the boundary
+        let max = "a".repeat(128);
+        assert!(validate_session_id(&max).is_ok());
+    }
+
+    #[test]
+    fn test_validate_session_id_rejects_empty() {
+        assert!(validate_session_id("").is_err());
+    }
+
+    #[test]
+    fn test_validate_session_id_rejects_oversized() {
+        let too_long = "a".repeat(129);
+        assert!(validate_session_id(&too_long).is_err());
+    }
+
+    #[test]
+    fn test_validate_session_id_rejects_path_traversal() {
+        assert!(validate_session_id("..").is_err());
+        assert!(validate_session_id("../etc/passwd").is_err());
+        assert!(validate_session_id("foo/../bar").is_err());
+    }
+
+    #[test]
+    fn test_validate_session_id_rejects_path_separators() {
+        assert!(validate_session_id("foo/bar").is_err());
+        assert!(validate_session_id("foo\\bar").is_err());
+        assert!(validate_session_id("/etc/passwd").is_err());
+        assert!(validate_session_id("C:\\Windows\\System32").is_err());
+    }
+
+    #[test]
+    fn test_validate_session_id_rejects_control_chars_and_nul() {
+        assert!(validate_session_id("a\0b").is_err());
+        assert!(validate_session_id("a\nb").is_err());
+        assert!(validate_session_id("a\tb").is_err());
+        assert!(validate_session_id("\x01abc").is_err());
+    }
+
+    #[test]
+    fn test_validate_session_id_rejects_leading_dot() {
+        // Defense-in-depth: even though '.' isn't in our allowlist, document
+        // intent explicitly.
+        assert!(validate_session_id(".").is_err());
+        assert!(validate_session_id(".hidden").is_err());
+    }
+
+    #[test]
+    fn test_validate_session_id_rejects_shell_metacharacters() {
+        for bad in &["foo$bar", "foo bar", "foo|bar", "foo;bar", "foo&bar",
+                     "foo`bar", "foo'bar", "foo\"bar", "foo*bar", "foo?bar"] {
+            assert!(
+                validate_session_id(bad).is_err(),
+                "should reject {:?}", bad
+            );
+        }
+    }
 
     #[test]
     fn test_atomic_write() {
