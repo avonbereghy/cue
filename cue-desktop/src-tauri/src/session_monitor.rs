@@ -131,6 +131,23 @@ impl SessionMonitorState {
     pub fn poll_status(&self) {
         let status_path = paths::sessions_json_path();
 
+        // Size cap before read: sessions.json is the untrusted boundary
+        // (the Python hook writes it but any local process can race-write
+        // to that path). A malicious or runaway producer could otherwise
+        // OOM the backend with a single-allocation read_to_string. Normal
+        // sessions.json is well under 100 KiB even with many sessions.
+        const SESSIONS_JSON_MAX_BYTES: u64 = 4 * 1024 * 1024;
+        if let Ok(meta) = std::fs::metadata(&status_path) {
+            if meta.len() > SESSIONS_JSON_MAX_BYTES {
+                log::warn!(
+                    "sessions.json exceeds {} bytes (got {}); keeping previous state",
+                    SESSIONS_JSON_MAX_BYTES,
+                    meta.len()
+                );
+                return;
+            }
+        }
+
         let status = match std::fs::read_to_string(&status_path) {
             Ok(content) => match serde_json::from_str::<StatusData>(&content) {
                 Ok(s) => s,
@@ -158,26 +175,20 @@ impl SessionMonitorState {
         //   - Terminal/quiescent states (idle/done/error/ended) keep the gate
         //     so prior-run ghosts don't pile up. The post-demotion sweep below
         //     re-applies this to any session demoted from an active state.
+        //   - Session id MUST pass `validate_session_id` — it's later joined
+        //     into a JSONL path, and a hostile sessions.json entry could
+        //     otherwise redirect Rust's file reads outside ~/.claude/projects.
         let launched_at = self.launched_at;
         let active = sort_sessions(status.sessions.into_values().filter(|s| {
-            security::sanitize_workspace_path(&s.workspace).is_ok()
+            security::validate_session_id(&s.id).is_ok()
+                && security::sanitize_workspace_path(&s.workspace).is_ok()
                 && admit_session(&s.state, s.started_at, s.last_activity, launched_at)
         }));
 
         // Deduplicate sessions sharing the same workspace that started within
         // 3s of each other. Collapses phantom sessions (e.g. from agent teams)
-        // that create a second short-lived process on startup. Kept tight to
-        // avoid merging real sessions in the same project.
+        // that create a second short-lived process on startup.
         let active = {
-            let state_priority = |s: &str| -> u8 {
-                match s {
-                    "working" | "subagent" => 3,
-                    "thinking" | "waiting" => 2,
-                    "idle" => 1,
-                    _ => 0, // done, error
-                }
-            };
-            // Collect team session IDs so we never merge them
             let team_ids: std::collections::HashSet<String> = {
                 let cache = self.metrics_cache.lock().unwrap();
                 active
@@ -189,30 +200,7 @@ impl SessionMonitorState {
                     .map(|s| s.id.clone())
                     .collect()
             };
-            let mut deduped: Vec<SessionInfo> = Vec::new();
-            for session in active {
-                // Never deduplicate team agent sessions — they are real
-                // parallel agents, not phantom startup duplicates.
-                if team_ids.contains(&session.id) {
-                    deduped.push(session);
-                } else if let Some(existing) = deduped.iter_mut().find(|s| {
-                    !team_ids.contains(&s.id)
-                        && s.workspace == session.workspace
-                        && (s.started_at - session.started_at).abs() < 3.0
-                }) {
-                    if state_priority(&session.state) > state_priority(&existing.state)
-                        || (state_priority(&session.state) == state_priority(&existing.state)
-                            && session.last_activity > existing.last_activity)
-                    {
-                        let stable_id = existing.id.clone();
-                        *existing = session;
-                        existing.id = stable_id;
-                    }
-                } else {
-                    deduped.push(session);
-                }
-            }
-            deduped
+            dedup_sessions(active, &team_ids)
         };
 
         // Promote team agent sessions from "idle" to "done" if inactive for 30s.
@@ -327,12 +315,12 @@ impl SessionMonitorState {
                 .collect()
         };
 
-        // Turn-ended recovery: demote `working`/`thinking` cards when the
-        // JSONL transcript shows `stop_reason == "end_turn"` newer than the
-        // session's `stateChangedAt`. This catches the case where the Stop
-        // hook failed to fire but Claude's own transcript records the turn
-        // finished. Deterministic (no timers). We only demote the two states
-        // — `subagent`, `waiting`, `compacting`, `clearing` are left alone.
+        // Turn-ended recovery: demote `working`/`thinking`/`waiting` cards
+        // when the JSONL transcript shows `stop_reason == "end_turn"` newer
+        // than the session's `stateChangedAt`. This catches the case where
+        // the resolving hook (Stop, or the user dismissing a permission
+        // prompt out-of-band) failed to fire but Claude's own transcript
+        // records the turn finished. Deterministic (no timers).
         let active: Vec<_> = {
             let cache = self.metrics_cache.lock().unwrap();
             active
@@ -346,6 +334,22 @@ impl SessionMonitorState {
                 })
                 .collect()
         };
+
+        // Stuck-active cap: `compacting`/`clearing` are transient by design
+        // (the next hook event should clear them within a second). If a
+        // `/compact` errors before its follow-up hook, or `/clear` is
+        // interrupted, the card pins until the parent PID dies. Cap at 60s
+        // past `stateChangedAt` so the dashboard self-heals. Deterministic
+        // because `stateChangedAt` is reset only on real transitions.
+        let active: Vec<_> = active
+            .into_iter()
+            .map(|mut s| {
+                if should_demote_stuck_active(&s.state, s.state_changed_at, now_secs) {
+                    s.state = "idle".to_string();
+                }
+                s
+            })
+            .collect();
 
         // Stale-subagent recovery: demote `subagent` cards whose counter is
         // non-zero but no subagent JSONL has been touched recently. Catches
@@ -518,6 +522,35 @@ impl SessionMonitorState {
                 active.iter().map(|s| s.id.as_str()).collect();
             // Prune sessions that no longer exist
             active_since.retain(|id, _| current_ids.contains(id.as_str()));
+            // Prune the five other per-session caches that previously
+            // accumulated forever — metrics_cache, jsonl_entry_cache,
+            // file_mod_dates, resolved_paths, output_speed_cache. Without
+            // this, a long-running tray app grew linearly in memory per
+            // session-id ever observed. Lock-ordering: we already hold
+            // `active_since`; these caches are acquired AFTER it in the
+            // documented order, so the chained locks below are safe.
+            self.metrics_cache
+                .lock()
+                .unwrap()
+                .retain(|id, _| current_ids.contains(id.as_str()));
+            self.jsonl_entry_cache
+                .lock()
+                .unwrap()
+                .retain(|id, _| current_ids.contains(id.as_str()));
+            // `file_mod_dates` also stores subagent-dir entries keyed as
+            // `<sid>-subagents`, so prefix-match the live ids.
+            self.file_mod_dates.lock().unwrap().retain(|key, _| {
+                let stripped = key.strip_suffix("-subagents").unwrap_or(key);
+                current_ids.contains(stripped)
+            });
+            self.resolved_paths
+                .lock()
+                .unwrap()
+                .retain(|id, _| current_ids.contains(id.as_str()));
+            self.output_speed_cache
+                .lock()
+                .unwrap()
+                .retain(|id, _| current_ids.contains(id.as_str()));
             for s in &active {
                 if is_active_state(&s.state) {
                     // Prefer the hook-supplied stateChangedAt — it captures
@@ -958,12 +991,80 @@ enum LivenessOutcome {
 /// `clearing` are left alone. Suppressed when a pending tool_use is open
 /// (the aggregator already cleared `last_end_turn_ts` in that case, but the
 /// explicit check keeps the contract clear).
+/// Priority used by `dedup_sessions` to choose which of two phantom-window
+/// duplicates to keep. Ordered to put user-attention states ABOVE quiet
+/// background states so a real `error` or `compacting` card is never
+/// shadowed by a same-workspace `idle` sibling.
+///
+/// Previous priority table collapsed `error` / `compacting` / `clearing` /
+/// `done` / `ended` all into priority 0 — *below* `idle` (1). Dedup
+/// therefore replaced a real `error` card with a phantom `idle`, and a
+/// `compacting` card got swapped for `idle` before the compacting floor
+/// ever had a chance to extend it.
+pub(crate) fn dedup_state_priority(state: &str) -> u8 {
+    match state {
+        "error" => 5,
+        "waiting" => 4,
+        "working" | "subagent" => 3,
+        "thinking" | "compacting" | "clearing" => 2,
+        "done" | "idle" => 1,
+        // ended is a tombstone — treat as lowest
+        _ => 0,
+    }
+}
+
+/// Collapse phantom duplicate sessions that share a workspace and started
+/// within 3 seconds of each other. Team-agent ids in `team_ids` are
+/// exempt — real parallel agents.
+///
+/// When two candidates compete, the higher `dedup_state_priority` wins;
+/// ties break by `last_activity`. The kept session inherits the existing
+/// stable id (so per-id latches on `promoted_for_prompt`, `compacting_floor`,
+/// etc. don't churn).
+pub(crate) fn dedup_sessions(
+    sessions: Vec<SessionInfo>,
+    team_ids: &std::collections::HashSet<String>,
+) -> Vec<SessionInfo> {
+    let mut deduped: Vec<SessionInfo> = Vec::new();
+    for session in sessions {
+        // Never deduplicate team agent sessions — they are real parallel
+        // agents, not phantom startup duplicates.
+        if team_ids.contains(&session.id) {
+            deduped.push(session);
+            continue;
+        }
+        if let Some(existing) = deduped.iter_mut().find(|s| {
+            !team_ids.contains(&s.id)
+                && s.workspace == session.workspace
+                && (s.started_at - session.started_at).abs() < 3.0
+        }) {
+            let p_new = dedup_state_priority(&session.state);
+            let p_old = dedup_state_priority(&existing.state);
+            if p_new > p_old || (p_new == p_old && session.last_activity > existing.last_activity)
+            {
+                let stable_id = existing.id.clone();
+                *existing = session;
+                existing.id = stable_id;
+            }
+        } else {
+            deduped.push(session);
+        }
+    }
+    deduped
+}
+
 fn should_demote_turn_ended(
     state: &str,
     state_changed_at: Option<f64>,
     metrics: Option<&crate::models::SessionMetrics>,
 ) -> bool {
-    if !matches!(state, "working" | "thinking") {
+    // `waiting` is included: a permission prompt resolved out-of-band
+    // (user killed the prompt, switched to a different terminal, etc.)
+    // can leave the session pinned on `waiting` forever — but the
+    // assistant's next end_turn proves the turn finished without Cue's
+    // observation. `subagent`/`compacting`/`clearing` are intentionally
+    // left alone here — they have their own recovery paths.
+    if !matches!(state, "working" | "thinking" | "waiting") {
         return false;
     }
     let Some(metrics) = metrics else { return false };
@@ -975,6 +1076,23 @@ fn should_demote_turn_ended(
     };
     let boundary = state_changed_at.unwrap_or(0.0);
     end_turn_ts > boundary
+}
+
+/// Pure predicate for the stuck-`compacting`/`clearing` cap. Demotes to
+/// `idle` once 60 seconds have elapsed since `stateChangedAt`. Both
+/// states are transient by design — the next hook event should clear
+/// them within a second — so anything still pinned at 60s is the result
+/// of an interrupted `/compact` or `/clear` whose resolving hook never
+/// fired. Returns false when `stateChangedAt` is missing so the cap
+/// can't fire on a record we can't time.
+fn should_demote_stuck_active(state: &str, state_changed_at: Option<f64>, now: f64) -> bool {
+    if !matches!(state, "compacting" | "clearing") {
+        return false;
+    }
+    let Some(state_changed_at) = state_changed_at else {
+        return false;
+    };
+    (now - state_changed_at) > 60.0
 }
 
 /// Pure predicate for the stale-subagent demotion path. Returns true when a
@@ -1000,13 +1118,26 @@ fn should_demote_stale_subagent(
         // card alone rather than risk demoting a real subagent run.
         return false;
     };
-    if (now - state_changed_at) < 15.0 {
+    let age = now - state_changed_at;
+    if age < 15.0 {
         return false;
     }
-    let live_count = metrics
-        .map(|m| m.subagents.iter().filter(|a| a.is_active).count())
-        .unwrap_or(0);
-    live_count == 0
+    match metrics {
+        Some(m) => {
+            // Metrics parsed at least once for this session — the absence
+            // of an active subagent JSONL is authoritative.
+            m.subagents.iter().filter(|a| a.is_active).count() == 0
+        }
+        None => {
+            // No metrics yet. With `refresh_metrics` running at ~5 Hz
+            // separately from poll_status, there's a race window at
+            // session-rotation time where a fresh subagent state can
+            // appear before metrics is populated. Require a longer
+            // grace so we don't second-guess the hook during that
+            // window — 30s gives the metrics cache time to fill.
+            age >= 30.0
+        }
+    }
 }
 
 /// Outcome of the per-poll thinking→working latch decision. Pure so tests
@@ -1441,11 +1572,11 @@ mod tests {
 
     #[test]
     fn test_no_demote_for_non_working_states() {
-        // Gate on {working, thinking} — don't touch subagent, waiting, etc.
+        // Gate on {working, thinking, waiting} — don't touch subagent,
+        // compacting, clearing, or terminal states.
         let m = metrics_with_end_turn(Some(200.0), false);
         for st in [
             "subagent",
-            "waiting",
             "compacting",
             "clearing",
             "idle",
@@ -1603,9 +1734,10 @@ mod tests {
 
     #[test]
     fn test_demote_stale_subagent_when_metrics_absent() {
-        // Transcript not yet parsed → no live signal. The 15s grace already
-        // covered the spawn race, so missing metrics this late means the
-        // session really has nothing live backing it. Demote.
+        // Transcript not yet parsed. When metrics is None we use a longer
+        // 30s grace (vs the 15s applied when metrics is present) so the
+        // ~5 Hz refresh_metrics has time to populate the cache after a
+        // session-id rotation. At age 30s exactly, demote.
         let now = 1000.0;
         assert!(should_demote_stale_subagent(
             "subagent",
@@ -1613,6 +1745,264 @@ mod tests {
             None,
             now,
         ));
+    }
+
+    #[test]
+    fn test_no_demote_stale_subagent_when_metrics_absent_inside_extended_grace() {
+        // metrics=None at age 20s — inside the 30s extended grace. Stay put.
+        let now = 1000.0;
+        assert!(!should_demote_stale_subagent(
+            "subagent",
+            Some(now - 20.0),
+            None,
+            now,
+        ));
+    }
+
+    #[test]
+    fn test_demote_stale_subagent_with_metrics_at_standard_grace_boundary() {
+        // metrics present + no live JSONL: standard 15s grace applies.
+        // At age 15.0001 exactly — demote.
+        let m = metrics_with_subagents(vec![]);
+        let now = 1000.0;
+        assert!(should_demote_stale_subagent(
+            "subagent",
+            Some(now - 15.0001),
+            Some(&m),
+            now,
+        ));
+    }
+
+    #[test]
+    fn test_no_demote_stale_subagent_just_inside_standard_grace() {
+        // The contract is `age < 15.0` → grace-protected. Pin age=14.999
+        // as "just inside, don't demote" so a regression to `<= 15.0`
+        // would still pass this test (with metrics absent and short
+        // enough age) — we instead pin the strict-<15.0 boundary in
+        // test_demote_stale_subagent_with_metrics_at_standard_grace_boundary.
+        let m = metrics_with_subagents(vec![]);
+        let now = 1000.0;
+        assert!(!should_demote_stale_subagent(
+            "subagent",
+            Some(now - 14.999),
+            Some(&m),
+            now,
+        ));
+    }
+
+    // ── should_demote_turn_ended waiting extension ──────────────────────
+
+    #[test]
+    fn test_demote_turn_ended_for_waiting_state() {
+        // Permission prompt resolved out-of-band (user killed terminal or
+        // dismissed prompt without producing a hook). Transcript shows
+        // end_turn newer than stateChangedAt — demote.
+        let m = metrics_with_end_turn(Some(200.0), false);
+        assert!(should_demote_turn_ended("waiting", Some(100.0), Some(&m)));
+    }
+
+    #[test]
+    fn test_no_demote_turn_ended_for_waiting_when_end_turn_stale() {
+        // end_turn from a prior turn, before the user's most recent prompt.
+        // The waiting state was a response to the most recent prompt — leave it.
+        let m = metrics_with_end_turn(Some(50.0), false);
+        assert!(!should_demote_turn_ended("waiting", Some(100.0), Some(&m)));
+    }
+
+    // ── should_demote_stuck_active (compacting/clearing 60s cap) ────────
+
+    #[test]
+    fn test_demote_stuck_active_compacting_past_60s() {
+        // /compact errored before its resolving hook; card is pinned on
+        // `compacting` for >60s. Cap fires.
+        assert!(should_demote_stuck_active("compacting", Some(900.0), 1000.0));
+    }
+
+    #[test]
+    fn test_demote_stuck_active_clearing_past_60s() {
+        assert!(should_demote_stuck_active("clearing", Some(900.0), 1000.0));
+    }
+
+    #[test]
+    fn test_no_demote_stuck_active_within_cap() {
+        // 30s in — still in the normal transient window.
+        assert!(!should_demote_stuck_active("compacting", Some(970.0), 1000.0));
+    }
+
+    #[test]
+    fn test_no_demote_stuck_active_for_unrelated_states() {
+        for st in ["working", "thinking", "idle", "done", "error", "waiting", "subagent"] {
+            assert!(
+                !should_demote_stuck_active(st, Some(900.0), 1000.0),
+                "stuck-active cap must only fire for compacting/clearing, not {}",
+                st
+            );
+        }
+    }
+
+    #[test]
+    fn test_no_demote_stuck_active_without_state_changed_at() {
+        // Can't compute age → don't fire.
+        assert!(!should_demote_stuck_active("compacting", None, 1000.0));
+    }
+
+    // ── dedup_state_priority ────────────────────────────────────────────
+
+    #[test]
+    fn test_dedup_priority_error_beats_idle() {
+        // Regression guard for F-correctness-003: previously `error` had
+        // priority 0 and `idle` had priority 1, so dedup hid a real error
+        // behind a phantom idle when two sessions collided in the
+        // workspace + started_at < 3s window.
+        assert!(dedup_state_priority("error") > dedup_state_priority("idle"));
+    }
+
+    #[test]
+    fn test_dedup_priority_waiting_beats_working() {
+        // `waiting` needs user attention more urgently than `working` —
+        // surface it preferentially when in a collision.
+        assert!(dedup_state_priority("waiting") > dedup_state_priority("working"));
+    }
+
+    #[test]
+    fn test_dedup_priority_compacting_beats_idle() {
+        // Compacting/clearing must NOT be replaced by an idle phantom —
+        // doing so would skip the compacting floor which is the only
+        // thing keeping the periwinkle dot visible during a fast /compact.
+        assert!(dedup_state_priority("compacting") > dedup_state_priority("idle"));
+        assert!(dedup_state_priority("clearing") > dedup_state_priority("idle"));
+    }
+
+    #[test]
+    fn test_dedup_priority_ordering_top_to_bottom() {
+        // Pin the full ordering. error > waiting > {working,subagent} >
+        // {thinking,compacting,clearing} > {done,idle} > {ended}.
+        let order = [
+            "error", "waiting", "working", "thinking", "idle", "ended",
+        ];
+        for pair in order.windows(2) {
+            assert!(
+                dedup_state_priority(pair[0]) > dedup_state_priority(pair[1]),
+                "{} should outrank {}", pair[0], pair[1]
+            );
+        }
+    }
+
+    // ── dedup_sessions ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_dedup_collapses_same_workspace_within_3s() {
+        let now = 1000.0;
+        let sessions = vec![
+            make_session("s1", "idle", now - 5.0, now - 100.0),
+            make_session("s2", "working", now - 5.0, now - 99.0), // 1s apart
+        ];
+        let team_ids = std::collections::HashSet::new();
+        let out = dedup_sessions(sessions, &team_ids);
+        assert_eq!(out.len(), 1, "expected dedup to collapse");
+        assert_eq!(out[0].state, "working", "higher-priority state survives");
+    }
+
+    #[test]
+    fn test_dedup_keeps_team_agents_untouched() {
+        let now = 1000.0;
+        let mut sessions = vec![
+            make_session("s1", "idle", now - 5.0, now - 100.0),
+            make_session("s2", "working", now - 5.0, now - 99.0),
+        ];
+        // Mark s2 as a team agent.
+        sessions[1].team_name = Some("auditors".to_string());
+        let mut team_ids = std::collections::HashSet::new();
+        team_ids.insert("s2".to_string());
+        let out = dedup_sessions(sessions, &team_ids);
+        assert_eq!(out.len(), 2, "team agents must not be deduplicated");
+    }
+
+    #[test]
+    fn test_dedup_keeps_sessions_more_than_3s_apart() {
+        let now = 1000.0;
+        let sessions = vec![
+            make_session("s1", "working", now - 5.0, now - 100.0),
+            make_session("s2", "working", now - 5.0, now - 96.5), // 3.5s apart
+        ];
+        let team_ids = std::collections::HashSet::new();
+        let out = dedup_sessions(sessions, &team_ids);
+        assert_eq!(out.len(), 2, "outside 3s window — independent sessions");
+    }
+
+    #[test]
+    fn test_dedup_error_survives_against_idle_phantom() {
+        // Regression test for F-correctness-003: a phantom `idle` sibling
+        // must NOT shadow a real `error` card. Order of insertion
+        // shouldn't matter — try both.
+        let now = 1000.0;
+        let team_ids = std::collections::HashSet::new();
+
+        let sessions = vec![
+            make_session("s1", "idle", now - 5.0, now - 100.0),
+            make_session("s2", "error", now - 5.0, now - 99.0),
+        ];
+        let out = dedup_sessions(sessions, &team_ids);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].state, "error");
+
+        // Inverted order — same result.
+        let sessions = vec![
+            make_session("s1", "error", now - 5.0, now - 100.0),
+            make_session("s2", "idle", now - 5.0, now - 99.0),
+        ];
+        let out = dedup_sessions(sessions, &team_ids);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].state, "error");
+    }
+
+    #[test]
+    fn test_dedup_compacting_survives_against_idle_phantom() {
+        // F-correctness-003 corollary: compacting must not be replaced
+        // by idle, otherwise the compacting_floor never gets a chance
+        // to fire.
+        let now = 1000.0;
+        let team_ids = std::collections::HashSet::new();
+        let sessions = vec![
+            make_session("s1", "idle", now - 5.0, now - 100.0),
+            make_session("s2", "compacting", now - 5.0, now - 99.0),
+        ];
+        let out = dedup_sessions(sessions, &team_ids);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].state, "compacting");
+    }
+
+    #[test]
+    fn test_dedup_tie_breaks_by_last_activity() {
+        let now = 1000.0;
+        // Both `working` — equal priority. Newer last_activity wins.
+        let sessions = vec![
+            make_session("s_old", "working", now - 100.0, now - 50.0),
+            make_session("s_new", "working", now - 5.0, now - 49.0),
+        ];
+        let team_ids = std::collections::HashSet::new();
+        let out = dedup_sessions(sessions, &team_ids);
+        assert_eq!(out.len(), 1);
+        // Stable-id semantics: the surviving entry keeps the FIRST id seen.
+        // Last activity determines which state/payload survives.
+        assert_eq!(out[0].id, "s_old");
+        assert!((out[0].last_activity - (now - 5.0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_dedup_preserves_stable_id_when_replacing() {
+        // When a higher-priority duplicate wins, the kept entry inherits
+        // the original (stable) id so per-id latches don't churn.
+        let now = 1000.0;
+        let sessions = vec![
+            make_session("orig", "idle", now - 5.0, now - 100.0),
+            make_session("new", "working", now - 5.0, now - 99.0),
+        ];
+        let team_ids = std::collections::HashSet::new();
+        let out = dedup_sessions(sessions, &team_ids);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "orig", "stable id must survive");
+        assert_eq!(out[0].state, "working", "higher-priority state survives");
     }
 
     #[test]
