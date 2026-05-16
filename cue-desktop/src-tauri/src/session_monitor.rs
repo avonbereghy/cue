@@ -347,6 +347,38 @@ impl SessionMonitorState {
                 .collect()
         };
 
+        // Stale-subagent recovery: demote `subagent` cards whose counter is
+        // non-zero but no subagent JSONL has been touched recently. Catches
+        // the case where a `SubagentStop` hook was missed, leaving
+        // `activeSubagents` stuck at >0 — the hook then keeps overriding
+        // every event to `subagent` forever. 15s grace after
+        // `stateChangedAt` so a freshly-spawned subagent has time to create
+        // its JSONL file before we second-guess the hook counter.
+        let active: Vec<_> = {
+            let cache = self.metrics_cache.lock().unwrap();
+            active
+                .into_iter()
+                .map(|mut s| {
+                    let metrics = cache.get(&s.id);
+                    if should_demote_stale_subagent(
+                        &s.state,
+                        s.state_changed_at,
+                        metrics,
+                        now_secs,
+                    ) {
+                        log::debug!(
+                            "stale-subagent-demote id={} active_subagents={} → idle",
+                            s.id,
+                            s.active_subagents,
+                        );
+                        s.state = "idle".to_string();
+                        s.active_subagents = 0;
+                    }
+                    s
+                })
+                .collect()
+        };
+
         // Post-demotion sweep: re-apply the launched_at gate to any session
         // that's no longer in a bypass state. Without this, a session admitted
         // via `bypasses_launch_gate` and then demoted (dead PID, missing JSONL,
@@ -945,6 +977,38 @@ fn should_demote_turn_ended(
     end_turn_ts > boundary
 }
 
+/// Pure predicate for the stale-subagent demotion path. Returns true when a
+/// session is stuck on `subagent` because the hook's `SubagentStop` event
+/// was missed: `activeSubagents` is non-zero so the hook keeps overriding
+/// every subsequent event back to `subagent`, but no subagent JSONL has
+/// been touched recently — the agents are gone.
+///
+/// Gated on `state == "subagent"`. Requires a 15s grace after
+/// `stateChangedAt` so a just-spawned subagent has time to create its
+/// JSONL file (we use `is_active`, a 60s mtime check, as the live signal).
+fn should_demote_stale_subagent(
+    state: &str,
+    state_changed_at: Option<f64>,
+    metrics: Option<&crate::models::SessionMetrics>,
+    now: f64,
+) -> bool {
+    if state != "subagent" {
+        return false;
+    }
+    let Some(state_changed_at) = state_changed_at else {
+        // No transition timestamp recorded — be conservative and leave the
+        // card alone rather than risk demoting a real subagent run.
+        return false;
+    };
+    if (now - state_changed_at) < 15.0 {
+        return false;
+    }
+    let live_count = metrics
+        .map(|m| m.subagents.iter().filter(|a| a.is_active).count())
+        .unwrap_or(0);
+    live_count == 0
+}
+
 /// Outcome of the per-poll thinking→working latch decision. Pure so tests
 /// can pin the exact bouncing scenarios (delayed text, stale prompt).
 #[derive(Debug, PartialEq)]
@@ -1407,6 +1471,148 @@ mod tests {
         // Metrics exist but no end_turn observed → stay put.
         let m = metrics_with_end_turn(None, false);
         assert!(!should_demote_turn_ended("working", Some(100.0), Some(&m)));
+    }
+
+    // ── should_demote_stale_subagent ────────────────────────────────────
+
+    fn metrics_with_subagents(
+        subagents: Vec<crate::models::SubagentMetrics>,
+    ) -> crate::models::SessionMetrics {
+        crate::models::SessionMetrics {
+            subagents,
+            ..Default::default()
+        }
+    }
+
+    fn subagent(is_active: bool) -> crate::models::SubagentMetrics {
+        crate::models::SubagentMetrics {
+            agent_id: "test".to_string(),
+            description: "test".to_string(),
+            slug: "test".to_string(),
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            model: String::new(),
+            tool_counts: std::collections::HashMap::new(),
+            message_count: 0,
+            is_active,
+            started_at: None,
+            ended_at: None,
+        }
+    }
+
+    #[test]
+    fn test_demote_stale_subagent_when_no_live_jsonl_after_grace() {
+        // Canonical stuck-subagent: counter > 0, state was set 30s ago,
+        // no JSONL touched in the live window → demote.
+        let m = metrics_with_subagents(vec![subagent(false)]);
+        let now = 1000.0;
+        assert!(should_demote_stale_subagent(
+            "subagent",
+            Some(now - 30.0),
+            Some(&m),
+            now,
+        ));
+    }
+
+    #[test]
+    fn test_demote_stale_subagent_when_metrics_have_no_subagents() {
+        // Counter is positive but no JSONLs exist for this session at all
+        // (likely deleted, never created, or wrong dir). Treat as stale.
+        let m = metrics_with_subagents(vec![]);
+        let now = 1000.0;
+        assert!(should_demote_stale_subagent(
+            "subagent",
+            Some(now - 30.0),
+            Some(&m),
+            now,
+        ));
+    }
+
+    #[test]
+    fn test_no_demote_stale_subagent_within_grace_window() {
+        // Just entered subagent state — JSONL may not exist yet. Grace
+        // period must protect this case so we don't bounce off legit
+        // subagent spawns.
+        let m = metrics_with_subagents(vec![]);
+        let now = 1000.0;
+        assert!(!should_demote_stale_subagent(
+            "subagent",
+            Some(now - 5.0),
+            Some(&m),
+            now,
+        ));
+    }
+
+    #[test]
+    fn test_no_demote_stale_subagent_when_jsonl_is_active() {
+        // Subagent JSONL was modified within 60s — agent is still working.
+        let m = metrics_with_subagents(vec![subagent(true)]);
+        let now = 1000.0;
+        assert!(!should_demote_stale_subagent(
+            "subagent",
+            Some(now - 30.0),
+            Some(&m),
+            now,
+        ));
+    }
+
+    #[test]
+    fn test_no_demote_stale_subagent_when_any_jsonl_is_active() {
+        // Mixed: one active, one stale → still live, don't demote.
+        let m = metrics_with_subagents(vec![subagent(false), subagent(true)]);
+        let now = 1000.0;
+        assert!(!should_demote_stale_subagent(
+            "subagent",
+            Some(now - 30.0),
+            Some(&m),
+            now,
+        ));
+    }
+
+    #[test]
+    fn test_no_demote_stale_subagent_for_non_subagent_states() {
+        // Predicate gates strictly on state == "subagent".
+        let m = metrics_with_subagents(vec![]);
+        let now = 1000.0;
+        for st in [
+            "working",
+            "thinking",
+            "waiting",
+            "compacting",
+            "clearing",
+            "idle",
+            "done",
+            "error",
+        ] {
+            assert!(
+                !should_demote_stale_subagent(st, Some(now - 30.0), Some(&m), now),
+                "state {} should not be demoted by stale-subagent path",
+                st
+            );
+        }
+    }
+
+    #[test]
+    fn test_no_demote_stale_subagent_without_state_changed_at() {
+        // Missing stateChangedAt → can't compute the grace window. Stay put.
+        let m = metrics_with_subagents(vec![]);
+        assert!(!should_demote_stale_subagent("subagent", None, Some(&m), 1000.0));
+    }
+
+    #[test]
+    fn test_demote_stale_subagent_when_metrics_absent() {
+        // Transcript not yet parsed → no live signal. The 15s grace already
+        // covered the spawn race, so missing metrics this late means the
+        // session really has nothing live backing it. Demote.
+        let now = 1000.0;
+        assert!(should_demote_stale_subagent(
+            "subagent",
+            Some(now - 30.0),
+            None,
+            now,
+        ));
     }
 
     #[test]
