@@ -18,6 +18,15 @@ pub fn sessions_json_path() -> PathBuf {
     }
 }
 
+/// Path to sessions.lock — the cross-process advisory lock file co-located
+/// with sessions.json. Both the Python hook and the Rust sandbox writers
+/// acquire an exclusive flock on this file before touching sessions.json,
+/// so a concurrent hook event can't lose its update to a sandbox write
+/// (or vice versa). See `security::with_sessions_lock`.
+pub fn sessions_lock_path() -> PathBuf {
+    sessions_json_path().with_file_name("sessions.lock")
+}
+
 /// Path to settings.json — app preferences.
 pub fn settings_path() -> PathBuf {
     if cfg!(target_os = "macos") {

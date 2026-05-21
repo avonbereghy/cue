@@ -598,53 +598,70 @@ fn write_sandbox_sessions(sessions: Vec<SandboxSessionPayload>) -> Result<(), St
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    // Validate all IDs start with "sandbox-" and workspaces are shell-safe.
-    // Without workspace validation, an attacker who reaches this command (e.g.
-    // via a compromised webview) could plant a path with shell metacharacters
-    // that later flows into revive_session's spawn_terminal_with_resume.
+    // Validate all IDs start with "sandbox-" AND the rest of the id passes
+    // the same regex the hook enforces. Without the second check, an id
+    // like "sandbox-../passwd" would slip through the prefix gate but then
+    // be silently dropped by the hook's _validate_sessions on the next
+    // event — visible state loss with no UI signal. F-correctness-002.
     for s in &sessions {
-        if !s.id.starts_with("sandbox-") {
-            return Err(format!(
-                "Sandbox session ID must start with 'sandbox-': {}",
-                s.id
-            ));
+        let suffix = match s.id.strip_prefix("sandbox-") {
+            Some(rest) => rest,
+            None => {
+                return Err(format!(
+                    "Sandbox session ID must start with 'sandbox-': {}",
+                    s.id
+                ));
+            }
+        };
+        if suffix.is_empty() {
+            return Err("Sandbox session ID needs content after 'sandbox-'".into());
         }
+        // validate_session_id checks the whole id; the prefix uses '-' which
+        // is in the allowlist, so passing the full id (not just suffix) is
+        // semantically equivalent and avoids re-validating just the suffix.
+        security::validate_session_id(&s.id).map_err(|e| e.to_string())?;
         security::sanitize_workspace_path(&s.workspace).map_err(|e| e.to_string())?;
     }
 
-    // Read existing sessions.json, strip old sandbox entries, merge new ones
-    let mut status: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|c| serde_json::from_str(&c).ok())
-        .unwrap_or_else(|| serde_json::json!({ "sessions": {} }));
+    // Acquire the cross-process lock the Python hook uses for sessions.json
+    // — without it, a hook event firing between our read and our rename
+    // silently overwrites the hook's update. F-correctness-002.
+    let lock_path = paths::sessions_lock_path();
+    security::with_sessions_lock(&lock_path, || {
+        // Read existing sessions.json, strip old sandbox entries, merge new ones
+        let mut status: serde_json::Value = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|c| serde_json::from_str(&c).ok())
+            .unwrap_or_else(|| serde_json::json!({ "sessions": {} }));
 
-    let map = status["sessions"]
-        .as_object_mut()
-        .ok_or("Invalid sessions.json")?;
+        let map = status["sessions"]
+            .as_object_mut()
+            .ok_or_else(|| std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid sessions.json",
+            ))?;
 
-    // Remove stale sandbox entries
-    map.retain(|k, _| !k.starts_with("sandbox-"));
+        // Remove stale sandbox entries
+        map.retain(|k, _| !k.starts_with("sandbox-"));
 
-    // Insert new sandbox entries
-    for s in sessions {
-        let entry = serde_json::json!({
-            "id": s.id,
-            "workspace": s.workspace,
-            "state": s.state,
-            "lastActivity": s.last_activity,
-            "startedAt": s.started_at,
-            "activeSubagents": s.active_subagents.unwrap_or(0),
-            "source": s.source.unwrap_or_else(|| "sandbox".to_string()),
-        });
-        map.insert(s.id.clone(), entry);
-    }
+        // Insert new sandbox entries
+        for s in &sessions {
+            let entry = serde_json::json!({
+                "id": s.id,
+                "workspace": s.workspace,
+                "state": s.state,
+                "lastActivity": s.last_activity,
+                "startedAt": s.started_at,
+                "activeSubagents": s.active_subagents.unwrap_or(0),
+                "source": s.source.clone().unwrap_or_else(|| "sandbox".to_string()),
+            });
+            map.insert(s.id.clone(), entry);
+        }
 
-    security::atomic_write(
-        &path,
-        serde_json::to_string_pretty(&status)
-            .map_err(|e| e.to_string())?
-            .as_bytes(),
-    )
+        let bytes = serde_json::to_string_pretty(&status)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        security::atomic_write(&path, bytes.as_bytes())
+    })
     .map_err(|e| e.to_string())
 }
 
@@ -656,21 +673,21 @@ fn clear_sandbox_sessions() -> Result<(), String> {
         return Ok(());
     }
 
-    let mut status: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|c| serde_json::from_str(&c).ok())
-        .unwrap_or_else(|| serde_json::json!({ "sessions": {} }));
+    let lock_path = paths::sessions_lock_path();
+    security::with_sessions_lock(&lock_path, || {
+        let mut status: serde_json::Value = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|c| serde_json::from_str(&c).ok())
+            .unwrap_or_else(|| serde_json::json!({ "sessions": {} }));
 
-    if let Some(map) = status["sessions"].as_object_mut() {
-        map.retain(|k, _| !k.starts_with("sandbox-"));
-    }
+        if let Some(map) = status["sessions"].as_object_mut() {
+            map.retain(|k, _| !k.starts_with("sandbox-"));
+        }
 
-    security::atomic_write(
-        &path,
-        serde_json::to_string_pretty(&status)
-            .map_err(|e| e.to_string())?
-            .as_bytes(),
-    )
+        let bytes = serde_json::to_string_pretty(&status)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        security::atomic_write(&path, bytes.as_bytes())
+    })
     .map_err(|e| e.to_string())
 }
 
@@ -1658,24 +1675,31 @@ async fn handle_permission_connection(
                 received_at: now,
             };
 
-            // Reserve the pending-request slot first. If we're saturated (local
+            // F-reliability-007 — insert metadata BEFORE the pending receiver.
+            // Previously the order was reversed: a resolve that arrived between
+            // the pending-insert and the metadata-insert would find pending
+            // populated but metadata empty, silently dropping the audit-log
+            // entry. With metadata-first, any resolve that finds pending also
+            // finds metadata, so the audit log can't lose decisions.
+            metadata
+                .lock()
+                .unwrap()
+                .insert(request_id.clone(), permission_req);
+
+            // Reserve the pending-request slot. If we're saturated (local
             // DoS flood, or a stuck user with dozens of unresolved prompts),
             // reject with 503 before emitting to the frontend so the UI doesn't
-            // get a prompt the backend can't track.
+            // get a prompt the backend can't track. Also drop the metadata we
+            // just inserted so we don't leak a phantom entry.
             let rx = match pending.insert(&request_id) {
                 Some(rx) => rx,
                 None => {
+                    metadata.lock().unwrap().remove(&request_id);
                     let response = "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nToo many requests";
                     let _ = stream.write_all(response.as_bytes()).await;
                     return Ok(());
                 }
             };
-
-            // Store metadata for logging on decision
-            metadata
-                .lock()
-                .unwrap()
-                .insert(request_id.clone(), permission_req);
 
             // Build frontend event payload (includes computed summary)
             let frontend_payload = serde_json::json!({
@@ -1691,10 +1715,29 @@ async fn handle_permission_connection(
             // Emit to React frontend
             let _ = app.emit("permission-request", &frontend_payload);
 
-            let decision = match rx.await {
-                Ok(d) => d,
-                Err(_) => {
-                    // Channel dropped (timeout or cleanup)
+            // F-reliability-001 — bound the wait at 60s. Without a timeout,
+            // an abandoned permission (Claude Code killed mid-prompt, network
+            // blip, user closes the toast without clicking) leaks the
+            // PendingRequests slot forever. After 64 such leaks, MAX_PENDING
+            // saturates and Cue silently stops mediating ALL permissions
+            // until the desktop app restarts. 60s is comfortably above any
+            // reasonable user-deliberation window for a local UI prompt and
+            // well below Python's urlopen 300s ceiling, so the hook still
+            // gets a clean 504 well before its own timeout fires.
+            const PERMISSION_WAIT_TIMEOUT: std::time::Duration =
+                std::time::Duration::from_secs(60);
+            let decision = match tokio::time::timeout(PERMISSION_WAIT_TIMEOUT, rx).await {
+                Ok(Ok(d)) => d,
+                Ok(Err(_)) | Err(_) => {
+                    // Either the channel was dropped (cleanup, app shutdown)
+                    // or the 60s budget expired. Free BOTH pending and
+                    // metadata so a re-fire of the same hook isn't blocked
+                    // by a zombie slot, and so subsequent decisions can't
+                    // resolve against a stale metadata entry. We use
+                    // pending.remove rather than .resolve(Deny) — the wait
+                    // was abandoned, not actively denied; the audit log
+                    // shouldn't claim the user said no.
+                    pending.remove(&request_id);
                     metadata.lock().unwrap().remove(&request_id);
                     let response = "HTTP/1.1 504 Gateway Timeout\r\nContent-Type: text/plain\r\nContent-Length: 7\r\nConnection: close\r\n\r\nTimeout";
                     stream.write_all(response.as_bytes()).await?;
