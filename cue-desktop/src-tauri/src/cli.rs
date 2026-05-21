@@ -642,6 +642,8 @@ mod tests {
             agent_name: None,
             pid: None,
             permission_mode: None,
+            error_type: None,
+            pending_permission: None,
         }
     }
 

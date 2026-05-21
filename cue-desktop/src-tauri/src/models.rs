@@ -61,6 +61,20 @@ pub struct SessionInfo {
     /// knowledge, so the value is suppressed to avoid showing stale data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
+    /// Error category from Claude Code's StopFailure hook (e.g. "rate_limit",
+    /// "billing_error", "authentication_failed"). Set only when state == "error"
+    /// and the error originated from an API-level failure rather than a tool
+    /// failure. The UI surfaces this so users can distinguish "Claude got rate
+    /// limited" from "the Bash tool failed".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_type: Option<String>,
+    /// Set true by `_quick_state_write` when a PermissionRequest hook is
+    /// in-flight to the dashboard. While this flag is set, concurrent hook
+    /// events (e.g. a PostToolUse from a parallel tool call) preserve
+    /// `state == "waiting"` instead of overwriting it. Cleared when the
+    /// permission resolves via the main write path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_permission: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1193,6 +1207,8 @@ mod tests {
             agent_name: None,
             pid: None,
             permission_mode: None,
+            error_type: None,
+            pending_permission: None,
         }
     }
 
