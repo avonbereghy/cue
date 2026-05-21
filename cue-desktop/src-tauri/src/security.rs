@@ -681,7 +681,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let lock_path = dir.join("sessions.lock");
         let result: io::Result<()> = with_sessions_lock(&lock_path, || {
-            Err(io::Error::new(io::ErrorKind::Other, "boom"))
+            Err(io::Error::other("boom"))
         });
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Other);
