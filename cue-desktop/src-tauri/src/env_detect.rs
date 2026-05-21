@@ -160,8 +160,12 @@ fn detect_wsl_distros() -> Vec<String> {
 
 /// Hook events and their corresponding cue-hook state arguments.
 ///
-/// Covers all Claude Code lifecycle events. Must stay aligned with
-/// the manual instructions in OnboardingWizard.tsx.
+/// Covers all Claude Code lifecycle events from
+/// https://code.claude.com/docs/en/hooks. The hook's main() does final
+/// per-event filtering (e.g. Notification subtype dispatch), so the value
+/// here is the *default* action; the hook may early-return when a subtype
+/// shouldn't change state. Must stay aligned with the manual instructions
+/// in OnboardingWizard.tsx.
 pub const HOOK_EVENTS: &[(&str, &str)] = &[
     ("SessionStart", "idle"),
     ("PreToolUse", "working"),
@@ -172,9 +176,11 @@ pub const HOOK_EVENTS: &[(&str, &str)] = &[
     ("SubagentStart", "subagent"),
     ("SubagentStop", "subagent_stop"),
     ("Stop", "idle"),
+    ("StopFailure", "error"),
     ("TaskCompleted", "done"),
-    ("Notification", "done"),
+    ("Notification", "waiting"),
     ("PreCompact", "compacting"),
+    ("PostCompact", "working"),
     ("SessionEnd", "remove"),
 ];
 
@@ -599,7 +605,7 @@ mod tests {
 
     #[test]
     fn test_hook_events_count() {
-        assert_eq!(HOOK_EVENTS.len(), 13);
+        assert_eq!(HOOK_EVENTS.len(), 15);
     }
 
     #[test]
@@ -615,10 +621,37 @@ mod tests {
         assert_eq!(events["SubagentStart"], "subagent");
         assert_eq!(events["SubagentStop"], "subagent_stop");
         assert_eq!(events["Stop"], "idle");
+        assert_eq!(events["StopFailure"], "error");
         assert_eq!(events["TaskCompleted"], "done");
-        assert_eq!(events["Notification"], "done");
+        // Notification carries six subtypes; three are user-attention prompts
+        // (permission_prompt, idle_prompt, elicitation_dialog) and three are
+        // informational (auth_success, elicitation_complete, elicitation_response).
+        // The hook treats "waiting" as the default for the prompt subtypes and
+        // returns without writing for the informational ones — see
+        // hooks/cue-hook for the dispatch.
+        assert_eq!(events["Notification"], "waiting");
         assert_eq!(events["PreCompact"], "compacting");
+        // PostCompact resolves the compacting state when the resolving event
+        // arrives; absent it, the Rust side's 60s stuck-active cap demotes.
+        assert_eq!(events["PostCompact"], "working");
         assert_eq!(events["SessionEnd"], "remove");
+    }
+
+    #[test]
+    fn test_hook_events_actions_in_valid_set() {
+        // Every state argument we install must be in the hook's valid_actions
+        // set. If this fails, the hook silently no-ops every event that maps
+        // to the missing action.
+        let valid_actions: std::collections::HashSet<&str> = [
+            "idle", "working", "thinking", "waiting", "done",
+            "remove", "error", "subagent", "subagent_stop", "compacting",
+        ].iter().copied().collect();
+        for (event, action) in HOOK_EVENTS {
+            assert!(
+                valid_actions.contains(*action),
+                "HOOK_EVENTS row ({event}, {action}) has an action the hook would silently drop",
+            );
+        }
     }
 
     #[test]
