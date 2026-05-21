@@ -783,8 +783,14 @@ def main():
                 # legitimate and should always apply.
                 if action == "waiting":
                     existing_activity = existing.get("lastActivity", 0)
-                    if existing_activity > hook_start_time:
-                        return  # A newer hook already wrote — don't clobber it
+                    # `pendingPermission` is set ONLY by our own
+                    # _quick_state_write a few lines earlier in the same
+                    # process; if it's True, the newer write is US, not a
+                    # foreign hook. Proceeding is correct — the main-write
+                    # below is the resolving event that clears the marker.
+                    if (existing_activity > hook_start_time
+                            and not existing.get("pendingPermission")):
+                        return  # A newer (foreign) hook already wrote — don't clobber it
 
                 # F-reliability-009 — While a PermissionRequest is in flight
                 # to the dashboard (`pendingPermission == True`), concurrent
