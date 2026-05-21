@@ -80,16 +80,26 @@ pub struct SessionMonitorState {
     /// re-evaluation, eliminating the bounce caused by JSONL flush timing
     /// variance between polls.
     promoted_for_prompt: Mutex<HashMap<String, f64>>,
-    /// Latches the `ended_at` timestamp of the most recent subagent JSONL
-    /// entry that triggered a done/idle→subagent rescue. The 10s rescue
-    /// window won't re-fire for the same `ended_at`, preventing the bounce
-    /// where a single just-finished subagent re-rescues on every poll.
+    /// Latches the `started_at` of the most recent subagent that triggered
+    /// a done/idle→subagent rescue. The latch keys on `started_at` (set
+    /// once on first entry, then never changes) rather than `ended_at`
+    /// (which advances every refresh while the agent is still running),
+    /// so the same agent can't re-trigger the rescue on every poll —
+    /// only a brand-new agent with a later first-entry timestamp does.
     subagent_rescued_for: Mutex<HashMap<String, f64>>,
     /// Per-session "compacting visible at least until" floor. When the hook
     /// writes `compacting`, we set this 1500ms in the future so the frontend
     /// always observes at least one tick of compacting even if a subsequent
     /// `working` write lands within the same poll window.
     compacting_floor: Mutex<HashMap<String, f64>>,
+    /// Consecutive `serde_json::from_str` failures on sessions.json. The hook
+    /// renames corrupt files aside on its own write, but only when a hook
+    /// event fires — if all Claude Code processes are idle and the file is
+    /// corrupt, the hook never runs and the dashboard freezes. After N
+    /// consecutive failures the poller takes over: renames the file aside
+    /// and writes a clean `{"sessions":{}}` so subsequent hooks repopulate.
+    /// Reset on the first successful parse. Zero on the cold path.
+    consecutive_parse_failures: Mutex<u32>,
     /// Cue's launch timestamp (seconds since UNIX epoch) — only sessions
     /// with activity after this are shown. Starts empty, reads forwards only.
     launched_at: f64,
@@ -117,6 +127,7 @@ impl Default for SessionMonitorState {
             promoted_for_prompt: Mutex::new(HashMap::new()),
             subagent_rescued_for: Mutex::new(HashMap::new()),
             compacting_floor: Mutex::new(HashMap::new()),
+            consecutive_parse_failures: Mutex::new(0),
             launched_at,
         }
     }
@@ -150,13 +161,68 @@ impl SessionMonitorState {
 
         let status = match std::fs::read_to_string(&status_path) {
             Ok(content) => match serde_json::from_str::<StatusData>(&content) {
-                Ok(s) => s,
+                Ok(s) => {
+                    // Successful parse — reset the failure counter so the
+                    // self-repair threshold is fresh for any future incident.
+                    *self.consecutive_parse_failures.lock().unwrap() = 0;
+                    s
+                }
                 Err(e) => {
                     // Preserve the prior enriched list across a transient parse
                     // failure (mid-rename read from the Python hook, or a manual
                     // edit). Wiping would drop active_since timers and cause a
                     // one-poll UI flash of zero sessions.
-                    log::warn!("sessions.json parse failed, keeping previous state: {}", e);
+                    //
+                    // F-reliability-006 — the hook only renames corrupt files
+                    // aside when a hook event actually fires. With all Claude
+                    // Code processes idle, no hook runs and the dashboard
+                    // freezes indefinitely. Track consecutive failures here
+                    // and recover after 5 polls (~5s) of unbroken corruption.
+                    const REPAIR_THRESHOLD: u32 = 5;
+                    let mut failures = self.consecutive_parse_failures.lock().unwrap();
+                    *failures += 1;
+                    if *failures < REPAIR_THRESHOLD {
+                        log::warn!(
+                            "sessions.json parse failed ({}); keeping previous state ({}/{} before self-repair)",
+                            e, *failures, REPAIR_THRESHOLD
+                        );
+                        return;
+                    }
+                    // Persistent corruption — rename the file aside and seed
+                    // a clean empty container. The next hook write will
+                    // repopulate it. Best-effort; if the rename itself fails
+                    // we just keep returning prior state.
+                    let timestamp = SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let corrupt_path = format!(
+                        "{}.corrupt-{}",
+                        status_path.display(),
+                        timestamp
+                    );
+                    if let Err(rename_err) = std::fs::rename(&status_path, &corrupt_path) {
+                        log::warn!(
+                            "sessions.json self-repair: rename aside failed: {}",
+                            rename_err
+                        );
+                        return;
+                    }
+                    if let Err(write_err) = security::atomic_write(
+                        &status_path,
+                        b"{\"sessions\":{}}",
+                    ) {
+                        log::warn!(
+                            "sessions.json self-repair: seed write failed: {}",
+                            write_err
+                        );
+                        return;
+                    }
+                    log::warn!(
+                        "sessions.json self-repaired after {} parse failures (corrupt copy at {})",
+                        *failures, corrupt_path
+                    );
+                    *failures = 0;
                     return;
                 }
             },
@@ -296,11 +362,16 @@ impl SessionMonitorState {
                     let Some(pid) = s.pid else {
                         return s; // no pid recorded (old entries) — can't check
                     };
-                    let live_start = sys
-                        .process(sysinfo::Pid::from_u32(pid))
-                        .map(|p| p.start_time());
+                    let process = sys.process(sysinfo::Pid::from_u32(pid));
+                    let live_start = process.map(|p| p.start_time());
+                    // Process name guards F-reliability-005: on first sight,
+                    // accept only processes that look like Claude Code so a
+                    // recycled PID doesn't get anchored.
+                    let live_name = process
+                        .and_then(|p| p.name().to_str())
+                        .map(str::to_owned);
                     let cached = identity.get(&s.id).copied();
-                    match resolve_liveness(pid, live_start, cached) {
+                    match resolve_liveness(pid, live_start, cached, live_name.as_deref()) {
                         LivenessOutcome::Alive { cache } => {
                             identity.insert(s.id.clone(), cache);
                         }
@@ -451,28 +522,36 @@ impl SessionMonitorState {
                     if !matches!(s.state.as_str(), "thinking" | "working" | "subagent") {
                         // Anything that isn't a handoffable continuation of
                         // the current turn (idle / done / ended / error /
-                        // waiting / compacting / clearing) clears the latch
-                        // so the NEXT thinking entry waits for a fresh
-                        // text-after-prompt signal before being promoted.
-                        // Without this, a session that errors out and
-                        // immediately retries with a stale prompt_ts in
-                        // metrics could skip the visual handoff entirely.
+                        // waiting / compacting) clears the latch so the NEXT
+                        // thinking entry waits for a fresh text-after-prompt
+                        // signal before being promoted. Without this, a
+                        // session that errors out and immediately retries
+                        // with a stale prompt_ts in metrics could skip the
+                        // visual handoff entirely.
                         promoted.remove(&s.id);
                     }
 
                     // ── Subagent rescue latch ──────────────────────────
-                    // Only fire on a NEW ended_at; same value won't re-rescue.
+                    // F-reliability-008 — key on latest `started_at` rather
+                    // than `ended_at`. For a still-running subagent
+                    // `parse_subagent_jsonl` advances ended_at on every
+                    // refresh (it's `max(ts)` across all entries), so the
+                    // prior identity `latest_ended` re-armed the rescue on
+                    // every poll. `started_at` is set once on the first
+                    // parsed entry and never advances, so the same agent
+                    // produces a stable identity; a NEW agent produces a
+                    // larger started_at and re-fires correctly.
                     if matches!(s.state.as_str(), "done" | "idle") && s.active_subagents == 0 {
                         if let Some(metrics) = metrics {
-                            let latest_ended = metrics
+                            let latest_started = metrics
                                 .subagents
                                 .iter()
-                                .filter_map(|a| a.ended_at)
-                                .filter(|t| (now_secs - t) < 10.0 && (now_secs - t) >= 0.0)
+                                .filter(|a| a.is_recently_live(now_secs, 10.0))
+                                .filter_map(|a| a.started_at)
                                 .fold(0.0_f64, f64::max);
-                            if latest_ended > 0.0 {
+                            if latest_started > 0.0 {
                                 let already = rescued.get(&s.id).copied().unwrap_or(0.0);
-                                if (latest_ended - already).abs() > 0.001 {
+                                if (latest_started - already).abs() > 0.001 {
                                     let live = metrics
                                         .subagents
                                         .iter()
@@ -491,7 +570,7 @@ impl SessionMonitorState {
                                         );
                                         s.state = "subagent".to_string();
                                         s.active_subagents = live;
-                                        rescued.insert(s.id.clone(), latest_ended);
+                                        rescued.insert(s.id.clone(), latest_started);
                                     }
                                 }
                             }
@@ -938,9 +1017,14 @@ pub fn encode_workspace_path(workspace: &str) -> String {
 /// launched_at gate. A genuinely live waiting prompt has both an alive parent
 /// PID and a JSONL on disk, so it survives both checks intact.
 fn is_liveness_sensitive(state: &str) -> bool {
+    // `clearing` was retained here for an event that Claude Code's canonical
+    // hook list (https://code.claude.com/docs/en/hooks) does not include —
+    // there is no `PreClear` event. The Python hook never writes "clearing"
+    // (it's absent from `valid_actions` in hooks/cue-hook), so this arm was
+    // unreachable from real data. Dropping it keeps the predicate honest.
     matches!(
         state,
-        "working" | "thinking" | "subagent" | "compacting" | "clearing" | "waiting"
+        "working" | "thinking" | "subagent" | "compacting" | "waiting"
     )
 }
 
@@ -1006,9 +1090,10 @@ pub(crate) fn dedup_state_priority(state: &str) -> u8 {
         "error" => 5,
         "waiting" => 4,
         "working" | "subagent" => 3,
-        "thinking" | "compacting" | "clearing" => 2,
+        "thinking" | "compacting" => 2,
         "done" | "idle" => 1,
-        // ended is a tombstone — treat as lowest
+        // ended is a tombstone — treat as lowest. `clearing` falls here too:
+        // see is_liveness_sensitive's note — the hook can't produce it.
         _ => 0,
     }
 }
@@ -1062,9 +1147,13 @@ fn should_demote_turn_ended(
     // (user killed the prompt, switched to a different terminal, etc.)
     // can leave the session pinned on `waiting` forever — but the
     // assistant's next end_turn proves the turn finished without Cue's
-    // observation. `subagent`/`compacting`/`clearing` are intentionally
-    // left alone here — they have their own recovery paths.
-    if !matches!(state, "working" | "thinking" | "waiting") {
+    // observation. `error` is included for the same reason once
+    // F-state-coverage-002 lands: a StopFailure or PostToolUseFailure
+    // can leave the session red, and a subsequent successful turn (clean
+    // `end_turn` newer than the error transition) is proof the user
+    // retried and the issue resolved. `subagent`/`compacting` have their
+    // own recovery paths and are excluded.
+    if !matches!(state, "working" | "thinking" | "waiting" | "error") {
         return false;
     }
     let Some(metrics) = metrics else { return false };
@@ -1086,7 +1175,9 @@ fn should_demote_turn_ended(
 /// fired. Returns false when `stateChangedAt` is missing so the cap
 /// can't fire on a record we can't time.
 fn should_demote_stuck_active(state: &str, state_changed_at: Option<f64>, now: f64) -> bool {
-    if !matches!(state, "compacting" | "clearing") {
+    // Only `compacting` remains here; `clearing` removed alongside the rest
+    // of its arms — see is_liveness_sensitive for the rationale.
+    if state != "compacting" {
         return false;
     }
     let Some(state_changed_at) = state_changed_at else {
@@ -1188,20 +1279,46 @@ pub(crate) fn promote_decision(
 
 /// Pure predicate for "should we extend the compacting display floor?"
 /// `until` is the floor's expiry ts (None if no floor active).
+///
+/// F-correctness-001 — narrowed to mask only neutral / done states. The
+/// floor exists to keep the periwinkle "compacting" indicator visible for
+/// a full poll tick when the hook writes `compacting` → `working` quickly,
+/// but `error`/`waiting`/`subagent`/`compacting` itself are either user-
+/// attention states (must surface immediately) or already the right
+/// indicator. Previously the only guard was `state != "compacting"`, which
+/// silently shadowed `error`/`waiting` behind compacting for up to 1.5 s.
 pub(crate) fn floor_extends(state: &str, until: Option<f64>, now: f64) -> bool {
-    state != "compacting" && until.is_some_and(|u| u > now)
+    if !matches!(state, "working" | "thinking" | "idle" | "done") {
+        return false;
+    }
+    until.is_some_and(|u| u > now)
 }
 
 fn resolve_liveness(
     pid: u32,
     live_start: Option<u64>,
     cached: Option<(u32, u64)>,
+    live_name: Option<&str>,
 ) -> LivenessOutcome {
     match (live_start, cached) {
-        // First sight — capture identity.
-        (Some(start), None) => LivenessOutcome::Alive {
-            cache: (pid, start),
-        },
+        // First sight — capture identity, but require the process name to
+        // contain "claude" before trusting it. Without this guard, a session
+        // whose recorded `pid` was recycled by the OS between the hook write
+        // and Cue's first poll would silently anchor onto an unrelated
+        // process (any random PID) and survive every later liveness check
+        // for the duration of that unrelated process. F-reliability-005.
+        (Some(start), None) => {
+            let name_ok = live_name
+                .map(|n| n.to_ascii_lowercase().contains("claude"))
+                .unwrap_or(false);
+            if name_ok {
+                LivenessOutcome::Alive {
+                    cache: (pid, start),
+                }
+            } else {
+                LivenessOutcome::Dead
+            }
+        }
         // Same PID, same start time — definitely the same process.
         (Some(start), Some((cached_pid, cached_start)))
             if cached_pid == pid && cached_start == start =>
@@ -1253,16 +1370,47 @@ mod tests {
     }
 
     #[test]
-    fn test_liveness_first_sight_captures_identity() {
-        match resolve_liveness(1234, Some(5000), None) {
+    fn test_liveness_first_sight_captures_identity_when_name_is_claude() {
+        match resolve_liveness(1234, Some(5000), None, Some("claude")) {
             LivenessOutcome::Alive { cache } => assert_eq!(cache, (1234, 5000)),
-            LivenessOutcome::Dead => panic!("expected Alive on first sight"),
+            LivenessOutcome::Dead => panic!("expected Alive on first sight of claude"),
         }
     }
 
     #[test]
-    fn test_liveness_matching_cache_stays_alive() {
-        match resolve_liveness(1234, Some(5000), Some((1234, 5000))) {
+    fn test_liveness_first_sight_accepts_mixed_case_claude() {
+        // Real binaries are sometimes "claude", "claude-code", "Claude.app/Contents/MacOS/Claude"
+        // — the check is case-insensitive substring match on "claude".
+        match resolve_liveness(1234, Some(5000), None, Some("Claude-Code")) {
+            LivenessOutcome::Alive { cache } => assert_eq!(cache, (1234, 5000)),
+            LivenessOutcome::Dead => panic!("expected Alive on Claude-Code"),
+        }
+    }
+
+    #[test]
+    fn test_liveness_first_sight_rejects_unrelated_process() {
+        // F-reliability-005 — recycled PID anchored onto an unrelated process.
+        assert!(matches!(
+            resolve_liveness(1234, Some(5000), None, Some("nginx")),
+            LivenessOutcome::Dead
+        ));
+    }
+
+    #[test]
+    fn test_liveness_first_sight_rejects_when_name_unavailable() {
+        // sysinfo couldn't read the process name; conservatively treat as dead
+        // on first sight. The hook will re-fire and we'll get another chance.
+        assert!(matches!(
+            resolve_liveness(1234, Some(5000), None, None),
+            LivenessOutcome::Dead
+        ));
+    }
+
+    #[test]
+    fn test_liveness_matching_cache_stays_alive_regardless_of_name() {
+        // Once we've cached identity, name no longer matters — the cached
+        // (pid, start_time) tuple is the authoritative check.
+        match resolve_liveness(1234, Some(5000), Some((1234, 5000)), Some("anything")) {
             LivenessOutcome::Alive { cache } => assert_eq!(cache, (1234, 5000)),
             LivenessOutcome::Dead => panic!("expected Alive when cache matches"),
         }
@@ -1271,7 +1419,7 @@ mod tests {
     #[test]
     fn test_liveness_process_gone_is_dead() {
         assert!(matches!(
-            resolve_liveness(1234, None, Some((1234, 5000))),
+            resolve_liveness(1234, None, Some((1234, 5000)), Some("claude")),
             LivenessOutcome::Dead
         ));
     }
@@ -1281,7 +1429,7 @@ mod tests {
         // Hook wrote a PID but there's no process at that pid and we never
         // cached one. Means it died before we ever polled — still dead.
         assert!(matches!(
-            resolve_liveness(1234, None, None),
+            resolve_liveness(1234, None, None, None),
             LivenessOutcome::Dead
         ));
     }
@@ -1290,7 +1438,7 @@ mod tests {
     fn test_liveness_pid_reuse_different_start_time_is_dead() {
         // Same pid, but a different process now holds it (different start time).
         assert!(matches!(
-            resolve_liveness(1234, Some(9999), Some((1234, 5000))),
+            resolve_liveness(1234, Some(9999), Some((1234, 5000)), Some("claude")),
             LivenessOutcome::Dead
         ));
     }
@@ -1301,7 +1449,6 @@ mod tests {
         assert!(is_liveness_sensitive("thinking"));
         assert!(is_liveness_sensitive("subagent"));
         assert!(is_liveness_sensitive("compacting"));
-        assert!(is_liveness_sensitive("clearing"));
         // `waiting` is liveness-sensitive: a stale prompt whose process died
         // shouldn't linger forever. A live waiting prompt has both PID + JSONL
         // intact, so liveness leaves it alone.
@@ -1309,6 +1456,12 @@ mod tests {
         assert!(!is_liveness_sensitive("idle"));
         assert!(!is_liveness_sensitive("done"));
         assert!(!is_liveness_sensitive("error"));
+        // `clearing` is intentionally NOT liveness-sensitive — the canonical
+        // Claude Code event list has no `PreClear`, the hook never writes
+        // "clearing" (it's not in valid_actions), so any value reaching here
+        // would be from an external mutator. Don't grant it active-state
+        // privileges. See is_liveness_sensitive for the full rationale.
+        assert!(!is_liveness_sensitive("clearing"));
     }
 
     #[test]
@@ -1324,7 +1477,7 @@ mod tests {
 
     #[test]
     fn test_bypasses_launch_gate_active_states() {
-        for s in ["working", "thinking", "subagent", "compacting", "clearing", "waiting"] {
+        for s in ["working", "thinking", "subagent", "compacting", "waiting"] {
             assert!(bypasses_launch_gate(s), "state {} should bypass", s);
         }
     }
@@ -1573,17 +1726,17 @@ mod tests {
     }
 
     #[test]
-    fn test_no_demote_for_non_working_states() {
-        // Gate on {working, thinking, waiting} — don't touch subagent,
-        // compacting, clearing, or terminal states.
+    fn test_no_demote_for_non_active_states() {
+        // Gate on {working, thinking, waiting, error} — don't touch subagent,
+        // compacting, or terminal states. F-state-coverage-009 added `error`
+        // because a clean end_turn after the error proves the user retried
+        // and the issue resolved.
         let m = metrics_with_end_turn(Some(200.0), false);
         for st in [
             "subagent",
             "compacting",
-            "clearing",
             "idle",
             "done",
-            "error",
         ] {
             assert!(
                 !should_demote_turn_ended(st, Some(100.0), Some(&m)),
@@ -1811,7 +1964,7 @@ mod tests {
         assert!(!should_demote_turn_ended("waiting", Some(100.0), Some(&m)));
     }
 
-    // ── should_demote_stuck_active (compacting/clearing 60s cap) ────────
+    // ── should_demote_stuck_active (compacting 60s cap) ─────────────────
 
     #[test]
     fn test_demote_stuck_active_compacting_past_60s() {
@@ -1821,8 +1974,11 @@ mod tests {
     }
 
     #[test]
-    fn test_demote_stuck_active_clearing_past_60s() {
-        assert!(should_demote_stuck_active("clearing", Some(900.0), 1000.0));
+    fn test_no_demote_stuck_active_clearing() {
+        // `clearing` no longer participates — the hook can't produce it. If
+        // an external mutator wrote it, we'd rather show it indefinitely
+        // than apply a 60s cap to data we don't produce.
+        assert!(!should_demote_stuck_active("clearing", Some(900.0), 1000.0));
     }
 
     #[test]
@@ -1836,7 +1992,7 @@ mod tests {
         for st in ["working", "thinking", "idle", "done", "error", "waiting", "subagent"] {
             assert!(
                 !should_demote_stuck_active(st, Some(900.0), 1000.0),
-                "stuck-active cap must only fire for compacting/clearing, not {}",
+                "stuck-active cap must only fire for compacting, not {}",
                 st
             );
         }
@@ -1868,11 +2024,18 @@ mod tests {
 
     #[test]
     fn test_dedup_priority_compacting_beats_idle() {
-        // Compacting/clearing must NOT be replaced by an idle phantom —
-        // doing so would skip the compacting floor which is the only
-        // thing keeping the periwinkle dot visible during a fast /compact.
+        // Compacting must NOT be replaced by an idle phantom — doing so
+        // would skip the compacting floor which is the only thing keeping
+        // the periwinkle dot visible during a fast /compact.
         assert!(dedup_state_priority("compacting") > dedup_state_priority("idle"));
-        assert!(dedup_state_priority("clearing") > dedup_state_priority("idle"));
+    }
+
+    #[test]
+    fn test_dedup_priority_clearing_falls_to_bottom() {
+        // `clearing` collapses into the catch-all priority-0 bucket along
+        // with `ended` — the hook can't produce it so any inbound value is
+        // a non-canonical entry that shouldn't outrank `idle`.
+        assert_eq!(dedup_state_priority("clearing"), 0);
     }
 
     #[test]
@@ -2088,5 +2251,87 @@ mod tests {
         assert!(path.contains("some-other-project"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── F-correctness-001: floor_extends narrowing ──────────────────────
+
+    #[test]
+    fn test_floor_extends_keeps_working_in_floor() {
+        // Active floor + working state → extend (no change visible to user).
+        assert!(floor_extends("working", Some(1000.5), 1000.0));
+    }
+
+    #[test]
+    fn test_floor_extends_keeps_idle_in_floor() {
+        // The floor's whole point is to mask brief working→idle transitions
+        // back to compacting display.
+        assert!(floor_extends("idle", Some(1000.5), 1000.0));
+        assert!(floor_extends("done", Some(1000.5), 1000.0));
+        assert!(floor_extends("thinking", Some(1000.5), 1000.0));
+    }
+
+    #[test]
+    fn test_floor_extends_never_masks_error() {
+        // Prior bug: `error` written during the floor window was repainted
+        // as "compacting" until the floor expired. User attention lost.
+        assert!(!floor_extends("error", Some(1000.5), 1000.0));
+    }
+
+    #[test]
+    fn test_floor_extends_never_masks_waiting() {
+        // PermissionRequest during a /compact must not be hidden behind the
+        // periwinkle "compacting" indicator.
+        assert!(!floor_extends("waiting", Some(1000.5), 1000.0));
+    }
+
+    #[test]
+    fn test_floor_extends_never_masks_subagent() {
+        // A subagent kick-off mid-/compact should surface immediately.
+        assert!(!floor_extends("subagent", Some(1000.5), 1000.0));
+    }
+
+    #[test]
+    fn test_floor_extends_does_not_self_extend_compacting() {
+        // The floor never extends the state it's named for — that would
+        // be a no-op anyway, but the predicate documents the intent.
+        assert!(!floor_extends("compacting", Some(1000.5), 1000.0));
+    }
+
+    #[test]
+    fn test_floor_extends_no_floor_means_no_extension() {
+        assert!(!floor_extends("working", None, 1000.0));
+    }
+
+    #[test]
+    fn test_floor_extends_expired_floor_no_extension() {
+        // Floor's `until` has passed — let the state through.
+        assert!(!floor_extends("working", Some(999.0), 1000.0));
+    }
+
+    // ── F-state-coverage-009: error participates in turn-ended demotion ──
+
+    #[test]
+    fn test_demote_turn_ended_clears_error_on_clean_end_turn() {
+        // Closes the "red latch" — a session that errored out and was then
+        // successfully retried (new end_turn newer than the state change)
+        // must drop the red pill once the turn proves recovery.
+        let m = metrics_with_end_turn(Some(200.0), false);
+        assert!(should_demote_turn_ended("error", Some(100.0), Some(&m)));
+    }
+
+    #[test]
+    fn test_no_demote_error_when_end_turn_predates_state_change() {
+        // end_turn that fired BEFORE the error transition is no proof of
+        // recovery — keep the red pill.
+        let m = metrics_with_end_turn(Some(50.0), false);
+        assert!(!should_demote_turn_ended("error", Some(100.0), Some(&m)));
+    }
+
+    #[test]
+    fn test_no_demote_error_when_tool_use_pending() {
+        // Mid-tool-call when the error happened — the open tool_use vetoes
+        // the demote so we don't drop the state mid-recovery.
+        let m = metrics_with_end_turn(Some(200.0), true);
+        assert!(!should_demote_turn_ended("error", Some(100.0), Some(&m)));
     }
 }
