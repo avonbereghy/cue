@@ -311,6 +311,13 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
                 if pm:
                     entry["permissionMode"] = pm
 
+                # Mark a PermissionRequest as in-flight to the dashboard so
+                # concurrent hook events (e.g. a PostToolUse from a parallel
+                # tool call) don't overwrite this "waiting" state during the
+                # HTTP wait. Cleared by the resolving PermissionRequest's
+                # main-write path below — see the carry-forward guard there.
+                entry["pendingPermission"] = True
+
                 status["sessions"][session_id] = entry
 
                 fd, tmp = tempfile.mkstemp(dir=STATUS_DIR, suffix=".json.tmp")
@@ -618,6 +625,35 @@ def main():
 
     team_name, agent_name = _detect_team(transcript_path)
     last_tokens = _read_last_tokens(transcript_path)
+    event_name = hook_data.get("hook_event_name", "")
+
+    # Claude Code's Notification hook fires for six subtypes — three are
+    # user-attention prompts (permission_prompt, idle_prompt, elicitation_dialog)
+    # and three are informational (auth_success, elicitation_complete,
+    # elicitation_response). HOOK_EVENTS maps Notification → "waiting" because
+    # the prompt subtypes dominate, but we must not flip the dashboard to
+    # waiting for informational subtypes — return early without touching
+    # sessions.json. Unknown subtypes default to "waiting" (safer than "done").
+    if event_name == "Notification":
+        notif_type = hook_data.get("notification_type")
+        _INFORMATIONAL_NOTIFICATIONS = {
+            "auth_success",
+            "elicitation_complete",
+            "elicitation_response",
+        }
+        if isinstance(notif_type, str) and notif_type in _INFORMATIONAL_NOTIFICATIONS:
+            return
+
+    # StopFailure carries an `error_type` (rate_limit / billing_error /
+    # authentication_failed / server_error / model_not_found / max_output_tokens
+    # / invalid_request / oauth_org_not_allowed / unknown). PostToolUseFailure
+    # does not. Capture once and persist on the entry below so the UI can
+    # distinguish "API rate-limited" from "Bash tool failed".
+    error_type = None
+    if action == "error":
+        raw_err = hook_data.get("error_type")
+        if isinstance(raw_err, str) and raw_err:
+            error_type = raw_err
 
     # Permission mode comes through on PreToolUse / UserPromptSubmit / PostToolUse
     # payloads as either `permission_mode` or `permissionMode`. Normalize to a
@@ -717,7 +753,6 @@ def main():
                 # means /clear was run. Also detect via transcript content for
                 # sessions that weren't previously tracked by Cue.
                 is_clear = False
-                event_name = hook_data.get("hook_event_name", "")
                 if action == "idle" and event_name == "SessionStart":
                     # Detect /clear or /compact: if the transcript already has
                     # content, this is a context reset, not a fresh session.
@@ -730,6 +765,16 @@ def main():
                             pass
                     if has_prior:
                         is_clear = True
+                        # Claude Code's SessionStart carries `source` ∈
+                        # {startup, resume, clear, compact}. For `resume`
+                        # and `compact` the user is mid-turn — promote to
+                        # "working" so the dashboard doesn't flash "idle"
+                        # for a poll cycle before the next PreToolUse.
+                        # `startup` (no prior) stays idle; `clear` (which
+                        # resets the transcript) also stays idle.
+                        source_kind = hook_data.get("source")
+                        if source_kind in ("resume", "compact"):
+                            action = "working"
 
                 # Guard against stale "waiting" writes: PermissionRequest hooks
                 # are slow (HTTP request) and can finish after PostToolUse
@@ -740,6 +785,17 @@ def main():
                     existing_activity = existing.get("lastActivity", 0)
                     if existing_activity > hook_start_time:
                         return  # A newer hook already wrote — don't clobber it
+
+                # F-reliability-009 — While a PermissionRequest is in flight
+                # to the dashboard (`pendingPermission == True`), concurrent
+                # hook events from parallel tool calls would otherwise clobber
+                # the "waiting" state. Preserve "waiting" for non-attention
+                # actions; let "error", "subagent_stop", "remove" still pass.
+                if (existing.get("pendingPermission") is True
+                        and existing.get("state") == "waiting"
+                        and action in ("working", "thinking", "subagent",
+                                       "compacting", "done", "idle")):
+                    action = "waiting"
 
                 # Self-heal a leaked subagent counter BEFORE we read it.
                 # If the session has been pinned on "subagent" for >60s with
@@ -780,14 +836,16 @@ def main():
                         active_subs += 1
                 elif action == "subagent_stop":
                     active_subs = max(0, active_subs - 1)
-                    if existing.get("state") in ("waiting", "error"):
-                        # User-attention states must never be clobbered by
-                        # subagent activity, whether or not the counter is
-                        # exhausted. Persist the decremented counter under
-                        # the preserved state. (Previously this branch
-                        # `return`'d early when existing was waiting, which
-                        # froze the on-disk counter and re-armed the
-                        # subagent-override trap once waiting resolved.)
+                    if existing.get("state") in ("waiting", "error", "compacting", "clearing"):
+                        # User-attention and transitional states must never be
+                        # clobbered by subagent activity. waiting/error need
+                        # the user; compacting/clearing are mid-phase — a fast
+                        # subagent finish during /compact must not flash the
+                        # card to "working" before PostCompact lands.
+                        # Persist the decremented counter under the preserved
+                        # state. (Previously this branch only preserved
+                        # waiting/error, which let subagent finishes during
+                        # /compact incorrectly transition through "working".)
                         action = existing["state"]
                     elif active_subs > 0:
                         # Counter still positive — show subagent.
@@ -863,6 +921,24 @@ def main():
                 pm = permission_mode or existing.get("permissionMode")
                 if pm:
                     entry["permissionMode"] = pm
+                # Persist errorType while the session is in "error" state.
+                # Set from this event's payload (StopFailure carries error_type)
+                # or carried forward from a prior error so PostToolUseFailure
+                # doesn't drop the category info. Cleared on any non-error
+                # transition by virtue of not being added to the new entry.
+                if action == "error":
+                    et = error_type or existing.get("errorType")
+                    if isinstance(et, str) and et:
+                        entry["errorType"] = et
+                # Carry forward the PermissionRequest in-flight marker UNLESS
+                # this main-write is the resolving PermissionRequest itself
+                # (the HTTP wait must have ended for us to reach this point,
+                # so the race window is closed).
+                is_resolving_perm = (action == "waiting"
+                                     and event_name == "PermissionRequest")
+                if (existing.get("pendingPermission") is True
+                        and not is_resolving_perm):
+                    entry["pendingPermission"] = True
                 status["sessions"][session_id] = entry
 
             # Atomic write with unique temp file to avoid collisions
