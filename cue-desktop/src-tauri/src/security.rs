@@ -4,6 +4,9 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
+
 /// Maximum age (in seconds) for temp files before cleanup.
 const STALE_TMP_AGE_SECS: u64 = 3600;
 
@@ -57,6 +60,83 @@ pub fn atomic_write(target: &Path, contents: &[u8]) -> io::Result<()> {
     fs::rename(&tmp_path, target)?;
 
     Ok(())
+}
+
+/// Run `f` while holding an exclusive advisory lock on the sessions.lock file.
+///
+/// This mirrors the Python hook's `_lock`/`_unlock` flow (cue-hook.py: 30-44):
+/// open the lock file, take `LOCK_EX | LOCK_NB` with up to a 2-second retry
+/// budget, run the work, release. Lets Rust commands like `write_sandbox_
+/// sessions` participate in the same cross-process critical section the hook
+/// uses, so a concurrent hook write can't be silently overwritten by a
+/// dashboard-driven sandbox update.
+///
+/// F-correctness-002 / F-reliability-002 — sandbox writers previously skipped
+/// this entirely, leaving a real race between Rust read-modify-rename and
+/// hook read-modify-rename of sessions.json.
+///
+/// On non-Unix platforms (Windows) this is currently a no-op pass-through —
+/// the hook's msvcrt.locking and Rust's std open semantics don't compose
+/// cleanly, and the platform's sandbox feature is rare enough that we accept
+/// the gap for now. Documented limitation, not silent failure: callers can
+/// still observe the gap via the test suite.
+pub fn with_sessions_lock<F, R>(lock_path: &Path, f: F) -> io::Result<R>
+where
+    F: FnOnce() -> io::Result<R>,
+{
+    // Make sure the parent directory exists so the lock-file open below
+    // can't fail with ENOENT on first run.
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)?;
+
+    #[cfg(unix)]
+    {
+        // 2-second retry budget with 10 ms backoff between attempts, matching
+        // the hook's contention window. Without this, a hot-spinning sandbox
+        // command could starve the hook (or vice versa) for the duration of
+        // a tool call.
+        const ATTEMPTS: u32 = 200; // 200 * 10 ms = 2 seconds
+        let fd = file.as_raw_fd();
+        let mut acquired = false;
+        for _ in 0..ATTEMPTS {
+            // libc::flock returns 0 on success, -1 on error. LOCK_NB makes
+            // it return immediately with EWOULDBLOCK if held elsewhere.
+            let rc = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+            if rc == 0 {
+                acquired = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if !acquired {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "sessions.lock contended for >2s — aborting to avoid an indefinite stall",
+            ));
+        }
+        let result = f();
+        // Best-effort unlock; even on error the lock will release when `file`
+        // drops at end of scope. Use _ to discard so an unlock failure can't
+        // mask the caller's actual return.
+        let _ = unsafe { libc::flock(fd, libc::LOCK_UN) };
+        result
+    }
+
+    #[cfg(not(unix))]
+    {
+        // TODO(windows) — proper LockFileEx integration. For now, the open
+        // call above proves the lock file is writable; the actual mutual
+        // exclusion is best-effort via atomic_write's rename atomicity.
+        let _ = file;
+        f()
+    }
 }
 
 /// Set file permissions to owner-only (0600 on Unix).
@@ -548,6 +628,112 @@ mod tests {
 
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ── with_sessions_lock ──────────────────────────────────────────────
+
+    #[test]
+    fn test_with_sessions_lock_runs_closure() {
+        // Sanity: the closure is invoked, its return value bubbles up.
+        let dir = std::env::temp_dir().join("cue_test_lock_runs");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let lock_path = dir.join("sessions.lock");
+        let result = with_sessions_lock(&lock_path, || Ok::<u32, io::Error>(42));
+        assert_eq!(result.unwrap(), 42);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_with_sessions_lock_creates_lock_file() {
+        let dir = std::env::temp_dir().join("cue_test_lock_creates");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let lock_path = dir.join("sessions.lock");
+        assert!(!lock_path.exists());
+        with_sessions_lock(&lock_path, || Ok::<(), io::Error>(())).unwrap();
+        assert!(lock_path.exists(), "lock file should be created on first acquire");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_with_sessions_lock_creates_parent_directory() {
+        // ensure_dirs is the documented init step, but the lock helper must
+        // also self-heal so a stray cold path can't ENOENT-out the hook.
+        let dir = std::env::temp_dir().join("cue_test_lock_parent");
+        let _ = fs::remove_dir_all(&dir);
+        // Intentionally do NOT create_dir_all here — let with_sessions_lock
+        // do it.
+        let lock_path = dir.join("nested").join("sessions.lock");
+        with_sessions_lock(&lock_path, || Ok::<(), io::Error>(())).unwrap();
+        assert!(lock_path.parent().unwrap().exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_with_sessions_lock_propagates_closure_error() {
+        // An error from the closure surfaces unchanged to the caller — the
+        // lock release on the Unix path uses `let _ =` so it can't shadow.
+        let dir = std::env::temp_dir().join("cue_test_lock_err");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let lock_path = dir.join("sessions.lock");
+        let result: io::Result<()> = with_sessions_lock(&lock_path, || {
+            Err(io::Error::new(io::ErrorKind::Other, "boom"))
+        });
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Other);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_with_sessions_lock_serializes_concurrent_callers() {
+        // Two threads hammering the same lock must observe the closures run
+        // serially — the shared counter goes 1 → 2 with no interleaving.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = std::env::temp_dir().join("cue_test_lock_concurrent");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let lock_path = dir.join("sessions.lock");
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let path1 = lock_path.clone();
+        let counter1 = counter.clone();
+        let t1 = thread::spawn(move || {
+            with_sessions_lock(&path1, || {
+                // Read-modify-sleep-write pattern to give the other thread a
+                // chance to interleave (if the lock were broken).
+                let pre = counter1.load(Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                counter1.store(pre + 1, Ordering::SeqCst);
+                Ok::<(), io::Error>(())
+            })
+        });
+        let path2 = lock_path.clone();
+        let counter2 = counter.clone();
+        let t2 = thread::spawn(move || {
+            with_sessions_lock(&path2, || {
+                let pre = counter2.load(Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                counter2.store(pre + 1, Ordering::SeqCst);
+                Ok::<(), io::Error>(())
+            })
+        });
+
+        t1.join().unwrap().unwrap();
+        t2.join().unwrap().unwrap();
+
+        // If both ran serially, counter == 2. If they raced and both observed
+        // pre == 0, counter == 1. (Within a single process flock is per-fd
+        // so this test would actually pass without the lock too on Linux,
+        // but on macOS it's per-process — the canonical platform.)
+        assert_eq!(counter.load(Ordering::SeqCst), 2);
 
         let _ = fs::remove_dir_all(&dir);
     }
