@@ -765,16 +765,20 @@ def main():
                             pass
                     if has_prior:
                         is_clear = True
-                        # Claude Code's SessionStart carries `source` ∈
-                        # {startup, resume, clear, compact}. For `resume`
-                        # and `compact` the user is mid-turn — promote to
-                        # "working" so the dashboard doesn't flash "idle"
-                        # for a poll cycle before the next PreToolUse.
-                        # `startup` (no prior) stays idle; `clear` (which
-                        # resets the transcript) also stays idle.
-                        source_kind = hook_data.get("source")
-                        if source_kind in ("resume", "compact"):
-                            action = "working"
+                        # NOTE: an earlier change (F-state-coverage-004) also
+                        # promoted action → "working" here for source ∈
+                        # {resume, compact} on the theory that the user is
+                        # mid-turn and would otherwise see a transient "idle"
+                        # flash. That broke cold-start: iTerm session restore
+                        # (and Claude Code's own resume path on launch) fires
+                        # SessionStart with source=resume for EVERY session
+                        # whose transcript exists, so every restored card
+                        # pinned on "working" with no actual activity, and
+                        # nothing fires a hook to demote it. The one-poll
+                        # idle flash is far cheaper than the stuck-working
+                        # failure mode, so the promotion is removed; the next
+                        # genuine event (PreToolUse / UserPromptSubmit) will
+                        # land the correct state within ~1s.
 
                 # Guard against stale "waiting" writes: PermissionRequest hooks
                 # are slow (HTTP request) and can finish after PostToolUse
