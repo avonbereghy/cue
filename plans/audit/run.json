@@ -1,16 +1,17 @@
 {
-  "base_commit": "3292322b48f57479864cf2ba4903cd319b7f0f93",
+  "base_commit": "45694d0ed496d4f4aa807a9c6c9cc909b539bb16",
   "n": 4,
-  "scope": "state changes and state identification (session_monitor.rs, jsonl_parser.rs, models.rs, hooks/cue-hook)",
-  "focus": null,
+  "scope": "claude-state-coverage",
+  "focus": "state-coverage,correctness,reliability,tests",
   "severity": "high",
-  "lenses": ["security", "reliability", "correctness", "tests"],
-  "lenses_dropped": ["db", "api", "prompts", "deps", "performance", "types", "observability", "dx"],
-  "started_at": "2026-05-16T14:32:00-07:00",
+  "lenses": ["state-coverage", "correctness", "reliability", "tests"],
+  "lenses_dropped": ["security (covered by prior audit)", "performance", "types", "deps", "db", "api", "observability", "prompts", "dx"],
+  "started_at": "2026-05-20T22:55:00Z",
   "lens_statuses": {
-    "security": "pending",
-    "reliability": "pending",
+    "state-coverage": "pending",
     "correctness": "pending",
+    "reliability": "pending",
     "tests": "pending"
-  }
+  },
+  "notes": "Focused sweep on Claude Code hook event coverage and state-state transitions. Prior audit (45694d0 + recent commits) already addressed security/reliability/correctness/tests at coarse level."
 }

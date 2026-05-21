@@ -1,139 +1,125 @@
-# Improvement Plan — Cue State Correctness Sweep
+# Improvement Plan — Claude State Coverage Sweep
 
-**Base commit:** `3292322`
-**Scope:** state changes and state identification (`session_monitor.rs`, `jsonl_parser.rs`, `models.rs`, `hooks/cue-hook`)
-**Severity floor:** `high`
-**Lenses run:** security, reliability, correctness, tests
+Base commit: `45694d0`
 
 ## Lens Coverage
 
-| Lens | Findings | Critical | High | Medium |
-|------|----------|----------|------|--------|
-| security    | 3  | 0 | 3  | 4 (out-of-scope) |
-| reliability | 8  | 1 | 7  | 9 (out-of-scope) |
-| correctness | 7  | 0 | 7  | 6 (out-of-scope) |
-| tests       | 10 | 1 | 9  | — |
-| **Total**   | **28** | **2** | **26** | — |
+| Lens | Findings | Critical | High | Medium | Low |
+|------|----------|----------|------|--------|-----|
+| state-coverage | 10 | 2 | 2 | 4 | 2 |
+| correctness | 3 | 0 | 3 | 0 | 0 |
+| reliability | 9 | 1 | 8 | 0 | 0 |
+| tests | 13 | 1 | 12 | 0 | 0 |
 
-After dedup: 24 distinct fix items (correctness-F-005 merged into F-002; correctness-F-007 merged into reliability-F-002's cache pruning; tests-F-008 merged into tests-F-001 Python suite).
+Total: 35 findings; 4 critical, 25 high, 4 medium, 2 low. Severity floor for this run: **high**. Below-floor (medium/low) acknowledged but deferred.
 
 ## Top Risks (severity × confidence)
 
-1. **F-tests-001** (zero Python hook coverage) — `critical × 100 = 400`. Hook is the canonical state writer; regressions ship undetected.
-2. **F-reliability-001** (destructive `_validate_sessions`) — `critical × 90 = 360`. Real live sessions disappear off the dashboard when an unrelated session fires a hook.
-3. **F-correctness-001** (SubagentStop counter leak when state=waiting) — `high × 95 = 285`. Stuck-subagent trap after permission prompts.
-4. **F-correctness-002 + F-005** (subagent override clobbers `error`) — `high × 92 = 276`. Red error indicator silently lost when any subagent fires.
-5. **F-correctness-003** (dedup priority ranks `error`/`compacting` below `idle`) — `high × 90 = 270`. User-attention states hidden behind phantom siblings.
+1. **F-tests-101** — `SessionEnd → state=ended` completely untested. Sessions could vanish on every exit; we'd have no test to catch a regression.
+2. **F-state-coverage-001** — `Notification.permission_prompt` and `idle_prompt` render as green "done" instead of yellow `waiting`. User dismisses MCP prompts unseen.
+3. **F-reliability-001** — Permission server has no timeout / disconnect detection. After 64 abandoned permissions, Cue stops mediating ALL permissions until app restart.
+4. **F-state-coverage-002** — `StopFailure` (rate_limit, billing_error, auth_failed, ...) unwired. Session stays green-pulsing "Working" after API errors until manual retry.
+5. **F-state-coverage-003** — `PostCompact` unwired. `compacting` state stuck for up to 60s after clean compact.
+
+## Dedup Notes
+
+- **F-correctness-002 ≡ F-reliability-002** — both flag the sandbox sessions writers bypassing the hook's flock. Merged into one finding under Track 3 with two complementary fix options (acquire flock from Rust, or split into separate file).
+- **F-tests-108 (clearing state)** crosses lens boundaries — it's both a coverage gap (test missing) and a correctness gap (Rust treats a state the hook can never produce). Resolved by Track 2 (drop `clearing` from Rust since `PreClear` doesn't exist in the canonical Claude Code event list).
+- **F-reliability-009 + F-state-coverage-001** — both touch `_quick_state_write` in cue-hook. Handled together in Track 1.
 
 ## Track Plan
 
-### Foundation Track (sequential, runs first)
-- **Owner:** orchestrator (main session)
-- **Files:** `cue-desktop/src-tauri/src/security.rs`
-- **Produces:** `pub fn validate_session_id(s: &str) -> Result<(), SecurityError>`. Requires `[A-Za-z0-9_-]{1,128}`, rejects empty, `/`, `\`, leading `.`, embedded NUL, control chars.
-- **Findings addressed:** F-security-001 (helper portion)
-- **Verification:** `cargo test --lib --package cue-desktop-lib validate_session_id` (all branches green); `cargo check` succeeds.
-
-### Track 1 — Python hook state correctness
-- **Owner:** Python hook agent
-- **Files modified:** `hooks/cue-hook`
-- **Files created:** `tests/hooks/test_cue_hook.py`, `tests/hooks/__init__.py`, `tests/__init__.py`, `tests/hooks/conftest.py`
+### Track 1: Hook event coverage  (parallel)
+- **Owner:** state machine
+- **Files:** `hooks/cue-hook`, `cue-desktop/src-tauri/src/env_detect.rs`, `cue-desktop/src-tauri/src/models.rs`
 - **Findings addressed:**
-  - F-correctness-001 (persist counter decrement when waiting)
-  - F-correctness-002 + F-005 (error-state guard symmetric to waiting; widen line-666 override skip-list)
-  - F-correctness-004 (drop `thinking` from override)
-  - F-correctness-006 (add stateChangedAt to `_quick_state_write`)
-  - F-reliability-001 (non-destructive `_validate_sessions` — leave malformed entries in place, log; coerce safe defaults where unambiguous)
-  - F-reliability-004 (counter-reset for stale subagent: if `existing.state=="subagent"` AND stateChangedAt > 60s AND no subagent JSONL mtime within 30s → reset `active_subs = 0`)
-  - F-reliability-005 (call `_validate_sessions` from `_quick_state_write`)
-  - F-security-001 (hook side: validate session_id before persisting via shared regex)
-  - F-tests-001 + F-tests-008 (full pytest suite covering all above)
-- **Contract to other tracks:** writes schema-compliant entries with `stateChangedAt` on every state change, `error` preserved across subagent events, stale subagent counters self-heal.
-- **Verification:** `python -m pytest tests/hooks/ -v` exits 0; manually inspect sessions.json after triggering hook with pre-seeded fixtures.
+  - F-state-coverage-001 — Notification subtype branching (permission_prompt/idle_prompt/elicitation_dialog → waiting; informational subtypes → no-op write)
+  - F-state-coverage-002 — Wire `StopFailure → error`; persist `error_type` on session entry; mirror error-preservation guards
+  - F-state-coverage-003 — Wire `PostCompact → working`
+  - F-state-coverage-004 — Branch `SessionStart` on `source` (`startup` → `idle`, `resume`/`compact` with prior transcript content → `working`)
+  - F-correctness-003 — `subagent_stop` preserves `compacting`/`clearing` (mirror existing waiting/error guard)
+  - F-reliability-009 — Sticky `pendingPermission` marker on `_quick_state_write` to protect `waiting` from concurrent non-attention writes (cleared by main-path Permission write completion)
+- **Verification:**
+  - `cargo test -p cue-desktop env_detect::tests::` (extend `HOOK_EVENTS` assertions for new rows)
+  - Pytest cases added in Integration track exercise the new branches
 
-### Track 2 — Rust state pipeline
-- **Owner:** Rust state agent
-- **Files modified:** `cue-desktop/src-tauri/src/session_monitor.rs`
+### Track 2: Rust state pipeline  (parallel)
+- **Owner:** Rust state derivation
+- **Files:** `cue-desktop/src-tauri/src/session_monitor.rs`, `cue-desktop/src-tauri/src/jsonl_parser.rs`
 - **Findings addressed:**
-  - F-correctness-003 (rebuild `state_priority`: `error=5, waiting=4, working|subagent=3, thinking|compacting|clearing=2, done|idle=1, ended=0`)
-  - F-correctness-007 (`should_demote_stale_subagent`: when `metrics.is_none()`, require 30s grace instead of 15s)
-  - F-reliability-002 (per-poll `.retain()` on `metrics_cache`, `jsonl_entry_cache`, `file_mod_dates`, `resolved_paths`, `output_speed_cache` — observe lock order)
-  - F-reliability-003 (extend `should_demote_turn_ended` to include `waiting`; add `should_demote_stuck_active(state, state_changed_at, max_duration)` for compacting/clearing with 60s cap)
-  - F-reliability-006 (after 5 consecutive parse failures, rename sessions.json aside and create empty `{"sessions":{}}`)
-  - F-reliability-008 (extend `resolve_liveness` to optionally check process name contains `claude` on first-sight)
-  - F-security-001 wiring (call `security::validate_session_id` in `poll_status` admission filter, drop invalid entries)
-  - F-security-002 (size-capped read: `metadata().len() > 4 MiB` → log + bail preserving prior state)
-  - F-tests-003 (extract `rescue_decision` pure predicate, 6 tests)
-  - F-tests-004 (extract `dedup_sessions` pure predicate, 7 tests)
-  - F-tests-005 (extract `promote_team_idle` pure predicate, 5 tests)
-  - F-tests-006 (extract `apply_compacting_floor` pure predicate, 4 tests)
-  - F-tests-007 (boundary tests at 15s/30s/10s/1.5s for existing + new predicates)
-- **Contract:** consumes `security::validate_session_id` from Foundation; no consumer downstream.
-- **Verification:** `cargo test --lib --package cue-desktop-lib` — at minimum +27 new tests; entire suite green (≥298 passing).
+  - F-correctness-001 — Narrow `floor_extends` to mask only `working`/`thinking`/`idle`/`done` (never `error`, `waiting`, `subagent`, `clearing`)
+  - F-reliability-005 — First-sight liveness verifies process name contains `claude` before accepting capture
+  - F-reliability-006 — After N consecutive `serde_json::from_str` failures, rename sessions.json aside and reset to `{"sessions":{}}`
+  - F-reliability-008 — `parse_subagent_jsonl` `ended_at` only finalizes when `is_active == false`; rescue latch keys on subagent set membership delta, not timestamp
+  - F-state-coverage-009 — Add `error` to `should_demote_turn_ended` so a clean post-error `end_turn` releases the red latch
+  - F-tests-108 — Resolve the `clearing` dead-code problem: drop `clearing` from `is_liveness_sensitive`, `should_demote_stuck_active`, `dedup_state_priority`, and the stuck-active 60s arm (the hook never produces it; canonical Claude Code hooks docs don't define `PreClear`)
+- **Verification:**
+  - `cargo test -p cue-desktop` — inline `#[cfg(test)] mod tests` in each file
+  - New tests pin: `floor_extends("error", Some(now+1.0), now) == false`; `should_demote_turn_ended("error", ...)` returns Some on a fresh `end_turn`; subagent rescue fires at most once across 10 refreshes of an active subagent
 
-### Track 3 — JSONL parser test coverage
-- **Owner:** JSONL parser agent
-- **Files modified:** `cue-desktop/src-tauri/src/jsonl_parser.rs`
+### Track 3: Permission server reliability  (parallel)
+- **Owner:** permission flow
+- **Files:** `cue-desktop/src-tauri/src/lib.rs`, `cue-desktop/src-tauri/src/permission_server.rs`, `cue-desktop/src-tauri/src/security.rs`
 - **Findings addressed:**
-  - F-tests-009 (load `tests/fixtures/malformed.jsonl` + add embedded-null, oversized-line, wrong-shape, leading-malformed cases)
-  - F-tests-010 (`test_pending_tool_use_entry_does_not_flag_end_turn` — per-entry contract)
-- **Contract:** none.
-- **Verification:** `cargo test --lib --package cue-desktop-lib jsonl_parser::tests::` — at least +5 new tests; all green.
+  - F-reliability-001 — Wrap `rx.await` in `tokio::time::timeout(60s, rx)`; race against stream-shutdown detection so a closed Python TCP connection frees the slot immediately. Surface pending count for UI.
+  - F-correctness-002 / F-reliability-002 — Either (a) port `sessions.lock` flock into a `with_sessions_lock` helper in `security.rs` and route `write_sandbox_sessions` / `clear_sandbox_sessions` through it, OR (b) split sandbox sessions into a separate file. Pick (a) for surgical fix. Also validate sandbox IDs against the same regex `_SESSION_ID_RE` the hook enforces.
+  - F-reliability-007 — Insert `permission_metadata` entry BEFORE `pending` insert (or merge both into one mutex-guarded struct) to close the audit-log race
+- **Verification:**
+  - `cargo test -p cue-desktop` permission tests — synthetic timeout/disconnect/MAX_PENDING saturation recovery
+  - Manual: trigger 65 abandoned permissions in a row; confirm the 65th is still mediated
 
-### Track 4 — Models test coverage
-- **Owner:** Models agent
-- **Files modified:** `cue-desktop/src-tauri/src/models.rs`
-- **Findings addressed:**
-  - F-tests-002 (`is_recently_live` — 5 boundary tests)
-- **Contract:** none.
-- **Verification:** `cargo test --lib --package cue-desktop-lib is_recently_live` — 5 tests green.
-
-### Integration Track
-**Not required.** No shared entry points need wiring after parallel work — `security::validate_session_id` is produced by Foundation and consumed only by Track 2; no other cross-track contracts beyond the schema invariant Track 1 produces (which Track 2 reads from `sessions.json` via existing serde).
+### Integration Track: Test coverage  (sequential, runs LAST)
+- **Owner:** pytest expansion
+- **Files:** `tests/hooks/test_cue_hook.py`, `tests/hooks/conftest.py`
+- **Findings addressed:** all 13 F-tests-101..113 plus pytest coverage for behaviors changed in Tracks 1-3:
+  - F-tests-101 `TestRemoveAction` — tombstone path
+  - F-tests-102 `TestClearDetection` — `is_clear` branch
+  - F-tests-103 `TestQuickStateWrite` + `TestPermissionRequest` — quick-write and HTTP forward paths
+  - F-tests-104 `TestTranscriptDrivenRouting` — `_last_tool_was_ask_question`, `_turn_has_finished`
+  - F-tests-105 `TestErrorState` — fire `error` from working/idle/thinking
+  - F-tests-106 `TestIgnoredSessions` — print/CUE_SKIP cleanup paths
+  - F-tests-107 `TestPermissionMode` — propagation casings × carry-forward × write paths
+  - F-tests-109 `TestWorkspacePinning` — workspace stays pinned across cwd flips
+  - F-tests-110 `TestCorruptionRecovery` — `.corrupt-<ts>` rename
+  - F-tests-111 `TestStaleWaitingGuard` — main-path waiting guard against newer activity
+  - F-tests-112 `TestLockContention` — flock retry, 2s timeout (Unix-only)
+  - F-tests-113 — `subagent_stop → idle` when `_turn_has_finished == True`
+  - **New for Track 1:** `TestNotificationSubtypes` (permission_prompt → waiting; auth_success → no-op); `TestStopFailure` (writes error + persists error_type); `TestPostCompact` (writes working); `TestSessionStartSources` (source=resume + transcript content → working); `TestSubagentStopPreservesCompacting` (F-correctness-003)
+- **Verification:**
+  - `pytest tests/hooks/ -v` — all green
+  - Coverage report: every event-name in HOOK_EVENTS has at least one direct pytest
 
 ## File Ownership Matrix
 
-| File | Foundation | Track 1 | Track 2 | Track 3 | Track 4 |
-|------|------------|---------|---------|---------|---------|
-| `cue-desktop/src-tauri/src/security.rs`        | ✏️ |    |    |    |    |
-| `hooks/cue-hook`                                |    | ✏️ |    |    |    |
-| `tests/hooks/test_cue_hook.py`                  |    | ✨ |    |    |    |
-| `tests/hooks/__init__.py`                       |    | ✨ |    |    |    |
-| `tests/__init__.py`                             |    | ✨ |    |    |    |
-| `tests/hooks/conftest.py`                       |    | ✨ |    |    |    |
-| `cue-desktop/src-tauri/src/session_monitor.rs`  |    |    | ✏️ |    |    |
-| `cue-desktop/src-tauri/src/jsonl_parser.rs`     |    |    |    | ✏️ |    |
-| `cue-desktop/src-tauri/src/models.rs`           |    |    |    |    | ✏️ |
+| File                                                | Track 1 | Track 2 | Track 3 | Integration |
+|-----------------------------------------------------|---------|---------|---------|-------------|
+| hooks/cue-hook                                      | ✏️      |         |         |             |
+| cue-desktop/src-tauri/src/env_detect.rs             | ✏️      |         |         |             |
+| cue-desktop/src-tauri/src/models.rs                 | ✏️      |         |         |             |
+| cue-desktop/src-tauri/src/session_monitor.rs        |         | ✏️      |         |             |
+| cue-desktop/src-tauri/src/jsonl_parser.rs           |         | ✏️      |         |             |
+| cue-desktop/src-tauri/src/lib.rs                    |         |         | ✏️      |             |
+| cue-desktop/src-tauri/src/permission_server.rs      |         |         | ✏️      |             |
+| cue-desktop/src-tauri/src/security.rs               |         |         | ✏️      |             |
+| tests/hooks/test_cue_hook.py                        |         |         |         | ✏️          |
+| tests/hooks/conftest.py                             |         |         |         | ✏️          |
 
-✨ = create new ✏️ = modify existing.
-
-### Matrix Validation
-1. No file in more than one parallel track column ✓
-2. Foundation file (`security.rs`) does not reappear with ✨ in any parallel track ✓
-3. Files marked ✏️ in any track exist in the repo (verified via `ls`) ✓ — no Integration column needed
-4. No track exceeds ~6 files; LOC budgets: Foundation ~80, Track 1 ~550, Track 2 ~600, Track 3 ~120, Track 4 ~60 — Track 2 slightly over guideline, justified by predicate extraction + test fortification on a single file that the matrix rule forces into one track
+**Validation:** no file appears in more than one column. No Foundation track is needed — Tracks 1-3 are independent and Integration is sequential at the end. Track 1 adds optional fields to entries in `models.rs`; Tracks 2 and 3 only READ from `models.rs`, no modifications.
 
 ## Inter-Track Contracts
-- **Foundation produces:** `security::validate_session_id(&str) -> Result<(), SecurityError>` — consumed by Track 2 admission filter.
-- **Track 1 produces (schema invariants consumed by Track 2 via sessions.json):**
-  - `stateChangedAt` present on every entry written, including `_quick_state_write` outputs
-  - `error` state preserved across SubagentStart/Stop events
-  - `activeSubagents` self-heals to 0 when stale (no JSONL mtime within 30s + stateChangedAt > 60s)
-  - Malformed entries no longer dropped — Track 2's downstream demotion paths see consistent records
-- **No track produces an API consumed by another at compile time** — Tracks 1–4 can run fully in parallel after Foundation commits.
 
-## Acknowledged but Deferred
+- **Track 1 → Integration:** New `valid_actions`/`HOOK_EVENTS` entries listed in the commit body. Integration pytest can grep them to drive parameterized tests.
+- **Track 1 → Track 2:** Track 2 drops `clearing` arms; Track 1 leaves the (commented-out / unused) reference in cue-hook untouched. Independent.
+- **Track 3 → Integration:** Any new fields added to permission metadata (e.g. a `received_at` timestamp for the timeout path) must be JSON-serializable so the audit log fixture matches.
 
-Filed but not fixed this run (out of scope by severity floor, or requires substantial refactor):
+## Acknowledged but Deferred (below `high` severity floor or out of sweep budget)
 
-- **F-security-003** (unauthenticated permission HTTP) — substantial design change (UDS or token auth); schedule separately.
-- **F-reliability-007** (JsonlEntryCache sliding-window aggregation) — substantial refactor to incremental aggregation; defer.
-- **F-reliability-006** — INCLUDED above (size cap recovery). The parse-failure-replace logic stays in Track 2.
-- Medium-severity items per individual findings files' "Out of scope" sections (subagent rescue idempotent re-fire, encode_workspace collisions, `_turn_has_finished` write race, etc.) — kept for future severity=medium sweep.
+- F-state-coverage-005 (medium) — `PermissionDenied` event unwired
+- F-state-coverage-006 (medium) — `Setup`, `WorktreeCreate/Remove`, `CwdChanged`, `InstructionsLoaded`, `ConfigChange`, `FileChanged` unwired (most observability-only)
+- F-state-coverage-007 (low) — `SessionEnd` reason subtypes lost
+- F-state-coverage-008 (low) — `agent_type` from SubagentStart/Stop discarded
+- F-state-coverage-010 (low) — `PreCompact.manual` vs `auto` collapse
+- F-reliability-003 (high, **deferred**) — `poll_status` lock-vs-IO ordering. Real risk on slow disks but the refactor is invasive (touches every active-list iteration site). Separate ticket.
+- F-reliability-004 (high, **deferred**) — `JsonlEntryCache` unbounded growth. Real long-session memory issue but requires reworking aggregation to incremental. Separate ticket.
 
-## Execution Plan
-
-1. **Foundation** — main session writes `security.rs` validation helper + inline tests; commits `fix(audit): add validate_session_id`; verifies `cargo check && cargo test --lib validate_session_id`.
-2. **Parallel tracks** — launch 4 `TeamCreate` teammates in a single message (Tracks 1–4 can all run concurrently per matrix). Each teammate commits its own `fix(audit): <track>` commit.
-3. **Verify** — `cargo test --lib` (all green, ≥303 tests up from 271 baseline + 27 in Track 2 + 5 in Track 3 + 5 in Track 4 + Foundation), `python -m pytest tests/hooks/` (green), `npm --prefix cue-desktop run build` succeeds, lint clean on changed files, no `#[allow]` / `# noqa` introduced.
-4. **Summarize** — report per-track status, findings handled vs deferred, full diff scope.
+These will be revisited if/when the user re-runs the sweep with `severity=medium`, or as individual targeted fixes.
