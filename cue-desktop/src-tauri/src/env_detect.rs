@@ -184,19 +184,44 @@ pub const HOOK_EVENTS: &[(&str, &str)] = &[
     ("SessionEnd", "remove"),
 ];
 
-/// Shell metacharacters that must not appear in hook paths.
+/// Shell metacharacters that must not appear in raw user-supplied hook
+/// path inputs (pre-expansion). The post-expansion check below uses a
+/// stricter allowlist, but at the raw stage we still need to permit `~`
+/// and `$HOME/` literals — the expansion logic strips them — so we can't
+/// allowlist there.
 const SHELL_METACHARACTERS: &[char] = &[
     ';', '|', '&', '`', '(', ')', '>', '<', '\n', '\r', '\'', '"',
 ];
 
-/// Verify a resolved hook-path string contains no shell metacharacters before
-/// it is interpolated into a hook command serialized to settings.json. Paths
-/// flow through dirs::home_dir() which is ultimately user-controlled via $HOME
-/// or %USERPROFILE%, so this is defense-in-depth against an exotic home dir
-/// that breaks the JSON command string at execution time.
+/// Allowlist of characters permitted in a *resolved, expanded* hook-path
+/// string before it gets interpolated into Claude Code's settings.json
+/// command line. The check is allowlist-style (not deny-list) so anything
+/// not explicitly enumerated — space, $, *, ?, {, }, [, ], #, tab,
+/// non-ASCII whitespace, etc. — is rejected. The set below covers every
+/// legitimate character a filesystem path can produce on macOS, Linux,
+/// and Windows after `dirs::home_dir()` expansion: ASCII alphanumerics
+/// plus the path-structure punctuation `_ - . / \ :` (colon for Windows
+/// drive letters; backslash for the Windows path separator).
+fn is_path_safe_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '\\' | ':')
+}
+
+/// Verify a *resolved* hook-path string is safe to interpolate into the
+/// hook command stored in Claude Code's settings.json. Paths flow through
+/// `dirs::home_dir()` which is ultimately user-controlled via $HOME or
+/// %USERPROFILE%, so an exotic home directory could otherwise smuggle in
+/// a space (breaking command tokenisation), `$` (variable expansion), `*`
+/// (glob), or other shell-sensitive bytes. An allowlist closes the whole
+/// class — anything outside `is_path_safe_char` is rejected.
 fn assert_safe_for_command(path: &str, label: &str) -> Result<(), String> {
-    if path.chars().any(|c| SHELL_METACHARACTERS.contains(&c)) {
-        return Err(format!("{} path contains invalid characters", label));
+    if path.is_empty() {
+        return Err(format!("{} path is empty", label));
+    }
+    if let Some(bad) = path.chars().find(|c| !is_path_safe_char(*c)) {
+        return Err(format!(
+            "{} path contains disallowed character {:?}",
+            label, bad
+        ));
     }
     Ok(())
 }
@@ -806,6 +831,53 @@ mod tests {
             result.unwrap_err().contains("absolute"),
             "Error should mention absolute path requirement"
         );
+    }
+
+    #[test]
+    fn test_assert_safe_for_command_allows_typical_paths() {
+        assert!(assert_safe_for_command("/Users/foo/.claude/hooks/cue-hook", "x").is_ok());
+        assert!(assert_safe_for_command("/home/foo/.claude/hooks/cue-hook", "x").is_ok());
+        assert!(assert_safe_for_command(r"C:\Users\foo\.claude\hooks\cue-hook.exe", "x").is_ok());
+        assert!(assert_safe_for_command("/opt/hyphen-named_dir/cue-hook", "x").is_ok());
+    }
+
+    #[test]
+    fn test_assert_safe_for_command_rejects_space_and_metachars() {
+        // The old deny-list missed space, $, *, ?, etc. The new allowlist
+        // closes the whole class.
+        for bad in [
+            "/Users/My Apps/cue-hook", // space — broke shell tokenisation
+            "/Users/foo/$HOME/cue-hook", // literal $ leak
+            "/tmp/*/cue-hook",         // glob
+            "/tmp/cue-hook?",          // glob
+            "/tmp/cue-hook;rm",        // semicolon
+            "/tmp/cue-hook|cat",       // pipe
+            "/tmp/cue\thook",          // tab
+            "/tmp/cue\nhook",          // newline
+            "/tmp/cue#hook",           // comment char
+            "/tmp/cue~hook",           // tilde mid-path
+            "/tmp/{a,b}/cue-hook",     // brace expansion
+            "/tmp/cue-hook ",          // trailing space
+        ] {
+            assert!(
+                assert_safe_for_command(bad, "x").is_err(),
+                "expected {:?} to be rejected by the allowlist",
+                bad
+            );
+        }
+    }
+
+    #[test]
+    fn test_assert_safe_for_command_rejects_empty() {
+        assert!(assert_safe_for_command("", "x").is_err());
+    }
+
+    #[test]
+    fn test_assert_safe_for_command_rejects_non_ascii() {
+        // Non-ASCII letters are filesystem-legal but cannot round-trip
+        // safely through arbitrary shells (different normalisation forms,
+        // homoglyph confusion) — reject defensively.
+        assert!(assert_safe_for_command("/tmp/cue-hökk", "x").is_err());
     }
 
     #[test]
