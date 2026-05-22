@@ -342,6 +342,28 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
         pass  # Best-effort — the main write path will retry
 
 
+def _read_permission_token():
+    """Read the per-launch shared secret the Cue desktop process wrote to
+    STATUS_DIR/permission-token (0600) on startup.
+
+    The token authenticates this hook to the localhost permission server so
+    a co-resident malicious process can't win the loopback bind race and
+    forge {"behavior":"allow"} responses to Claude Code prompts. Returns
+    None if Cue isn't running, the user hasn't enabled permission
+    forwarding, or the file is missing/unreadable — caller treats that as
+    a soft fail and lets Claude Code fall back to its native prompt.
+    """
+    token_path = os.path.join(STATUS_DIR, "permission-token")
+    try:
+        with open(token_path, "r", encoding="utf-8") as f:
+            # Token is 32 ASCII hex chars. Cap the read so a malformed/huge
+            # file can't blow up the hook process.
+            value = f.read(256).strip()
+        return value if value else None
+    except (OSError, IOError):
+        return None
+
+
 def _forward_permission_request(hook_data, session_id):
     """Forward a permission request to the Cue dashboard via localhost HTTP.
 
@@ -350,6 +372,15 @@ def _forward_permission_request(hook_data, session_id):
     """
     import urllib.request
     import urllib.error
+
+    # Refuse to forward without the per-launch shared secret. If the token
+    # file is missing, Cue isn't running (or has permissions disabled), and
+    # we'd otherwise be talking to whichever process happens to be bound to
+    # 127.0.0.1:3002 — exactly the unauthenticated-forgery scenario the
+    # token closes.
+    token = _read_permission_token()
+    if not token:
+        return None
 
     payload = json.dumps({
         "session_id": session_id,
@@ -361,7 +392,10 @@ def _forward_permission_request(hook_data, session_id):
     req = urllib.request.Request(
         "http://127.0.0.1:3002/permission-request",
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "X-Cue-Token": token,
+        },
         method="POST",
     )
 
