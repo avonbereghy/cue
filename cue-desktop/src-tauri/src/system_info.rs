@@ -61,7 +61,12 @@ pub fn get_claude_default_effort() -> (Option<String>, Option<f64>) {
         .and_then(|m| m.modified().ok())
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs_f64());
-    let level = std::fs::read_to_string(&path)
+    // Bound the read at 4 MiB. Claude Code's settings.json is normally tiny,
+    // but it lives outside Cue's data dir and is touched by other tooling;
+    // a runaway writer (or a stale corrupted append) would otherwise stall
+    // every poll on a multi-GB read.
+    const CLAUDE_SETTINGS_MAX_BYTES: u64 = 4 * 1024 * 1024;
+    let level = crate::security::read_to_string_bounded(&path, CLAUDE_SETTINGS_MAX_BYTES)
         .ok()
         .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
         .and_then(|v| {
