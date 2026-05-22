@@ -27,6 +27,16 @@ pub fn sessions_lock_path() -> PathBuf {
     sessions_json_path().with_file_name("sessions.lock")
 }
 
+/// Path to permission-token — a per-launch shared secret the Python hook
+/// must present in the `X-Cue-Token` header on POSTs to the localhost
+/// permission server. Co-located with sessions.json under the user's
+/// 0700 status directory and itself written 0600, so only the same OS
+/// user can read it. Without this header any local process could win
+/// the loopback bind race and forge {"behavior":"allow"} responses.
+pub fn permission_token_path() -> PathBuf {
+    sessions_json_path().with_file_name("permission-token")
+}
+
 /// Path to settings.json — app preferences.
 pub fn settings_path() -> PathBuf {
     if cfg!(target_os = "macos") {
