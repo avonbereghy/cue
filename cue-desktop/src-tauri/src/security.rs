@@ -139,6 +139,33 @@ where
     }
 }
 
+/// Read `path` into a `String`, refusing to allocate beyond `max_bytes`.
+///
+/// The plain `fs::read_to_string` allocates a `String` matching the file's
+/// reported length, which is fine for files we wrote ourselves but unsafe
+/// for any path another process could race-write. A 1+ GiB sessions.json or
+/// permission-log.jsonl would OOM the backend before we even get to parse.
+/// This helper stats first, returns an early `FileTooLarge` if the size
+/// exceeds the cap, then reads. Used for every untrusted boundary read in
+/// the backend so the policy lives in one place.
+///
+/// Returns `io::ErrorKind::InvalidData` if the file isn't valid UTF-8.
+pub fn read_to_string_bounded(path: &Path, max_bytes: u64) -> io::Result<String> {
+    let metadata = fs::metadata(path)?;
+    if metadata.len() > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::FileTooLarge,
+            format!(
+                "file at {:?} exceeds bound: {} > {}",
+                path,
+                metadata.len(),
+                max_bytes
+            ),
+        ));
+    }
+    fs::read_to_string(path)
+}
+
 /// Set file permissions to owner-only (0600 on Unix).
 #[cfg(unix)]
 pub fn set_owner_only_permissions(path: &Path) -> io::Result<()> {
@@ -539,6 +566,46 @@ mod tests {
     fn test_sanitize_workspace_path_rejects_null_byte() {
         let result = sanitize_workspace_path("/tmp/x\0y");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_to_string_bounded_under_cap() {
+        // Happy path: file under the cap reads through verbatim.
+        let dir = std::env::temp_dir().join("cue_test_bounded_under");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ok.txt");
+        fs::write(&path, "hello world").unwrap();
+        let got = read_to_string_bounded(&path, 1024).unwrap();
+        assert_eq!(got, "hello world");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_read_to_string_bounded_over_cap() {
+        // Over-cap files return an error without allocating the contents.
+        // Prior pattern (fs::read_to_string) would happily allocate
+        // arbitrary bytes from a hostile producer.
+        let dir = std::env::temp_dir().join("cue_test_bounded_over");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("huge.txt");
+        // 1024 bytes; cap is 16 — easily exceeded.
+        fs::write(&path, vec![b'x'; 1024]).unwrap();
+        let result = read_to_string_bounded(&path, 16);
+        assert!(result.is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_read_to_string_bounded_missing_file() {
+        // Missing file surfaces the underlying NotFound — callers can
+        // distinguish that from a bound violation if they care.
+        let missing = std::env::temp_dir().join("cue_test_bounded_missing_does_not_exist");
+        let _ = fs::remove_file(&missing);
+        let result = read_to_string_bounded(&missing, 1024);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::NotFound);
     }
 
     #[cfg(unix)]

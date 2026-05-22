@@ -71,7 +71,13 @@ pub fn read_permission_log(session_id: &str) -> Vec<PermissionLogEntry> {
 
 /// Read permission log entries from a specific file path, filtered by session_id.
 fn read_permission_log_from(path: &Path, session_id: &str) -> Vec<PermissionLogEntry> {
-    let content = match std::fs::read_to_string(path) {
+    // Bound the read at 16 MiB. The log is append-only and only Cue writes
+    // it, but the file lives in a user-writable dir; without a cap, a
+    // co-resident process race-writing a multi-GiB blob would OOM the
+    // backend when the user opens the history panel. 16 MiB comfortably
+    // holds tens of thousands of decisions while still being a hard ceiling.
+    const PERMISSION_LOG_MAX_BYTES: u64 = 16 * 1024 * 1024;
+    let content = match crate::security::read_to_string_bounded(path, PERMISSION_LOG_MAX_BYTES) {
         Ok(c) => c,
         Err(_) => return Vec::new(),
     };

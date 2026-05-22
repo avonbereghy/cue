@@ -16,7 +16,12 @@ pub const CURRENT_SETTINGS_VERSION: u32 = 2;
 pub fn load_settings() -> Settings {
     let path = paths::settings_path();
 
-    match std::fs::read_to_string(&path) {
+    // Bound the read at 4 MiB. Cue is the only legitimate writer of this
+    // file, but it lives in a user-writable dir and load_settings is called
+    // on the UI-blocking startup path — a multi-GiB blob would freeze the
+    // app boot. Real settings.json is well under 64 KiB.
+    const SETTINGS_MAX_BYTES: u64 = 4 * 1024 * 1024;
+    match security::read_to_string_bounded(&path, SETTINGS_MAX_BYTES) {
         Ok(content) => {
             let mut loaded: Settings = serde_json::from_str(&content).unwrap_or_default();
             if loaded.settings_version < CURRENT_SETTINGS_VERSION {
