@@ -103,6 +103,12 @@ pub struct ParsedEntry {
 
 /// Parse a JSONL file into a list of entries.
 /// Returns an empty Vec if the file is too large, unreadable, or empty.
+///
+/// Uses `open_jsonl_no_follow` so a symlink dropped at
+/// `~/.claude/projects/<encoded-ws>/<sid>.jsonl` can't redirect this read
+/// at e.g. `~/.ssh/id_rsa` and surface its contents through SessionMetrics
+/// into the frontend. Mirrors the hardening already applied to the
+/// incremental cache path in `refresh_entry_cache`.
 pub fn parse_jsonl_file(path: &Path) -> Vec<ParsedEntry> {
     // Check file size
     if let Ok(metadata) = std::fs::metadata(path) {
@@ -116,13 +122,19 @@ pub fn parse_jsonl_file(path: &Path) -> Vec<ParsedEntry> {
         }
     }
 
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
+    let mut file = match open_jsonl_no_follow(path) {
+        Ok(f) => f,
         Err(e) => {
-            log::debug!("Failed to read JSONL file {:?}: {}", path, e);
+            log::debug!("Failed to open JSONL file {:?}: {}", path, e);
             return Vec::new();
         }
     };
+
+    let mut content = String::new();
+    if let Err(e) = file.read_to_string(&mut content) {
+        log::debug!("Failed to read JSONL file {:?}: {}", path, e);
+        return Vec::new();
+    }
 
     parse_jsonl_content(&content)
 }
@@ -821,15 +833,31 @@ pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::Subagent
         }
     }
 
-    // Read companion .meta.json for description
+    // Read companion .meta.json for description.
+    //
+    // Same untrusted-directory rules as the JSONL itself: anyone able to
+    // drop a symlink under ~/.claude/projects/.../subagents/ could redirect
+    // this read at an arbitrary file, and the `description` we'd surface to
+    // the frontend would leak the first 256 bytes of whatever JSON happens
+    // to parse out of it. Open with O_NOFOLLOW and cap the read at 256 KiB
+    // (real meta files are < 1 KiB; this is just an OOM guard).
     if let Some(stem) = jsonl_path.file_stem().and_then(|s| s.to_str()) {
         let meta_filename = format!("{}.meta.json", stem);
         if let Some(parent) = jsonl_path.parent() {
             let meta_path = parent.join(meta_filename);
-            if let Ok(content) = std::fs::read_to_string(&meta_path) {
-                if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(desc) = meta.get("description").and_then(|v| v.as_str()) {
-                        m.description = desc.to_string();
+            const META_MAX_BYTES: u64 = 256 * 1024;
+            let oversized = std::fs::metadata(&meta_path)
+                .map(|md| md.len() > META_MAX_BYTES)
+                .unwrap_or(false);
+            if !oversized {
+                if let Ok(mut file) = open_jsonl_no_follow(&meta_path) {
+                    let mut content = String::new();
+                    if file.read_to_string(&mut content).is_ok() {
+                        if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&content) {
+                            if let Some(desc) = meta.get("description").and_then(|v| v.as_str()) {
+                                m.description = desc.to_string();
+                            }
+                        }
                     }
                 }
             }
@@ -1095,6 +1123,57 @@ mod tests {
         r#"{"type":"user","timestamp":1710000003.0,"gitBranch":"feat/dashboard"}"#;
 
     const MALFORMED: &str = r#"{"type":invalid json here"#;
+
+    #[cfg(unix)]
+    #[test]
+    fn test_parse_jsonl_file_refuses_to_follow_symlink() {
+        // Threat: ~/.claude/projects/<encoded-ws>/<sid>.jsonl is dropped as a
+        // symlink to ~/.ssh/id_rsa (or any user-readable file). Without
+        // O_NOFOLLOW the parser would read the target and surface its
+        // contents through SessionMetrics. With O_NOFOLLOW the open errors
+        // out and we return an empty Vec.
+        use std::os::unix::fs::symlink;
+
+        let dir = std::env::temp_dir().join("cue_test_parse_jsonl_symlink");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Real file with one valid JSONL line — the symlink target.
+        let victim = dir.join("victim.jsonl");
+        std::fs::write(&victim, USER_MESSAGE.to_string() + "\n").unwrap();
+
+        // Symlink at the path parse_jsonl_file is about to open.
+        let link = dir.join("session.jsonl");
+        symlink(&victim, &link).unwrap();
+
+        let entries = parse_jsonl_file(&link);
+        assert!(
+            entries.is_empty(),
+            "symlink at JSONL path must not be followed; got {} entries",
+            entries.len()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_parse_jsonl_file_reads_regular_file() {
+        // Sanity check: the no-follow open still works on a normal file.
+        let dir = std::env::temp_dir().join("cue_test_parse_jsonl_regular");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let path = dir.join("session.jsonl");
+        let body = format!("{}\n{}\n", USER_MESSAGE, ASSISTANT_WITH_USAGE);
+        std::fs::write(&path, body).unwrap();
+
+        let entries = parse_jsonl_file(&path);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].entry_type, "user");
+        assert_eq!(entries[1].entry_type, "assistant");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn test_parse_assistant_with_usage() {
