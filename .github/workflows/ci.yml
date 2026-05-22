@@ -1,5 +1,10 @@
 # PR/push verification: typecheck, lint, and unit tests on every push.
 # Does not produce build artifacts — see release.yml for that.
+#
+# Third-party actions are pinned to commit SHAs (FIND-006). The trailing
+# comment records the human-readable tag the SHA corresponds to so
+# `dependabot`/manual review can recognise version bumps without diffing
+# action behaviour. Bump both fields together.
 name: ci
 
 on:
@@ -12,11 +17,11 @@ jobs:
   rust:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch tip
         with:
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: cue-desktop/src-tauri -> target
       - name: cargo fmt
@@ -32,8 +37,8 @@ jobs:
   frontend:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
           cache: 'npm'
