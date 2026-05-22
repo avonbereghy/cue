@@ -754,8 +754,18 @@ fn validate_alphanumeric_id(id: &str, label: &str) -> Result<(), String> {
 #[tauri::command]
 fn revive_session(session_id: String, workspace: String) -> Result<(), String> {
     validate_alphanumeric_id(&session_id, "session ID")?;
-    security::sanitize_workspace_path(&workspace).map_err(|e| e.to_string())?;
-    spawn_terminal_with_resume(&session_id, &workspace)
+    // Use the canonicalised path returned by sanitize_workspace_path rather
+    // than the raw frontend string. The sanitiser resolves symlinks and
+    // strips traversal components; passing the raw `workspace` re-introduced
+    // those properties at the spawn site. Falls back to the raw input only
+    // if conversion to UTF-8 fails, which shouldn't happen for a path the
+    // sanitiser just returned, but the explicit branch avoids an unwrap.
+    let canonical = security::sanitize_workspace_path(&workspace).map_err(|e| e.to_string())?;
+    let canonical_str = canonical
+        .to_str()
+        .map(|s| s.to_string())
+        .unwrap_or(workspace);
+    spawn_terminal_with_resume(&session_id, &canonical_str)
 }
 
 #[tauri::command]
@@ -1448,8 +1458,29 @@ pub fn run() {
             // Only start if user has opted in via settings
             let perm_settings = settings::load_settings();
             if perm_settings.permissions_enabled {
-                spawn_permission_server(handle, pending_for_server, metadata_for_server);
-                log::info!("Permission server started (permissions_enabled=true)");
+                // Provision a fresh per-launch token before opening the socket.
+                // The Python hook reads the same file and presents the token in
+                // an X-Cue-Token header; the server rejects anything else with
+                // 403. Without this, any local process winning the loopback
+                // bind race could forge `{"behavior":"allow"}` responses to
+                // Claude Code prompts.
+                match permission_server::provision_token() {
+                    Ok(token) => {
+                        spawn_permission_server(
+                            handle,
+                            pending_for_server,
+                            metadata_for_server,
+                            token,
+                        );
+                        log::info!("Permission server started (permissions_enabled=true)");
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "Permission server NOT started — failed to provision auth token: {}",
+                            e
+                        );
+                    }
+                }
             } else {
                 log::info!("Permission server not started (permissions_enabled=false)");
             }
@@ -1470,6 +1501,7 @@ fn spawn_permission_server(
     app_handle: AppHandle,
     pending: Arc<permission_server::PendingRequests>,
     metadata: Arc<Mutex<HashMap<String, models::PermissionRequest>>>,
+    token: String,
 ) {
     tauri::async_runtime::spawn(async move {
         let listener = match tokio::net::TcpListener::bind("127.0.0.1:3002").await {
@@ -1481,6 +1513,10 @@ fn spawn_permission_server(
             }
         };
         log::info!("Permission server listening on 127.0.0.1:3002");
+
+        // Single shared Arc so spawned per-connection tasks compare against
+        // the same byte slice without cloning the 32-char string repeatedly.
+        let token = Arc::new(token);
 
         loop {
             let (stream, _addr) = match listener.accept().await {
@@ -1494,9 +1530,12 @@ fn spawn_permission_server(
             let app = app_handle.clone();
             let pending = pending.clone();
             let metadata = metadata.clone();
+            let token = token.clone();
 
             tokio::spawn(async move {
-                if let Err(e) = handle_permission_connection(stream, app, pending, metadata).await {
+                if let Err(e) =
+                    handle_permission_connection(stream, app, pending, metadata, token).await
+                {
                     log::debug!("Permission connection error: {}", e);
                 }
             });
@@ -1510,6 +1549,7 @@ async fn handle_permission_connection(
     app: AppHandle,
     pending: Arc<permission_server::PendingRequests>,
     metadata: Arc<Mutex<HashMap<String, models::PermissionRequest>>>,
+    expected_token: Arc<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -1572,12 +1612,37 @@ async fn handle_permission_connection(
         return Ok(());
     }
 
+    // Per-launch token auth on every mutating endpoint. /health stays open
+    // because the only caller is the Python hook's connectivity probe and
+    // we want a 200 with no auth to be a definitive "server is up" signal
+    // (otherwise diagnostics conflate "Cue is down" with "hook can't read
+    // the token file"). Anything that produces a side effect — currently
+    // just /permission-request — must present the matching X-Cue-Token
+    // header. Header parsing is case-insensitive per RFC 7230 §3.2.
+    let token_ok = header_str.lines().any(|line| {
+        let Some((name, value)) = line.split_once(':') else {
+            return false;
+        };
+        if !name.eq_ignore_ascii_case(permission_server::TOKEN_HEADER) {
+            return false;
+        }
+        permission_server::constant_time_eq(value.trim().as_bytes(), expected_token.as_bytes())
+    });
+
     match (method, path) {
         ("GET", "/health") => {
             let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK";
             stream.write_all(response.as_bytes()).await?;
         }
         ("POST", "/permission-request") => {
+            // Reject unauthenticated POSTs before allocating any state for
+            // them. The hook reads STATUS_DIR/permission-token (0600) on
+            // every invocation and sends the value verbatim in X-Cue-Token.
+            if !token_ok {
+                let response = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                let _ = stream.write_all(response.as_bytes()).await;
+                return Ok(());
+            }
             // Parse Content-Length to ensure we have the full body
             let content_length: usize = header_str
                 .lines()
