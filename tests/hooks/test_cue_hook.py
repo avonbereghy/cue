@@ -513,12 +513,21 @@ class TestRemoveAction:
 # ─────────────────────────────────────────────────────────────────────
 
 class TestNotificationSubtypes:
-    """The hook installer maps Notification → "waiting". The hook itself
-    filters out informational subtypes (auth_success / elicitation_complete /
-    elicitation_response) so they don't paint the card yellow when no user
-    action is required."""
+    """Notification subtypes are handled in two groups:
 
-    def test_permission_prompt_writes_waiting(self, hook_env, invoke_hook):
+    - `elicitation_dialog` accompanies an AskUserQuestion / ExitPlanMode
+      tool_use, which the Rust `awaiting_user_prompt` verdict authoritatively
+      tracks (matching tool_result demotes back to idle). The hook eagerly
+      writes `waiting` so the card flips at dialog-open without waiting on
+      the 1 Hz Rust re-parse.
+
+    - The other five subtypes (`permission_prompt`, `idle_prompt`,
+      `auth_success`, `elicitation_complete`, `elicitation_response`,
+      `future_unknown_type`) have no JSONL signal Rust can use to demote.
+      Writing `waiting` there would pin the card forever on terminal-side
+      approve / ctrl-c / rewind / closed window. They early-return."""
+
+    def test_permission_prompt_does_not_change_state(self, hook_env, invoke_hook):
         hook_env.write_sessions({
             "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
                        "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}
@@ -527,9 +536,9 @@ class TestNotificationSubtypes:
             "waiting",
             make_payload(hook_event_name="Notification", notification_type="permission_prompt"),
         )
-        assert hook_env.read_sessions()["abc123"]["state"] == "waiting"
+        assert hook_env.read_sessions()["abc123"]["state"] == "working"
 
-    def test_idle_prompt_writes_waiting(self, hook_env, invoke_hook):
+    def test_idle_prompt_does_not_change_state(self, hook_env, invoke_hook):
         hook_env.write_sessions({
             "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
                        "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}
@@ -538,9 +547,12 @@ class TestNotificationSubtypes:
             "waiting",
             make_payload(hook_event_name="Notification", notification_type="idle_prompt"),
         )
-        assert hook_env.read_sessions()["abc123"]["state"] == "waiting"
+        assert hook_env.read_sessions()["abc123"]["state"] == "working"
 
     def test_elicitation_dialog_writes_waiting(self, hook_env, invoke_hook):
+        # AskUserQuestion / ExitPlanMode dialog opening — eager hook write
+        # so the card flips immediately. Rust will demote once the matching
+        # tool_result lands in the JSONL.
         hook_env.write_sessions({
             "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
                        "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}
@@ -552,8 +564,6 @@ class TestNotificationSubtypes:
         assert hook_env.read_sessions()["abc123"]["state"] == "waiting"
 
     def test_auth_success_does_not_write(self, hook_env, invoke_hook):
-        # Pre-seed a working state. An informational notification must not
-        # disturb it — auth_success is purely observational.
         hook_env.write_sessions({
             "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
                        "lastActivity": 100.0, "startedAt": 0.0, "activeSubagents": 0}
@@ -586,10 +596,10 @@ class TestNotificationSubtypes:
         )
         assert hook_env.read_sessions()["abc123"]["state"] == "working"
 
-    def test_unknown_notification_type_writes_waiting(self, hook_env, invoke_hook):
-        # If Claude Code adds a new prompt subtype, defaulting to "waiting"
-        # is safer than defaulting to no-write (a missed prompt is worse
-        # than an extra one).
+    def test_unknown_notification_type_does_not_write(self, hook_env, invoke_hook):
+        # Unknown subtypes early-return because we can't tell whether they
+        # have a JSONL signal Rust can use to demote — the safe default is to
+        # not pin the card.
         hook_env.write_sessions({
             "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
                        "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}
@@ -598,7 +608,49 @@ class TestNotificationSubtypes:
             "waiting",
             make_payload(hook_event_name="Notification", notification_type="future_unknown_type"),
         )
+        assert hook_env.read_sessions()["abc123"]["state"] == "working"
+
+
+class TestPreToolUsePromptingTools:
+    """PreToolUse for the prompting tools (AskUserQuestion / ExitPlanMode)
+    promotes the card to `waiting` so it flips at dialog-open. This is
+    redundant with the Notification(elicitation_dialog) eager write — kept
+    because Claude Code versions vary in which (or both) of these fire."""
+
+    def test_pretooluse_ask_user_question_writes_waiting(self, hook_env, invoke_hook):
+        hook_env.write_sessions({
+            "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
+                       "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}
+        })
+        invoke_hook(
+            "working",
+            make_payload(hook_event_name="PreToolUse", tool_name="AskUserQuestion"),
+        )
         assert hook_env.read_sessions()["abc123"]["state"] == "waiting"
+
+    def test_pretooluse_exit_plan_mode_writes_waiting(self, hook_env, invoke_hook):
+        hook_env.write_sessions({
+            "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
+                       "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}
+        })
+        invoke_hook(
+            "working",
+            make_payload(hook_event_name="PreToolUse", tool_name="ExitPlanMode"),
+        )
+        assert hook_env.read_sessions()["abc123"]["state"] == "waiting"
+
+    def test_pretooluse_other_tool_stays_working(self, hook_env, invoke_hook):
+        # Regression guard: only the two named prompting tools promote.
+        # A Bash PreToolUse must NOT flip the card to waiting.
+        hook_env.write_sessions({
+            "abc123": {"id": "abc123", "workspace": "/x", "state": "thinking",
+                       "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}
+        })
+        invoke_hook(
+            "working",
+            make_payload(hook_event_name="PreToolUse", tool_name="Bash"),
+        )
+        assert hook_env.read_sessions()["abc123"]["state"] == "working"
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -725,69 +777,49 @@ class TestSubagentStopPreservesTransient:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# F-reliability-009 — pendingPermission sticky marker
+# PermissionRequest no longer changes state
 # ─────────────────────────────────────────────────────────────────────
 
-class TestPendingPermissionMarker:
-    """While a PermissionRequest's HTTP forward is in flight, concurrent
-    hook events from parallel tool calls must NOT overwrite the "waiting"
-    state. The marker is set by _quick_state_write and respected by the
-    main write path of OTHER events; cleared only by the resolving
-    PermissionRequest's own main-write."""
+class TestPermissionRequestNoStateChange:
+    """PermissionRequest hooks are now state-neutral. The hook forwards to
+    the dashboard permission server (when enabled) but never writes
+    sessions.json — the resolving hooks were unreliable (terminal-side
+    approve, ctrl-c, closed window, rewind) and waiting cards pinned
+    forever. The Rust JSONL-derived awaiting_user_prompt verdict catches
+    genuine user-input tool calls (AskUserQuestion / ExitPlanMode) instead.
 
-    def test_concurrent_post_tool_use_preserves_waiting(self, hook_env, invoke_hook):
-        # Simulate the race: PermissionRequest quick-wrote waiting+marker;
-        # before the HTTP returns, PostToolUse for a parallel tool fires.
+    Legacy `pendingPermission` is deprecated: not written, and any value on
+    existing entries is dropped by the next hook flush (no carry-forward)."""
+
+    def test_permission_request_does_not_change_state(self, hook_env, invoke_hook):
         hook_env.write_sessions({
-            "abc123": {"id": "abc123", "workspace": "/x", "state": "waiting",
+            "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
+                       "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}
+        })
+        invoke_hook("waiting", make_payload(hook_event_name="PermissionRequest"))
+        assert hook_env.read_sessions()["abc123"]["state"] == "working"
+
+    def test_legacy_pending_permission_is_dropped_by_next_event(self, hook_env, invoke_hook):
+        # Legacy entries from before this refactor may carry pendingPermission.
+        # Any subsequent hook flushes a rebuilt entry that does not include it.
+        hook_env.write_sessions({
+            "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
                        "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0,
                        "pendingPermission": True}
         })
         invoke_hook("working", make_payload(hook_event_name="PostToolUse"))
         entry = hook_env.read_sessions()["abc123"]
-        assert entry["state"] == "waiting", "PostToolUse must not clobber waiting while marker set"
-        assert entry["pendingPermission"] is True, "marker must persist until resolving event"
+        assert "pendingPermission" not in entry, "deprecated field must be dropped"
 
-    def test_concurrent_thinking_preserves_waiting(self, hook_env, invoke_hook):
+    def test_error_during_in_flight_permission_still_surfaces(self, hook_env, invoke_hook):
+        # PostToolUseFailure during what was previously a stuck-waiting session
+        # still cleanly transitions to error — no special marker handling needed.
         hook_env.write_sessions({
-            "abc123": {"id": "abc123", "workspace": "/x", "state": "waiting",
-                       "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0,
-                       "pendingPermission": True}
-        })
-        invoke_hook("thinking", make_payload(hook_event_name="UserPromptSubmit"))
-        entry = hook_env.read_sessions()["abc123"]
-        assert entry["state"] == "waiting"
-        assert entry["pendingPermission"] is True
-
-    def test_error_overrides_marker(self, hook_env, invoke_hook):
-        # PostToolUseFailure during the permission wait must still surface —
-        # the user needs to know a tool errored even while staring at a prompt.
-        hook_env.write_sessions({
-            "abc123": {"id": "abc123", "workspace": "/x", "state": "waiting",
-                       "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0,
-                       "pendingPermission": True}
+            "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
+                       "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}
         })
         invoke_hook("error", make_payload(hook_event_name="PostToolUseFailure"))
-        entry = hook_env.read_sessions()["abc123"]
-        assert entry["state"] == "error"
-
-    def test_resolving_waiting_clears_marker(self, hook_env, invoke_hook):
-        # The PermissionRequest's main-write (action=waiting, event=PermissionRequest)
-        # is the resolving event — HTTP must have returned for us to reach it.
-        # Marker clears.
-        hook_env.write_sessions({
-            "abc123": {"id": "abc123", "workspace": "/x", "state": "waiting",
-                       "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0,
-                       "pendingPermission": True}
-        })
-        invoke_hook(
-            "waiting",
-            make_payload(hook_event_name="PermissionRequest"),
-        )
-        entry = hook_env.read_sessions()["abc123"]
-        assert entry["state"] == "waiting"
-        # Marker cleared — the resolving event proves the HTTP returned.
-        assert "pendingPermission" not in entry
+        assert hook_env.read_sessions()["abc123"]["state"] == "error"
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -891,29 +923,30 @@ class TestCorruptionRecovery:
 # ─────────────────────────────────────────────────────────────────────
 
 class TestStaleWaitingGuard:
-    """A slow PermissionRequest HTTP can complete after a faster event
-    already moved state to working. The main write path skips waiting
-    writes when existing.lastActivity > hook_start_time."""
+    """PermissionRequest is now state-neutral regardless of timing — the
+    stale-waiting guard from the pre-refactor world is no longer needed
+    because the event never overwrites state in the first place. Tests are
+    kept as regression guards: under no timing condition should a
+    PermissionRequest pin state=waiting."""
 
-    def test_waiting_skipped_when_newer_activity_exists(self, hook_env, invoke_hook):
-        # Pre-seed lastActivity in the future so the guard fires.
+    def test_permission_request_never_overwrites_working(self, hook_env, invoke_hook):
         hook_env.write_sessions({
             "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
-                       "lastActivity": time.time() + 60.0,  # newer than hook_start_time
+                       "lastActivity": time.time() + 60.0,
                        "startedAt": 0.0, "activeSubagents": 0}
         })
         invoke_hook("waiting", make_payload(hook_event_name="PermissionRequest"))
-        # State must NOT have been moved back to waiting.
         assert hook_env.read_sessions()["abc123"]["state"] == "working"
 
-    def test_waiting_applies_when_no_newer_activity(self, hook_env, invoke_hook):
+    def test_permission_request_does_not_overwrite_even_with_older_activity(self, hook_env, invoke_hook):
+        # Pre-refactor this case wrote waiting. Post-refactor it must not.
         hook_env.write_sessions({
             "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
-                       "lastActivity": time.time() - 60.0,  # older than hook_start_time
+                       "lastActivity": time.time() - 60.0,
                        "startedAt": 0.0, "activeSubagents": 0}
         })
         invoke_hook("waiting", make_payload(hook_event_name="PermissionRequest"))
-        assert hook_env.read_sessions()["abc123"]["state"] == "waiting"
+        assert hook_env.read_sessions()["abc123"]["state"] == "working"
 
 
 # ─────────────────────────────────────────────────────────────────────

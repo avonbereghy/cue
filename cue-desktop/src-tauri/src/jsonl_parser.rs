@@ -99,7 +99,24 @@ pub struct ParsedEntry {
     /// workspace. Captured regardless of block position so the snippet is
     /// deterministic.
     pub assistant_text: Option<String>,
+    /// `id` fields of tool_use blocks in this assistant message whose `name`
+    /// is in the user-prompting set (AskUserQuestion, ExitPlanMode). When such
+    /// an id has no matching tool_result anywhere in the file, the session is
+    /// genuinely blocked on a user-input tool call — that's the only deterministic
+    /// "waiting" condition. Permission prompts and idle notifications do *not*
+    /// populate this list (they're not user-input tools, they just gate the next
+    /// step of an in-progress turn).
+    pub prompting_tool_use_ids: Vec<String>,
+    /// `tool_use_id` references from tool_result blocks in this user message.
+    /// Used to mark prompting tool_uses as resolved when the user has answered.
+    pub tool_result_ids: Vec<String>,
 }
+
+/// Tool names that genuinely block the assistant on user input. An unmatched
+/// tool_use with one of these names is the only deterministic signal that the
+/// session is "waiting" on the user in the way the dashboard yellow stripes
+/// imply. Kept narrow on purpose — permission prompts are *not* in this set.
+pub const PROMPTING_TOOL_NAMES: &[&str] = &["AskUserQuestion", "ExitPlanMode"];
 
 /// Parse a JSONL file into a list of entries.
 /// Returns an empty Vec if the file is too large, unreadable, or empty.
@@ -352,6 +369,30 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
             entry.effort_command_ts = entry.timestamp;
         }
         entry.is_user_message = entry.user_prompt_text.is_some();
+
+        // Scan content blocks for tool_result references. Claude Code packs
+        // tool_results inside `type:"user"` entries with `content[].type ==
+        // "tool_result"` (see test_tool_result_user_entry_not_counted). Capture
+        // every referenced tool_use_id so the aggregator can resolve matching
+        // prompting tool_uses. Also flip the legacy `is_tool_result` flag here
+        // since the `entry_type == "tool_result"` branch below never fires in
+        // real JSONL.
+        if let Some(message) = obj.get("message").and_then(|v| v.as_object()) {
+            if let Some(content) = message.get("content").and_then(|v| v.as_array()) {
+                for block in content {
+                    if let Some(block_obj) = block.as_object() {
+                        if block_obj.get("type").and_then(|v| v.as_str()) == Some("tool_result") {
+                            entry.is_tool_result = true;
+                            if let Some(tuid) =
+                                block_obj.get("tool_use_id").and_then(|v| v.as_str())
+                            {
+                                entry.tool_result_ids.push(tuid.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Parse assistant messages for tokens and tool usage
@@ -415,6 +456,18 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
                                     entry.todo_is_bulk_replace = true;
                                 } else if name == "TaskCreate" || name == "TaskUpdate" {
                                     parse_task_tool(name, block_obj.get("input"), &mut entry);
+                                }
+
+                                // Record user-prompting tool_uses for the
+                                // awaiting_user_prompt verdict. Only the id is
+                                // needed — the matching tool_result references
+                                // it via tool_use_id.
+                                if PROMPTING_TOOL_NAMES.contains(&name) {
+                                    if let Some(id) =
+                                        block_obj.get("id").and_then(|v| v.as_str())
+                                    {
+                                        entry.prompting_tool_use_ids.push(id.to_string());
+                                    }
                                 }
                             }
                         }
@@ -1029,6 +1082,24 @@ fn aggregate_entries(
             }
         }
     }
+
+    // Awaiting-user-prompt verdict: does any prompting tool_use
+    // (AskUserQuestion / ExitPlanMode) exist without a matching
+    // tool_result? This runs regardless of `saw_pending_tool_use` because
+    // AskUserQuestion *is itself* a stop_reason=tool_use entry — it would
+    // always be eclipsed if gated behind that flag. Build the set of
+    // resolved tool_use_ids and check every prompting id against it. This is
+    // the only deterministic signal for state="waiting"; permission prompts
+    // and idle notifications intentionally do not pin state anymore.
+    let resolved: std::collections::HashSet<&str> = entries
+        .iter()
+        .flat_map(|e| e.tool_result_ids.iter().map(String::as_str))
+        .collect();
+    m.awaiting_user_prompt = entries.iter().any(|e| {
+        e.prompting_tool_use_ids
+            .iter()
+            .any(|id| !resolved.contains(id.as_str()))
+    });
 
     // Todo items: accumulate from all entries.
     // TodoWrite (bulk_replace=true) replaces the entire list.
@@ -1975,5 +2046,113 @@ mod tests {
             !entry.has_end_turn,
             "stop_reason=tool_use must NOT set has_end_turn"
         );
+    }
+
+    // ── awaiting_user_prompt detection ───────────────────────────────────
+    // This is the authoritative signal for state="waiting". Permission
+    // prompts and idle notifications are intentionally excluded — only
+    // tool calls that genuinely block the assistant on user input qualify.
+
+    #[test]
+    fn test_awaiting_user_prompt_when_ask_user_question_unmatched() {
+        let user = r#"{"type":"user","timestamp":1.0,"message":{"content":"plan it"}}"#;
+        let ask = r#"{"type":"assistant","timestamp":2.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"toolu_ask_1","name":"AskUserQuestion","input":{}}],"stop_reason":"tool_use"}}"#;
+
+        let dir = std::env::temp_dir().join("cue_test_await_unmatched");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        std::fs::write(&path, format!("{}\n{}", user, ask)).unwrap();
+
+        let m = super::parse_jsonl_to_session_metrics(&path).unwrap();
+        assert!(
+            m.awaiting_user_prompt,
+            "AskUserQuestion without matching tool_result must mark awaiting"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_awaiting_user_prompt_false_when_answered() {
+        let ask = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"toolu_ask_2","name":"AskUserQuestion","input":{}}],"stop_reason":"tool_use"}}"#;
+        let result = r#"{"type":"user","timestamp":2.0,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_ask_2","content":"user picked option A"}]}}"#;
+
+        let dir = std::env::temp_dir().join("cue_test_await_answered");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        std::fs::write(&path, format!("{}\n{}", ask, result)).unwrap();
+
+        let m = super::parse_jsonl_to_session_metrics(&path).unwrap();
+        assert!(
+            !m.awaiting_user_prompt,
+            "matching tool_result must clear awaiting"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_awaiting_user_prompt_recognizes_exit_plan_mode() {
+        let plan = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"toolu_plan_1","name":"ExitPlanMode","input":{"plan":"do the thing"}}],"stop_reason":"tool_use"}}"#;
+
+        let dir = std::env::temp_dir().join("cue_test_await_exitplan");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        std::fs::write(&path, plan).unwrap();
+
+        let m = super::parse_jsonl_to_session_metrics(&path).unwrap();
+        assert!(
+            m.awaiting_user_prompt,
+            "unmatched ExitPlanMode must mark awaiting"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_awaiting_user_prompt_ignores_non_prompting_tools() {
+        // Bash tool_use with no result is NOT awaiting — it's running.
+        // Only AskUserQuestion / ExitPlanMode count.
+        let bash = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"toolu_bash_1","name":"Bash","input":{"command":"ls"}}],"stop_reason":"tool_use"}}"#;
+
+        let dir = std::env::temp_dir().join("cue_test_await_bash");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        std::fs::write(&path, bash).unwrap();
+
+        let m = super::parse_jsonl_to_session_metrics(&path).unwrap();
+        assert!(
+            !m.awaiting_user_prompt,
+            "non-prompting tools must not mark awaiting"
+        );
+        assert!(m.pending_tool_use, "but pending_tool_use should still fire");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_awaiting_user_prompt_handles_multiple_ids() {
+        // Two AskUserQuestion calls, one answered, one pending → still awaiting.
+        let ask1 = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"toolu_q1","name":"AskUserQuestion","input":{}}],"stop_reason":"tool_use"}}"#;
+        let result1 = r#"{"type":"user","timestamp":2.0,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_q1","content":"A"}]}}"#;
+        let ask2 = r#"{"type":"assistant","timestamp":3.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"toolu_q2","name":"AskUserQuestion","input":{}}],"stop_reason":"tool_use"}}"#;
+
+        let dir = std::env::temp_dir().join("cue_test_await_multi");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        std::fs::write(&path, format!("{}\n{}\n{}", ask1, result1, ask2)).unwrap();
+
+        let m = super::parse_jsonl_to_session_metrics(&path).unwrap();
+        assert!(
+            m.awaiting_user_prompt,
+            "second pending question keeps awaiting=true"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

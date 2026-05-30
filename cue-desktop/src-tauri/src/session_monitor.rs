@@ -454,6 +454,35 @@ impl SessionMonitorState {
                 .collect()
         };
 
+        // Authoritative waiting verdict: derived purely from the JSONL —
+        // a "waiting" card means an unmatched AskUserQuestion / ExitPlanMode
+        // tool_use is sitting in the transcript with no matching tool_result.
+        // Permission prompts and idle notifications used to mint waiting via
+        // hooks, but their resolving hooks were unreliable (terminal-side
+        // approve, rewind, user closed window, ctrl-c) and the cards pinned
+        // forever. The hook now skips state writes for those events; this
+        // pass is the only source of state="waiting" and the only thing that
+        // demotes a stale one. Terminal states (done/ended/error/subagent/
+        // compacting) are preserved — they have their own truth.
+        let active: Vec<_> = {
+            let cache = self.metrics_cache.lock().unwrap();
+            active
+                .into_iter()
+                .map(|mut s| {
+                    let awaiting = cache
+                        .get(&s.id)
+                        .map(|m| m.awaiting_user_prompt)
+                        .unwrap_or(false);
+                    if awaiting && is_promotable_to_waiting(&s.state) {
+                        s.state = "waiting".to_string();
+                    } else if !awaiting && s.state == "waiting" {
+                        s.state = "idle".to_string();
+                    }
+                    s
+                })
+                .collect()
+        };
+
         // Post-demotion sweep: re-apply the launched_at gate to any session
         // that's no longer in a bypass state. Without this, a session admitted
         // via `bypasses_launch_gate` and then demoted (dead PID, missing JSONL,
@@ -1138,6 +1167,14 @@ pub(crate) fn dedup_sessions(
     deduped
 }
 
+/// States that may be overwritten with "waiting" when the JSONL shows an
+/// unmatched user-prompting tool_use. Terminal/specialized states (done,
+/// ended, error, subagent, compacting, clearing) own their truth from
+/// elsewhere — promoting them to waiting would lose information.
+fn is_promotable_to_waiting(state: &str) -> bool {
+    matches!(state, "working" | "thinking" | "idle" | "waiting")
+}
+
 fn should_demote_turn_ended(
     state: &str,
     state_changed_at: Option<f64>,
@@ -1757,6 +1794,40 @@ mod tests {
         // Metrics exist but no end_turn observed → stay put.
         let m = metrics_with_end_turn(None, false);
         assert!(!should_demote_turn_ended("working", Some(100.0), Some(&m)));
+    }
+
+    // ── is_promotable_to_waiting ────────────────────────────────────────
+    // Guards which states the JSONL-driven waiting verdict is allowed to
+    // overwrite. Terminal/specialized states own their truth from elsewhere.
+
+    #[test]
+    fn test_promotable_to_waiting_allows_active_and_waiting_states() {
+        assert!(is_promotable_to_waiting("working"));
+        assert!(is_promotable_to_waiting("thinking"));
+        assert!(is_promotable_to_waiting("idle"));
+        // Already-waiting must remain promotable so the no-op case is cheap
+        // and explicit (and the inverse "demote stale waiting" check still
+        // gates on awaiting_user_prompt being false).
+        assert!(is_promotable_to_waiting("waiting"));
+    }
+
+    #[test]
+    fn test_promotable_to_waiting_rejects_terminal_and_specialized() {
+        for st in [
+            "done",
+            "ended",
+            "error",
+            "subagent",
+            "compacting",
+            "clearing",
+            "remove",
+        ] {
+            assert!(
+                !is_promotable_to_waiting(st),
+                "state {} must not be overwritten by JSONL waiting verdict",
+                st
+            );
+        }
     }
 
     // ── should_demote_stale_subagent ────────────────────────────────────

@@ -227,6 +227,13 @@ pub struct SessionMetrics {
     /// Used to infer "waiting" state from the JSONL when the hook doesn't fire.
     #[serde(default)]
     pub pending_tool_use: bool,
+    /// True if the JSONL contains an unmatched user-prompting tool_use
+    /// (AskUserQuestion / ExitPlanMode) — the only deterministic signal that
+    /// the session is genuinely blocked on a user response. This is the
+    /// authoritative input for state="waiting"; permission prompts and idle
+    /// notifications no longer pin state. See jsonl_parser::PROMPTING_TOOL_NAMES.
+    #[serde(default)]
+    pub awaiting_user_prompt: bool,
     /// Timestamp (unix secs) of the most recent assistant message with
     /// `stop_reason == "end_turn"`. When this is newer than the session's
     /// `stateChangedAt` and no newer pending tool_use exists, the poller
