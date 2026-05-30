@@ -234,13 +234,15 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
                        last_tokens, hook_start_time,
                        team_name=None, agent_name=None,
                        permission_mode=None):
-    """Write 'waiting' state to sessions.json immediately (before blocking HTTP).
+    """Write 'waiting' state to sessions.json immediately so the dashboard
+    flips the card the instant a prompting event fires, without waiting on
+    the 1 Hz Rust JSONL re-parse.
 
-    This is a fast-path write so the dashboard shows 'waiting' while the
-    permission prompt is displayed, rather than staying stuck on 'working'.
+    Used for `Notification(elicitation_dialog)` and PreToolUse(AskUserQuestion
+    / ExitPlanMode). The Rust poller's `awaiting_user_prompt` verdict is the
+    authoritative resolver — when the JSONL gains a matching tool_result the
+    Rust side demotes `waiting` back to `idle`, so we don't pin cards forever.
     """
-    # Reject malicious / typo'd session ids before they reach disk
-    # — the id is later joined into a file path on the Rust side.
     if not _is_valid_session_id(session_id):
         return
     try:
@@ -254,24 +256,18 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
                 except Exception:
                     status = {"sessions": {}}
 
-                # Normalize structure but preserve malformed entries
-                # rather than silently dropping them — symmetric to the
-                # main write path. Without this call, malformed entries
-                # could survive the quick-write only to be erased by the
-                # main path 5 minutes later.
                 status = _validate_sessions(status)
 
                 existing = status["sessions"].get(session_id, {})
 
-                # Same stale-waiting guard as the main write path
+                # Stale-write guard: if a newer hook already wrote, bail.
                 existing_activity = existing.get("lastActivity", 0)
                 if existing_activity > hook_start_time:
-                    return  # A newer hook already wrote
+                    return
 
                 now = time.time()
-                # stateChangedAt: this IS a state change (we're writing
-                # "waiting"). Carry forward only if the previous entry
-                # was already in waiting — otherwise we're transitioning.
+                # If we're already on waiting, carry stateChangedAt forward
+                # so the active-duration timer doesn't reset on every prompt.
                 prev_state = existing.get("state", "")
                 prev_changed = existing.get("stateChangedAt")
                 state_changed_at = (
@@ -306,17 +302,9 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
                     entry["inputTokens"] = existing["inputTokens"]
                     entry["outputTokens"] = existing.get("outputTokens", 0)
                     entry["model"] = existing.get("model", "")
-                # Carry forward last known mode if the current hook didn't include it.
                 pm = permission_mode or existing.get("permissionMode")
                 if pm:
                     entry["permissionMode"] = pm
-
-                # Mark a PermissionRequest as in-flight to the dashboard so
-                # concurrent hook events (e.g. a PostToolUse from a parallel
-                # tool call) don't overwrite this "waiting" state during the
-                # HTTP wait. Cleared by the resolving PermissionRequest's
-                # main-write path below — see the carry-forward guard there.
-                entry["pendingPermission"] = True
 
                 status["sessions"][session_id] = entry
 
@@ -326,8 +314,6 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
                         json.dump(status, f, indent=2)
                         f.flush()
                         os.fsync(f.fileno())
-                    # chmod before the rename so the target file is never
-                    # world-readable between replace and chmod.
                     if sys.platform != "win32":
                         os.chmod(tmp, 0o600)
                     os.replace(tmp, STATUS_FILE)
@@ -339,7 +325,7 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
             finally:
                 _unlock(lock)
     except Exception:
-        pass  # Best-effort — the main write path will retry
+        pass
 
 
 def _read_permission_token():
@@ -661,22 +647,42 @@ def main():
     last_tokens = _read_last_tokens(transcript_path)
     event_name = hook_data.get("hook_event_name", "")
 
-    # Claude Code's Notification hook fires for six subtypes — three are
-    # user-attention prompts (permission_prompt, idle_prompt, elicitation_dialog)
-    # and three are informational (auth_success, elicitation_complete,
-    # elicitation_response). HOOK_EVENTS maps Notification → "waiting" because
-    # the prompt subtypes dominate, but we must not flip the dashboard to
-    # waiting for informational subtypes — return early without touching
-    # sessions.json. Unknown subtypes default to "waiting" (safer than "done").
+    # Claude Code's Notification hook fires for six subtypes. Three are
+    # informational (auth_success, elicitation_complete, elicitation_response)
+    # — never a state change. Two are user-attention prompts whose resolution
+    # is unreliable (permission_prompt, idle_prompt) — skip, because the
+    # Rust side has no JSONL signal to demote them and they'd pin the card.
+    # The sixth — `elicitation_dialog` — IS JSONL-trackable: it accompanies
+    # an `AskUserQuestion` / `ExitPlanMode` tool_use whose presence/absence
+    # the Rust `awaiting_user_prompt` verdict authoritatively tracks. Write
+    # `waiting` eagerly so the card flips at dialog-open, and let Rust demote
+    # back to idle when the matching tool_result lands.
     if event_name == "Notification":
         notif_type = hook_data.get("notification_type")
-        _INFORMATIONAL_NOTIFICATIONS = {
-            "auth_success",
-            "elicitation_complete",
-            "elicitation_response",
-        }
-        if isinstance(notif_type, str) and notif_type in _INFORMATIONAL_NOTIFICATIONS:
-            return
+        os.makedirs(STATUS_DIR, exist_ok=True)
+        if notif_type == "elicitation_dialog":
+            _quick_state_write(
+                session_id, workspace, source, subprocess_label,
+                last_tokens, hook_start_time,
+                team_name=team_name, agent_name=agent_name,
+                permission_mode=(hook_data.get("permission_mode")
+                                 or hook_data.get("permissionMode")),
+            )
+        return
+
+    # PermissionRequest events forward to the dashboard's permission panel
+    # (when enabled) but never change session state for the same reason:
+    # the resolving event isn't reliable. Forward-and-return so the
+    # dashboard can still render the request, sessions.json stays untouched,
+    # and the assistant remains classified as working/thinking (which is
+    # what it is — gated on consent, not waiting on a user-input tool call).
+    if event_name == "PermissionRequest":
+        if "tool_name" in hook_data:
+            decision = _forward_permission_request(hook_data, session_id)
+            if decision is not None:
+                json.dump(decision, sys.stdout)
+                sys.stdout.flush()
+        return
 
     # StopFailure carries an `error_type` (rate_limit / billing_error /
     # authentication_failed / server_error / model_not_found / max_output_tokens
@@ -698,25 +704,30 @@ def main():
 
     os.makedirs(STATUS_DIR, exist_ok=True)
 
-    # For PermissionRequest, write "waiting" state BEFORE the blocking HTTP
-    # call to the dashboard. Otherwise the state stays "working" the entire
-    # time the user is looking at the permission prompt.
-    if action == "waiting":
-        _quick_state_write(session_id, workspace, source, subprocess_label,
-                           last_tokens, hook_start_time,
-                           team_name=team_name, agent_name=agent_name,
-                           permission_mode=permission_mode)
+    # PreToolUse fires *before* the AskUserQuestion / ExitPlanMode dialog
+    # actually opens — Claude Code may or may not also send a Notification
+    # (elicitation_dialog) for it, so this is a redundant fast-path that
+    # guarantees the card flips on dialog-open regardless. We promote the
+    # action to `waiting` and let the main lock-held write below land it;
+    # the Rust `awaiting_user_prompt` verdict demotes when the matching
+    # tool_result eventually shows up in the JSONL.
+    if event_name == "PreToolUse":
+        tool_name = hook_data.get("tool_name")
+        if isinstance(tool_name, str) and tool_name in ("AskUserQuestion", "ExitPlanMode"):
+            action = "waiting"
+            _quick_state_write(
+                session_id, workspace, source, subprocess_label,
+                last_tokens, hook_start_time,
+                team_name=team_name, agent_name=agent_name,
+                permission_mode=permission_mode,
+            )
 
-    # Forward permission requests to the dashboard for user decision.
-    # PermissionRequest hooks have tool_name in the payload and action="waiting".
-    if action == "waiting" and "tool_name" in hook_data:
-        decision = _forward_permission_request(hook_data, session_id)
-        if decision is not None:
-            # Output the decision JSON so Claude Code receives it
-            json.dump(decision, sys.stdout)
-            sys.stdout.flush()
-            # Still update sessions.json below (don't return) so the
-            # dashboard shows the session state change
+    # PermissionRequest and the non-elicitation Notification subtypes early-
+    # returned above — they never set state="waiting" because their resolving
+    # events are unreliable and would pin cards forever. Waiting is otherwise
+    # JSONL-derived from unmatched AskUserQuestion/ExitPlanMode tool_uses on
+    # the Rust side, plus the _last_tool_was_ask_question fast-path at
+    # done/idle transitions below.
 
     # Hold an exclusive lock for the entire read-modify-write cycle
     # to prevent concurrent hooks from clobbering each other's updates
@@ -813,33 +824,6 @@ def main():
                         # failure mode, so the promotion is removed; the next
                         # genuine event (PreToolUse / UserPromptSubmit) will
                         # land the correct state within ~1s.
-
-                # Guard against stale "waiting" writes: PermissionRequest hooks
-                # are slow (HTTP request) and can finish after PostToolUse
-                # already moved the state to "working". Only skip writes for
-                # the "waiting" action — all other state transitions are
-                # legitimate and should always apply.
-                if action == "waiting":
-                    existing_activity = existing.get("lastActivity", 0)
-                    # `pendingPermission` is set ONLY by our own
-                    # _quick_state_write a few lines earlier in the same
-                    # process; if it's True, the newer write is US, not a
-                    # foreign hook. Proceeding is correct — the main-write
-                    # below is the resolving event that clears the marker.
-                    if (existing_activity > hook_start_time
-                            and not existing.get("pendingPermission")):
-                        return  # A newer (foreign) hook already wrote — don't clobber it
-
-                # F-reliability-009 — While a PermissionRequest is in flight
-                # to the dashboard (`pendingPermission == True`), concurrent
-                # hook events from parallel tool calls would otherwise clobber
-                # the "waiting" state. Preserve "waiting" for non-attention
-                # actions; let "error", "subagent_stop", "remove" still pass.
-                if (existing.get("pendingPermission") is True
-                        and existing.get("state") == "waiting"
-                        and action in ("working", "thinking", "subagent",
-                                       "compacting", "done", "idle")):
-                    action = "waiting"
 
                 # Self-heal a leaked subagent counter BEFORE we read it.
                 # If the session has been pinned on "subagent" for >60s with
@@ -974,15 +958,10 @@ def main():
                     et = error_type or existing.get("errorType")
                     if isinstance(et, str) and et:
                         entry["errorType"] = et
-                # Carry forward the PermissionRequest in-flight marker UNLESS
-                # this main-write is the resolving PermissionRequest itself
-                # (the HTTP wait must have ended for us to reach this point,
-                # so the race window is closed).
-                is_resolving_perm = (action == "waiting"
-                                     and event_name == "PermissionRequest")
-                if (existing.get("pendingPermission") is True
-                        and not is_resolving_perm):
-                    entry["pendingPermission"] = True
+                # pendingPermission is deprecated. Any legacy True value on
+                # existing entries is intentionally dropped here — the new
+                # entry doesn't carry it forward, so the next hook flush
+                # clears the field across the dashboard.
                 status["sessions"][session_id] = entry
 
             # Atomic write with unique temp file to avoid collisions
