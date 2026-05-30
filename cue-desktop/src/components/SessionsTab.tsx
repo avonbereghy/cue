@@ -1336,10 +1336,18 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const quiesceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isAnimatingRef = useRef(false);
   const animationGenRef = useRef(0); // incremented each animation; stale chains check this
-  // Set when the effect observes a fresh sortKey while an animation is already
-  // in flight. The in-flight run's finally consumes it to retrigger the effect
-  // so the deferred reorder doesn't get dropped.
+  // Set by the turnEnd/invariant timer when its 300ms debounce fires but the
+  // state-transition registry is still holding (a card mid commitHandoff).
+  // The transition-registry subscription clears it and calls
+  // fireDeferredReorder when the last in-flight transition completes.
   const pendingReorderRef = useRef(false);
+  // Set by the FLIP layout effect when sortKey changes while an animation is
+  // already running. The in-flight animation's finally consumes this to
+  // re-trigger the effect with live (post-transform) positions as the
+  // baseline so the next animation diff isn't a no-op. Kept separate from
+  // pendingReorderRef so the FLIP cleanup doesn't accidentally clear a
+  // pending turnEnd reorder that's waiting on the transition registry.
+  const pendingFlipReRunRef = useRef(false);
   const isQuiescenceReorderRef = useRef(false);
   // Tracks previous state per session so we can detect turn-end transitions
   // (non-quiescent → quiescent) and fire a gated reorder.
@@ -1673,9 +1681,13 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setReorderTick((t) => t + 1);
   }, []);
 
-  // Reuse the module-scope pendingReorderRef declared earlier — same
-  // "fire when unblocked" semantic for both animation-in-flight and
-  // transition-registry-in-flight paths.
+  // `pendingReorderRef` is for the turnEnd/invariant reorder deferral
+  // (waiting for the state-transition registry to clear). The FLIP layout
+  // effect uses a separate `pendingFlipReRunRef` for its own "re-run when
+  // current anim finishes" deferral. Conflating them silently dropped
+  // turnEnd reorders whenever a FLIP animation cleanup ran between the
+  // turnEnd timer setting the flag and the transition listener observing
+  // it — manifesting as idle sessions stuck above active ones.
   if ((turnEndDetected || invariantViolated) && autoReorder && turnEndTimerRef.current === null) {
     turnEndTimerRef.current = setTimeout(() => {
       turnEndTimerRef.current = null;
@@ -1756,12 +1768,12 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     if (!list || !autoReorder) return;
 
     // Don't start a new animation while one is in flight — the current
-    // animation owns cardPositions. Flag the pending reorder so the in-flight
+    // animation owns cardPositions. Flag the pending re-run so the in-flight
     // run's finally retriggers this effect; without that, a reorder that
     // arrives mid-animation is silently dropped (cardPositions gets written
     // from post-animation DOM, so the re-run sees a no-op diff).
     if (isAnimatingRef.current) {
-      pendingReorderRef.current = true;
+      pendingFlipReRunRef.current = true;
       return;
     }
 
@@ -2148,13 +2160,17 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           await runSpawns();
         }
       } finally {
-        // If a reorder was requested mid-flight, the latest sortKey no longer
-        // matches the DOM we just animated toward. Capture cards' *current*
-        // visual positions (getBoundingClientRect reflects applied transforms)
-        // as the "from" snapshot BEFORE clearing transforms — the re-run can
-        // then diff against the new DOM layout and animate from where cards
-        // visually are, avoiding a snap.
-        if (pendingReorderRef.current && animationGenRef.current === gen) {
+        // If the layout effect saw a fresh sortKey mid-flight, the latest
+        // sortKey no longer matches the DOM we just animated toward. Capture
+        // cards' *current* visual positions (getBoundingClientRect reflects
+        // applied transforms) as the "from" snapshot BEFORE clearing
+        // transforms — the re-run can then diff against the new DOM layout
+        // and animate from where cards visually are, avoiding a snap.
+        // We only consume `pendingFlipReRunRef` here, NOT `pendingReorderRef`
+        // — the latter belongs to the turnEnd/transition-registry path and
+        // must remain set until its subscription listener actually fires
+        // fireDeferredReorder.
+        if (pendingFlipReRunRef.current && animationGenRef.current === gen) {
           const liveCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
           const livePositions = new Map<string, DOMRect>();
           liveCards.forEach((c) => {
@@ -2164,7 +2180,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           cleanupExistingTransforms();
           cleanupSpawnState();
           isAnimatingRef.current = false;
-          pendingReorderRef.current = false;
+          pendingFlipReRunRef.current = false;
           setReorderTick((t) => t + 1);
           return;
         }
