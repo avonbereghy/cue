@@ -584,6 +584,10 @@ impl SessionMonitorState {
                         s.state = "waiting".to_string();
                     } else if s.state == "waiting"
                         && should_resolve_waiting(awaiting, pending)
+                        && metrics_caught_up(
+                            metrics.and_then(|m| m.last_entry_ts),
+                            s.state_changed_at,
+                        )
                     {
                         s.state = "idle".to_string();
                     }
@@ -1308,6 +1312,26 @@ fn is_promotable_to_waiting(state: &str) -> bool {
 /// turn-ended passes, so this predicate never needs a timer.
 fn should_resolve_waiting(awaiting: bool, pending: bool) -> bool {
     !awaiting && !pending
+}
+
+/// Freshness gate for the `waiting` demote. The hook seeds `waiting` (and
+/// `stateChangedAt`) the instant a dialog opens, but the JSONL-derived metrics
+/// only refresh every ~5s while the poller runs every ~1s. In that window the
+/// cached `awaiting`/`pending` are stale-false — they predate the dialog — so a
+/// naive `should_resolve_waiting` would demote a just-opened question/permission
+/// card to idle for up to a refresh cycle (the visible "doesn't catch the
+/// question" flicker). Only allow the demote once the parse has caught up to (or
+/// past) when the card became `waiting`: `last_entry_ts >= state_changed_at`.
+///
+/// Returns `true` (allow demote) when we can't prove staleness — no parsed
+/// timestamp or no `stateChangedAt` — preserving the prior behavior for those
+/// edge cases. The liveness / JSONL-deletion / turn-ended passes remain the
+/// backstops for an abandoned prompt, so holding here never pins forever.
+fn metrics_caught_up(last_entry_ts: Option<f64>, state_changed_at: Option<f64>) -> bool {
+    match (last_entry_ts, state_changed_at) {
+        (Some(last), Some(changed)) => last >= changed,
+        _ => true,
+    }
 }
 
 fn should_demote_turn_ended(
@@ -2711,6 +2735,89 @@ mod tests {
     // These drive the path-injected `poll_status_with` against fixture files so
     // the full reconcile pipeline (read → parse → recovery → liveness →
     // waiting verdict) is locked, not just the pure predicates.
+
+    #[test]
+    fn test_metrics_caught_up_gate() {
+        // Stale parse (predates the seed) → hold (don't allow demote).
+        assert!(!metrics_caught_up(Some(100.0), Some(200.0)));
+        // Caught-up parse → allow demote.
+        assert!(metrics_caught_up(Some(200.0), Some(200.0)));
+        assert!(metrics_caught_up(Some(250.0), Some(200.0)));
+        // Unknown freshness → preserve prior behavior (allow).
+        assert!(metrics_caught_up(None, Some(200.0)));
+        assert!(metrics_caught_up(Some(100.0), None));
+    }
+
+    #[test]
+    fn test_poll_holds_question_waiting_while_metrics_stale() {
+        // The regression behind "Cue stopped catching questions": the hook
+        // seeds `waiting` the instant a question opens, but the 1s poll runs
+        // before the 5s metrics refresh catches up. With the cache still stale
+        // (awaiting=false, pending=false, last_entry_ts predating stateChangedAt)
+        // the card must HOLD `waiting`, not flicker to idle.
+        let dir = std::env::temp_dir().join("cue_test_poll_stale_hold");
+        let _ = std::fs::remove_dir_all(&dir);
+        let projects = dir.join("projects");
+        let ws_dir = projects.join("-Users-dev-App");
+        std::fs::create_dir_all(&ws_dir).unwrap();
+        std::fs::write(ws_dir.join("sess-q.jsonl"), "{}").unwrap();
+
+        let status_path = dir.join("sessions.json");
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        let changed = now + 5.0; // hook just seeded waiting "now"
+        let sessions = format!(
+            r#"{{"sessions":{{"sess-q":{{"id":"sess-q","workspace":"/Users/dev/App","state":"waiting","lastActivity":{},"startedAt":{},"stateChangedAt":{}}}}}}}"#,
+            changed, changed, changed
+        );
+        std::fs::write(&status_path, sessions).unwrap();
+
+        let m = SessionMonitorState::new();
+        // Stale metrics: parsed BEFORE the question opened, so they don't yet see
+        // the unmatched AskUserQuestion (awaiting/pending both false).
+        m.metrics_cache.lock_safe().insert(
+            "sess-q".to_string(),
+            crate::models::SessionMetrics {
+                awaiting_user_prompt: false,
+                pending_tool_use: false,
+                last_entry_ts: Some(changed - 100.0),
+                ..Default::default()
+            },
+        );
+        m.poll_status_with(status_path.clone(), projects.clone());
+        {
+            let e = m.enriched_sessions.lock_safe();
+            let s = e.iter().find(|s| s.info.id == "sess-q").expect("present");
+            assert_eq!(
+                s.info.state, "waiting",
+                "must HOLD waiting while metrics are stale (pre-refresh)"
+            );
+        }
+
+        // Metrics catch up and show genuine resolution (question answered):
+        // last_entry_ts now past stateChangedAt, awaiting/pending false → demote.
+        m.metrics_cache.lock_safe().insert(
+            "sess-q".to_string(),
+            crate::models::SessionMetrics {
+                awaiting_user_prompt: false,
+                pending_tool_use: false,
+                last_entry_ts: Some(changed + 10.0),
+                ..Default::default()
+            },
+        );
+        m.poll_status_with(status_path.clone(), projects.clone());
+        {
+            let e = m.enriched_sessions.lock_safe();
+            let s = e.iter().find(|s| s.info.id == "sess-q").expect("present");
+            assert_eq!(
+                s.info.state, "idle",
+                "must demote once metrics catch up and show resolution"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn dummy_enriched(id: &str) -> crate::models::EnrichedSession {
         crate::models::EnrichedSession::from_info_and_metrics(
