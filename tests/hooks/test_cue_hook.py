@@ -168,11 +168,21 @@ class TestStaleSubagentSelfHeal:
         hook._maybe_clear_stale_subagent_counter(existing, str(tmp_path / "x.jsonl"), time.time())
         assert existing["activeSubagents"] == 3
 
-    def test_does_not_clear_when_not_subagent_state(self, hook, tmp_path):
-        existing = {"state": "working", "activeSubagents": 3,
-                    "stateChangedAt": time.time() - 90}
-        hook._maybe_clear_stale_subagent_counter(existing, str(tmp_path / "x.jsonl"), time.time())
-        assert existing["activeSubagents"] == 3
+    def test_clears_leaked_counter_under_waiting_or_error(self, hook, tmp_path):
+        # F-correctness-001: a SubagentStart that fired while the card was in
+        # `waiting`/`error` increments activeSubagents but preserves that
+        # user-attention state. If the SubagentStop is then missed, the heal
+        # must STILL clear the stale counter — keying on the leaked counter, not
+        # on state == "subagent" — or the next working/idle/done transition gets
+        # pinned back to a false "subagent". (Previously this asserted the buggy
+        # state-gated behavior that left the counter leaked.)
+        for state in ("waiting", "error", "working"):
+            existing = {"state": state, "activeSubagents": 3,
+                        "stateChangedAt": time.time() - 90}
+            hook._maybe_clear_stale_subagent_counter(
+                existing, str(tmp_path / "x.jsonl"), time.time())
+            assert existing["activeSubagents"] == 0, \
+                f"stale leaked counter must clear under state={state!r}"
 
     def test_does_not_clear_when_jsonl_recently_active(self, hook, tmp_path):
         # Set up a fresh subagent JSONL — the self-heal must back off.
@@ -515,19 +525,25 @@ class TestRemoveAction:
 class TestNotificationSubtypes:
     """Notification subtypes are handled in two groups:
 
-    - `elicitation_dialog` accompanies an AskUserQuestion / ExitPlanMode
-      tool_use, which the Rust `awaiting_user_prompt` verdict authoritatively
-      tracks (matching tool_result demotes back to idle). The hook eagerly
-      writes `waiting` so the card flips at dialog-open without waiting on
-      the 1 Hz Rust re-parse.
+    - The two dialog subtypes write `waiting` eagerly so the card flips at
+      dialog-open without waiting on the 1 Hz Rust re-parse. Both are backed
+      by a JSONL signal Rust uses to demote, so neither pins forever:
+      `elicitation_dialog` accompanies an AskUserQuestion / ExitPlanMode
+      tool_use (tracked by `awaiting_user_prompt`), and `permission_prompt`
+      parks a real tool_use unresolved at the transcript tail (tracked by
+      `pending_tool_use`; the Rust resolver demotes the instant it clears).
 
-    - The other five subtypes (`permission_prompt`, `idle_prompt`,
-      `auth_success`, `elicitation_complete`, `elicitation_response`,
-      `future_unknown_type`) have no JSONL signal Rust can use to demote.
-      Writing `waiting` there would pin the card forever on terminal-side
-      approve / ctrl-c / rewind / closed window. They early-return."""
+    - The other four subtypes (`idle_prompt`, `auth_success`,
+      `elicitation_complete`, `elicitation_response`, `future_unknown_type`)
+      are not amber needs-you blocks — `idle_prompt` is just idle (Stop→idle
+      covers it) and the rest are informational. They early-return."""
 
-    def test_permission_prompt_does_not_change_state(self, hook_env, invoke_hook):
+    def test_permission_prompt_writes_waiting(self, hook_env, invoke_hook):
+        # The most common block — a tool needs consent ("Allow Bash?"). The
+        # dialog parks a real tool_use unresolved at the transcript tail, so
+        # the Rust resolver holds `waiting` while `pending_tool_use` is set and
+        # demotes the instant it clears. Regression guard for the dual-source
+        # refactor that dropped this and showed the card as `working`.
         hook_env.write_sessions({
             "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
                        "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}
@@ -536,7 +552,7 @@ class TestNotificationSubtypes:
             "waiting",
             make_payload(hook_event_name="Notification", notification_type="permission_prompt"),
         )
-        assert hook_env.read_sessions()["abc123"]["state"] == "working"
+        assert hook_env.read_sessions()["abc123"]["state"] == "waiting"
 
     def test_idle_prompt_does_not_change_state(self, hook_env, invoke_hook):
         hook_env.write_sessions({
@@ -1019,3 +1035,101 @@ class TestWorkspacePinning:
         entry = hook_env.read_sessions()["abc123"]
         assert entry["state"] == "ended"
         assert entry["workspace"] == "/Users/x/proj"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# F-correctness-002: the waiting fast-path must not clobber an error card
+# ─────────────────────────────────────────────────────────────────────
+
+class TestQuickWritePreservesError:
+    """`_quick_state_write` (the eager `waiting` seed) bypasses the main write
+    path's guards. It must still honor error stickiness — a permission/
+    elicitation Notification on a session that hit a StopFailure must NOT
+    downgrade the red error card to yellow `waiting` or drop `errorType`."""
+
+    def test_permission_prompt_does_not_clobber_error(self, hook_env, invoke_hook):
+        hook_env.write_sessions({
+            "abc123": {"id": "abc123", "workspace": "/x", "state": "error",
+                       "errorType": "rate_limit", "lastActivity": 0.0,
+                       "startedAt": 0.0, "activeSubagents": 0}
+        })
+        invoke_hook(
+            "waiting",
+            make_payload(hook_event_name="Notification", notification_type="permission_prompt"),
+        )
+        entry = hook_env.read_sessions()["abc123"]
+        assert entry["state"] == "error", "error must outrank a waiting seed"
+        assert entry["errorType"] == "rate_limit", "errorType must not be dropped"
+
+    def test_elicitation_dialog_does_not_clobber_error(self, hook_env, invoke_hook):
+        hook_env.write_sessions({
+            "abc123": {"id": "abc123", "workspace": "/x", "state": "error",
+                       "errorType": "billing_error", "lastActivity": 0.0,
+                       "startedAt": 0.0, "activeSubagents": 0}
+        })
+        invoke_hook(
+            "waiting",
+            make_payload(hook_event_name="Notification", notification_type="elicitation_dialog"),
+        )
+        entry = hook_env.read_sessions()["abc123"]
+        assert entry["state"] == "error"
+        assert entry["errorType"] == "billing_error"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# F-protocol-002: tail reads must find the last assistant line past the window
+# ─────────────────────────────────────────────────────────────────────
+
+class TestTailReadWindow:
+    """The bounded tail reads (`_read_last_tokens` / `_read_last_assistant`)
+    must locate the last assistant line even when it sits far from EOF behind a
+    wall of trailing non-assistant rows — the doubling window expands up to the
+    1 MiB cap instead of silently returning {}/None."""
+
+    def test_finds_last_assistant_beyond_initial_window(self, hook, tmp_path):
+        path = tmp_path / "t.jsonl"
+        asst = json.dumps({"type": "assistant", "message": {
+            "model": "claude-opus-4-8",
+            "usage": {"input_tokens": 100, "output_tokens": 7,
+                      "cache_read_input_tokens": 50}}})
+        # ~120 KiB of trailing non-assistant lines (each ~1 KiB) — well past the
+        # 64 KiB initial window but within the 1 MiB cap.
+        filler = json.dumps({"type": "system", "pad": "x" * 1000})
+        path.write_text("\n".join([asst] + [filler] * 120))
+
+        toks = hook._read_last_tokens(str(path))
+        assert toks.get("model") == "claude-opus-4-8"
+        assert toks.get("inputTokens") == 157   # 100 + 50 + 7
+        assert toks.get("outputTokens") == 7
+        assert hook._read_last_assistant(str(path)) is not None
+
+    def test_returns_empty_when_no_assistant_within_cap(self, hook, tmp_path):
+        path = tmp_path / "t.jsonl"
+        filler = json.dumps({"type": "system", "pad": "x" * 1000})
+        path.write_text("\n".join([filler] * 50))
+        assert hook._read_last_tokens(str(path)) == {}
+        assert hook._read_last_assistant(str(path)) is None
+
+
+# ─────────────────────────────────────────────────────────────────────
+# F-reliability-001: a lock-acquisition failure must not crash the hook
+# ─────────────────────────────────────────────────────────────────────
+
+class TestLockFailureDegradesGracefully:
+    def test_main_drops_update_without_raising_when_lock_fails(
+            self, hook_env, invoke_hook, monkeypatch, hook):
+        # Seed a card, force the main-path lock to raise (Unix 2s flock timeout /
+        # Windows 2s deadline), fire a PostToolUse: main() must return cleanly
+        # (no uncaught traceback to Claude Code) and leave the card untouched —
+        # the update is dropped, not half-written.
+        hook_env.write_sessions({
+            "abc123": {"id": "abc123", "workspace": "/x", "state": "waiting",
+                       "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}
+        })
+
+        def boom(_lockfile):
+            raise OSError("flock timeout")
+
+        monkeypatch.setattr(hook, "_lock", boom)
+        invoke_hook("working", make_payload(hook_event_name="PostToolUse"))  # must not raise
+        assert hook_env.read_sessions()["abc123"]["state"] == "waiting"
