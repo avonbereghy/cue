@@ -16,6 +16,27 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
+/// Lock a `std::sync::Mutex`, recovering through poison instead of panicking.
+///
+/// `std::sync::Mutex` poisons itself if a thread panics while holding the guard,
+/// after which every plain `.lock_safe()` on that mutex panics too. In a
+/// long-running daemon a single transient panic in any lock-holding scope would
+/// otherwise permanently wedge every later `poll_status`, blink tick, and
+/// `get_sessions` — freezing the tray + dashboard with no self-recovery, which
+/// is worse than a clean crash-and-restart. The protected data is plain session
+/// state (Rust guarantees no memory unsafety across the unwind), so recovering
+/// with possibly-stale data that self-corrects on the next poll beats a
+/// permanent freeze. Use `.lock_safe()` for all shared-state mutexes.
+pub(crate) trait LockSafe<T> {
+    fn lock_safe(&self) -> std::sync::MutexGuard<'_, T>;
+}
+
+impl<T> LockSafe<T> for Mutex<T> {
+    fn lock_safe(&self) -> std::sync::MutexGuard<'_, T> {
+        self.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 /// Sort sessions by start time. Used by both the monitor and CLI.
 pub fn sort_sessions(sessions: impl IntoIterator<Item = SessionInfo>) -> Vec<SessionInfo> {
     let mut list: Vec<_> = sessions.into_iter().collect();
@@ -140,31 +161,41 @@ impl SessionMonitorState {
 
     /// Poll sessions.json for current session states (called every ~1s).
     pub fn poll_status(&self) {
-        let status_path = paths::sessions_json_path();
+        self.poll_status_with(
+            paths::sessions_json_path(),
+            paths::claude_projects_path(),
+        );
+    }
 
-        // Size cap before read: sessions.json is the untrusted boundary
-        // (the Python hook writes it but any local process can race-write
-        // to that path). A malicious or runaway producer could otherwise
-        // OOM the backend with a single-allocation read_to_string. Normal
-        // sessions.json is well under 100 KiB even with many sessions.
+    /// Path-injected core of `poll_status`. Extracted so tests can drive the
+    /// full reconcile pipeline (read → parse → liveness → stale-subagent →
+    /// waiting verdict → turn-ended) against fixture files instead of the real
+    /// `~/.../sessions.json` and `~/.claude/projects` (F-tests-001/003). The
+    /// public wrapper above passes the production paths.
+    fn poll_status_with(
+        &self,
+        status_path: std::path::PathBuf,
+        projects_path: std::path::PathBuf,
+    ) {
+        // sessions.json is the untrusted boundary (the Python hook writes it,
+        // but any local process can race-write that path). Read through the
+        // size-bounded reader so a runaway/hostile producer can't OOM the
+        // backend with one giant allocation — and so the cap is enforced
+        // against the same handle we read, closing the stat-then-read TOCTOU a
+        // separate metadata() pre-check would leave open. Normal sessions.json
+        // is well under 100 KiB even with many sessions.
         const SESSIONS_JSON_MAX_BYTES: u64 = 4 * 1024 * 1024;
-        if let Ok(meta) = std::fs::metadata(&status_path) {
-            if meta.len() > SESSIONS_JSON_MAX_BYTES {
-                log::warn!(
-                    "sessions.json exceeds {} bytes (got {}); keeping previous state",
-                    SESSIONS_JSON_MAX_BYTES,
-                    meta.len()
-                );
-                return;
-            }
-        }
+        // Shared by the parse-error and read-error arms below: keep showing the
+        // prior state for this many consecutive bad polls before any recovery
+        // action, so a single mid-rename read never flashes the UI.
+        const REPAIR_THRESHOLD: u32 = 5;
 
-        let status = match std::fs::read_to_string(&status_path) {
+        let status = match security::read_to_string_bounded(&status_path, SESSIONS_JSON_MAX_BYTES) {
             Ok(content) => match serde_json::from_str::<StatusData>(&content) {
                 Ok(s) => {
                     // Successful parse — reset the failure counter so the
                     // self-repair threshold is fresh for any future incident.
-                    *self.consecutive_parse_failures.lock().unwrap() = 0;
+                    *self.consecutive_parse_failures.lock_safe() = 0;
                     s
                 }
                 Err(e) => {
@@ -178,8 +209,7 @@ impl SessionMonitorState {
                     // Code processes idle, no hook runs and the dashboard
                     // freezes indefinitely. Track consecutive failures here
                     // and recover after 5 polls (~5s) of unbroken corruption.
-                    const REPAIR_THRESHOLD: u32 = 5;
-                    let mut failures = self.consecutive_parse_failures.lock().unwrap();
+                    let mut failures = self.consecutive_parse_failures.lock_safe();
                     *failures += 1;
                     if *failures < REPAIR_THRESHOLD {
                         log::warn!(
@@ -226,8 +256,41 @@ impl SessionMonitorState {
                     return;
                 }
             },
-            Err(_) => {
-                *self.enriched_sessions.lock().unwrap() = Vec::new();
+            Err(e) if e.kind() == std::io::ErrorKind::FileTooLarge => {
+                // Abnormally large sessions.json (runaway/hostile writer). Keep
+                // the prior state rather than clearing: a 4 MB+ file is far more
+                // likely legit-but-bloated than gone, and blanking every card is
+                // worse than a slightly stale view.
+                log::warn!(
+                    "sessions.json exceeds {} bytes; keeping previous state",
+                    SESSIONS_JSON_MAX_BYTES
+                );
+                return;
+            }
+            Err(e) => {
+                // Transient read failure — the file is momentarily absent during
+                // the hook's atomic rename, or an EINTR/EIO blip. Preserve the
+                // prior enriched list for a few polls instead of flashing zero
+                // sessions (mirrors the parse-failure arm); only clear once the
+                // file stays unreadable, which means the store was genuinely
+                // removed (uninstall/reset). Previously this wiped on the very
+                // first error, causing a one-frame "0 sessions" flash whenever a
+                // poll landed inside the hook's rename window.
+                let mut failures = self.consecutive_parse_failures.lock_safe();
+                *failures += 1;
+                if *failures < REPAIR_THRESHOLD {
+                    log::warn!(
+                        "sessions.json read failed ({}); keeping previous state ({}/{} before clear)",
+                        e, *failures, REPAIR_THRESHOLD
+                    );
+                    return;
+                }
+                log::warn!(
+                    "sessions.json unreadable after {} polls ({}); clearing session list",
+                    *failures, e
+                );
+                *self.enriched_sessions.lock_safe() = Vec::new();
+                *failures = 0;
                 return;
             }
         };
@@ -256,7 +319,7 @@ impl SessionMonitorState {
         // that create a second short-lived process on startup.
         let active = {
             let team_ids: std::collections::HashSet<String> = {
-                let cache = self.metrics_cache.lock().unwrap();
+                let cache = self.metrics_cache.lock_safe();
                 active
                     .iter()
                     .filter(|s| {
@@ -276,7 +339,7 @@ impl SessionMonitorState {
             .unwrap_or_default()
             .as_secs_f64();
         let active: Vec<_> = {
-            let cache = self.metrics_cache.lock().unwrap();
+            let cache = self.metrics_cache.lock_safe();
             active
                 .into_iter()
                 .map(|mut s| {
@@ -305,9 +368,8 @@ impl SessionMonitorState {
         // new id's events. JSONL deletion is the authoritative deterministic
         // signal that Claude Code dropped that session id; no timer needed.
         let active: Vec<_> = {
-            let projects_path = paths::claude_projects_path();
-            let mut active_since = self.active_since.lock().unwrap();
-            let mut identity = self.process_identity.lock().unwrap();
+            let mut active_since = self.active_since.lock_safe();
+            let mut identity = self.process_identity.lock_safe();
             active
                 .into_iter()
                 .map(|mut s| {
@@ -345,11 +407,11 @@ impl SessionMonitorState {
                 .filter(|s| is_liveness_sensitive(&s.state))
                 .filter_map(|s| s.pid.map(sysinfo::Pid::from_u32))
                 .collect();
-            let mut sys = self.sysinfo_system.lock().unwrap();
+            let mut sys = self.sysinfo_system.lock_safe();
             if !pids_to_check.is_empty() {
                 sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&pids_to_check), false);
             }
-            let mut identity = self.process_identity.lock().unwrap();
+            let mut identity = self.process_identity.lock_safe();
             // Drop cache entries for sessions no longer present.
             identity.retain(|id, _| active_ids.contains(id));
 
@@ -393,7 +455,7 @@ impl SessionMonitorState {
         // prompt out-of-band) failed to fire but Claude's own transcript
         // records the turn finished. Deterministic (no timers).
         let active: Vec<_> = {
-            let cache = self.metrics_cache.lock().unwrap();
+            let cache = self.metrics_cache.lock_safe();
             active
                 .into_iter()
                 .map(|mut s| {
@@ -422,6 +484,33 @@ impl SessionMonitorState {
             })
             .collect();
 
+        // Stalled-turn cap: recover `working`/`thinking` cards whose owning
+        // process is alive but whose transcript has been frozen on an
+        // unanswered turn past STALLED_TURN_SECS. This is the gap the
+        // turn-ended pass can't close — when a fresh prompt lands after the
+        // last `end_turn`, the newest `end_turn` is older than the prompt, so
+        // `should_demote_turn_ended` never fires and the card pins on
+        // `working` forever. Last-resort timer (see fn doc); deterministic
+        // signals are exhausted by the time we reach it.
+        let active: Vec<_> = {
+            let cache = self.metrics_cache.lock_safe();
+            active
+                .into_iter()
+                .map(|mut s| {
+                    let metrics = cache.get(&s.id);
+                    if should_demote_stalled_turn(&s.state, metrics, now_secs) {
+                        log::debug!(
+                            "stalled-turn-demote id={} state={} → idle",
+                            s.id,
+                            s.state,
+                        );
+                        s.state = "idle".to_string();
+                    }
+                    s
+                })
+                .collect()
+        };
+
         // Stale-subagent recovery: demote `subagent` cards whose counter is
         // non-zero but no subagent JSONL has been touched recently. Catches
         // the case where a `SubagentStop` hook was missed, leaving
@@ -430,7 +519,7 @@ impl SessionMonitorState {
         // `stateChangedAt` so a freshly-spawned subagent has time to create
         // its JSONL file before we second-guess the hook counter.
         let active: Vec<_> = {
-            let cache = self.metrics_cache.lock().unwrap();
+            let cache = self.metrics_cache.lock_safe();
             active
                 .into_iter()
                 .map(|mut s| {
@@ -454,28 +543,48 @@ impl SessionMonitorState {
                 .collect()
         };
 
-        // Authoritative waiting verdict: derived purely from the JSONL —
-        // a "waiting" card means an unmatched AskUserQuestion / ExitPlanMode
-        // tool_use is sitting in the transcript with no matching tool_result.
-        // Permission prompts and idle notifications used to mint waiting via
-        // hooks, but their resolving hooks were unreliable (terminal-side
-        // approve, rewind, user closed window, ctrl-c) and the cards pinned
-        // forever. The hook now skips state writes for those events; this
-        // pass is the only source of state="waiting" and the only thing that
-        // demotes a stale one. Terminal states (done/ended/error/subagent/
-        // compacting) are preserved — they have their own truth.
+        // Waiting verdict — dual-source promote + JSONL-backed resolve.
+        //
+        // Two independent signals mint state="waiting":
+        //   1. JSONL `awaiting_user_prompt` — an unmatched AskUserQuestion /
+        //      ExitPlanMode tool_use sits in the transcript. Deterministic and
+        //      self-resolving (the matching tool_result clears it), so this
+        //      pass both PROMOTES and DEMOTES on it.
+        //   2. Hook seed on `Notification(permission_prompt)` — a tool that
+        //      needs consent has paused the turn behind a permission dialog.
+        //      Permission prompts produce NO prompting tool_use, so the JSONL
+        //      can't promote them (a pending tool_use is indistinguishable
+        //      from a tool that's merely running) — only the hook knows the
+        //      dialog is open. This pass therefore only PRESERVES such a card;
+        //      it never invents one.
+        //
+        // The demote must not stomp a live permission seed. The earlier design
+        // demoted on `!awaiting` alone, which erased every permission-prompt
+        // card within one poll (its `awaiting` is always false). Gate the
+        // demote on `!pending_tool_use` as well: while any tool_use is still
+        // unresolved at the transcript tail (dialog open), hold `waiting`; the
+        // instant it resolves — approved→result, denied→rejection, answered,
+        // or the turn advances — `pending` clears and we demote. Abandonment
+        // (ctrl-c, killed terminal, closed window) is caught by the liveness,
+        // JSONL-deletion, and turn-ended passes above, so nothing pins forever.
+        // Terminal states (done/ended/error/subagent/compacting) own their own
+        // truth and are never touched here. View-only: the Rust poller never
+        // writes sessions.json, so a racy demote self-corrects next tick.
         let active: Vec<_> = {
-            let cache = self.metrics_cache.lock().unwrap();
+            let cache = self.metrics_cache.lock_safe();
             active
                 .into_iter()
                 .map(|mut s| {
-                    let awaiting = cache
-                        .get(&s.id)
-                        .map(|m| m.awaiting_user_prompt)
-                        .unwrap_or(false);
+                    let metrics = cache.get(&s.id);
+                    let awaiting =
+                        metrics.map(|m| m.awaiting_user_prompt).unwrap_or(false);
+                    let pending =
+                        metrics.map(|m| m.pending_tool_use).unwrap_or(false);
                     if awaiting && is_promotable_to_waiting(&s.state) {
                         s.state = "waiting".to_string();
-                    } else if !awaiting && s.state == "waiting" {
+                    } else if s.state == "waiting"
+                        && should_resolve_waiting(awaiting, pending)
+                    {
                         s.state = "idle".to_string();
                     }
                     s
@@ -499,10 +608,10 @@ impl SessionMonitorState {
         // state — `EnrichedSession::from_info_and_metrics` no longer
         // re-evaluates them, which removes the per-poll bounce surface.
         let active: Vec<_> = {
-            let cache = self.metrics_cache.lock().unwrap();
-            let mut promoted = self.promoted_for_prompt.lock().unwrap();
-            let mut rescued = self.subagent_rescued_for.lock().unwrap();
-            let mut floor = self.compacting_floor.lock().unwrap();
+            let cache = self.metrics_cache.lock_safe();
+            let mut promoted = self.promoted_for_prompt.lock_safe();
+            let mut rescued = self.subagent_rescued_for.lock_safe();
+            let mut floor = self.compacting_floor.lock_safe();
             let current_ids: std::collections::HashSet<&str> =
                 active.iter().map(|s| s.id.as_str()).collect();
             promoted.retain(|id, _| current_ids.contains(id.as_str()));
@@ -619,7 +728,7 @@ impl SessionMonitorState {
         // active state (working/thinking/waiting/error/subagent). Reset on
         // idle/done/compacting/clearing. Used for the "active duration" timer.
         let active_since_snapshot = {
-            let mut active_since = self.active_since.lock().unwrap();
+            let mut active_since = self.active_since.lock_safe();
             let is_active_state = |st: &str| -> bool {
                 matches!(
                     st,
@@ -647,7 +756,7 @@ impl SessionMonitorState {
                 .retain(|id, _| current_ids.contains(id.as_str()));
             // `file_mod_dates` also stores subagent-dir entries keyed as
             // `<sid>-subagents`, so prefix-match the live ids.
-            self.file_mod_dates.lock().unwrap().retain(|key, _| {
+            self.file_mod_dates.lock_safe().retain(|key, _| {
                 let stripped = key.strip_suffix("-subagents").unwrap_or(key);
                 current_ids.contains(stripped)
             });
@@ -681,11 +790,11 @@ impl SessionMonitorState {
         };
 
         let enriched: Vec<_> = {
-            let cache = self.metrics_cache.lock().unwrap();
-            let supp = self.supplemental.lock().unwrap().clone();
-            let git_cache = self.git_status_cache.lock().unwrap();
-            let config_cache = self.config_counts_cache.lock().unwrap();
-            let speed_cache = self.output_speed_cache.lock().unwrap();
+            let cache = self.metrics_cache.lock_safe();
+            let supp = self.supplemental.lock_safe().clone();
+            let git_cache = self.git_status_cache.lock_safe();
+            let config_cache = self.config_counts_cache.lock_safe();
+            let speed_cache = self.output_speed_cache.lock_safe();
 
             active
                 .into_iter()
@@ -711,7 +820,7 @@ impl SessionMonitorState {
                 .collect()
         }; // all locks dropped before acquiring enriched_sessions lock
 
-        *self.enriched_sessions.lock().unwrap() = enriched;
+        *self.enriched_sessions.lock_safe() = enriched;
     }
 
     /// Parse JSONL conversation logs for token metrics (called every ~5s).
@@ -721,7 +830,7 @@ impl SessionMonitorState {
         // a 20-session list previously copied ~40 KB of nested supplemental
         // data through the allocator for no reason.
         let session_keys: Vec<(String, String, String)> = {
-            let guard = self.enriched_sessions.lock().unwrap();
+            let guard = self.enriched_sessions.lock_safe();
             guard
                 .iter()
                 .map(|s| {
@@ -754,7 +863,7 @@ impl SessionMonitorState {
                 let mut should_skip = false;
                 if let Ok(metadata) = std::fs::metadata(&path) {
                     if let Ok(mod_time) = metadata.modified() {
-                        let mut mod_dates = self.file_mod_dates.lock().unwrap();
+                        let mut mod_dates = self.file_mod_dates.lock_safe();
                         if let Some(cached) = mod_dates.get(id) {
                             if *cached == mod_time {
                                 // Parent unchanged — also check subagents dir
@@ -798,7 +907,7 @@ impl SessionMonitorState {
             }
 
             let metrics = {
-                let mut cache_guard = self.jsonl_entry_cache.lock().unwrap();
+                let mut cache_guard = self.jsonl_entry_cache.lock_safe();
                 let entry_cache = cache_guard.entry(id.clone()).or_default();
                 jsonl_parser::parse_jsonl_to_session_metrics_cached(Path::new(&path), entry_cache)
             };
@@ -809,7 +918,7 @@ impl SessionMonitorState {
                     .unwrap_or_default()
                     .as_secs_f64();
                 {
-                    let mut speed_cache = self.output_speed_cache.lock().unwrap();
+                    let mut speed_cache = self.output_speed_cache.lock_safe();
                     // Store current output_tokens as "previous" for next poll
                     speed_cache.insert(id.clone(), (metrics.output_tokens, now_ts));
                 }
@@ -825,15 +934,21 @@ impl SessionMonitorState {
     /// Refresh supplemental data: rate limits, system memory, git status, config counts.
     /// Called on the 5s timer alongside refresh_metrics().
     pub fn refresh_supplemental(&self) {
-        // Rate limits: read from bridge file
+        // Rate limits: read from bridge file. This file is written by an
+        // external statusline bridge into the same user-writable data dir as
+        // sessions.json, so it's an untrusted boundary like every other read
+        // here — route it through the bounded reader (it's a handful of fields;
+        // 1 MiB is generous) so a runaway/corrupt writer or a same-uid process
+        // dropping a multi-GB file can't OOM the backend on the 5s tick.
+        const RATE_LIMITS_MAX_BYTES: u64 = 1024 * 1024;
         let rate_path = paths::rate_limits_path();
-        let new_rate_limits = std::fs::read_to_string(&rate_path)
+        let new_rate_limits = security::read_to_string_bounded(&rate_path, RATE_LIMITS_MAX_BYTES)
             .ok()
             .and_then(|content| serde_json::from_str::<RateLimitInfo>(&content).ok());
 
         // System memory using cached System instance (avoids re-allocation)
         let new_system_memory = {
-            let mut sys = self.sysinfo_system.lock().unwrap();
+            let mut sys = self.sysinfo_system.lock_safe();
             system_info::get_system_memory_with(&mut sys)
         };
 
@@ -842,7 +957,7 @@ impl SessionMonitorState {
 
         // Single guard acquisition for all five fields.
         {
-            let mut supp = self.supplemental.lock().unwrap();
+            let mut supp = self.supplemental.lock_safe();
             if let Some(rl) = new_rate_limits {
                 supp.rate_limits = Some(rl);
             }
@@ -852,7 +967,7 @@ impl SessionMonitorState {
         }
 
         // Git status and config counts per workspace (with staleness caching)
-        let sessions = self.enriched_sessions.lock().unwrap().clone();
+        let sessions = self.enriched_sessions.lock_safe().clone();
         let now = SystemTime::now();
 
         // Collect unique workspaces
@@ -863,18 +978,18 @@ impl SessionMonitorState {
 
         // Prune cache entries for workspaces no longer in active sessions
         {
-            let mut cache = self.git_status_cache.lock().unwrap();
+            let mut cache = self.git_status_cache.lock_safe();
             cache.retain(|ws, _| workspaces.contains(ws));
         }
         {
-            let mut cache = self.config_counts_cache.lock().unwrap();
+            let mut cache = self.config_counts_cache.lock_safe();
             cache.retain(|ws, _| workspaces.contains(ws));
         }
 
         for ws in &workspaces {
             // Git status: refresh every 10s
             {
-                let mut cache = self.git_status_cache.lock().unwrap();
+                let mut cache = self.git_status_cache.lock_safe();
                 let stale = cache
                     .get(ws.as_str())
                     .map(|(_, t)| t.elapsed().map(|e| e.as_secs() > 10).unwrap_or(true))
@@ -888,7 +1003,7 @@ impl SessionMonitorState {
 
             // Config counts: refresh every 30s
             {
-                let mut cache = self.config_counts_cache.lock().unwrap();
+                let mut cache = self.config_counts_cache.lock_safe();
                 let stale = cache
                     .get(ws.as_str())
                     .map(|(_, t)| t.elapsed().map(|e| e.as_secs() > 30).unwrap_or(true))
@@ -924,7 +1039,7 @@ impl SessionMonitorState {
         // If we already resolved a path for this id, just stat it. A deleted
         // JSONL still leaves the cached string in place; `Path::exists()`
         // returning false is exactly the signal we want.
-        if let Some(cached) = self.resolved_paths.lock().unwrap().get(session_id).cloned() {
+        if let Some(cached) = self.resolved_paths.lock_safe().get(session_id).cloned() {
             return Path::new(&cached).exists();
         }
 
@@ -971,7 +1086,7 @@ impl SessionMonitorState {
     fn jsonl_path(&self, session_id: &str, workspace: &str, projects_path: &Path) -> String {
         // Check cache
         {
-            let cache = self.resolved_paths.lock().unwrap();
+            let cache = self.resolved_paths.lock_safe();
             if let Some(cached) = cache.get(session_id) {
                 return cached.clone();
             }
@@ -1175,6 +1290,26 @@ fn is_promotable_to_waiting(state: &str) -> bool {
     matches!(state, "working" | "thinking" | "idle" | "waiting")
 }
 
+/// Pure predicate for resolving (demoting) a card currently shown as
+/// `waiting`. Returns true only when the transcript proves the block is over:
+/// no unmatched prompting tool_use (`awaiting`) AND no tool_use still pending
+/// at the tail (`pending`).
+///
+/// The `pending` guard is what lets a hook-seeded permission-prompt `waiting`
+/// survive. Permission prompts never set `awaiting` (they produce no
+/// AskUserQuestion/ExitPlanMode tool_use), so demoting on `!awaiting` alone
+/// erased them on the next poll — the regression this restores. While the
+/// gated tool_use sits unresolved (`pending == true`), the dialog is still
+/// open, so we hold `waiting`; once it resolves (approved→tool_result,
+/// denied→rejection result, answered, or the turn advances) `pending` clears
+/// and the card demotes. An AskUserQuestion answer is itself a tool_result, so
+/// the prompting-tool path also clears `pending`, keeping this correct for
+/// both sources. Abandonment is covered by the liveness / JSONL-deletion /
+/// turn-ended passes, so this predicate never needs a timer.
+fn should_resolve_waiting(awaiting: bool, pending: bool) -> bool {
+    !awaiting && !pending
+}
+
 fn should_demote_turn_ended(
     state: &str,
     state_changed_at: Option<f64>,
@@ -1221,6 +1356,59 @@ fn should_demote_stuck_active(state: &str, state_changed_at: Option<f64>, now: f
         return false;
     };
     (now - state_changed_at) > 60.0
+}
+
+/// How long a `working`/`thinking` card may sit with a frozen transcript
+/// before the stalled-turn cap recovers it to `idle`. 5 minutes: Claude Code
+/// writes incrementally (each tool call, thinking block, and text message
+/// appends an entry), so this much total silence on an active card — with no
+/// pending tool and no user prompt awaiting an answer — means the turn died
+/// without a resolving Stop/StopFailure hook (interrupt, silent API failure,
+/// or a TUI prompt outside the tracked elicitation types).
+const STALLED_TURN_SECS: f64 = 300.0;
+
+/// Pure predicate for the stalled-turn cap — the last-resort recovery for the
+/// one gap the deterministic signals can't close. `should_demote_turn_ended`
+/// only fires when an `end_turn` is *newer* than `stateChangedAt`; when the
+/// user submits a fresh prompt after the last `end_turn` and the turn then
+/// stalls, the newest `end_turn` is older than the new prompt, so that pass
+/// can never trigger. Liveness also passes (the foreground Claude Code process
+/// stays alive at ~0% CPU), and the JSONL still exists. With every
+/// deterministic signal exhausted, this is the flagged timer of last resort.
+///
+/// Gated tightly to avoid clobbering a legitimately long turn:
+/// - only `working`/`thinking` (terminal/specialized states own their truth);
+/// - never while a tool_use is pending — a long-running tool (test suite,
+///   build) keeps the transcript quiet but is genuine work;
+/// - never while `awaiting_user_prompt` — that's the `waiting` path's job;
+/// - keyed on the newest *conversational* timestamp (user prompt / assistant
+///   text / end_turn), not the file mtime, so trailing metadata rows
+///   (`mode`, `permission-mode`, `file-history-snapshot`) can't mask a stall.
+fn should_demote_stalled_turn(
+    state: &str,
+    metrics: Option<&crate::models::SessionMetrics>,
+    now: f64,
+) -> bool {
+    if !matches!(state, "working" | "thinking") {
+        return false;
+    }
+    let Some(metrics) = metrics else { return false };
+    if metrics.pending_tool_use || metrics.awaiting_user_prompt {
+        return false;
+    }
+    let last_activity = [
+        metrics.last_user_prompt_ts,
+        metrics.last_assistant_text_ts,
+        metrics.last_end_turn_ts,
+    ]
+    .into_iter()
+    .flatten()
+    .fold(0.0_f64, f64::max);
+    if last_activity <= 0.0 {
+        // No conversational timestamp parsed yet — can't time the stall.
+        return false;
+    }
+    (now - last_activity) > STALLED_TURN_SECS
 }
 
 /// Pure predicate for the stale-subagent demotion path. Returns true when a
@@ -1504,7 +1692,7 @@ mod tests {
     #[test]
     fn test_session_monitor_state_new() {
         let state = SessionMonitorState::new();
-        assert!(state.enriched_sessions.lock().unwrap().is_empty());
+        assert!(state.enriched_sessions.lock_safe().is_empty());
     }
 
     // ── admission filter ────────────────────────────────────────────────
@@ -1665,7 +1853,7 @@ mod tests {
         // Should not panic regardless of whether sessions.json exists
         state.poll_status();
         // Just verify it produces valid output (may be non-empty if real sessions.json exists)
-        let sessions = state.enriched_sessions.lock().unwrap();
+        let sessions = state.enriched_sessions.lock_safe();
         let _ = sessions.len(); // accessible, not corrupted
     }
 
@@ -1796,6 +1984,89 @@ mod tests {
         assert!(!should_demote_turn_ended("working", Some(100.0), Some(&m)));
     }
 
+    // ── should_demote_stalled_turn ──────────────────────────────────────
+    // Last-resort recovery for a working/thinking card whose process is
+    // alive but whose transcript froze on an unanswered prompt.
+
+    fn metrics_stalled(
+        last_user_prompt_ts: Option<f64>,
+        last_assistant_text_ts: Option<f64>,
+        last_end_turn_ts: Option<f64>,
+        pending: bool,
+        awaiting: bool,
+    ) -> crate::models::SessionMetrics {
+        crate::models::SessionMetrics {
+            last_user_prompt_ts,
+            last_assistant_text_ts,
+            last_end_turn_ts,
+            pending_tool_use: pending,
+            awaiting_user_prompt: awaiting,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_stalled_turn_demotes_unanswered_prompt() {
+        // Canonical case: user prompted at t=1000, no assistant output since,
+        // now = 1000 + 6min. Last end_turn is from a *prior* turn (t=600), so
+        // should_demote_turn_ended can't fire — but this cap does.
+        let m = metrics_stalled(Some(1000.0), None, Some(600.0), false, false);
+        assert!(should_demote_stalled_turn("working", Some(&m), 1000.0 + 360.0));
+        assert!(should_demote_stalled_turn("thinking", Some(&m), 1000.0 + 360.0));
+    }
+
+    #[test]
+    fn test_stalled_turn_no_demote_within_window() {
+        // Same shape but only 4 minutes of silence — still inside the grace.
+        let m = metrics_stalled(Some(1000.0), None, Some(600.0), false, false);
+        assert!(!should_demote_stalled_turn("working", Some(&m), 1000.0 + 240.0));
+    }
+
+    #[test]
+    fn test_stalled_turn_no_demote_pending_tool() {
+        // A long-running tool keeps the transcript quiet but is genuine work.
+        let m = metrics_stalled(Some(1000.0), None, Some(600.0), true, false);
+        assert!(!should_demote_stalled_turn("working", Some(&m), 1000.0 + 600.0));
+    }
+
+    #[test]
+    fn test_stalled_turn_no_demote_awaiting_user() {
+        // Awaiting an AskUserQuestion/ExitPlanMode answer is the waiting
+        // path's domain, not a stall.
+        let m = metrics_stalled(Some(1000.0), None, Some(600.0), false, true);
+        assert!(!should_demote_stalled_turn("working", Some(&m), 1000.0 + 600.0));
+    }
+
+    #[test]
+    fn test_stalled_turn_uses_newest_activity_ts() {
+        // Assistant began streaming text at t=1100 (after the prompt at 1000),
+        // then stalled. The cap keys off the newest activity (1100), so at
+        // 1100 + 4min it must NOT yet demote even though the prompt is older.
+        let m = metrics_stalled(Some(1000.0), Some(1100.0), Some(600.0), false, false);
+        assert!(!should_demote_stalled_turn("working", Some(&m), 1100.0 + 240.0));
+        assert!(should_demote_stalled_turn("working", Some(&m), 1100.0 + 360.0));
+    }
+
+    #[test]
+    fn test_stalled_turn_no_demote_non_active_states() {
+        let m = metrics_stalled(Some(1000.0), None, Some(600.0), false, false);
+        for st in ["idle", "done", "ended", "error", "waiting", "subagent", "compacting"] {
+            assert!(
+                !should_demote_stalled_turn(st, Some(&m), 1000.0 + 600.0),
+                "state {} should not be demoted by stalled-turn cap",
+                st
+            );
+        }
+    }
+
+    #[test]
+    fn test_stalled_turn_no_demote_without_metrics_or_ts() {
+        assert!(!should_demote_stalled_turn("working", None, 1_000_000.0));
+        // Metrics present but no conversational timestamp parsed yet.
+        let m = metrics_stalled(None, None, None, false, false);
+        assert!(!should_demote_stalled_turn("working", Some(&m), 1_000_000.0));
+    }
+
     // ── is_promotable_to_waiting ────────────────────────────────────────
     // Guards which states the JSONL-driven waiting verdict is allowed to
     // overwrite. Terminal/specialized states own their truth from elsewhere.
@@ -1828,6 +2099,36 @@ mod tests {
                 st
             );
         }
+    }
+
+    // ── should_resolve_waiting ──────────────────────────────────────────
+    // Decides when a card shown as `waiting` may demote back to `idle`. The
+    // `pending` guard is what keeps a hook-seeded permission-prompt card alive
+    // until the gated tool_use actually resolves.
+
+    #[test]
+    fn test_resolve_waiting_demotes_when_nothing_pending() {
+        // AskUserQuestion answered (awaiting cleared, its tool_result is at the
+        // tail so pending is false too) → safe to demote.
+        assert!(should_resolve_waiting(false, false));
+    }
+
+    #[test]
+    fn test_resolve_waiting_holds_open_permission_prompt() {
+        // Permission prompt: no prompting tool_use (awaiting=false) but a real
+        // tool_use is parked behind the dialog (pending=true). Must NOT demote
+        // — this is the exact regression: demoting on !awaiting alone erased
+        // every permission-prompt waiting within one poll.
+        assert!(!should_resolve_waiting(false, true));
+    }
+
+    #[test]
+    fn test_resolve_waiting_holds_unanswered_prompting_tool() {
+        // AskUserQuestion / ExitPlanMode still unanswered (awaiting=true). The
+        // promote arm re-asserts waiting; the resolve arm must keep its hands
+        // off regardless of the pending flag.
+        assert!(!should_resolve_waiting(true, false));
+        assert!(!should_resolve_waiting(true, true));
     }
 
     // ── should_demote_stale_subagent ────────────────────────────────────
@@ -2404,5 +2705,199 @@ mod tests {
         // the demote so we don't drop the state mid-recovery.
         let m = metrics_with_end_turn(Some(200.0), true);
         assert!(!should_demote_turn_ended("error", Some(100.0), Some(&m)));
+    }
+
+    // ── poll_status end-to-end (F-tests-001 / F-tests-003) ───────────────
+    // These drive the path-injected `poll_status_with` against fixture files so
+    // the full reconcile pipeline (read → parse → recovery → liveness →
+    // waiting verdict) is locked, not just the pure predicates.
+
+    fn dummy_enriched(id: &str) -> crate::models::EnrichedSession {
+        crate::models::EnrichedSession::from_info_and_metrics(
+            make_session(id, "idle", 100.0, 100.0),
+            crate::models::SessionMetrics::default(),
+            &crate::models::SupplementalData::default(),
+        )
+    }
+
+    #[test]
+    fn test_poll_holds_permission_waiting_then_resolves() {
+        // F-tests-001: the exact wiring the cd2a32b regression broke. A
+        // permission-prompt `waiting` card (no prompting tool_use, so
+        // awaiting=false) must HOLD while the JSONL still parks an unresolved
+        // tool_use (pending=true), then demote to `idle` the instant the tool
+        // resolves and pending clears. (Revert should_resolve_waiting to the old
+        // `!awaiting`-only gate and the hold assertion fails.)
+        let dir = std::env::temp_dir().join("cue_test_poll_waiting");
+        let _ = std::fs::remove_dir_all(&dir);
+        let projects = dir.join("projects");
+        // The transcript must exist on disk or the JSONL-presence backstop
+        // demotes the liveness-sensitive `waiting` state before the verdict.
+        let ws_dir = projects.join("-Users-dev-App");
+        std::fs::create_dir_all(&ws_dir).unwrap();
+        std::fs::write(ws_dir.join("sess-perm.jsonl"), "{}").unwrap();
+
+        let status_path = dir.join("sessions.json");
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        let ts = now + 5.0; // safely >= launched_at so idle survives the sweep
+        let sessions = format!(
+            r#"{{"sessions":{{"sess-perm":{{"id":"sess-perm","workspace":"/Users/dev/App","state":"waiting","lastActivity":{},"startedAt":{}}}}}}}"#,
+            ts, ts
+        );
+        std::fs::write(&status_path, sessions).unwrap();
+
+        let m = SessionMonitorState::new();
+        // Seed the metrics cache as refresh_metrics would for a permission
+        // prompt: an unresolved tool_use at the tail, no prompting tool_use.
+        m.metrics_cache.lock_safe().insert(
+            "sess-perm".to_string(),
+            crate::models::SessionMetrics {
+                pending_tool_use: true,
+                awaiting_user_prompt: false,
+                ..Default::default()
+            },
+        );
+        m.poll_status_with(status_path.clone(), projects.clone());
+        {
+            let enriched = m.enriched_sessions.lock_safe();
+            let s = enriched
+                .iter()
+                .find(|s| s.info.id == "sess-perm")
+                .expect("waiting session present");
+            assert_eq!(
+                s.info.state, "waiting",
+                "must HOLD waiting while pending_tool_use is set"
+            );
+        }
+
+        // Tool approved → tool_result lands → pending clears.
+        m.metrics_cache.lock_safe().insert(
+            "sess-perm".to_string(),
+            crate::models::SessionMetrics {
+                pending_tool_use: false,
+                awaiting_user_prompt: false,
+                ..Default::default()
+            },
+        );
+        m.poll_status_with(status_path.clone(), projects.clone());
+        {
+            let enriched = m.enriched_sessions.lock_safe();
+            let s = enriched
+                .iter()
+                .find(|s| s.info.id == "sess-perm")
+                .expect("session present after resolve");
+            assert_eq!(
+                s.info.state, "idle",
+                "must demote to idle once pending_tool_use clears"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_poll_keeps_prior_state_on_transient_read_error() {
+        // F-tests-003: a momentarily-absent sessions.json (the hook's atomic
+        // rename window) must preserve the prior list for a few polls — never
+        // flash zero sessions — and only clear once it stays gone.
+        let dir = std::env::temp_dir().join("cue_test_poll_read_err");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let status_path = dir.join("sessions.json"); // intentionally absent
+        let projects = dir.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+
+        let m = SessionMonitorState::new();
+        *m.enriched_sessions.lock_safe() = vec![dummy_enriched("d1")];
+        *m.consecutive_parse_failures.lock_safe() = 0;
+
+        for _ in 0..4 {
+            m.poll_status_with(status_path.clone(), projects.clone());
+            assert_eq!(
+                m.enriched_sessions.lock_safe().len(),
+                1,
+                "prior state preserved below the repair threshold"
+            );
+        }
+        m.poll_status_with(status_path.clone(), projects.clone());
+        assert_eq!(
+            m.enriched_sessions.lock_safe().len(),
+            0,
+            "cleared once the store stays unreadable past the threshold"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_poll_keeps_prior_state_on_oversized_file() {
+        // F-tests-003: a >4 MiB sessions.json (runaway/hostile writer) hits the
+        // FileTooLarge arm, which must KEEP the prior list — blanking every card
+        // is worse than a slightly stale view — and never reach the clear path.
+        let dir = std::env::temp_dir().join("cue_test_poll_oversized");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let status_path = dir.join("sessions.json");
+        std::fs::write(&status_path, vec![b' '; 5 * 1024 * 1024]).unwrap();
+        let projects = dir.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+
+        let m = SessionMonitorState::new();
+        *m.enriched_sessions.lock_safe() = vec![dummy_enriched("d1")];
+
+        for _ in 0..7 {
+            m.poll_status_with(status_path.clone(), projects.clone());
+            assert_eq!(
+                m.enriched_sessions.lock_safe().len(),
+                1,
+                "oversized file must never clear the prior list"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_poll_self_repairs_on_persistent_parse_failure() {
+        // F-tests-003: a persistently malformed sessions.json must preserve
+        // prior state for <REPAIR_THRESHOLD polls (no UI flash), then rename the
+        // corrupt file aside and reseed an empty container.
+        let dir = std::env::temp_dir().join("cue_test_poll_parsefail");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let status_path = dir.join("sessions.json");
+        std::fs::write(&status_path, b"{ this is not valid json").unwrap();
+        let projects = dir.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+
+        let m = SessionMonitorState::new();
+        *m.enriched_sessions.lock_safe() = vec![dummy_enriched("d1")];
+        *m.consecutive_parse_failures.lock_safe() = 0;
+
+        for _ in 0..4 {
+            m.poll_status_with(status_path.clone(), projects.clone());
+            assert_eq!(
+                m.enriched_sessions.lock_safe().len(),
+                1,
+                "prior state preserved below the repair threshold"
+            );
+            // The malformed file is left untouched until the threshold.
+            assert_eq!(
+                std::fs::read(&status_path).unwrap(),
+                b"{ this is not valid json"
+            );
+        }
+        // Threshold reached → rename aside + reseed an empty, VALID container.
+        m.poll_status_with(status_path.clone(), projects.clone());
+        let reseeded = std::fs::read_to_string(&status_path).unwrap();
+        let parsed: StatusData =
+            serde_json::from_str(&reseeded).expect("reseeded file must be valid");
+        assert!(parsed.sessions.is_empty(), "reseeded container is empty");
+        let has_corrupt = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().contains(".corrupt-"));
+        assert!(has_corrupt, "malformed file must be renamed aside");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

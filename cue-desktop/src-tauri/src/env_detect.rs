@@ -648,12 +648,13 @@ mod tests {
         assert_eq!(events["Stop"], "idle");
         assert_eq!(events["StopFailure"], "error");
         assert_eq!(events["TaskCompleted"], "done");
-        // Notification carries six subtypes; three are user-attention prompts
-        // (permission_prompt, idle_prompt, elicitation_dialog) and three are
-        // informational (auth_success, elicitation_complete, elicitation_response).
-        // The hook treats "waiting" as the default for the prompt subtypes and
-        // returns without writing for the informational ones — see
-        // hooks/cue-hook for the dispatch.
+        // Notification carries six subtypes. The hook writes "waiting" for the
+        // two JSONL-backed dialog subtypes (permission_prompt → pending_tool_use,
+        // elicitation_dialog → awaiting_user_prompt) and returns without writing
+        // for the rest (idle_prompt is plain idle; auth_success /
+        // elicitation_complete / elicitation_response are informational). The
+        // install-map action below is just the CLI arg; the per-subtype dispatch
+        // lives in hooks/cue-hook.
         assert_eq!(events["Notification"], "waiting");
         assert_eq!(events["PreCompact"], "compacting");
         // PostCompact resolves the compacting state when the resolving event
