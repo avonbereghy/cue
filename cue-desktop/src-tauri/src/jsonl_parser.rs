@@ -51,7 +51,13 @@ pub struct ParsedEntry {
     pub is_user_message: bool,
     pub is_assistant_message: bool,
     pub tool_counts: HashMap<String, i64>,
+    /// Explicit title — the user's `/title` command or the fork "(Branch)"
+    /// marker (`type == "custom-title"`, field `customTitle`). Authoritative.
     pub custom_title: Option<String>,
+    /// Auto-generated title Claude Code now writes for nearly every session
+    /// (`type == "ai-title"`, field `aiTitle`). Used as a fallback subtitle
+    /// only when no explicit `custom_title` survives.
+    pub ai_title: Option<String>,
     pub git_branch: Option<String>,
     pub agent_id: Option<String>,
     pub slug: Option<String>,
@@ -297,6 +303,22 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
     let json: Value = serde_json::from_str(line).ok()?;
     let obj = json.as_object()?;
 
+    // Drop sidechain entries: these belong to a Task subagent's conversation,
+    // not the orchestrator's turn. Today Claude Code writes subagent turns to
+    // separate `subagents/*.jsonl` files (parsed independently by
+    // `parse_subagent_jsonl`), so this is currently a no-op on real data — but
+    // some versions / entrypoints interleave them into the MAIN transcript
+    // flagged `isSidechain: true`. If that happens, counting them here would
+    // let a subagent's pending tool_use, end_turn, or AskUserQuestion drive the
+    // main card's state (false "working"/"waiting"/idle verdicts). Filtering at
+    // the source keeps every downstream signal — pending_tool_use,
+    // awaiting_user_prompt, last_end_turn_ts, running tool, assistant text,
+    // token totals — scoped to the main conversation. Covers both the full
+    // parse and the incremental cache, which share this function.
+    if obj.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+
     let entry_type = obj.get("type")?.as_str()?.to_string();
     let mut entry = ParsedEntry {
         entry_type: entry_type.clone(),
@@ -311,17 +333,30 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
     // include slash-command XML wrappers (<command-message>.../</command-args>),
     // ANSI escapes, or [Image #N] bracket markers. Apply the same sanitization
     // as user_prompt_text so the subtitle never leaks raw harness markup.
+    // Same sanitization for both title sources, since the auto `ai-title` can
+    // also echo command markup from the first user turn.
+    let sanitize_title = |raw: &str| -> Option<String> {
+        let s = strip_ansi_escapes(raw);
+        let s = strip_xml_tags(&s);
+        let s = strip_bracket_markers(&s);
+        let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
+        Some(s).filter(|s| !s.is_empty())
+    };
     if entry_type == "custom-title" {
         entry.custom_title = obj
             .get("customTitle")
             .and_then(|v| v.as_str())
-            .map(|raw| {
-                let s = strip_ansi_escapes(raw);
-                let s = strip_xml_tags(&s);
-                let s = strip_bracket_markers(&s);
-                s.split_whitespace().collect::<Vec<_>>().join(" ")
-            })
-            .filter(|s| !s.is_empty());
+            .and_then(&sanitize_title);
+    } else if entry_type == "ai-title" {
+        // Current Claude Code writes the session's auto-generated title as its
+        // own `{"type":"ai-title","aiTitle":"..."}` entry (168 of 169 titled
+        // live transcripts use this; only the explicit `/title` path still
+        // emits `custom-title`). Read it as a fallback so the UI subtitle isn't
+        // blank for nearly every session.
+        entry.ai_title = obj
+            .get("aiTitle")
+            .and_then(|v| v.as_str())
+            .and_then(&sanitize_title);
     }
 
     // Extract session ID from metadata entries (permission-mode or system headers)
@@ -946,6 +981,9 @@ fn aggregate_entries(
     }
 
     let mut m = crate::models::SessionMetrics::default();
+    // Auto title fallback, resolved into `custom_title` after the loop only if
+    // no explicit `custom-title` (and no branch) claims the subtitle.
+    let mut ai_title: Option<String> = None;
 
     for entry in entries {
         // Session ID from JSONL metadata — first occurrence wins
@@ -955,9 +993,13 @@ fn aggregate_entries(
             }
         }
 
-        // Custom title — last one wins
+        // Custom title — last one wins. Explicit `custom-title` is
+        // authoritative; the auto `ai-title` is held aside as a fallback.
         if let Some(ref title) = entry.custom_title {
             m.custom_title = Some(title.clone());
+        }
+        if let Some(ref title) = entry.ai_title {
+            ai_title = Some(title.clone());
         }
 
         // Git branch — last non-HEAD wins
@@ -1145,6 +1187,13 @@ fn aggregate_entries(
                 m.custom_title = None;
             }
         }
+    }
+
+    // Fall back to the auto-generated title only when no explicit title claimed
+    // the subtitle and this isn't a branch (a branch renders "Branch from <id>"
+    // via `branched_from_session_id`, so it must not show a stale auto title).
+    if m.custom_title.is_none() && m.branched_from_session_id.is_none() {
+        m.custom_title = ai_title;
     }
 
     // Discover subagents: {session_stem}/subagents/*.jsonl
@@ -2154,5 +2203,115 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_sidechain_entries_do_not_corrupt_main_state() {
+        // The main turn has FINISHED (end_turn). A Task subagent is still
+        // running and — in the interleaved-transcript layout — appends its own
+        // entries flagged `isSidechain:true`: a pending Bash tool_use and an
+        // unanswered AskUserQuestion. Without source filtering, the backward
+        // scan would read the sidechain's pending tool_use as the main card's
+        // (false `working`), and the sidechain AskUserQuestion would set
+        // `awaiting_user_prompt` (false `waiting`). The filter must scope every
+        // verdict to the main conversation: pending=false, awaiting=false, and
+        // the main end_turn timestamp preserved.
+        let main_end = r#"{"type":"assistant","timestamp":100.0,"isSidechain":false,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}}"#;
+        let side_tool = r#"{"type":"assistant","timestamp":101.0,"isSidechain":true,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"toolu_side_bash","name":"Bash","input":{"command":"ls"}}],"stop_reason":"tool_use"}}"#;
+        let side_ask = r#"{"type":"assistant","timestamp":102.0,"isSidechain":true,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"toolu_side_q","name":"AskUserQuestion","input":{}}],"stop_reason":"tool_use"}}"#;
+
+        let dir = std::env::temp_dir().join("cue_test_sidechain");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        std::fs::write(&path, format!("{}\n{}\n{}", main_end, side_tool, side_ask)).unwrap();
+
+        let m = super::parse_jsonl_to_session_metrics(&path).unwrap();
+        assert!(
+            !m.pending_tool_use,
+            "a subagent's pending tool_use must not flag the main card"
+        );
+        assert!(
+            !m.awaiting_user_prompt,
+            "a subagent's AskUserQuestion must not mark the main card waiting"
+        );
+        assert_eq!(
+            m.last_end_turn_ts,
+            Some(100.0),
+            "main turn's end_turn must remain the ground-truth finish signal"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn write_metrics_transcript(tag: &str, lines: &[&str]) -> crate::models::SessionMetrics {
+        let dir = std::env::temp_dir().join(format!("cue_test_{}", tag));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        std::fs::write(&path, lines.join("\n")).unwrap();
+        let m = super::parse_jsonl_to_session_metrics(&path).expect("metrics");
+        let _ = std::fs::remove_dir_all(&dir);
+        m
+    }
+
+    // F-tests-002 (resolve half): a permission-prompt `waiting` card demotes the
+    // instant the tool is approved and its `tool_result` lands. The backward
+    // scan must `break` on the trailing tool_result so the now-resolved tool_use
+    // no longer flags `pending_tool_use`. (Flip line ~1096 `if entry.is_tool_result
+    // { break }` to `if false { ... }` and this test fails — pending stays true.)
+    #[test]
+    fn test_pending_tool_use_clears_when_matching_tool_result_lands() {
+        let tool_use = r#"{"type":"assistant","timestamp":101.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"toolu_a","name":"Bash","input":{"command":"ls"}}],"stop_reason":"tool_use"}}"#;
+        let tool_result = r#"{"type":"user","timestamp":102.0,"message":{"content":[{"type":"tool_result","tool_use_id":"toolu_a","content":"ok"}]}}"#;
+        let m = write_metrics_transcript("pending_clears", &[tool_use, tool_result]);
+        assert!(
+            !m.pending_tool_use,
+            "an approved tool's tool_result at the tail must clear pending_tool_use"
+        );
+    }
+
+    // F-tests-002 (seed half): an unresolved tool_use at the tail keeps
+    // `pending_tool_use` set — this is what holds a permission-prompt card on
+    // `waiting` until the user responds. Guards the test above from passing
+    // trivially (i.e. proves pending CAN be true for this transcript shape).
+    #[test]
+    fn test_pending_tool_use_holds_when_tool_use_unresolved() {
+        let tool_use = r#"{"type":"assistant","timestamp":101.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"toolu_b","name":"Bash","input":{"command":"ls"}}],"stop_reason":"tool_use"}}"#;
+        let m = write_metrics_transcript("pending_holds", &[tool_use]);
+        assert!(
+            m.pending_tool_use,
+            "an unresolved trailing tool_use must keep pending_tool_use set"
+        );
+    }
+
+    // F-protocol-001: the auto `ai-title` entry (what current Claude Code writes
+    // for nearly every session) must reach the UI subtitle via `custom_title`.
+    #[test]
+    fn test_ai_title_used_as_fallback_subtitle() {
+        let asst = r#"{"type":"assistant","timestamp":100.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}}"#;
+        let ai_title = r#"{"type":"ai-title","timestamp":101.0,"aiTitle":"Review house purchase scenarios","sessionId":"s1"}"#;
+        let m = write_metrics_transcript("ai_title", &[asst, ai_title]);
+        assert_eq!(
+            m.custom_title.as_deref(),
+            Some("Review house purchase scenarios"),
+            "ai-title must fall back into the subtitle when no explicit title exists"
+        );
+    }
+
+    // F-protocol-001: an explicit `custom-title` (the user's `/title` or the
+    // fork "(Branch)" marker) stays authoritative even when an `ai-title` is
+    // written afterward — otherwise "last one wins" would let the auto title
+    // clobber a deliberate one and break `(Branch)` fork detection.
+    #[test]
+    fn test_explicit_custom_title_wins_over_ai_title() {
+        let custom = r#"{"type":"custom-title","timestamp":100.0,"customTitle":"My deliberate title","sessionId":"s1"}"#;
+        let ai_title = r#"{"type":"ai-title","timestamp":101.0,"aiTitle":"Auto generated title","sessionId":"s1"}"#;
+        let m = write_metrics_transcript("title_precedence", &[custom, ai_title]);
+        assert_eq!(
+            m.custom_title.as_deref(),
+            Some("My deliberate title"),
+            "explicit custom-title must win over a later ai-title"
+        );
     }
 }
