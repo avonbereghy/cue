@@ -1,0 +1,30 @@
+{
+  "base_commit": "0a0eed3fe528a1e4fe9d82f2f8d06d8e99575cd7",
+  "n": 6,
+  "scope": "session-state correctness + JSON/JSONL reading pipeline (12 files)",
+  "focus": "correctness and accuracy while running claude code sessions; reading from json files",
+  "severity": "high",
+  "lenses": ["security", "reliability", "correctness", "protocol", "types", "tests"],
+  "lenses_dropped": ["db", "prompts", "auth", "performance", "deps", "dx", "observability"],
+  "started_at": "2026-06-03",
+  "finished_at": "2026-06-03",
+  "lens_status": {
+    "security": "done",
+    "reliability": "done",
+    "correctness": "done",
+    "protocol": "done",
+    "types": "done",
+    "tests": "done"
+  },
+  "outcome": {
+    "findings_total": 13,
+    "critical": 1,
+    "high": 12,
+    "fixed": 12,
+    "false_positive": 1,
+    "false_positive_notes": "F-correctness-001 Rust-side half (broaden should_demote_stale_subagent past state==subagent) would wrongly demote a legitimate permission-prompt/error card to idle — the hook-side heal is the correct, sufficient fix.",
+    "tests_added": "Rust 374->384 (+10), Python 80->85 (+5); all green",
+    "committed": false,
+    "execution": "sequential in main session (audit subagents were Write-blocked by harness)"
+  }
+}

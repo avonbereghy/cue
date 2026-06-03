@@ -1,10 +1,12 @@
 hooks/cue-hook
-cue-desktop/src-tauri/src/session_monitor.rs
 cue-desktop/src-tauri/src/jsonl_parser.rs
-cue-desktop/src-tauri/src/models.rs
-cue-desktop/src-tauri/src/lib.rs
+cue-desktop/src-tauri/src/session_monitor.rs
 cue-desktop/src-tauri/src/env_detect.rs
+cue-desktop/src-tauri/src/model_context.rs
+cue-desktop/src-tauri/src/models.rs
+cue-desktop/src-tauri/src/security.rs
+cue-desktop/src-tauri/src/system_info.rs
+cue-desktop/src-tauri/src/paths.rs
 cue-desktop/src-tauri/src/permission_server.rs
 cue-desktop/src-tauri/src/permission_log.rs
-tests/hooks/test_cue_hook.py
-tests/hooks/conftest.py
+cue-desktop/src-tauri/src/lib.rs

@@ -1,54 +1,39 @@
 # Correctness Findings
 
 ## Summary
-
-Track-1/Track-2 fixes resolved every previously-recorded high-severity defect in the prior `findings_correctness.md` (subagent counter leak, error/compacting suppression in dedup, the symmetric `subagent`/`subagent_stop` clobbers of `error`, the `_quick_state_write` missing-`stateChangedAt`, the `metrics_cache` prune). A fresh sweep surfaces three new high-confidence correctness issues — two land in the Rust pipeline (compacting floor masks `error`/`waiting`; the sandbox writer races sessions.json without the hook lock) and one in the Python hook (`subagent_stop` silently overwrites `compacting`/`clearing`). All three are reproducible without unusual conditions.
+The state machine is broadly sound and well-tested (374 Rust unit tests pass), but two real correctness defects survive: a subagent counter that leaks under `waiting`/`error` with no self-heal path (can pin a later card on false `subagent` forever), and `_quick_state_write` overwriting a live `error` card with `waiting` while silently dropping `errorType`. Several lower-severity issues are listed under Out of scope.
 
 ## Findings
 
-### F-correctness-001: `compacting_floor` masks `error` and `waiting` for up to 1.5 s
+### F-correctness-001: Subagent counter leaks under `waiting`/`error` and is never self-healed, pinning a later card on false `subagent`
 - **Severity:** high
-- **Confidence:** 95
-- **Files:** cue-desktop/src-tauri/src/session_monitor.rs:422-430, 1191-1193
-- **What:** When the hook writes `compacting` for a session, `poll_status` arms `compacting_floor` with `now + 1.5s`. On any later poll within that window where the state is NOT `compacting`, the predicate `floor_extends(state, until, now)` returns `true` for **any** non-compacting state, and `s.state` is overwritten back to `"compacting"`. The predicate's only guard is `state != "compacting"` — `error`, `waiting`, `subagent`, `done`, `idle` all trigger the extension equally. Concretely: if `/compact` is interrupted by `PostToolUseFailure` (state → `error`) or a `PermissionRequest` (state → `waiting`) within 1500 ms of the PreCompact hook, the user-attention state is silently displayed as `compacting` until the floor expires.
-- **Why it matters:** Errors and permission prompts are the two states with the strongest user-attention contract. Hiding either behind a periwinkle "compacting" indicator for a full poll cycle delays the user's awareness by 1–2 polls. The mistake is invisible to the operator — sessions.json contains `error`/`waiting`, but the dashboard says `compacting`. Existing tests at 1452-1470 only validate "left compacting for working/idle" — the omission is in the predicate, not the test coverage.
-- **Suggested fix:** Narrow `floor_extends` to mask ONLY `working`/`thinking`/`idle`/`done` — never `error`, `waiting`, `subagent`, `clearing`:
-  ```rust
-  pub(crate) fn floor_extends(state: &str, until: Option<f64>, now: f64) -> bool {
-      if !matches!(state, "working" | "thinking" | "idle" | "done") { return false; }
-      until.is_some_and(|u| u > now)
-  }
-  ```
-  Mirrors the philosophy of `dedup_state_priority`: user-attention states are never shadowed.
-- **Verification:** Add tests pinning `floor_extends("error", Some(now+1.0), now) == false`, `floor_extends("waiting", Some(now+1.0), now) == false`, and a poll-level integration test that armed-floor + new state=`error` keeps `s.state == "error"`.
+- **Confidence:** 80
+- **Files:** hooks/cue-hook:869-877, hooks/cue-hook:203-230, hooks/cue-hook:900-908; cue-desktop/src-tauri/src/session_monitor.rs:1383-1417
+- **What:** On `SubagentStart` while the session is in `waiting`/`error`, the hook increments `activeSubagents` but preserves the user-attention state (`action = existing["state"]`, lines 873-875). The persisted entry now has `state="waiting"` with `activeSubagents>0`. Both self-heal paths are gated strictly on `state == "subagent"`: the hook's `_maybe_clear_stale_subagent_counter` returns early unless `existing.get("state") == "subagent"` (line 219), and the Rust `should_demote_stale_subagent` returns false unless `state != "subagent"` (line 1389). So if the matching `SubagentStop` is ever missed (the exact failure mode these heals exist for) while the card sat in `waiting`/`error`, the non-zero counter is never cleared. When the session later legitimately transitions to `working` (line 907-908) or `idle`/`done` (line 862-865), the leaked counter overrides it back to `subagent`.
+- **Why it matters:** A session that genuinely finished (idle/done) or is actively working renders permanently as `subagent` (blinking cyan) until the owning process dies — the liveness check is the only backstop, and only fires when the process is actually gone. Observable whenever a subagent is spawned during a permission prompt / error and its Stop event is dropped.
+- **Suggested fix:** Broaden `_maybe_clear_stale_subagent_counter` and `should_demote_stale_subagent` to also run when `activeSubagents > 0` regardless of state (key the heal on the leaked counter, not the display state), OR don't increment `activeSubagents` while preserving `waiting`/`error` — defer the count until the state leaves the user-attention state.
+- **Verification:** Construct a sessions.json entry with `state="waiting"`, `activeSubagents=2`, `stateChangedAt` > 60s ago, no subagent JSONLs on disk; fire a `working`/PostToolUse hook event and confirm the resulting state is `subagent` not `working`. Grep: `grep -n 'state.*!=.*subagent\|state.*==.*subagent' hooks/cue-hook cue-desktop/src-tauri/src/session_monitor.rs`.
 
-### F-correctness-002: `write_sandbox_sessions` / `clear_sandbox_sessions` race the hook without `sessions.lock`
+### F-correctness-002: `_quick_state_write` overwrites a live `error` card with `waiting` and drops `errorType`
 - **Severity:** high
-- **Confidence:** 92
-- **Files:** cue-desktop/src-tauri/src/lib.rs:594-649 (write), 652-675 (clear); cue-desktop/src-tauri/src/security.rs:16-60 (`atomic_write` — rename-atomic, no flock)
-- **What:** The Python hook performs every read-modify-write of `sessions.json` under an exclusive `fcntl`/`msvcrt` lock on `sessions.lock` (cue-hook lines 247-333, 651-889). The Rust sandbox commands `write_sandbox_sessions` and `clear_sandbox_sessions` do a parallel read-modify-write of the same file via `security::atomic_write`, which is atomic at the rename layer but acquires NO lock at all. If a hook fires between the Rust read and the Rust rename, the hook's write is silently overwritten by the Rust commit (based on a stale snapshot). Symmetrically, a Rust commit landing between two hook events can clobber the persisted inter-hook state.
-- **Why it matters:** A user toggling sandbox sessions in the dashboard at the same moment a real Claude Code hook fires will lose either the hook event (real session card freezes on stale state) or the sandbox toggle. Worse, the hook's `_validate_sessions` will silently DROP any sandbox entry on the next hook write if the entry's `id` doesn't pass `_is_valid_session_id` — and the sandbox writer at line 605-611 only checks `starts_with("sandbox-")`, not the regex (`_SESSION_ID_RE = ^[A-Za-z0-9_-]{1,128}$`). A sandbox id containing `/`, `.`, etc. is written by Rust then erased by the next hook event, with no UI signal.
-- **Suggested fix:** Either (a) acquire `sessions.lock` from Rust (port the hook's flock/msvcrt scheme into a `with_sessions_lock<F>` helper in `security.rs` and route both sandbox commands through it), or (b) move sandbox-session storage into a separate file (`sandbox_sessions.json`) that the poller merges in-memory. (b) is the cleaner long-term fix — eliminates contention entirely and stops Rust ever writing the hook-owned file. Either fix should additionally validate sandbox IDs against the same regex the hook enforces.
-- **Verification:** Concurrency test that spawns 100 alternating `write_sandbox_sessions` and `subprocess.run(['cue-hook','working'], …)` invocations and asserts every survivor entry from both writers is preserved in the final sessions.json. Plus a unit test asserting `write_sandbox_sessions` rejects ids with `/`, `..`, NUL, etc.
-
-### F-correctness-003: `subagent_stop` clobbers `compacting`/`clearing` on counter→0
-- **Severity:** high
-- **Confidence:** 85
-- **Files:** hooks/cue-hook:781-799
-- **What:** When `SubagentStop` arrives, the hook decrements `active_subs`. Lines 783-799 choose the new action: `waiting`/`error` preserved, `active_subs > 0` → `subagent`, else → `idle`/`working` via `_turn_has_finished`. There is NO branch for `existing.state in ("compacting", "clearing")` — both transient transitional states get overwritten with `working` or `idle` when the last subagent ends mid-compact/clear. The 1500 ms `compacting_floor` on the Rust side mitigates compacting briefly but not after the floor expires; `clearing` has no symmetric floor. A fast subagent finish during `/compact` produces a 1–2 poll flash of `working`, and if the resolving PostCompact hook never fires the card pins on `working` (not `compacting`) until the 60 s stuck-active cap demotes it to `idle`.
-- **Why it matters:** Parallel subagents finishing during `/compact` is a routine workflow (long sessions trigger auto-compact, agents in flight). The user sees a "working" pulse mid-compact that contradicts the actual session phase, and the wrong-state window is self-correcting only via demotion to `idle`, never back to `compacting`.
-- **Suggested fix:** Add `compacting`/`clearing` to the preservation arm at line 783:
-  ```python
-  if existing.get("state") in ("waiting", "error", "compacting", "clearing"):
-      action = existing["state"]
-  ```
-  Mirrors the same philosophy as the existing `waiting`/`error` guards and the CLAUDE.md contract that the subagent override applies to `working`/`done`/`idle` only.
-- **Verification:** Pre-seed `state="compacting"`, `activeSubagents=1`; fire `subagent_stop`; assert resulting `state == "compacting"` and `activeSubagents == 0`. Repeat for `clearing`.
+- **Confidence:** 72
+- **Files:** hooks/cue-hook:233-309, hooks/cue-hook:671-682
+- **What:** `_quick_state_write` is the fast-path that writes `state="waiting"` on `Notification(elicitation_dialog|permission_prompt)` and on `PreToolUse(AskUserQuestion|ExitPlanMode)`. Unlike the main write path (which guards `existing_state in ("waiting","error")` and early-returns, lines 859-860/873/880, and carries `errorType` forward, lines 970-973), `_quick_state_write` unconditionally builds a fresh `state="waiting"` entry. It preserves `workspace`, `startedAt`, `source`, `activeSubagents`, tokens, and `permissionMode`, but it does NOT preserve `errorType` and applies NO guard for an existing `error` state. So a `Notification(permission_prompt)` (or elicitation) firing on a session currently shown as `error` clobbers the red error card to yellow `waiting` and permanently loses the error category. The stale-write guard (line 265, `existing_activity > hook_start_time`) only blocks out-of-order writes, not this state downgrade.
+- **Why it matters:** A session that hit a `StopFailure` (e.g. rate_limit) and then surfaces any permission/elicitation dialog will silently flip `error`→`waiting`, masking the failure and dropping `errorType` so the UI can no longer tell the user *why* it broke. The main path was explicitly hardened against exactly this (lines 850-908); the quick path bypasses every one of those guards.
+- **Suggested fix:** In `_quick_state_write`, mirror the main path: if `existing.get("state") == "error"`, either return without writing or carry `errorType` forward onto the new entry; at minimum copy `existing.get("errorType")` into `entry` when present.
+- **Verification:** Seed sessions.json with `{state:"error", errorType:"rate_limit", lastActivity:<past>}`; invoke the hook with a `Notification` payload `notification_type=permission_prompt`; confirm the entry is not silently flipped to `waiting` with `errorType` dropped. Code check: `_quick_state_write` body contains no reference to `errorType` or to an `error`-state guard (grep `errorType` shows hits only at line >= 965).
 
 ## Out of scope
-- Hook `_quick_state_write` runs without re-reading sessions.json after `_forward_permission_request` returns — if a faster hook wrote during the HTTP wait, the stale-waiting guard at line 740 catches it but the quick-write at line 268 already committed. Medium; main path corrects within one event.
-- Subagent rescue latch (session_monitor.rs:465-498) uses `(now - t) >= 0.0` so a small negative clock skew (NTP step) silently masks legitimately-recent agents for one poll.
-- `last_assistant_text_ts` and `last_user_prompt_ts` come from JSONL timestamps and can race in-flight writes — `promote_decision`'s latch handles the bounce but not a one-poll mis-promotion.
-- The hook's `_subagent_jsonls_active` 30 s window vs Rust's 15 s `should_demote_stale_subagent` grace — both correct in isolation but the asymmetry produces a single demote → re-arm cycle when a subagent dir is 16-29 s old. Cosmetic.
-- `clearing` state has no `compacting_floor` analog; with the F-correctness-001 fix this becomes irrelevant.
-- Stuck-active 60 s cap demotes both `compacting` and `clearing` to `idle` (session_monitor.rs:1088-1096) — for `clearing`, the real recovery is the next `SessionStart` writing `idle`, so the cap is harmless but redundant.
+The following are real but below the HIGH/CRITICAL floor, or are low-confidence:
+
+- **`running_tool_name` picks the LAST tool_use in a multi-tool assistant message** (jsonl_parser.rs:464-465, confirmed by `ASSISTANT_WITH_USAGE` test where Bash/Read/Bash yields "Bash"). This is the known-suspected bug, but it is cosmetic only — `running_tool_name`/`running_tool_target` feed a display pill, not any state verdict. `pending_tool_use`, `awaiting_user_prompt`, and `prompting_tool_use_ids` are all computed independently of which single tool is chosen, so no state goes wrong. Medium severity at most (wrong tool label on the card).
+
+- **`should_demote_stale_subagent` with `None` metrics demotes a real subagent after 30s** (session_monitor.rs:1407-1415). If `refresh_metrics` (5s cadence) hasn't populated metrics for a freshly-rotated session within 30s of `stateChangedAt`, a genuinely-running subagent with no parsed metrics is demoted to idle. The 30s grace makes this rare in practice; flagged as a latent edge, not a confirmed live failure.
+
+- **`is_promotable_to_waiting` includes `idle`** (session_monitor.rs:1250), so a JSONL `awaiting_user_prompt` can promote `idle`->`waiting`. This is intended (a stale unmatched AskUserQuestion legitimately means waiting), and the resolve path + pending-tool guard keep it from pinning. No defect, noted for completeness.
+
+- **`extract_timestamp` only accepts RFC3339 / two `NaiveDateTime` formats** (jsonl_parser.rs:638-651). Integer JSON timestamps are handled (serde `as_f64()` covers ints). A timestamp with a non-`Z` named offset and no `T` separator, or space-separated, would fail to parse and yield `None`; downstream code tolerates `None` (treated as 0.0 / skipped), so this degrades gracefully rather than producing a wrong verdict.
+
+- **`floor_extends` could briefly hold `idle`/`done` on `compacting` for up to 1.5s** (session_monitor.rs:1475-1480). By design; the comment documents the narrowing to neutral states only. Not a defect.
+
+- **model_context.rs gate scanner** is heuristic byte-scanning of a minified binary; if Claude Code renames gate functions again or moves `return 1e6` >300 bytes from the call site, extraction silently falls back to the baked-in `FALLBACK_1M_SUBSTRINGS` (model_context.rs:24-31, 66-83). That fallback currently covers shipping 1M models, so a parse miss degrades to a correct-enough default rather than a wrong context window. Maintenance risk, not a current correctness bug.

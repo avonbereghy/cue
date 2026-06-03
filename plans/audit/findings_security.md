@@ -1,42 +1,31 @@
 # Security Findings
 
 ## Summary
-The Rust backend sanitizes `workspace` and uses `O_NOFOLLOW` on the JSONL tail-reader, but skips equivalent validation on `session_id`, which becomes a path component. Two additional high issues: the Rust read of `sessions.json` has no size cap (single-allocation DoS), and the localhost permission HTTP server is unauthenticated.
+Posture is strong: the untrusted boundaries are mostly well-hardened — session-id allowlisting, workspace sanitization, O_NOFOLLOW reads, bounded reads for sessions.json / permission-log / claude settings, constant-time token auth, Host/Origin checks, and a privacy-preserving panic handler are all present and tested. Two real HIGH gaps remain, both DoS-class: one untrusted file read (`rate_limits.json`) skips the size-bound used everywhere else, and the localhost permission server has no socket read timeout or connection cap, leaving a pre-auth slowloris hang. No injection, traversal, or data-leak CRITICALs were found in the 12 in-scope files.
 
 ## Findings
 
-### F-security-001: Untrusted `session_id` is used as a path component without validation
-- **Severity:** high
-- **Confidence:** 90
-- **Files:** cue-desktop/src-tauri/src/session_monitor.rs:777-889, 131-166; hooks/cue-hook:483
-- **What:** `jsonl_path` / `jsonl_exists_on_disk` build `projects_path.join(encoded_workspace).join(format!("{}.jsonl", session_id))`. `session_id` comes from `sessions.json` (untrusted per CLAUDE.md). `poll_status` validates `workspace` (line 163) but not `id`. `Path::join` resets to absolute when given an absolute fragment, and tolerates `..` traversal. Derived `subagents/` directory at `parent.join(session_stem).join("subagents")` is also influenced, and `parse_jsonl_file` (jsonl_parser.rs:119) uses `read_to_string` without symlink guard.
-- **Why it matters:** A writer of sessions.json can force the backend to read any file the user can read (SSH keys, secrets) and surface contents in `SessionMetrics` (crossing IPC to the frontend).
-- **Suggested fix:** Add `validate_session_id` to security.rs (UUID-like regex `[A-Za-z0-9_-]{1,128}`, reject `/ \ ..` and leading `.`). Call from `poll_status` admission filter; reject in Python hook before write; add defense-in-depth check in `jsonl_path`.
-- **Verification:** `grep -n 'validate_session_id' cue-desktop/src-tauri/src/security.rs` shows the helper; `cargo test validate_session_id` covers traversal cases.
-
-### F-security-002: Rust reads `sessions.json` with no size cap
-- **Severity:** high
-- **Confidence:** 85
-- **Files:** cue-desktop/src-tauri/src/session_monitor.rs:134; hooks/cue-hook:122-143
-- **What:** `read_to_string(&status_path)` runs every poll with no limit. JSONL parser caps at 500 MB but sessions.json has no ceiling. `_validate_sessions` checks shape but not value-length.
-- **Why it matters:** A 1+ GB sessions.json OOMs the backend and freezes the UI. Even 200 MB causes per-poll allocation churn.
-- **Suggested fix:** `metadata().len()` check against 4 MiB cap, read via `File::take(cap).read_to_string`. On excess, log and preserve previous enriched list. Tighten `_validate_sessions` to per-field length caps.
-- **Verification:** Test writes 10 MiB sessions.json, asserts `poll_status` doesn't panic and prior state is preserved.
-
-### F-security-003: Unauthenticated localhost permission HTTP grants arbitrary allow/deny
+### F-security-001: `rate_limits.json` read is unbounded — memory-exhaustion DoS from a user-writable file
 - **Severity:** high
 - **Confidence:** 80
-- **Files:** hooks/cue-hook:229-257, 524-533
-- **What:** Hook POSTs to `127.0.0.1:3002/permission-request` and pipes response to stdout for Claude Code. No token, no nonce. Any local process can answer `{"decision":"allow"}`.
-- **Why it matters:** Forges allow on tool-call permission prompts — authorization-bypass primitive equivalent to RCE.
-- **Suggested fix:** Switch to unix-domain socket in STATUS_DIR (0700), or generate a per-launch random token persisted to a 0600 file in STATUS_DIR; hook reads, server rejects unauthenticated requests. Validate response payload shape.
-- **Verification:** `nc -l 3002` while Cue offline, trigger permission, confirm hook rejects unauthenticated forged response.
+- **Files:** cue-desktop/src-tauri/src/session_monitor.rs:904-907
+- **What:** `refresh_supplemental` reads the rate-limit bridge file with a plain `std::fs::read_to_string(&rate_path)` (no size check) every 5 seconds: `let new_rate_limits = std::fs::read_to_string(&rate_path).ok().and_then(...)`. `rate_limits_path()` resolves to the same user-writable data dir as sessions.json (`~/Library/Application Support/Cue/rate_limits.json` on macOS), and per `paths.rs` it is "written by the statusline bridge script" — i.e. an external producer Cue does not control. Every other untrusted-boundary read in the backend goes through `security::read_to_string_bounded` with an explicit cap (sessions.json 4 MiB at session_monitor.rs:152/158, permission-log 16 MiB at permission_log.rs:79, claude settings 4 MiB at system_info.rs:68). This one was missed. `read_to_string` pre-allocates a `String` sized to the file's reported length, so a co-resident process (or a runaway/corrupt bridge writer) that drops a multi-GB `rate_limits.json` causes the backend to attempt a multi-GB allocation on the next 5 s `refresh_supplemental` tick.
+- **Why it matters:** A same-uid process — exactly the threat model the bounded reads elsewhere defend against — can OOM-kill or stall the Cue backend by writing one oversized file into a directory it already shares, with no traversal or escalation needed. The crash recurs on every poll while the file exists.
+- **Suggested fix:** Replace the call with the existing bounded reader, mirroring the other sites: `crate::security::read_to_string_bounded(&rate_path, RATE_LIMITS_MAX_BYTES)` where `const RATE_LIMITS_MAX_BYTES: u64 = 1 * 1024 * 1024;` (the file is a handful of fields; 1 MiB is generous). Keep the `.ok().and_then(...)` chain so a too-large file degrades to "no rate-limit update this tick" instead of crashing.
+- **Verification:** `grep -n "fs::read_to_string(&rate_path)" cue-desktop/src-tauri/src/session_monitor.rs` confirms the unbounded call. To reproduce: drop a 3 GiB file at `~/Library/Application Support/Cue/rate_limits.json` and observe backend RSS spike / OOM within ~5 s. After the fix, `grep -n "read_to_string_bounded" cue-desktop/src-tauri/src/session_monitor.rs` should show the rate-limit path included alongside the sessions.json read.
+
+### F-security-002: Permission server has no socket read timeout and no connection cap — pre-auth slowloris local DoS
+- **Severity:** high
+- **Confidence:** 70
+- **Files:** cue-desktop/src-tauri/src/lib.rs:1521-1582, cue-desktop/src-tauri/src/lib.rs:1674-1682
+- **What:** `handle_permission_connection` reads the HTTP header block in a loop (`let got = stream.read(&mut chunk).await?;`, lib.rs:1566-1582) and later reads the body (lib.rs:1675-1682) with no read deadline on the `TcpStream`. The only `tokio::time::timeout` in the path wraps the *user-decision* wait (lib.rs:1794), which is reached only AFTER a full, authenticated request is parsed. A client that connects and then sends bytes slowly — or sends a few bytes and never the `\r\n\r\n` terminator, or advertises a large `Content-Length` and dribbles the body — keeps both the connection and its per-connection `tokio::spawn` task (lib.rs:1535) alive indefinitely. The accept loop (lib.rs:1521-1542) spawns a new task per connection with no ceiling on concurrent connections/tasks. All of this happens before the `X-Cue-Token` check (token is only evaluated for `POST /permission-request` at lib.rs:1641, after headers are fully read), so the hang is pre-authentication: the per-launch token does not gate it. (`MAX_PENDING` = 64 caps in-flight *decisions*, not raw connections, so it does not bound this.)
+- **Why it matters:** Any local process can open a stream of connections that each block in the header/body read forever, accumulating unbounded Tokio tasks and file descriptors until the process hits its FD limit or memory pressure — silently disabling the permission-mediation feature (and degrading the whole backend) for the duration. Same-uid is the in-scope threat model for this server (it binds 127.0.0.1 with no kernel ACL; the token exists precisely because co-resident processes are untrusted), and the audit lists "DoS via slow/large requests" as in-scope.
+- **Suggested fix:** Wrap the header-read loop and the body-read loop in a `tokio::time::timeout` (e.g. 10 s for the whole header+body read) so a stalled peer is dropped; on elapse, return `Ok(())` to close the connection. Optionally add a global concurrent-connection semaphore (`Arc<tokio::sync::Semaphore>` with a small permit count, acquired before `tokio::spawn` at lib.rs:1535) so a flood can't spawn unbounded tasks even within the timeout window. Both changes sit entirely inside the existing localhost-only server and add no new capabilities.
+- **Verification:** `grep -n "set_read_timeout\|time::timeout" cue-desktop/src-tauri/src/lib.rs` shows the only timeout is the post-auth decision wait (line ~1794), none around the `stream.read` calls (~1568, ~1677). Repro: open N connections that send `GET /health` one byte per second without finishing — observe the spawned tasks never complete and connection count grow without bound.
 
 ## Out of scope
-- `parse_jsonl_file` follows symlinks (jsonl_parser.rs:119); subagent enumeration uses unguarded variant — medium.
-- Hook lockfile/dir permissions (cue-hook:156, 513, 537) inherit default umask — medium.
-- Workspace string length not bounded (covered partially by F-002).
-- `encode_workspace_path` `/`→`-` collisions enable post-dedup workspace overwrite — medium.
-- `atomic_write` tmp filename leaks writer PID (security.rs:33) — low.
-- `.lock().unwrap()` panics poison locks — reliability concern.
-- `permission_mode` not validated against enum — misuse trap, not security.
+- **`write_sandbox_sessions` / `clear_sandbox_sessions` read sessions.json unbounded** (lib.rs:632, 678 — `std::fs::read_to_string(&path)`): same class as F-security-001 but lower severity — these are frontend-invoked Tauri commands (not a 1 Hz/5 s hot loop) and run under the cross-process `with_sessions_lock`. Still worth switching to `read_to_string_bounded` for consistency. (MEDIUM)
+- **`sanitize_workspace_path` calls `fs::canonicalize` on attacker-influenced input each poll** (security.rs:241, invoked from session_monitor.rs:278 at ~1 Hz per session): a benign filesystem-touch per session per tick, and a stat-then-use gap exists, but the downstream JSONL reads are independently guarded by O_NOFOLLOW + size caps, so no traversal/symlink escape results. Informational only. (LOW)
+- **macOS `spawn_terminal_with_resume` interpolates `workspace` into an AppleScript string literal** (lib.rs:841-857): reviewed and considered safe — `revive_session` (lib.rs:763) runs the value through `sanitize_workspace_path`, which rejects `"`, `'`, backtick, `$`, `;`, `|`, `&`, `\`, CR/LF and NUL before it reaches the script, and the command itself uses `quoted form of`. No action needed; noting only because it is the one remaining string-interpolation-into-an-interpreter site among the 12 files. (LOW / informational)
+- **`detect_system_theme` / `get_claude_version` / `take_window_screenshot` spawn subprocesses** (lib.rs:130, system_info.rs:33, lib.rs:723): all use fixed argv with no untrusted interpolation (`defaults read -g ...`, `claude --version`, `screencapture -R<computed ints>`); not injection vectors. The "no subprocess" rule in CLAUDE.md applies specifically to the Python hook, which was confirmed subprocess-free. Informational. (LOW)
+- **Python hook `_get_wsl_windows_status_dir` builds a path from `/mnt/c/Users` listing** (hooks/cue-hook:57-80): the chosen Windows username flows into `STATUS_DIR`; it is filesystem-derived (a real directory name), used only as a path component for Cue's own data, and the function bails when the candidate set is ambiguous. No traversal primitive. Informational. (LOW)

@@ -1,261 +1,49 @@
-# Test Findings
+# Tests Findings
 
 ## Summary
-Pure Rust predicates (`promote_decision`, `floor_extends`, `should_demote_*`, `dedup_*`, `resolve_liveness`, `is_recently_live`, `admit_session`) are now exhaustively tested after the recent audit tracks. The remaining gaps are concentrated in **Claude Code event handling** and **state-transition wiring**: the hook only maps 13 of Claude Code's ~30 documented event names (the other ~17 silently no-op), `SessionEnd → "ended"` and the `/clear` detection branch have zero tests, `PermissionRequest`-with-`tool_name` (the quick-write + HTTP-forward path) is uncovered, several user-attention transitions (`_last_tool_was_ask_question`, `_turn_has_finished` routing) have no end-to-end coverage, and the `clearing` state is documented in the schema but never emitted by the hook (yet the Rust pipeline treats it as a first-class state with 60s caps, latches, and dedup priority).
-
-## Coverage Tables
-
-### Hook event coverage (pytest)
-Source of truth for "what the hook maps" is `cue-desktop/src-tauri/src/env_detect.rs:165-179` (HOOK_EVENTS). Anything not in that table is **silently dropped** by the hook because `valid_actions` rejects unknown CLI args (`hooks/cue-hook:575-577`).
-
-| Event | Subtype/source | Hook maps? | Tested via pytest? | Test name(s) |
-| --- | --- | --- | --- | --- |
-| SessionStart | startup | yes → `idle` | no | — |
-| SessionStart | resume | yes → `idle` | no | — |
-| SessionStart | clear (`/clear`) | yes → `idle` + `is_clear` reset path | **no — entire branch untested** | — |
-| SessionStart | compact (`/compact`) | yes → `idle` + `is_clear` reset path | no | — |
-| Setup | n/a | no (not in HOOK_EVENTS) | n/a | — |
-| UserPromptSubmit | n/a | yes → `thinking` | partial | `test_thinking_propagates_through_active_subagents` |
-| UserPromptExpansion | n/a | no | n/a | — |
-| PreToolUse | n/a | yes → `working` | indirect | `test_working_still_overridden_to_subagent` |
-| PostToolUse | n/a | yes → `working` | indirect | same as above |
-| PostToolUseFailure | n/a | yes → `error` | partial — only preservation tested, no fire-from-working test | — |
-| PostToolBatch | n/a | no | n/a | — |
-| PermissionRequest | (no `tool_name`) | yes → `waiting` (quick-write only) | no | — |
-| PermissionRequest | with `tool_name` (HTTP forward) | yes → `waiting` + POST to :3002 | **no — `_quick_state_write` + `_forward_permission_request` untested** | — |
-| PermissionDenied | n/a | no | n/a | — |
-| Stop | n/a | yes → `idle` (subject to AskUserQuestion → `waiting` promotion) | partial — idle/done preservation tested but **AskUserQuestion routing untested** | — |
-| StopFailure | n/a | no | n/a | — |
-| SubagentStart | n/a | yes → `subagent` (+ counter++) | yes | `test_subagent_start_increments_counter` |
-| SubagentStop | n/a | yes → `subagent_stop` | partial — counter and preservation tested, **`_turn_has_finished`-routes-to-idle path untested** | `test_subagent_stop_decrements_counter`, `test_subagent_stop_clamps_at_zero` |
-| TaskCreated | n/a | no | n/a | — |
-| TaskCompleted | n/a | yes → `done` | no direct test | — |
-| Notification | (all subtypes) | yes → `done` | no | — |
-| TeammateIdle | n/a | no | n/a — team idle-to-done handled in Rust | — |
-| FileChanged | n/a | no | n/a | — |
-| ConfigChange | n/a | no | n/a | — |
-| InstructionsLoaded | n/a | no | n/a | — |
-| CwdChanged | n/a | no | n/a | — |
-| PreCompact | n/a | yes → `compacting` | no | — |
-| PostCompact | n/a | no | n/a | — |
-| WorktreeCreate / WorktreeRemove | n/a | no | n/a | — |
-| Elicitation / ElicitationResult | n/a | no | n/a | — |
-| SessionEnd | hangup / logout / exit | yes → `remove` (sets state="ended") | **no — entire `remove` branch untested** | — |
-
-**Net:** Of 13 mapped event names, only 4 have any end-to-end pytest coverage. 9 mapped events are completely unanchored.
-
-### State transition coverage
-
-| From | To | Trigger | Tested in pytest? | Test name(s) |
-| --- | --- | --- | --- | --- |
-| (new) | idle | SessionStart (startup) | no | — |
-| (new) | thinking | UserPromptSubmit on fresh session | no | — |
-| idle | working | PreToolUse / PostToolUse | partial | `test_stale_counter_reset_lets_working_transition` |
-| idle | thinking | UserPromptSubmit | no | — |
-| idle | waiting | PermissionRequest | no | — |
-| idle | subagent | SubagentStart | no | — |
-| idle | compacting | PreCompact | no | — |
-| idle | ended | SessionEnd | no | — |
-| working | thinking | UserPromptSubmit mid-turn | no | — |
-| working | waiting | PermissionRequest | no | — |
-| working | error | PostToolUseFailure | no | — |
-| working | subagent | SubagentStart (override fires) | yes | `test_subagent_start_increments_counter`, `test_working_still_overridden_to_subagent` |
-| working | done | TaskCompleted / Notification | no | — |
-| working | idle | Stop | no direct test | — |
-| working | compacting | PreCompact | no | — |
-| working | ended | SessionEnd | no | — |
-| thinking | working | promote_decision latch (Rust) | yes (Rust) | `promote_fires_when_text_after_prompt`, etc. |
-| thinking | subagent | (BLOCKED by design) | yes (negative) | `test_thinking_propagates_through_active_subagents` |
-| thinking | done | TaskCompleted / Notification | no | — |
-| thinking | idle | Stop | no | — |
-| waiting | working | PostToolUse after permission decision | no | — |
-| waiting | (preserved) | subagent_stop / done / idle / subagent | yes | `TestWaitingNotClobbered` (4 tests) |
-| waiting | error | PostToolUseFailure on waiting | no | — |
-| waiting | idle | demoter (turn-ended, Rust) | yes (Rust) | `test_demote_turn_ended_for_waiting_state` |
-| error | (preserved) | subagent_stop / done / idle / subagent | yes | `TestErrorNotClobbered` (4 tests) |
-| error | working | next PreToolUse | no | — |
-| error | thinking | UserPromptSubmit on error | no | — |
-| subagent | working | last SubagentStop, turn not finished | no | — |
-| subagent | idle | last SubagentStop, `_turn_has_finished == True` | **no** | — |
-| subagent | idle (forced) | stale-counter self-heal | yes | `test_stale_counter_reset_lets_working_transition` |
-| compacting | working | PostCompact or next PreToolUse | no | — |
-| compacting | idle | stuck-active 60s cap (Rust) | yes (Rust) | `test_demote_stuck_active_compacting_past_60s` |
-| clearing | * | **N/A — `clearing` is never written by hook** | n/a | — |
-| ended | (revived) | SessionStart on tombstoned session | no | — |
-| any active | idle | liveness demote (dead PID) | yes (Rust) | `resolve_liveness*` |
-| any active | idle | JSONL-missing demote | no end-to-end test | — |
-| any | ended | SessionEnd → `remove` | **no** | — |
-| done/idle | subagent | rescue latch (Rust) | partial | `test_is_recently_live_*` |
-| (idle + AskUserQuestion in transcript) | waiting | Stop → `_last_tool_was_ask_question` | **no** | — |
-| (transcript prior content + SessionStart) | idle (with startedAt reset) | `is_clear == True` branch | **no** | — |
+Both suites pass clean: 374 Rust unit tests (1 `#[ignore]` — a documented live-`claude`-binary smoke test, intentional) and 80 Python hook tests, no skips/xfails. The pure state predicates (`should_resolve_waiting`, `should_demote_stalled_turn`, `resolve_liveness`, `should_demote_turn_ended`, `is_promotable_to_waiting`) are each well unit-tested, and the Python hook side is strong. The systemic gap is at the **orchestration boundary**: `poll_status` — which wires the JSONL signals into the four demote/promote passes in a specific order — has only a no-crash smoke test, so the freshly-restored permission-prompt `waiting` path (the exact behavior the `cd2a32b` regression broke) is locked only at the predicate level, never end-to-end, and several new error-recovery arms are completely untested.
 
 ## Findings
 
-### F-tests-101: `SessionEnd → state=ended` (the `remove` action) is completely untested
-- **Severity:** critical
-- **Confidence:** 100
-- **Files:** hooks/cue-hook:703-712; tests/hooks/test_cue_hook.py (no test references `"remove"` or `"ended"`)
-- **What:** The `remove` action is the ONLY way the hook transitions a session into the `ended` tombstone state — yet no test invokes `invoke_hook("remove", ...)`. Both the happy path (existing session → `state="ended"`) and the no-op path (no existing entry → write nothing) are unexercised.
-- **Why it matters:** `ended` is the signal the frontend uses to filter sessions into the "revived" section. If `remove` silently deletes the entry instead of tombstoning, every SessionEnd erases the card without ceremony.
-- **Suggested fix:** Add `TestRemoveAction`:
-  - `test_remove_tombstones_existing_session`
-  - `test_remove_noop_when_session_absent`
-  - `test_remove_preserves_workspace_pid_subprocess`
-  - `test_remove_then_session_start_overwrites_tombstone`
-- **Verification:** `pytest tests/hooks/test_cue_hook.py::TestRemoveAction -v`
-
-### F-tests-102: `/clear` and `/compact` detection (`is_clear` branch) untested
+### F-tests-001: Permission-prompt `waiting` survival is locked only as a pure predicate, never through `poll_status` — the regression that already shipped could recur via a wiring change
 - **Severity:** high
-- **Confidence:** 98
-- **Files:** hooks/cue-hook:719-732, 835
-- **What:** SessionStart with `action == "idle"` and transcript >100 bytes triggers `is_clear` path that resets `startedAt`. No tests for trigger, negative (small transcript), or no-op (missing path).
-- **Why it matters:** A regression swapping `>` for `>=`, or misreading `hook_event_name`, silently disables `/clear` detection. The active-duration timer then accumulates through every `/clear`.
-- **Suggested fix:** Add `TestClearDetection`:
-  - `test_clear_detected_when_transcript_has_prior_content`
-  - `test_clear_not_detected_for_fresh_transcript`
-  - `test_clear_not_detected_without_session_start_event_name`
-  - `test_clear_not_detected_when_transcript_path_missing`
+- **Confidence:** 85
+- **Files:** cue-desktop/src-tauri/src/session_monitor.rs:504-575 (waiting promote/resolve arm), :1269 (`should_resolve_waiting`), :1811-1818 (`test_poll_status_no_crash` — the only `poll_status` test)
+- **What:** The dual-source waiting fix gates the demote on `should_resolve_waiting(awaiting, pending) = !awaiting && !pending`. The pure predicate is tested (`test_resolve_waiting_holds_open_permission_prompt` etc.), but nothing exercises `poll_status` with a seeded `state="waiting"` session whose `metrics_cache` carries `pending_tool_use=true, awaiting_user_prompt=false`. `metrics_cache` is private and never pre-populated by a test. The `cd2a32b` regression was exactly a wiring error in this arm (demoting on `!awaiting` alone); the same class of mistake — reading the wrong flag, inverting the gate, or reordering passes so a later pass stomps the seed — would NOT be caught. `test_poll_status_no_crash` only asserts "does not panic".
+- **Why it matters:** This is the most common Claude Code block ("Allow Bash?"). A regression here reships the user-visible "permission prompt shows as `working`" bug, and the predicate-only test gives false confidence it's locked.
+- **Suggested fix:** Add an end-to-end test driving `poll_status` via a testable seam (e.g. extract `poll_status_at(status_path, projects_path)`): write a fixture sessions.json with one `state:"waiting"` session + a transcript whose tail is an unresolved tool_use (real parser yields `pending=true, awaiting=false`); assert it stays `"waiting"`. Append the matching `tool_result`, re-poll, assert `"idle"`. Mirror case for `AskUserQuestion` → answer → `idle`.
+- **Verification:** Temporarily revert the gate to the old `should_resolve_waiting(_,_) = !awaiting` form — the new integration test must FAIL (card demotes while `pending=true`); restore and it passes. Existing predicate tests pass under both, proving they don't cover this.
 
-### F-tests-103: `_quick_state_write` and `_forward_permission_request` untested
-- **Severity:** high
-- **Confidence:** 96
-- **Files:** hooks/cue-hook:233-336, 338-366, 634-650
-- **What:** When `action == "waiting"`, the hook calls `_quick_state_write` BEFORE the blocking HTTP forward. Neither function has any test. The `if action == "waiting" and "tool_name" in hook_data` branch (line 642) is the ONLY thing distinguishing a real PermissionRequest from a manual `cue-hook waiting`.
-- **Why it matters:** PermissionRequest is the only event with network I/O. A crash inside `_quick_state_write` is swallowed and the main write path picks up 300s later.
-- **Suggested fix:** Add `TestQuickStateWrite` + `TestPermissionRequest`:
-  - `test_quick_write_creates_waiting_entry_with_subagent_counter_preserved`
-  - `test_quick_write_stale_guard_skips_when_newer_activity_exists`
-  - `test_quick_write_carries_forward_stateChangedAt_when_already_waiting`
-  - `test_quick_write_resets_stateChangedAt_when_transitioning`
-  - `test_quick_write_propagates_permission_mode`
-  - `test_waiting_action_without_tool_name_skips_http_forward` (mock `urllib.request.urlopen`)
-  - `test_waiting_action_with_tool_name_attempts_http_forward`
-  - `test_permission_request_http_failure_still_writes_sessions_json` (mock URLError)
-
-### F-tests-104: `_last_tool_was_ask_question` and `_turn_has_finished` (transcript-driven routing) untested
-- **Severity:** high
-- **Confidence:** 95
-- **Files:** hooks/cue-hook:494-525, 769, 799
-- **What:** Two transcript-parsing helpers drive critical action routing:
-  - `_last_tool_was_ask_question`: routes `idle/done → waiting` when last tool was AskUserQuestion. Untested.
-  - `_turn_has_finished`: routes `subagent_stop` (counter=0) to `idle` vs `working`. Untested.
-- **Why it matters:** Failure modes: (1) Stop leaves card on `idle` instead of `waiting` when AskUserQuestion is pending. (2) Final SubagentStop routes to `working` and pins forever (no stuck-active cap for working). (3) Malformed transcript JSON crashes the hook, sessions.json never updated.
-- **Suggested fix:** Add `TestTranscriptDrivenRouting`:
-  - `test_last_tool_ask_question_detects_terminal_tool_use_block`
-  - `test_last_tool_ask_question_false_for_other_tools`
-  - `test_last_tool_ask_question_false_for_text_only_response`
-  - `test_last_tool_ask_question_handles_malformed_transcript`
-  - `test_turn_has_finished_routes_subagent_stop_to_idle_when_end_turn_seen`
-  - `test_turn_has_finished_routes_subagent_stop_to_working_when_no_end_turn`
-  - `test_turn_has_finished_returns_false_on_empty_transcript`
-
-### F-tests-105: PostToolUseFailure → `error` from `working` not tested as a fire path
-- **Severity:** high
-- **Confidence:** 90
-- **Files:** hooks/cue-hook:570-866
-- **What:** `TestErrorNotClobbered` tests preservation but no test fires `error` from a `working`/`idle`/`thinking` baseline. A regression that no-ops the error action (e.g. hoisting it into the `done/idle` guard list) would still pass every existing test.
-- **Why it matters:** `error` is the only signal Cue surfaces for tool failures.
-- **Suggested fix:** Add `TestErrorState`:
-  - `test_error_action_transitions_from_working`
-  - `test_error_action_transitions_from_idle`
-  - `test_error_action_transitions_from_thinking`
-  - `test_error_action_resets_stateChangedAt_on_transition`
-  - `test_error_does_not_increment_subagent_counter`
-
-### F-tests-106: `_should_ignore_session` (session_type + CUE_SKIP) untested
-- **Severity:** high
-- **Confidence:** 92
-- **Files:** hooks/cue-hook:399-412, 679-699
-- **What:** When payload indicates non-interactive or `CUE_SKIP=1`, hook attempts cleanup of existing entry then returns. Three branches untested. The cleanup path also writes sessions.json — second write path, uncovered.
-- **Why it matters:** `claude -p` subprocesses fire hooks. If `_should_ignore_session` regresses to False, every `claude -p` shows up as a phantom; no SessionEnd fires for print mode, so they pile up forever.
-- **Suggested fix:** Add `TestIgnoredSessions`:
-  - `test_print_mode_session_skipped`
-  - `test_interactive_session_not_skipped`
-  - `test_cue_skip_env_var_skips_session`
-  - `test_ignored_session_cleans_up_prior_entry`
-  - `test_ignored_session_no_write_when_no_prior_entry`
-
-### F-tests-107: `permission_mode` propagation untested
-- **Severity:** high
-- **Confidence:** 90
-- **Files:** hooks/cue-hook:622-627, 309-313, 862-865
-- **What:** Hook reads `permission_mode` (or `permissionMode`). Two casings × three outcomes (set/carry/drop) × two write paths = 12 cells. Zero tested.
-- **Why it matters:** Permission-mode pill is the user's primary signal for "Claude has shift+tab'd into bypass mode behind my back".
-- **Suggested fix:** Add `TestPermissionMode`:
-  - `test_permission_mode_snake_case_persisted`
-  - `test_permission_mode_camel_case_persisted`
-  - `test_permission_mode_carries_forward_when_absent_from_payload`
-  - `test_permission_mode_overwritten_when_new_value_supplied`
-  - `test_permission_mode_quick_write_carries_forward`
-  - `test_permission_mode_invalid_type_treated_as_none`
-
-### F-tests-108: `clearing` state is documented + supported in Rust but never produced by the hook
-- **Severity:** high
-- **Confidence:** 98
-- **Files:** CLAUDE.md schema; hooks/cue-hook:575 (valid_actions); cue-desktop/src-tauri/src/env_detect.rs:165-179 (no PreClear); cue-desktop/src-tauri/src/session_monitor.rs:943, 1009, 1089
-- **What:** Rust treats `clearing` as a first-class state. But: `PreClear` is NOT in `HOOK_EVENTS`; `"clearing"` is NOT in `valid_actions`; the only `"clearing"` reference in `hooks/cue-hook` is a comment on line 716. Every Rust test for clearing verifies behavior on a state that cannot ever appear in sessions.json.
-- **Why it matters:** False sense of completeness. Either feature was abandoned (drop everywhere) or the hook is missing `PreClear → clearing`. Current state is worst of both: dead code in producer, live code with tests in every consumer.
-- **Suggested fix:** Pick a direction and add an integration test:
-  - If feature should ship: add `("PreClear", "clearing")` to `HOOK_EVENTS`, add `"clearing"` to `valid_actions`, add `test_pre_clear_writes_clearing_state`.
-  - If abandoned: remove `clearing` from CLAUDE.md, drop arms from `is_liveness_sensitive`, `should_demote_stuck_active`, `dedup_state_priority`.
-  - Either way, add a contract test asserting every state arm in `is_liveness_sensitive`/`dedup_state_priority` is reachable from some hook action.
-
-### F-tests-109: Workspace-pinning contract (`stable_workspace`) untested
-- **Severity:** high
-- **Confidence:** 88
-- **Files:** hooks/cue-hook:813, 831
-- **What:** `workspace` pinned via `existing.get("workspace", workspace)`. No test confirms first-event seeding, subsequent-event preservation, or `_quick_state_write` preservation.
-- **Why it matters:** Flipping workspace mid-session breaks dedup, breaks Rust JSONL path resolution, breaks privacy.
-- **Suggested fix:** Add `TestWorkspacePinning`:
-  - `test_first_event_seeds_workspace_from_cwd`
-  - `test_subsequent_event_with_different_cwd_keeps_original_workspace`
-  - `test_quick_write_path_preserves_pinned_workspace`
-  - `test_remove_action_preserves_workspace_in_tombstone`
-
-### F-tests-110: Sessions.json corruption recovery (`.corrupt-<ts>` rename) untested
-- **Severity:** high
-- **Confidence:** 92
-- **Files:** hooks/cue-hook:666-672
-- **What:** When sessions.json fails to parse, hook renames it aside. No tests for rename step, fallback, or rename-failure no-op.
-- **Why it matters:** Only data-preservation path for forensic recovery.
-- **Suggested fix:** Add `TestCorruptionRecovery`:
-  - `test_invalid_json_renames_to_corrupt_suffix`
-  - `test_invalid_json_starts_fresh_after_rename`
-  - `test_unicode_decode_error_also_triggers_rename`
-  - `test_file_not_found_does_not_trigger_rename`
-  - `test_rename_failure_does_not_crash_hook`
-
-### F-tests-111: Stale-`waiting` write guard in main path untested
-- **Severity:** high
-- **Confidence:** 90
-- **Files:** hooks/cue-hook:734-742
-- **What:** Lines 739-742 skip `waiting` writes when `existing_activity > hook_start_time`. No test seeds `lastActivity > hook_start_time` and verifies the waiting write is skipped.
-- **Why it matters:** Race-condition guard for 300s HTTP call.
-- **Suggested fix:** Add `TestStaleWaitingGuard`:
-  - `test_main_path_waiting_skips_when_newer_activity_exists`
-  - `test_main_path_waiting_applies_when_no_newer_activity`
-
-### F-tests-112: Concurrent hooks racing on lock acquisition / lock-timeout untested
+### F-tests-002: `pending_tool_use` clearing on `tool_result` arrival — the demote signal for permission prompts — is never asserted at the parser level
 - **Severity:** high
 - **Confidence:** 80
-- **Files:** hooks/cue-hook:30-44
-- **What:** Non-Windows `_lock` retries `flock(LOCK_EX | LOCK_NB)` for 2s. No test exercises the retry loop, the 2-second timeout, or verifies lock-failure leaves sessions.json unchanged.
-- **Why it matters:** A regression dropping the timeout (flipping to blocking `LOCK_EX`) would let one stuck hook block the entire pipeline indefinitely.
-- **Suggested fix:** Add `TestLockContention` (Unix-only):
-  - `test_lock_retries_when_contended_briefly`
-  - `test_lock_times_out_after_2_seconds_when_indefinitely_held`
-  - `test_lock_failure_leaves_sessions_json_unchanged`
+- **Files:** cue-desktop/src-tauri/src/jsonl_parser.rs:1068-1082 (backward scan: `if entry.is_tool_result { break }` then `m.pending_tool_use=true`)
+- **What:** Every `assert!(!m.pending_tool_use)` in the suite reaches false via end_turn or no-tool paths. No test feeds the canonical resolve sequence `assistant(tool_use id=X) → user(tool_result tool_use_id=X)` and asserts `pending_tool_use == false`. That `break` on `is_tool_result` is the exact mechanism demoting a permission-prompt `waiting` card the instant approval lands. `test_tool_result_user_entry_not_counted` only checks the entry isn't a user prompt — it never builds metrics.
+- **Why it matters:** A refactor of the backward scan that changed the `break`/`pending` interplay would pin permission cards on `waiting` forever after approval with no failing test. This is the resolve half of the permission-prompt seed→resolve pair.
+- **Suggested fix:** Add `test_pending_tool_use_clears_when_tool_result_lands` (tool_use then matching tool_result → assert `!pending_tool_use`) and the negative twin `test_pending_tool_use_set_when_tool_result_for_other_id` (parallel tool: result for a different id → assert `pending_tool_use` stays true).
+- **Verification:** Change line 1070 `if entry.is_tool_result { break }` to `if false { break }` — the new test must fail; revert.
 
-### F-tests-113: Subagent-stop → `idle` via `_turn_has_finished` integration untested
+### F-tests-003: `poll_status` read-error and parse-failure recovery arms (repair threshold, transient-grace, FileTooLarge) are entirely untested
 - **Severity:** high
-- **Confidence:** 92
-- **Files:** hooks/cue-hook:781-799
-- **What:** When `subagent_stop` decrements counter to 0 AND `_turn_has_finished` returns True, action rewritten to `"idle"`. F-tests-104 covers the helper but the integration is unanchored.
-- **Suggested fix:**
-  - `test_subagent_stop_routes_to_idle_when_turn_finished`
-  - `test_subagent_stop_routes_to_working_when_turn_ongoing`
+- **Confidence:** 82
+- **Files:** cue-desktop/src-tauri/src/session_monitor.rs:158-262 (parse-failure counter :177, FileTooLarge arm :224, read-failure transient-grace counter :235)
+- **What:** `poll_status` reads the hardcoded `paths::sessions_json_path()` with no injection seam, so its error branches can't be hit by a test. Untested: (a) `REPAIR_THRESHOLD=5` parse-failure counter that holds prior state then renames-aside; (b) the new read-failure transient-grace arm whose comment says it was added to stop a "one-frame 0 sessions flash" (a prior regression fix with no lock); (c) the `FileTooLarge` arm that must KEEP prior state, not clear. `read_to_string_bounded` is unit-tested but the consumer's reaction to each outcome is not; `consecutive_parse_failures` is private and never observed.
+- **Why it matters:** Reverting the transient-grace arm to "clear on first read error" reintroduces the UI flash silently; inverting the FileTooLarge arm to clear blanks every card on a bloated file silently.
+- **Suggested fix:** Extract `poll_status_at(&self, status_path, projects_path)`; add `test_poll_keeps_prior_state_on_transient_read_error` (missing path, poll < threshold preserves, past threshold clears), `test_poll_keeps_prior_state_on_parse_failure` (malformed JSON, `.corrupt-*` rename only after threshold), `test_poll_keeps_prior_state_on_oversized_file` (>4 MiB file, list unchanged, NOT cleared).
+- **Verification:** Make the FileTooLarge arm fall through to clear — the oversized test fails; revert. Make the read-error arm clear on first failure — the transient test fails; revert.
+
+### F-tests-004: No cross-language schema-contract test — a hook-written sessions.json is never round-tripped through the Rust `StatusData`/`SessionInfo` serde structs
+- **Severity:** high
+- **Confidence:** 78
+- **Files:** cue-desktop/src-tauri/src/models.rs:12-83 (`SessionInfo` with `rename_all="camelCase"` + renames `inputTokens`/`outputTokens`/`model`; `StatusData`), hooks/cue-hook:278-307 and :928-942 (the entry dicts the hook writes)
+- **What:** The hook writes camelCase keys (`stateChangedAt`, `lastActivity`, `inputTokens`, `activeSubagents`, `permissionMode`, `errorType`, `pid`); Rust maps them via serde rename. No test constructs a hook-shaped JSON and asserts it deserializes into `StatusData` with correct values. `SessionInfo` has no `deny_unknown_fields` and most fields are `#[serde(default)]`, so a rename drift silently deserializes to the default and is invisible. Existing serde tests (models.rs:1325/1355) cover `PermissionRequest`/`PermissionLogEntry`, not the session entry.
+- **Why it matters:** Python-writes/Rust-reads is the highest-leverage contract in the app, exercised every poll. A camelCase/snake_case mismatch on a load-bearing field (`stateChangedAt` → active-duration timer + turn-ended demote, or `pid` → liveness) degrades silently with zero failing tests, despite CLAUDE.md mandating both sides conform.
+- **Suggested fix:** Add Rust `test_hook_written_sessions_json_round_trips` embedding a realistic full-field entry, asserting `from_str::<StatusData>` yields the right `state`, `state_changed_at`, `hook_input_tokens`, `active_subagents`, `permission_mode`, `error_type`, `pid`. Optionally check in a golden `fixtures/sessions.golden.json` loaded by both a Python reader test and the Rust test so one file locks both ends.
+- **Verification:** Remove `#[serde(rename="inputTokens")]` (models.rs:32) — the round-trip test must fail (field reads 0); revert. Rename a key in the embedded JSON to snake_case — it must fail.
 
 ## Out of scope
-- Frontend tests (Vitest/Jest) — outside Rust/Python target.
-- Tests for events the hook does NOT map — feature gap, not test gap.
-- Adequately covered: subagent counter increment/decrement/clamp; waiting/error preservation; stateChangedAt carry-forward vs reset; thinking-not-clobbered; `_validate_sessions`; session ID validation; subagent JSONL freshness check + self-heal; all Rust pure predicates.
+- **Brittleness:** no real `thread::sleep`, no wall-clock `now()` inside Rust predicate tests (all inject `now`), no HashMap-order assertions. Python tests use `time.time()` relative offsets with ≥60 s grace windows — deterministic, not flaky.
+- **`#[ignore]`:** `model_context.rs:781 live_binary_resolves_opus_4_8_to_1m` is correctly ignored (needs a real `claude` binary), documented, run via `--ignored`.
+- **Sidechain filter (LOW):** `test_sidechain_entries_do_not_corrupt_main_state` (jsonl_parser.rs:2173) covers the full-parse path; the same `isSidechain` drop in `parse_jsonl_to_session_metrics_cached` (incremental) isn't separately asserted. Below the HIGH floor — single shared function.
+- **Predicate coverage is genuinely strong** (not flagged): `should_demote_stalled_turn` (7 tests), `should_resolve_waiting` (3), `resolve_liveness` (pid-reuse/gone/name-match), `should_demote_stuck_active` (compacting-only 60 s), `should_demote_turn_ended` incl. waiting-extension, and Python subagent counter balance (increment/decrement/clamp/no-negative/preserve-waiting). The gap is exclusively the untested seam composing these inside `poll_status`.
+- **Deprecated field (LOW):** `SessionInfo.pending_permission` (models.rs:77) is kept for back-compat; the hook no longer writes it. Python locks the hook side (`test_legacy_pending_permission_is_dropped_by_next_event`); no Rust assertion that a stale `pendingPermission` deserializes harmlessly — minor, below floor.
