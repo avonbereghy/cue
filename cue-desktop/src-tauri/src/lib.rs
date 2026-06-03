@@ -22,7 +22,7 @@ pub mod system_info;
 pub mod tray;
 
 use models::{EnrichedSession, Settings};
-use session_monitor::SessionMonitorState;
+use session_monitor::{LockSafe, SessionMonitorState};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -254,7 +254,7 @@ fn quit_app(app: AppHandle) {
 
 #[tauri::command]
 fn get_sessions(state: State<'_, AppState>) -> Vec<EnrichedSession> {
-    state.monitor.enriched_sessions.lock().unwrap().clone()
+    state.monitor.enriched_sessions.lock_safe().clone()
 }
 
 #[tauri::command]
@@ -522,7 +522,7 @@ fn record_permission_decision(
     );
     state.pending_permissions.resolve(request_id, decision)?;
 
-    if let Some(req) = state.permission_metadata.lock().unwrap().remove(request_id) {
+    if let Some(req) = state.permission_metadata.lock_safe().remove(request_id) {
         let summary = summary_formatter::format_tool_summary(&req.tool_name, &req.tool_input);
         let entry = models::PermissionLogEntry {
             timestamp: std::time::SystemTime::now()
@@ -1164,7 +1164,7 @@ fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
                 m.refresh_metrics();
                 m.refresh_supplemental();
                 m.poll_status();
-                m.enriched_sessions.lock().unwrap().clone()
+                m.enriched_sessions.lock_safe().clone()
             })
             .await;
             match result {
@@ -1194,7 +1194,7 @@ fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
             let m = monitor_poll.clone();
             let result = tokio::task::spawn_blocking(move || {
                 m.poll_status();
-                m.enriched_sessions.lock().unwrap().clone()
+                m.enriched_sessions.lock_safe().clone()
             })
             .await;
             match result {
@@ -1240,7 +1240,7 @@ fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
         let m = monitor.clone();
         let _ = tokio::task::spawn_blocking(move || {
             let version = system_info::get_claude_version();
-            m.supplemental.lock().unwrap().claude_version = version;
+            m.supplemental.lock_safe().claude_version = version;
         })
         .await;
     });
@@ -1363,7 +1363,7 @@ pub fn run() {
                         if window.label() == "main" {
                             if let Some(state) = window.try_state::<AppState>() {
                                 let sessions =
-                                    state.monitor.enriched_sessions.lock().unwrap().clone();
+                                    state.monitor.enriched_sessions.lock_safe().clone();
                                 let _ = window.emit("sessions-updated", &sessions);
                             }
                         }
@@ -1518,11 +1518,29 @@ fn spawn_permission_server(
         // the same byte slice without cloning the 32-char string repeatedly.
         let token = Arc::new(token);
 
+        // Bound concurrent in-flight connections so a local flood of slow or
+        // stalled peers can't accumulate unbounded Tokio tasks + file
+        // descriptors before each connection's ingest timeout drops it. The
+        // real client is the single local Python hook; 32 is far more than
+        // legitimate use ever needs. At capacity we drop new connections
+        // immediately (the peer can retry) rather than stalling the accept loop.
+        const MAX_CONNECTIONS: usize = 32;
+        let conn_limit = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
+
         loop {
             let (stream, _addr) = match listener.accept().await {
                 Ok(s) => s,
                 Err(e) => {
                     log::debug!("Accept error: {}", e);
+                    continue;
+                }
+            };
+
+            let permit = match conn_limit.clone().try_acquire_owned() {
+                Ok(p) => p,
+                Err(_) => {
+                    log::debug!("Permission server at capacity ({} conns); dropping", MAX_CONNECTIONS);
+                    drop(stream);
                     continue;
                 }
             };
@@ -1533,6 +1551,9 @@ fn spawn_permission_server(
             let token = token.clone();
 
             tokio::spawn(async move {
+                // Hold the permit for the connection's lifetime; releasing it on
+                // task end (including on ingest timeout) frees the slot.
+                let _permit = permit;
                 if let Err(e) =
                     handle_permission_connection(stream, app, pending, metadata, token).await
                 {
@@ -1558,6 +1579,14 @@ async fn handle_permission_connection(
     const MAX_HEADER_BYTES: usize = 8 * 1024;
     const MAX_BODY_BYTES: usize = 1024 * 1024;
 
+    // Overall deadline for ingesting the request (header + body). A fixed
+    // deadline — not a per-read timeout — defeats a slowloris that dribbles one
+    // byte at a time (which would otherwise keep resetting a per-read timer
+    // forever), capping the whole pre-decision phase. The post-auth user
+    // decision wait has its own separate 60s timeout downstream.
+    let ingest_deadline =
+        tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+
     // Read until we have the \r\n\r\n header terminator or MAX_HEADER_BYTES.
     // A single `read` is not guaranteed to deliver a full header block; fragmented
     // TCP segments would otherwise silently fail the Host-header parse.
@@ -1565,7 +1594,7 @@ async fn handle_permission_connection(
     let header_end;
     loop {
         let mut chunk = [0u8; 4096];
-        let got = stream.read(&mut chunk).await?;
+        let got = tokio::time::timeout_at(ingest_deadline, stream.read(&mut chunk)).await??;
         if got == 0 {
             return Ok(());
         }
@@ -1674,7 +1703,8 @@ async fn handle_permission_connection(
             // Read remaining body if needed
             while body_bytes.len() < content_length {
                 let mut extra = vec![0u8; content_length - body_bytes.len()];
-                let extra_n = stream.read(&mut extra).await?;
+                let extra_n =
+                    tokio::time::timeout_at(ingest_deadline, stream.read(&mut extra)).await??;
                 if extra_n == 0 {
                     break;
                 }
@@ -1759,7 +1789,7 @@ async fn handle_permission_connection(
             let rx = match pending.insert(&request_id) {
                 Some(rx) => rx,
                 None => {
-                    metadata.lock().unwrap().remove(&request_id);
+                    metadata.lock_safe().remove(&request_id);
                     let response = "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nToo many requests";
                     let _ = stream.write_all(response.as_bytes()).await;
                     return Ok(());
@@ -1803,7 +1833,7 @@ async fn handle_permission_connection(
                     // was abandoned, not actively denied; the audit log
                     // shouldn't claim the user said no.
                     pending.remove(&request_id);
-                    metadata.lock().unwrap().remove(&request_id);
+                    metadata.lock_safe().remove(&request_id);
                     let response = "HTTP/1.1 504 Gateway Timeout\r\nContent-Type: text/plain\r\nContent-Length: 7\r\nConnection: close\r\n\r\nTimeout";
                     stream.write_all(response.as_bytes()).await?;
                     return Ok(());
@@ -1918,7 +1948,7 @@ fn setup_tray(
     handle: &AppHandle,
     monitor: &Arc<SessionMonitorState>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let all_sessions = monitor.enriched_sessions.lock().unwrap().clone();
+    let all_sessions = monitor.enriched_sessions.lock_safe().clone();
     let sessions = tray_active_sessions(&all_sessions);
     let style = settings::load_settings().menu_bar_style;
     let png_bytes = render_tray_icon(&style, &sessions, true, 0, 44);
@@ -1942,7 +1972,7 @@ fn setup_tray(
             {
                 let app = tray.app_handle();
                 if let Some(state) = app.try_state::<AppState>() {
-                    *state.last_tray_rect.lock().unwrap() = Some(rect);
+                    *state.last_tray_rect.lock_safe() = Some(rect);
                 }
                 show_tray_popover(app, rect);
             }
@@ -2119,7 +2149,7 @@ fn show_tray_popover(app: &AppHandle, rect: tauri::Rect) {
     // Cache the rect we just used so a subsequent global-shortcut invocation
     // can re-anchor at the same spot without waiting for another click.
     if let Some(state) = app.try_state::<AppState>() {
-        *state.last_tray_rect.lock().unwrap() = Some(rect);
+        *state.last_tray_rect.lock_safe() = Some(rect);
     }
 }
 
@@ -2138,7 +2168,7 @@ fn toggle_tray_popover_via_shortcut(app: &AppHandle) {
     }
     let rect = app
         .try_state::<AppState>()
-        .and_then(|s| *s.last_tray_rect.lock().unwrap())
+        .and_then(|s| *s.last_tray_rect.lock_safe())
         .unwrap_or_else(|| fallback_tray_rect(&popover));
     show_tray_popover(app, rect);
 }
@@ -2177,7 +2207,7 @@ fn apply_shortcut_settings(handle: &AppHandle, settings: &models::Settings) {
     let gs = handle.global_shortcut();
 
     // Unregister whatever we had previously, so the new value cleanly replaces it.
-    let mut current = state.registered_shortcut.lock().unwrap();
+    let mut current = state.registered_shortcut.lock_safe();
     if let Some(old) = current.take() {
         let _ = gs.unregister(old.as_str());
     }
@@ -2285,11 +2315,11 @@ fn spawn_blink_timer(handle: AppHandle, monitor: Arc<SessionMonitorState>) {
         loop {
             interval.tick().await;
 
-            let all_sessions = monitor.enriched_sessions.lock().unwrap().clone();
+            let all_sessions = monitor.enriched_sessions.lock_safe().clone();
             let sessions = tray_active_sessions(&all_sessions);
 
             let current = {
-                let mut t = tick.lock().unwrap();
+                let mut t = tick.lock_safe();
                 *t = t.wrapping_add(1);
                 *t
             };
@@ -2363,7 +2393,7 @@ fn update_tray(
     let icon_key = format!("{}:{}:{}", menu_key, phase_key, style);
 
     let icon_changed = {
-        let last = last_icon_key.lock().unwrap();
+        let last = last_icon_key.lock_safe();
         *last != icon_key
     };
 
@@ -2374,12 +2404,12 @@ fn update_tray(
             if let Ok(icon) = tauri::image::Image::from_bytes(&png_bytes) {
                 let _ = tray.set_icon(Some(icon));
             }
-            *last_icon_key.lock().unwrap() = icon_key;
+            *last_icon_key.lock_safe() = icon_key;
         }
 
         // Only rebuild menu when session data actually changes
         let should_rebuild = {
-            let last = last_menu_key.lock().unwrap();
+            let last = last_menu_key.lock_safe();
             *last != menu_key
         };
 
@@ -2390,7 +2420,7 @@ fn update_tray(
                 let _ = tray.set_menu(Some(menu));
             }
 
-            *last_menu_key.lock().unwrap() = menu_key;
+            *last_menu_key.lock_safe() = menu_key;
         }
     }
 }

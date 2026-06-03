@@ -12,11 +12,28 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
+    // The reader must be at least as tolerant as the writer. The Python hook's
+    // `_validate_sessions` intentionally *preserves* entries missing these
+    // fields (version skew, an interrupted older hook, a manual edit) rather
+    // than dropping them. Because `StatusData.sessions` is one `HashMap`, a
+    // single value missing a non-`default` field would abort the WHOLE parse
+    // (`serde_json::from_str::<StatusData>` → `Err`), blanking every card and
+    // — after `REPAIR_THRESHOLD` polls — tripping the self-repair that renames
+    // sessions.json aside. So every field carries `#[serde(default)]`; a
+    // defaulted-empty entry then deserializes cleanly and is dropped by the
+    // admission filter (`validate_session_id` / `sanitize_workspace_path` /
+    // `admit_session`, which rejects the 0.0 timestamps) instead of taking
+    // every healthy session down with it.
+    #[serde(default)]
     pub id: String,
+    #[serde(default)]
     pub workspace: String,
     /// One of: "working", "waiting", "error", "subagent", "idle", "done"
+    #[serde(default)]
     pub state: String,
+    #[serde(default)]
     pub last_activity: f64,
+    #[serde(default)]
     pub started_at: f64,
     /// Unix timestamp of the last actual state transition, written by the hook.
     /// The 1 Hz poller can miss brief intermediate states (e.g. working→compacting→working
@@ -1217,6 +1234,83 @@ mod tests {
             error_type: None,
             pending_permission: None,
         }
+    }
+
+    /// F-tests-004: cross-language schema-contract lock. A sessions.json entry
+    /// shaped exactly as the Python hook writes it (camelCase keys, the
+    /// `inputTokens`/`outputTokens`/`model` renames) must round-trip through the
+    /// Rust serde structs with every load-bearing field intact. A casing/rename
+    /// drift on `stateChangedAt` (active-duration timer + turn-ended demote) or
+    /// `pid` (liveness) would otherwise deserialize to the default silently.
+    #[test]
+    fn test_hook_written_sessions_json_round_trips() {
+        let json = r#"{
+            "sessions": {
+                "11111111-1111-1111-1111-111111111111": {
+                    "id": "11111111-1111-1111-1111-111111111111",
+                    "workspace": "/Users/x/proj",
+                    "state": "working",
+                    "lastActivity": 1717000000.0,
+                    "startedAt": 1716999000.0,
+                    "stateChangedAt": 1717000050.0,
+                    "source": "vscode",
+                    "inputTokens": 1234,
+                    "outputTokens": 567,
+                    "model": "claude-opus-4-8",
+                    "activeSubagents": 2,
+                    "permissionMode": "default",
+                    "pid": 4242
+                }
+            }
+        }"#;
+        let data: StatusData = serde_json::from_str(json).expect("hook-shaped JSON must deserialize");
+        let s = data
+            .sessions
+            .get("11111111-1111-1111-1111-111111111111")
+            .expect("session present");
+        assert_eq!(s.state, "working");
+        assert_eq!(s.last_activity, 1717000000.0);
+        assert_eq!(s.started_at, 1716999000.0);
+        assert_eq!(s.state_changed_at, Some(1717000050.0));
+        assert_eq!(s.source.as_deref(), Some("vscode"));
+        assert_eq!(s.hook_input_tokens, 1234);
+        assert_eq!(s.hook_output_tokens, 567);
+        assert_eq!(s.hook_model, "claude-opus-4-8");
+        assert_eq!(s.active_subagents, 2);
+        assert_eq!(s.permission_mode.as_deref(), Some("default"));
+        assert_eq!(s.pid, Some(4242));
+    }
+
+    /// F-types-001: one malformed entry must NOT abort the whole parse. The hook
+    /// intentionally preserves entries missing `state`/`lastActivity`/`startedAt`
+    /// (`tests/hooks/test_cue_hook.py` locks this on the writer side); the reader
+    /// must tolerate them per-entry instead of dropping every healthy session.
+    #[test]
+    fn test_malformed_entry_does_not_abort_whole_parse() {
+        let json = r#"{
+            "sessions": {
+                "abc": {"id": "abc", "workspace": "/Users/x/y"},
+                "22222222-2222-2222-2222-222222222222": {
+                    "id": "22222222-2222-2222-2222-222222222222",
+                    "workspace": "/Users/x/z",
+                    "state": "working",
+                    "lastActivity": 1.0,
+                    "startedAt": 1.0
+                }
+            }
+        }"#;
+        // Before the fix this returned Err (missing field `state`), taking the
+        // healthy session down with the bad one.
+        let data: StatusData =
+            serde_json::from_str(json).expect("a malformed entry must not abort the map");
+        assert_eq!(data.sessions.len(), 2, "both entries deserialize");
+        // The malformed entry defaults to empty state / 0.0 timestamps, which the
+        // admission filter in poll_status drops; the healthy one survives intact.
+        let healthy = &data.sessions["22222222-2222-2222-2222-222222222222"];
+        assert_eq!(healthy.state, "working");
+        let bad = &data.sessions["abc"];
+        assert_eq!(bad.state, "");
+        assert_eq!(bad.started_at, 0.0);
     }
 
     #[test]
