@@ -1143,6 +1143,14 @@ fn aggregate_entries(
             .any(|id| !resolved.contains(id.as_str()))
     });
 
+    // Freshness marker: the newest entry timestamp this parse reflects. The
+    // waiting verdict gates its demote on this so a hook-seeded `waiting` card
+    // isn't dropped to idle while the metrics still predate the dialog opening.
+    m.last_entry_ts = entries
+        .iter()
+        .filter_map(|e| e.timestamp)
+        .fold(None, |acc, t| Some(acc.map_or(t, |a: f64| a.max(t))));
+
     // Todo items: accumulate from all entries.
     // TodoWrite (bulk_replace=true) replaces the entire list.
     // TaskCreate (bulk_replace=false) appends incrementally.

@@ -257,6 +257,16 @@ pub struct SessionMetrics {
     /// treats the turn as finished and demotes stuck working/thinking cards.
     #[serde(default)]
     pub last_end_turn_ts: Option<f64>,
+    /// Timestamp (unix secs) of the newest transcript entry these metrics
+    /// reflect — i.e. how far the parse has caught up. The waiting verdict uses
+    /// it as a freshness gate: a hook-seeded `waiting` card must not be demoted
+    /// to idle while the metrics still predate `stateChangedAt` (the parse
+    /// hasn't yet seen the AskUserQuestion / permission dialog that opened it).
+    /// refresh_metrics runs every 5s while poll_status runs every 1s, so without
+    /// this gate a freshly-opened question flickers to idle for up to a refresh
+    /// cycle — the visible "Cue doesn't catch the question" bug.
+    #[serde(default)]
+    pub last_entry_ts: Option<f64>,
     /// True if the latest assistant message contains a non-empty `text` content
     /// block — i.e., user-visible response prose has begun streaming. Used to
     /// promote `thinking` → `working` for text-only responses where neither
