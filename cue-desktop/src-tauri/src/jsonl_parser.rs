@@ -969,7 +969,16 @@ pub fn parse_jsonl_to_session_metrics_cached(
     cache: &mut JsonlEntryCache,
 ) -> Option<crate::models::SessionMetrics> {
     refresh_entry_cache(path, cache);
-    aggregate_entries(&cache.entries, path)
+    let mut m = aggregate_entries(&cache.entries, path)?;
+    // Stamp the transcript file mtime this parse reflects so the turn-ended
+    // demote can tell a genuinely-idle session (file unchanged since the last
+    // end_turn) from a resumed/stale-bumped one where stateChangedAt jumped
+    // ahead of the end_turn without a new turn.
+    m.parsed_file_mtime = cache
+        .file_mtime
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64());
+    Some(m)
 }
 
 fn aggregate_entries(
