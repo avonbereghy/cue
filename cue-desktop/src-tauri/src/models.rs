@@ -267,6 +267,14 @@ pub struct SessionMetrics {
     /// cycle — the visible "Cue doesn't catch the question" bug.
     #[serde(default)]
     pub last_entry_ts: Option<f64>,
+    /// Transcript FILE mtime (unix secs) at the last parse — how current the
+    /// parse is, independent of content timestamps. `claude --resume` rewrites
+    /// the transcript (bumping its mtime + firing a "working" hook event) but
+    /// adds only metadata entries with no timestamp, so `last_entry_ts` can't
+    /// see it; the file mtime can. The turn-ended demote uses it to recover a
+    /// resumed-but-idle session that the hook left pinned on `working`.
+    #[serde(default)]
+    pub parsed_file_mtime: Option<f64>,
     /// True if the latest assistant message contains a non-empty `text` content
     /// block — i.e., user-visible response prose has begun streaming. Used to
     /// promote `thinking` → `working` for text-only responses where neither

@@ -1360,7 +1360,24 @@ fn should_demote_turn_ended(
         return false;
     };
     let boundary = state_changed_at.unwrap_or(0.0);
-    end_turn_ts > boundary
+    if end_turn_ts > boundary {
+        return true;
+    }
+    // Resume / stale-working recovery. `claude --resume` (and some other late
+    // hook writes) stamp a fresh `working`/`thinking` with stateChangedAt NEWER
+    // than the last end_turn while adding no new turn — the transcript's last
+    // meaningful entry is still that end_turn, so the session is idle, but the
+    // `end_turn_ts > boundary` check above can't see it. We're already past the
+    // `pending_tool_use` guard and `last_end_turn_ts` is Some (a genuine new
+    // prompt would have set it to None by stopping the backward scan at the new
+    // user message), so the turn IS ended. Demote — but only once the parse has
+    // provably re-read the transcript past stateChangedAt (file mtime advances
+    // on the resume rewrite even though content timestamps don't). That gate
+    // also absorbs the ~5s metrics-refresh lag on a real new turn, so a freshly
+    // working card never flickers to idle before the parse catches up.
+    metrics
+        .parsed_file_mtime
+        .is_some_and(|mtime| mtime >= boundary)
 }
 
 /// Pure predicate for the stuck-`compacting`/`clearing` cap. Demotes to
@@ -1965,6 +1982,34 @@ mod tests {
         // boundary, or before the user's new prompt). Must not demote.
         let m = metrics_with_end_turn(Some(50.0), false);
         assert!(!should_demote_turn_ended("working", Some(100.0), Some(&m)));
+    }
+
+    #[test]
+    fn test_demote_resumed_idle_session_when_parse_caught_up() {
+        // `claude --resume` bumped stateChangedAt (200) past the old end_turn
+        // (100) with no new turn. Once the parse re-read the transcript past the
+        // bump (file mtime 250 >= 200), the stuck `working` card demotes to idle.
+        let m = crate::models::SessionMetrics {
+            last_end_turn_ts: Some(100.0),
+            pending_tool_use: false,
+            parsed_file_mtime: Some(250.0),
+            ..Default::default()
+        };
+        assert!(should_demote_turn_ended("working", Some(200.0), Some(&m)));
+        assert!(should_demote_turn_ended("thinking", Some(200.0), Some(&m)));
+    }
+
+    #[test]
+    fn test_no_demote_resumed_when_parse_not_caught_up() {
+        // Same shape but the parse is still stale (mtime 150 < stateChangedAt
+        // 200) — could be a real new turn mid-refresh, so HOLD (no idle flicker).
+        let m = crate::models::SessionMetrics {
+            last_end_turn_ts: Some(100.0),
+            pending_tool_use: false,
+            parsed_file_mtime: Some(150.0),
+            ..Default::default()
+        };
+        assert!(!should_demote_turn_ended("working", Some(200.0), Some(&m)));
     }
 
     #[test]
