@@ -674,52 +674,59 @@ impl SessionMonitorState {
                     }
 
                     // ── Subagent rescue latch ──────────────────────────
-                    // F-reliability-008 — key on latest `started_at` rather
-                    // than `ended_at`. For a still-running subagent
-                    // `parse_subagent_jsonl` advances ended_at on every
-                    // refresh (it's `max(ts)` across all entries), so the
-                    // prior identity `latest_ended` re-armed the rescue on
-                    // every poll. `started_at` is set once on the first
-                    // parsed entry and never advances, so the same agent
-                    // produces a stable identity; a NEW agent produces a
-                    // larger started_at and re-fires correctly.
-                    if matches!(s.state.as_str(), "done" | "idle") && s.active_subagents == 0 {
-                        if let Some(metrics) = metrics {
-                            let latest_started = metrics
-                                .subagents
-                                .iter()
-                                .filter(|a| a.is_recently_live(now_secs, 10.0))
-                                .filter_map(|a| a.started_at)
-                                .fold(0.0_f64, f64::max);
-                            if latest_started > 0.0 {
-                                let already = rescued.get(&s.id).copied().unwrap_or(0.0);
-                                if (latest_started - already).abs() > 0.001 {
-                                    let live = metrics
-                                        .subagents
-                                        .iter()
-                                        .filter(|a| a.is_recently_live(now_secs, 10.0))
-                                        .count() as i64;
-                                    if live > 0 {
-                                        // Demoted from info→debug: session ids
-                                        // map 1:1 to JSONL files / conversation
-                                        // records, and the privacy posture only
-                                        // shows leaf workspace names. Surface
-                                        // with RUST_LOG=cue_desktop=debug when
-                                        // investigating rescue cycles.
-                                        log::debug!(
-                                            "subagent-rescue-latched id={} state={}→subagent live={}",
-                                            s.id, s.state, live
-                                        );
-                                        s.state = "subagent".to_string();
-                                        s.active_subagents = live;
-                                        rescued.insert(s.id.clone(), latest_started);
-                                    }
-                                }
-                            }
+                    // F-reliability-009 — counter-blind JSONL fallback. The
+                    // hook's `activeSubagents` counter undercounts parallel
+                    // batches: 4+ `SubagentStart` events contend for the
+                    // sessions.json lock and the hook's non-blocking flock
+                    // drops any that can't acquire within 2s, so a genuinely
+                    // delegating turn can sit at idle/done with the counter
+                    // stuck at 0 (observed: a 4-track `parallel()` fan-out
+                    // showing `idle` for its whole run). Recover it from the
+                    // JSONL scan, using the SAME 60s mtime liveness
+                    // (`is_active`) that `should_demote_stale_subagent` uses to
+                    // LEAVE the state — enter and exit are now symmetric, so
+                    // the card holds `subagent` for the whole run and exits
+                    // exactly when the demoter would.
+                    //
+                    // Assert `subagent` on EVERY qualifying poll, not once per
+                    // cohort. The predecessor (F-reliability-008) keyed the
+                    // state write on a stable per-cohort `started_at` plus a
+                    // 10s `ended_at` window: after the first poll the latch
+                    // matched, so the write was skipped and the card reverted
+                    // to idle — and a batch whose agents went quiet >10s
+                    // mid-tool-call never re-qualified. The `rescued` map now
+                    // throttles only the debug log (once per cohort), never the
+                    // state assignment.
+                    if let Some(live) =
+                        subagent_rescue_count(&s.state, s.active_subagents, metrics)
+                    {
+                        let latest_started = metrics
+                            .map(|m| {
+                                m.subagents
+                                    .iter()
+                                    .filter(|a| a.is_active)
+                                    .filter_map(|a| a.started_at)
+                                    .fold(0.0_f64, f64::max)
+                            })
+                            .unwrap_or(0.0);
+                        let already = rescued.get(&s.id).copied().unwrap_or(0.0);
+                        if (latest_started - already).abs() > 0.001 {
+                            // Demoted from info→debug: session ids map 1:1 to
+                            // JSONL files / conversation records, and the
+                            // privacy posture only shows leaf workspace names.
+                            // Surface with RUST_LOG=cue_desktop=debug when
+                            // investigating rescue cycles.
+                            log::debug!(
+                                "subagent-rescue-latched id={} state={}→subagent live={}",
+                                s.id, s.state, live
+                            );
+                            rescued.insert(s.id.clone(), latest_started);
                         }
+                        s.state = "subagent".to_string();
+                        s.active_subagents = live;
                     } else if !matches!(s.state.as_str(), "done" | "idle" | "subagent") {
                         // Active states clear the rescue latch so the NEXT
-                        // done/idle window can rescue if needed.
+                        // done/idle window re-logs if needed.
                         rescued.remove(&s.id);
                     }
 
@@ -1495,6 +1502,39 @@ fn should_demote_stale_subagent(
             age >= 30.0
         }
     }
+}
+
+/// Pure predicate for the subagent rescue — the JSONL-scan fallback that keeps
+/// a card on `subagent` when the hook's `activeSubagents` counter undercounts a
+/// parallel batch. The hook increments the counter on each `SubagentStart`, but
+/// those events race for the `sessions.json` lock and the hook's non-blocking
+/// flock drops any that can't acquire within 2s; a 4-way `parallel()` fan-out
+/// can therefore leave the counter at 0 while the agents are plainly running.
+/// Returns `Some(live)` — the count of live subagent JSONLs — when a
+/// `done`/`idle` card with a zero counter should be shown as `subagent`, else
+/// `None`.
+///
+/// Liveness is the 60s file-mtime check (`is_active`) — the SAME signal
+/// `should_demote_stale_subagent` uses to demote OUT of `subagent`. Matching
+/// them makes enter/exit symmetric: the card holds `subagent` for the whole run
+/// and leaves it exactly when the demoter would. (The prior inline form used a
+/// 10s `ended_at` window and asserted the state once per cohort, so a long
+/// batch whose agents fell quiet >10s mid-tool-call blipped `subagent` for a
+/// single poll, then reverted to idle for the rest of the run.)
+fn subagent_rescue_count(
+    state: &str,
+    active_subagents: i64,
+    metrics: Option<&crate::models::SessionMetrics>,
+) -> Option<i64> {
+    if !matches!(state, "done" | "idle") || active_subagents != 0 {
+        return None;
+    }
+    let live = metrics?
+        .subagents
+        .iter()
+        .filter(|a| a.is_active)
+        .count() as i64;
+    (live > 0).then_some(live)
 }
 
 /// Outcome of the per-poll thinking→working latch decision. Pure so tests
@@ -2296,6 +2336,72 @@ mod tests {
             Some(&m),
             now,
         ));
+    }
+
+    #[test]
+    fn test_subagent_rescue_when_counter_zero_and_jsonl_active() {
+        // The core fix: the hook counter dropped to 0 mid-batch (lost
+        // SubagentStart under lock contention) but a subagent JSONL is live.
+        // Both idle and done must be rescued to subagent on every poll.
+        let m = metrics_with_subagents(vec![subagent(true)]);
+        assert_eq!(subagent_rescue_count("idle", 0, Some(&m)), Some(1));
+        assert_eq!(subagent_rescue_count("done", 0, Some(&m)), Some(1));
+    }
+
+    #[test]
+    fn test_subagent_rescue_counts_only_active_jsonls() {
+        // The live count reflects only the active (mtime < 60s) JSONLs — a
+        // finished agent in the cohort must not inflate `activeSubagents`.
+        let m = metrics_with_subagents(vec![subagent(true), subagent(false), subagent(true)]);
+        assert_eq!(subagent_rescue_count("idle", 0, Some(&m)), Some(2));
+    }
+
+    #[test]
+    fn test_no_subagent_rescue_when_no_active_jsonl() {
+        // All JSONLs quiet (>60s mtime) → the agents are gone; don't rescue.
+        // Symmetric with should_demote_stale_subagent's `is_active` exit, so a
+        // genuinely-finished batch lands on idle rather than flapping.
+        let m = metrics_with_subagents(vec![subagent(false), subagent(false)]);
+        assert_eq!(subagent_rescue_count("idle", 0, Some(&m)), None);
+    }
+
+    #[test]
+    fn test_no_subagent_rescue_when_counter_nonzero() {
+        // Counter > 0 means the hook already owns the subagent state — the
+        // rescue is strictly the counter-is-zero fallback.
+        let m = metrics_with_subagents(vec![subagent(true)]);
+        assert_eq!(subagent_rescue_count("idle", 2, Some(&m)), None);
+    }
+
+    #[test]
+    fn test_no_subagent_rescue_for_non_idle_states() {
+        // Only done/idle are rescuable; never override an active/attention
+        // state (or re-enter an already-subagent card) from the JSONL scan.
+        let m = metrics_with_subagents(vec![subagent(true)]);
+        for st in [
+            "working",
+            "thinking",
+            "waiting",
+            "error",
+            "compacting",
+            "subagent",
+        ] {
+            assert_eq!(
+                subagent_rescue_count(st, 0, Some(&m)),
+                None,
+                "state {} must not be rescued",
+                st
+            );
+        }
+    }
+
+    #[test]
+    fn test_no_subagent_rescue_when_metrics_absent_or_empty() {
+        // No transcript parsed yet, or no subagent JSONLs at all → nothing to
+        // rescue from.
+        assert_eq!(subagent_rescue_count("idle", 0, None), None);
+        let m = metrics_with_subagents(vec![]);
+        assert_eq!(subagent_rescue_count("idle", 0, Some(&m)), None);
     }
 
     #[test]
