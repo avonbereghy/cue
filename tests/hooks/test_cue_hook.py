@@ -133,12 +133,44 @@ class TestSubagentJsonlsActive:
         # Just-created file → fresh.
         assert hook._subagent_jsonls_active(transcript, time.time())
 
-    def test_returns_false_when_jsonl_stale_past_window(self, hook, tmp_path):
+    # Minimal agent transcripts for tail-state liveness. A finished agent's
+    # last assistant entry carries stop_reason=end_turn; a running agent's
+    # tail is still mid-turn (tool_use / no assistant yet).
+    _FINISHED = (
+        '{"type":"assistant","timestamp":1.0,"message":'
+        '{"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}}\n'
+    )
+    _RUNNING = (
+        '{"type":"assistant","timestamp":1.0,"message":'
+        '{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}],'
+        '"stop_reason":"tool_use"}}\n'
+    )
+
+    def test_quiet_but_unfinished_jsonl_is_still_active(self, hook, tmp_path):
+        # Real agent batches show 71-167s silent gaps inside long tool calls.
+        # A quiet file whose tail has NOT reached end_turn must count as
+        # active (the old pure-mtime check zeroed live counters here).
         transcript, subagents_dir = self._setup_subagents_dir(tmp_path)
         agent_file = subagents_dir / "agent1.jsonl"
-        agent_file.write_text("{}")
-        # Set mtime to 60s ago — window default is 30s.
+        agent_file.write_text(self._RUNNING)
+        old = time.time() - 120
+        os.utime(agent_file, (old, old))
+        assert hook._subagent_jsonls_active(transcript, time.time())
+
+    def test_returns_false_when_quiet_jsonl_tail_finished(self, hook, tmp_path):
+        transcript, subagents_dir = self._setup_subagents_dir(tmp_path)
+        agent_file = subagents_dir / "agent1.jsonl"
+        agent_file.write_text(self._FINISHED)
         old = time.time() - 60
+        os.utime(agent_file, (old, old))
+        assert not hook._subagent_jsonls_active(transcript, time.time())
+
+    def test_returns_false_past_crash_backstop(self, hook, tmp_path):
+        # Unfinished tail but silent past the 10-min backstop → agent died.
+        transcript, subagents_dir = self._setup_subagents_dir(tmp_path)
+        agent_file = subagents_dir / "agent1.jsonl"
+        agent_file.write_text(self._RUNNING)
+        old = time.time() - 700
         os.utime(agent_file, (old, old))
         assert not hook._subagent_jsonls_active(transcript, time.time())
 
@@ -146,7 +178,7 @@ class TestSubagentJsonlsActive:
         transcript, subagents_dir = self._setup_subagents_dir(tmp_path)
         stale = subagents_dir / "old.jsonl"
         fresh = subagents_dir / "new.jsonl"
-        stale.write_text("{}")
+        stale.write_text(self._FINISHED)
         fresh.write_text("{}")
         old = time.time() - 60
         os.utime(stale, (old, old))

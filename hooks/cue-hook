@@ -182,15 +182,37 @@ def _validate_sessions(data):
     return {"sessions": preserved}
 
 
+# Crash backstop for subagent liveness (mirrors jsonl_parser.rs's
+# SUBAGENT_BACKSTOP_SECS): an agent whose transcript never reached end_turn
+# (killed process) stops counting as live after this much total silence.
+_SUBAGENT_BACKSTOP_SECS = 600.0
+
+
+def _agent_tail_finished(jsonl_path):
+    """True if the agent's transcript tail shows a completed run — its last
+    assistant entry has stop_reason == "end_turn". Running agents sit on
+    stop_reason tool_use (or no assistant entry yet)."""
+    obj = _scan_tail_for_assistant(
+        jsonl_path, lambda o: o.get("type") == "assistant"
+    )
+    if not obj:
+        return False
+    return (obj.get("message") or {}).get("stop_reason") == "end_turn"
+
+
 def _subagent_jsonls_active(transcript_path, now, window_secs=30.0):
-    """True if any subagent JSONL under the session's subagents/ dir
-    has been modified within `window_secs`. Used by the stale-subagent
-    self-heal to verify the subagents are truly gone before zeroing
-    `activeSubagents`.
+    """True if any subagent JSONL under the session's subagents/ dir belongs
+    to an agent that is still running. Used by the stale-subagent self-heal to
+    verify the subagents are truly gone before zeroing `activeSubagents`.
+
+    Liveness is transcript-state, not recency: a fresh mtime (< window_secs)
+    short-circuits as active without a read, but a quiet file is only "gone"
+    if its tail reached end_turn OR it has been silent past the 10-minute
+    crash backstop. Real agent batches show 71–167s silent gaps inside long
+    tool calls — the old pure-mtime check zeroed live counters mid-run.
 
     Subagent JSONLs live at `<projects>/<encoded-ws>/<session_stem>/subagents/*.jsonl`
-    per jsonl_parser.rs's discovery rule. We only stat — no read — so
-    this is cheap to run from the hook.
+    per jsonl_parser.rs's discovery rule.
     """
     if not transcript_path:
         return False
@@ -203,11 +225,15 @@ def _subagent_jsonls_active(transcript_path, now, window_secs=30.0):
         for name in os.listdir(subagents_dir):
             if not name.endswith(".jsonl"):
                 continue
+            path = os.path.join(subagents_dir, name)
             try:
-                mtime = os.path.getmtime(os.path.join(subagents_dir, name))
+                mtime = os.path.getmtime(path)
             except OSError:
                 continue
-            if (now - mtime) < window_secs:
+            age = now - mtime
+            if age < window_secs:
+                return True
+            if age < _SUBAGENT_BACKSTOP_SECS and not _agent_tail_finished(path):
                 return True
     except OSError:
         pass
