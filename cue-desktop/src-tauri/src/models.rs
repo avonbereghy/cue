@@ -266,6 +266,14 @@ pub struct SessionMetrics {
     /// treats the turn as finished and demotes stuck working/thinking cards.
     #[serde(default)]
     pub last_end_turn_ts: Option<f64>,
+    /// Timestamp (unix secs) of the most recent interrupt marker — the
+    /// "[Request interrupted by user]" user entry Claude Code writes on ESC.
+    /// No hook fires on interrupt, so when this is newer than
+    /// `stateChangedAt` the turn was aborted and stuck working/thinking/
+    /// waiting cards demote immediately (previously they sat on the
+    /// 5-minute stalled-turn timer).
+    #[serde(default)]
+    pub last_interrupt_ts: Option<f64>,
     /// Timestamp (unix secs) of the newest transcript entry these metrics
     /// reflect — i.e. how far the parse has caught up. The waiting verdict uses
     /// it as a freshness gate: a hook-seeded `waiting` card must not be demoted

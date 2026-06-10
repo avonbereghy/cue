@@ -1364,10 +1364,21 @@ fn should_demote_turn_ended(
     if metrics.pending_tool_use {
         return false;
     }
+    let boundary = state_changed_at.unwrap_or(0.0);
+    // ESC interrupt: Claude Code fires NO hook, but it writes a
+    // "[Request interrupted by user]" user entry (and, for tool-use
+    // interrupts, a synthetic tool_result that already cleared `pending`
+    // above). A marker newer than the state transition proves the turn was
+    // aborted — demote now instead of waiting out the stalled-turn timer.
+    if metrics
+        .last_interrupt_ts
+        .is_some_and(|int_ts| int_ts > boundary)
+    {
+        return true;
+    }
     let Some(end_turn_ts) = metrics.last_end_turn_ts else {
         return false;
     };
-    let boundary = state_changed_at.unwrap_or(0.0);
     if end_turn_ts > boundary {
         return true;
     }
@@ -2014,6 +2025,48 @@ mod tests {
             pending_tool_use: pending,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn test_demote_on_interrupt_marker_newer_than_state_change() {
+        // ESC interrupt: no hook fires; the transcript marker is the only
+        // signal. Newer than stateChangedAt → demote working/thinking/waiting
+        // immediately instead of waiting out the 5-min stalled-turn timer.
+        let m = crate::models::SessionMetrics {
+            last_interrupt_ts: Some(150.0),
+            ..Default::default()
+        };
+        for st in ["working", "thinking", "waiting"] {
+            assert!(
+                should_demote_turn_ended(st, Some(100.0), Some(&m)),
+                "state {} must demote on fresh interrupt",
+                st
+            );
+        }
+    }
+
+    #[test]
+    fn test_no_demote_on_stale_interrupt_marker() {
+        // Marker from a PRIOR turn (user interrupted, then prompted again —
+        // stateChangedAt advanced past the marker). Must not demote.
+        let m = crate::models::SessionMetrics {
+            last_interrupt_ts: Some(50.0),
+            ..Default::default()
+        };
+        assert!(!should_demote_turn_ended("working", Some(100.0), Some(&m)));
+    }
+
+    #[test]
+    fn test_no_demote_on_interrupt_while_tool_pending() {
+        // A pending tool_use always wins: genuine in-flight work is never
+        // demoted, marker or not (tool interrupts clear pending via the
+        // synthetic tool_result, so a real abort never hits this guard).
+        let m = crate::models::SessionMetrics {
+            last_interrupt_ts: Some(150.0),
+            pending_tool_use: true,
+            ..Default::default()
+        };
+        assert!(!should_demote_turn_ended("working", Some(100.0), Some(&m)));
     }
 
     #[test]
