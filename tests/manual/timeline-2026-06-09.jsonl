@@ -1,0 +1,467 @@
+{"t": 1781063005.530248, "marker": "spawn"}
+{"t": 1781063008.784349, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "idle", "subs": 0}
+{"t": 1781063010.735498, "marker": "observed:SessionStart"}
+{"t": 1781063016.740893, "marker": "P1-send-permission-prompt-task"}
+{"t": 1781063016.9202292, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "thinking", "subs": 0}
+{"t": 1781063021.7907798, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "working", "subs": 0}
+{"t": 1781063021.877558, "marker": "observed:P1-permission-event"}
+{"t": 1781063021.8777652, "marker": "P1-dialog-open-hold"}
+{"t": 1781063027.891349, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063031.880267, "marker": "P1-approve"}
+{"t": 1781063033.171797, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "working", "subs": 0}
+{"t": 1781063034.3891032, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "idle", "subs": 0}
+{"t": 1781063034.4487941, "marker": "observed:P1-stop"}
+{"t": 1781063037.454015, "marker": "P1b-send-second-permission-task"}
+{"t": 1781063127.7767382, "marker": "TIMEOUT-waiting:P1b-permission-event"}
+{"t": 1781063127.7778392, "marker": "P1b-dialog-open-hold"}
+{"t": 1781063135.7828858, "marker": "P1b-dismiss-ESC"}
+{"t": 1781063145.835849, "marker": "P1b-post-dismiss-observed"}
+{"t": 1781063145.83605, "marker": "P2-send-askuserquestion-task"}
+{"t": 1781063236.091656, "marker": "TIMEOUT-waiting:P2-askuserquestion-open"}
+{"t": 1781063236.091943, "marker": "P2-dialog-open-hold"}
+{"t": 1781063246.0935512, "marker": "P2-answer"}
+{"t": 1781063246.260624, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "thinking", "subs": 0}
+{"t": 1781063252.7767081, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "working", "subs": 0}
+{"t": 1781063258.891807, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063306.6480708, "marker": "TIMEOUT-waiting:P2-stop"}
+{"t": 1781063309.652056, "marker": "P3-send-subagent-task"}
+{"t": 1781063429.705656, "marker": "TIMEOUT-waiting:SubagentStart"}
+{"t": 1781063429.706701, "marker": "P3-subagent-running"}
+{"t": 1781063443.175732, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "idle", "subs": 0}
+{"t": 1781063443.580863, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063443.589696, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "thinking", "subs": 0}
+{"t": 1781063443.9949272, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063443.994983, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "thinking", "subs": 0}
+{"t": 1781063444.40142, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063444.4014778, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "thinking", "subs": 0}
+{"t": 1781063444.807961, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063444.808046, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "thinking", "subs": 0}
+{"t": 1781063445.2148302, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063445.214999, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "thinking", "subs": 0}
+{"t": 1781063445.620738, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063445.620846, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "idle", "subs": 0}
+{"t": 1781063446.028007, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063446.028121, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063446.4350321, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063446.4351401, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063446.842734, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063446.8428748, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063447.2461839, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063447.246327, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063447.652297, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063447.65245, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063448.059834, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063448.05999, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063448.467857, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063448.4680462, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063448.875925, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063448.876107, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063449.283136, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063449.283251, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063449.690887, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063449.691006, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063450.097368, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063450.097505, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063450.504839, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063450.5049732, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063450.912714, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063450.912884, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063451.320802, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063451.3209522, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063451.728385, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063451.728524, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063452.132853, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063452.1331, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063452.5362, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063452.5363789, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063452.942682, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063452.942816, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063453.347479, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063453.347702, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063453.754467, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063453.7546408, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063454.162272, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063454.1624541, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063454.568414, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063454.5686002, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063454.972949, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063454.973151, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063455.381024, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063455.3812008, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063455.783647, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063455.7837598, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063456.188092, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063456.188304, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063456.59333, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063456.59351, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063457.0013702, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063457.001566, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063457.409031, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063457.409159, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063457.815718, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063457.815812, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063458.222343, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063458.222445, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063458.629392, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063458.629493, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063459.036862, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063459.03703, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063459.4448352, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063459.444999, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063459.852957, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063459.853142, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063460.260309, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063460.260514, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063460.668331, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063460.668538, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063461.075946, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063461.0760572, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063461.4793081, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063461.479464, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063461.883687, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063461.8838, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063462.288764, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063462.288938, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063462.696314, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063462.6965172, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063463.1030421, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063463.10322, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063463.5083892, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063463.5086122, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063463.916471, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063463.916681, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063464.325088, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063464.325282, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063464.733063, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063464.733258, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063465.14255, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063465.142785, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063465.5504, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063465.550602, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063465.95804, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063465.958324, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063466.365387, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063466.3655438, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063466.7740731, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063466.774276, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063467.18276, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063467.183038, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063467.590434, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063467.5906491, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063467.995297, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063467.9955509, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063468.4035032, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063468.4036858, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063468.8086882, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063468.8088582, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063469.213949, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063469.21413, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063469.622426, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063469.6226828, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063470.029536, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063470.0296252, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063470.435447, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063470.435563, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063470.8412092, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063470.841353, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063471.2487261, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063471.248866, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063471.6548321, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063471.654989, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063472.0623648, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063472.06253, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063472.4710112, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063472.471193, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063472.8769631, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063472.877153, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063473.28486, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063473.285005, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063473.692888, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063473.693045, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063474.099902, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063474.100061, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063474.505804, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063474.505997, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063474.916459, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063474.916842, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063475.321294, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063475.32147, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063475.729585, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063475.729764, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063476.1377878, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063476.137949, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063476.547735, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063476.54793, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063476.955416, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063476.955565, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063477.364553, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063477.364736, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063477.772748, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063477.772912, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063478.176519, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063478.1765912, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063478.581609, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063478.581722, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063478.989953, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063478.990121, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063479.399152, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063479.3993778, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063479.8075578, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063479.8077939, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063480.2144032, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063480.214626, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063480.62338, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063480.6236238, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063481.0344, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063481.0347168, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063481.438381, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063481.438578, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063481.846299, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063481.8464682, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063482.255986, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063482.2562041, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063482.664342, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063482.664491, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063483.073347, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063483.073537, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063483.4821382, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063483.4823658, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063483.8856661, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063483.8858619, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063484.294403, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063484.2946272, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063484.70018, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063484.7002938, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063485.109151, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063485.109374, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063485.514345, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063485.514432, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063485.921377, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063485.9214458, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063486.327101, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063486.3272161, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063486.7316961, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063486.731796, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063487.135613, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063487.1358552, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063487.542347, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063487.542421, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063487.9501288, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063487.950325, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063488.35818, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063488.3583229, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063488.7659929, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063488.766159, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063489.174318, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063489.174505, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063489.583133, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063489.583359, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063489.990827, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063489.990999, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063490.400605, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063490.400903, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063490.807006, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063490.807244, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063491.213689, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063491.21387, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063491.6211252, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063491.621254, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063492.025019, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063492.0252411, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063492.4309912, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063492.4312372, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063492.838562, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063492.83883, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063493.248029, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063493.248271, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063493.656425, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063493.656597, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063494.0651798, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063494.0654159, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063494.473784, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063494.473939, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063494.882284, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063494.8824441, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063495.290658, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063495.290853, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063495.698782, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063495.698921, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063496.105555, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063496.105673, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063496.513482, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063496.513653, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063496.9220679, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063496.9223301, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063497.3283598, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063497.328458, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063497.73587, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063497.73612, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063498.142644, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063498.14274, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063498.5465071, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063498.546589, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063498.953182, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063498.953289, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063499.357013, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063499.357096, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063499.76001, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063499.760084, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063500.166519, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063500.166618, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063500.573165, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063500.57326, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063500.97979, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063500.979868, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063501.386069, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063501.386183, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063501.78845, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063501.788548, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063502.194991, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063502.1950788, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063502.601553, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063502.601635, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063503.0070012, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063503.007301, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063503.411681, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063503.411766, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063503.8172102, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063503.817312, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063504.223914, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063504.2240481, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063504.628284, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063504.628376, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063505.0348191, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063505.034909, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063505.441346, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063505.4414442, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063505.844827, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063505.844921, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063506.251368, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063506.25146, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063506.6578739, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063506.657971, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063507.063225, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063507.063315, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063507.4697978, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063507.46989, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063507.876488, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063507.876589, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063508.283015, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063508.283118, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063508.689845, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063508.6899562, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063509.096568, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063509.096689, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063509.503063, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063509.503149, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063509.906674, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063509.906771, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063510.3113222, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063510.311414, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063510.71792, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063510.718016, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063511.1219351, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063511.122037, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063511.5279841, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063511.528224, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063511.931711, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063511.931808, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063512.338432, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063512.338742, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063512.745279, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063512.7453709, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063513.1483688, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063513.14847, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063513.554998, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063513.5551229, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063513.956817, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063513.956922, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063514.35851, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063514.358613, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063514.7648299, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063514.764929, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063515.171504, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063515.171623, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063515.577565, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063515.577655, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063515.984125, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063515.9842298, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063516.387528, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063516.387625, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063516.7899368, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063516.790038, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063517.196647, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063517.196759, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063517.602992, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063517.603116, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063518.006654, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063518.006767, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063518.4116411, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063518.4117382, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063518.8147662, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063518.8148859, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063519.2214751, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063519.221556, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063519.6282592, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063519.6283698, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063520.034904, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063520.0349991, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063520.441531, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063520.4416761, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063520.846518, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063520.846621, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063521.252426, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063521.252525, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063521.656706, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063521.656812, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063522.0634, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063522.063508, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063522.47017, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063522.470282, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063522.874572, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063522.8747032, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063523.276509, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063523.2766452, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063523.681741, "sid": "13d6c7b6-bf35-40e4-a11b-1b33a2092543", "state": "waiting", "subs": 0}
+{"t": 1781063523.681875, "sid": "ce0a7d43-05c2-437a-aa10-f599ea8d40ce", "state": "ended", "subs": 0}
+{"t": 1781063534.994315, "marker": "spawn2"}
+{"t": 1781063536.090042, "marker": "observed:SessionStart2"}
+{"t": 1781063536.090166, "marker": "sid=9870520e-ae2e-495e-a066-17be05c7e86e"}
+{"t": 1781063536.211908, "state": "idle", "subs": 0}
+{"t": 1781063542.0934012, "marker": "Q1-type"}
+{"t": 1781063543.9365492, "state": "thinking", "subs": 0}
+{"t": 1781063544.2117949, "marker": "observed:Q1-submitted"}
+{"t": 1781063546.730452, "marker": "observed:Q1-asktool"}
+{"t": 1781063546.730599, "marker": "Q1-dialog-hold"}
+{"t": 1781063546.7819571, "state": "waiting", "subs": 0}
+{"t": 1781063558.734692, "marker": "Q1-answer-enter"}
+{"t": 1781063558.9697962, "state": "working", "subs": 0}
+{"t": 1781063560.598916, "state": "waiting", "subs": 0}
+{"t": 1781063560.808138, "marker": "observed:Q1-stop"}
+{"t": 1781063563.8134022, "marker": "Q2-type"}
+{"t": 1781063565.479637, "state": "thinking", "subs": 0}
+{"t": 1781063565.927072, "marker": "observed:Q2-submitted"}
+{"t": 1781063568.7348769, "state": "subagent", "subs": 1}
+{"t": 1781063568.954581, "marker": "observed:Q2-SubagentStart"}
+{"t": 1781063580.497845, "state": "working", "subs": 0}
+{"t": 1781063580.555915, "marker": "observed:Q2-SubagentStop"}
+{"t": 1781063584.5566862, "state": "idle", "subs": 0}
+{"t": 1781063584.5869792, "marker": "observed:Q2-stop"}
+{"t": 1781063587.591434, "marker": "Q3-type"}
+{"t": 1781063589.428509, "state": "thinking", "subs": 0}
+{"t": 1781063589.710251, "marker": "observed:Q3-submitted"}
+{"t": 1781063591.460683, "state": "working", "subs": 0}
+{"t": 1781063591.727642, "marker": "observed:Q3-perm"}
+{"t": 1781063591.727773, "marker": "Q3-dialog-hold"}
+{"t": 1781063597.543603, "state": "waiting", "subs": 0}
+{"t": 1781063599.732233, "marker": "Q3-ESC-deny"}
+{"t": 1781063609.7913249, "marker": "Q3-post-deny"}
+{"t": 1781063609.791476, "marker": "Q4-type"}
+{"t": 1781063611.739907, "state": "thinking", "subs": 0}
+{"t": 1781063611.911942, "marker": "observed:Q4-submitted"}
+{"t": 1781063618.9171178, "marker": "Q4-ESC-interrupt"}
+{"t": 1781063630.9719281, "marker": "Q4-post-interrupt"}
+{"t": 1781063630.972212, "marker": "Q5-exit"}
+{"t": 1781063632.8863528, "state": "ended", "subs": 0}
+{"t": 1781063633.091039, "marker": "observed:SessionEnd2"}
+{"t": 1781063635.093364, "marker": "done2"}
