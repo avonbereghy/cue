@@ -193,7 +193,10 @@ pub struct SubagentMetrics {
     pub model: String,
     pub tool_counts: HashMap<String, i64>,
     pub message_count: i64,
-    /// True if the subagent's JSONL was modified recently (within 60s)
+    /// True if the agent is still running: its transcript tail has NOT
+    /// reached `end_turn` and its file was touched within the 10-minute
+    /// crash backstop. Tail-state, not recency — long tool calls inside an
+    /// agent leave the JSONL silent for minutes without meaning "gone".
     #[serde(default)]
     pub is_active: bool,
     /// Unix timestamp of the first entry in the JSONL (agent start).
@@ -251,6 +254,12 @@ pub struct SessionMetrics {
     /// notifications no longer pin state. See jsonl_parser::PROMPTING_TOOL_NAMES.
     #[serde(default)]
     pub awaiting_user_prompt: bool,
+    /// Count of Agent/Task tool_uses with no matching tool_result — foreground
+    /// subagents in flight. Deterministic (transcript-derived) counterpart to
+    /// the hook's `activeSubagents` counter; robust to parallel batches where
+    /// some agents already returned. See jsonl_parser::AGENT_TOOL_NAMES.
+    #[serde(default)]
+    pub pending_agent_tool_count: i64,
     /// Timestamp (unix secs) of the most recent assistant message with
     /// `stop_reason == "end_turn"`. When this is newer than the session's
     /// `stateChangedAt` and no newer pending tool_use exists, the poller
