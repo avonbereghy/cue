@@ -255,6 +255,37 @@ def make_payload(session_id="abc123", cwd="/Users/x/proj", transcript="", **extr
     return payload
 
 
+class TestPermissionRequestSeedsWaiting:
+    """PermissionRequest fires only when a consent dialog is actually shown
+    (verified live: auto-allowed tools produce no PermissionRequest), so it
+    seeds `waiting` immediately instead of riding the ~6s-delayed
+    Notification(permission_prompt) (audit F5)."""
+
+    def test_permission_request_writes_waiting(self, hook_env, invoke_hook):
+        hook_env.write_sessions({"abc123": {
+            "id": "abc123", "workspace": "/Users/x/proj", "state": "working",
+            "lastActivity": time.time() - 5, "startedAt": time.time() - 100,
+            "activeSubagents": 0,
+        }})
+        invoke_hook("waiting", make_payload(
+            hook_event_name="PermissionRequest", tool_name="Bash",
+            permission_mode="default"))
+        entry = hook_env.read_sessions()["abc123"]
+        assert entry["state"] == "waiting"
+        assert entry["permissionMode"] == "default"
+
+    def test_permission_request_does_not_downgrade_error(self, hook_env, invoke_hook):
+        # _quick_state_write's error stickiness must hold for this seed too.
+        hook_env.write_sessions({"abc123": {
+            "id": "abc123", "workspace": "/Users/x/proj", "state": "error",
+            "lastActivity": time.time() - 5, "startedAt": time.time() - 100,
+            "activeSubagents": 0, "errorType": "rate_limit",
+        }})
+        invoke_hook("waiting", make_payload(
+            hook_event_name="PermissionRequest", tool_name="Bash"))
+        assert hook_env.read_sessions()["abc123"]["state"] == "error"
+
+
 class TestLastToolWasAskQuestion:
     """Stop's waiting fast-path must fire only for UNANSWERED questions
     (audit F4 — it previously re-minted waiting after the answer landed)."""
@@ -902,23 +933,22 @@ class TestSubagentStopPreservesTransient:
 # ─────────────────────────────────────────────────────────────────────
 
 class TestPermissionRequestNoStateChange:
-    """PermissionRequest hooks are now state-neutral. The hook forwards to
-    the dashboard permission server (when enabled) but never writes
-    sessions.json — the resolving hooks were unreliable (terminal-side
-    approve, ctrl-c, closed window, rewind) and waiting cards pinned
-    forever. The Rust JSONL-derived awaiting_user_prompt verdict catches
-    genuine user-input tool calls (AskUserQuestion / ExitPlanMode) instead.
+    """PermissionRequest seeds `waiting` (audit F5) — it fires only when a
+    consent dialog is actually shown (verified live: auto-allowed tools
+    produce no PermissionRequest), so the seed can't pin on auto-approvals.
+    The Rust resolver demotes it exactly like the Notification seed: holds
+    while the gated tool_use is pending, releases on approve/deny/interrupt.
 
     Legacy `pendingPermission` is deprecated: not written, and any value on
     existing entries is dropped by the next hook flush (no carry-forward)."""
 
-    def test_permission_request_does_not_change_state(self, hook_env, invoke_hook):
+    def test_permission_request_seeds_waiting(self, hook_env, invoke_hook):
         hook_env.write_sessions({
             "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
                        "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}
         })
         invoke_hook("waiting", make_payload(hook_event_name="PermissionRequest"))
-        assert hook_env.read_sessions()["abc123"]["state"] == "working"
+        assert hook_env.read_sessions()["abc123"]["state"] == "waiting"
 
     def test_legacy_pending_permission_is_dropped_by_next_event(self, hook_env, invoke_hook):
         # Legacy entries from before this refactor may carry pendingPermission.
@@ -1044,13 +1074,11 @@ class TestCorruptionRecovery:
 # ─────────────────────────────────────────────────────────────────────
 
 class TestStaleWaitingGuard:
-    """PermissionRequest is now state-neutral regardless of timing — the
-    stale-waiting guard from the pre-refactor world is no longer needed
-    because the event never overwrites state in the first place. Tests are
-    kept as regression guards: under no timing condition should a
-    PermissionRequest pin state=waiting."""
+    """The PermissionRequest waiting seed honors _quick_state_write's
+    stale-write guard: a session whose lastActivity is NEWER than the hook's
+    start time was already updated by a faster hook — don't overwrite."""
 
-    def test_permission_request_never_overwrites_working(self, hook_env, invoke_hook):
+    def test_permission_request_yields_to_newer_write(self, hook_env, invoke_hook):
         hook_env.write_sessions({
             "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
                        "lastActivity": time.time() + 60.0,
@@ -1059,15 +1087,17 @@ class TestStaleWaitingGuard:
         invoke_hook("waiting", make_payload(hook_event_name="PermissionRequest"))
         assert hook_env.read_sessions()["abc123"]["state"] == "working"
 
-    def test_permission_request_does_not_overwrite_even_with_older_activity(self, hook_env, invoke_hook):
-        # Pre-refactor this case wrote waiting. Post-refactor it must not.
+    def test_permission_request_seeds_waiting_over_older_activity(self, hook_env, invoke_hook):
+        # Normal case: the dialog is open and nothing newer has written —
+        # the seed lands (audit F5; pre-F5 this event was state-neutral and
+        # the card showed 'working' for the first ~6s of every dialog).
         hook_env.write_sessions({
             "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
                        "lastActivity": time.time() - 60.0,
                        "startedAt": 0.0, "activeSubagents": 0}
         })
         invoke_hook("waiting", make_payload(hook_event_name="PermissionRequest"))
-        assert hook_env.read_sessions()["abc123"]["state"] == "working"
+        assert hook_env.read_sessions()["abc123"]["state"] == "waiting"
 
 
 # ─────────────────────────────────────────────────────────────────────
