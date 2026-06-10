@@ -674,19 +674,19 @@ impl SessionMonitorState {
                     }
 
                     // ── Subagent rescue latch ──────────────────────────
-                    // F-reliability-009 — counter-blind JSONL fallback. The
-                    // hook's `activeSubagents` counter undercounts parallel
-                    // batches: 4+ `SubagentStart` events contend for the
-                    // sessions.json lock and the hook's non-blocking flock
-                    // drops any that can't acquire within 2s, so a genuinely
-                    // delegating turn can sit at idle/done with the counter
-                    // stuck at 0 (observed: a 4-track `parallel()` fan-out
-                    // showing `idle` for its whole run). Recover it from the
-                    // JSONL scan, using the SAME 60s mtime liveness
-                    // (`is_active`) that `should_demote_stale_subagent` uses to
-                    // LEAVE the state — enter and exit are now symmetric, so
-                    // the card holds `subagent` for the whole run and exits
-                    // exactly when the demoter would.
+                    // Counter-blind transcript fallback (F-reliability-009,
+                    // re-rooted by the 2026-06-09 state audit). Note: the
+                    // original flock-contention attribution did NOT reproduce
+                    // (8 parallel SubagentStarts against a real-size
+                    // sessions.json all landed at ~26ms each); the real
+                    // failure was the old 60s-mtime liveness misreading long
+                    // agent tool calls as "agents gone". Rescue now keys on
+                    // the deterministic pair in `subagent_rescue_count`
+                    // (unmatched Agent tool_use + tail-state JSONL liveness),
+                    // the SAME signals `should_demote_stale_subagent` uses to
+                    // LEAVE the state — enter and exit stay symmetric, so the
+                    // card holds `subagent` across multi-minute agent tool
+                    // calls and exits exactly when the demoter would.
                     //
                     // Assert `subagent` on EVERY qualifying poll, not once per
                     // cohort. The predecessor (F-reliability-008) keyed the
@@ -724,9 +724,10 @@ impl SessionMonitorState {
                         }
                         s.state = "subagent".to_string();
                         s.active_subagents = live;
-                    } else if !matches!(s.state.as_str(), "done" | "idle" | "subagent") {
-                        // Active states clear the rescue latch so the NEXT
-                        // done/idle window re-logs if needed.
+                    } else if !matches!(s.state.as_str(), "done" | "idle" | "working" | "subagent")
+                    {
+                        // Non-rescuable states clear the rescue latch so the
+                        // NEXT qualifying window re-logs if needed.
                         rescued.remove(&s.id);
                     }
 
@@ -1462,12 +1463,14 @@ fn should_demote_stalled_turn(
 /// Pure predicate for the stale-subagent demotion path. Returns true when a
 /// session is stuck on `subagent` because the hook's `SubagentStop` event
 /// was missed: `activeSubagents` is non-zero so the hook keeps overriding
-/// every subsequent event back to `subagent`, but no subagent JSONL has
-/// been touched recently — the agents are gone.
+/// every subsequent event back to `subagent`, but both live signals say the
+/// agents are gone — no unmatched Agent/Task tool_use in the parent
+/// transcript, and every agent JSONL's tail reached `end_turn` (`is_active`
+/// is tail-state with a 10-min crash backstop, not a recency window).
 ///
 /// Gated on `state == "subagent"`. Requires a 15s grace after
 /// `stateChangedAt` so a just-spawned subagent has time to create its
-/// JSONL file (we use `is_active`, a 60s mtime check, as the live signal).
+/// JSONL file.
 fn should_demote_stale_subagent(
     state: &str,
     state_changed_at: Option<f64>,
@@ -1488,9 +1491,15 @@ fn should_demote_stale_subagent(
     }
     match metrics {
         Some(m) => {
-            // Metrics parsed at least once for this session — the absence
-            // of an active subagent JSONL is authoritative.
-            m.subagents.iter().filter(|a| a.is_active).count() == 0
+            // Metrics parsed at least once for this session. Two independent
+            // live signals must BOTH be absent before we second-guess the
+            // hook counter: no unmatched Agent/Task tool_use in the parent
+            // transcript (foreground batch in flight), and no agent JSONL
+            // whose tail is still mid-turn. The former catches the spawn
+            // window before agent files exist; the latter catches background
+            // agents whose parent turn already ended.
+            m.pending_agent_tool_count == 0
+                && m.subagents.iter().filter(|a| a.is_active).count() == 0
         }
         None => {
             // No metrics yet. With `refresh_metrics` running at ~5 Hz
@@ -1504,36 +1513,36 @@ fn should_demote_stale_subagent(
     }
 }
 
-/// Pure predicate for the subagent rescue — the JSONL-scan fallback that keeps
-/// a card on `subagent` when the hook's `activeSubagents` counter undercounts a
-/// parallel batch. The hook increments the counter on each `SubagentStart`, but
-/// those events race for the `sessions.json` lock and the hook's non-blocking
-/// flock drops any that can't acquire within 2s; a 4-way `parallel()` fan-out
-/// can therefore leave the counter at 0 while the agents are plainly running.
-/// Returns `Some(live)` — the count of live subagent JSONLs — when a
-/// `done`/`idle` card with a zero counter should be shown as `subagent`, else
-/// `None`.
+/// Pure predicate for the subagent rescue — the transcript fallback that keeps
+/// a card on `subagent` when the hook's `activeSubagents` counter is wrong
+/// (missed SubagentStart, or zeroed by a heal mid-batch). Returns `Some(live)`
+/// when a zero-counter card should be shown as `subagent`, else `None`.
 ///
-/// Liveness is the 60s file-mtime check (`is_active`) — the SAME signal
-/// `should_demote_stale_subagent` uses to demote OUT of `subagent`. Matching
-/// them makes enter/exit symmetric: the card holds `subagent` for the whole run
-/// and leaves it exactly when the demoter would. (The prior inline form used a
-/// 10s `ended_at` window and asserted the state once per cohort, so a long
-/// batch whose agents fell quiet >10s mid-tool-call blipped `subagent` for a
-/// single poll, then reverted to idle for the rest of the run.)
+/// Two deterministic live signals, the SAME pair `should_demote_stale_subagent`
+/// uses to demote OUT of `subagent` (enter/exit stay symmetric):
+///   1. `pending_agent_tool_count` — unmatched Agent/Task tool_use in the
+///      parent transcript. While a foreground batch runs, the parent turn is
+///      blocked on those tool calls by definition; agent-JSONL quiet periods
+///      (real batches show 71–167s gaps inside long tool calls) don't matter.
+///   2. `is_active` agent JSONLs — tail not yet `end_turn` (mtime only as a
+///      10-min crash backstop). Covers background agents whose parent turn
+///      already ended, where signal 1 is gone.
+///
+/// `working` is rescuable alongside `done`/`idle`: subagent tool events fire
+/// PreToolUse/PostToolUse **on the parent session id**, so with a zeroed
+/// counter every agent tool call rewrote the card to `working` mid-batch.
+/// `thinking`/`waiting`/`error`/`compacting` keep their own truth.
 fn subagent_rescue_count(
     state: &str,
     active_subagents: i64,
     metrics: Option<&crate::models::SessionMetrics>,
 ) -> Option<i64> {
-    if !matches!(state, "done" | "idle") || active_subagents != 0 {
+    if !matches!(state, "done" | "idle" | "working") || active_subagents != 0 {
         return None;
     }
-    let live = metrics?
-        .subagents
-        .iter()
-        .filter(|a| a.is_active)
-        .count() as i64;
+    let m = metrics?;
+    let live_jsonls = m.subagents.iter().filter(|a| a.is_active).count() as i64;
+    let live = m.pending_agent_tool_count.max(live_jsonls);
     (live > 0).then_some(live)
 }
 
@@ -2340,9 +2349,9 @@ mod tests {
 
     #[test]
     fn test_subagent_rescue_when_counter_zero_and_jsonl_active() {
-        // The core fix: the hook counter dropped to 0 mid-batch (lost
-        // SubagentStart under lock contention) but a subagent JSONL is live.
-        // Both idle and done must be rescued to subagent on every poll.
+        // The core fix: the hook counter reads 0 mid-batch (missed
+        // SubagentStart, or zeroed by a heal) but an agent JSONL is still
+        // mid-turn. Both idle and done must be rescued on every poll.
         let m = metrics_with_subagents(vec![subagent(true)]);
         assert_eq!(subagent_rescue_count("idle", 0, Some(&m)), Some(1));
         assert_eq!(subagent_rescue_count("done", 0, Some(&m)), Some(1));
@@ -2350,17 +2359,18 @@ mod tests {
 
     #[test]
     fn test_subagent_rescue_counts_only_active_jsonls() {
-        // The live count reflects only the active (mtime < 60s) JSONLs — a
-        // finished agent in the cohort must not inflate `activeSubagents`.
+        // The live count reflects only still-running agents (tail not yet
+        // end_turn) — a finished agent must not inflate `activeSubagents`.
         let m = metrics_with_subagents(vec![subagent(true), subagent(false), subagent(true)]);
         assert_eq!(subagent_rescue_count("idle", 0, Some(&m)), Some(2));
     }
 
     #[test]
     fn test_no_subagent_rescue_when_no_active_jsonl() {
-        // All JSONLs quiet (>60s mtime) → the agents are gone; don't rescue.
-        // Symmetric with should_demote_stale_subagent's `is_active` exit, so a
-        // genuinely-finished batch lands on idle rather than flapping.
+        // Every agent finished (tail end_turn) and no Agent tool_use pending →
+        // the batch is over; don't rescue. Symmetric with
+        // should_demote_stale_subagent's exit, so a genuinely-finished batch
+        // lands on idle rather than flapping.
         let m = metrics_with_subagents(vec![subagent(false), subagent(false)]);
         assert_eq!(subagent_rescue_count("idle", 0, Some(&m)), None);
     }
@@ -2374,18 +2384,11 @@ mod tests {
     }
 
     #[test]
-    fn test_no_subagent_rescue_for_non_idle_states() {
-        // Only done/idle are rescuable; never override an active/attention
-        // state (or re-enter an already-subagent card) from the JSONL scan.
+    fn test_no_subagent_rescue_for_attention_states() {
+        // Only done/idle/working are rescuable; never override an attention
+        // or specialized state (or re-enter an already-subagent card).
         let m = metrics_with_subagents(vec![subagent(true)]);
-        for st in [
-            "working",
-            "thinking",
-            "waiting",
-            "error",
-            "compacting",
-            "subagent",
-        ] {
+        for st in ["thinking", "waiting", "error", "compacting", "subagent"] {
             assert_eq!(
                 subagent_rescue_count(st, 0, Some(&m)),
                 None,
@@ -2393,6 +2396,47 @@ mod tests {
                 st
             );
         }
+    }
+
+    #[test]
+    fn test_subagent_rescue_lifts_working_mid_batch() {
+        // Subagent tool events fire PreToolUse/PostToolUse on the PARENT
+        // session id, so a zeroed counter rewrites the card to `working` on
+        // every agent tool call. The rescue must lift working back to
+        // subagent while either live signal holds.
+        let m = metrics_with_subagents(vec![subagent(true)]);
+        assert_eq!(subagent_rescue_count("working", 0, Some(&m)), Some(1));
+    }
+
+    #[test]
+    fn test_subagent_rescue_from_pending_agent_tool_alone() {
+        // Foreground batch in flight (unmatched Agent tool_use) but agent
+        // JSONLs quiet/missing — e.g. the spawn window before files exist, or
+        // every agent stuck inside a long tool call. The parent-transcript
+        // signal alone must hold the card on subagent.
+        let mut m = metrics_with_subagents(vec![]);
+        m.pending_agent_tool_count = 3;
+        assert_eq!(subagent_rescue_count("idle", 0, Some(&m)), Some(3));
+        // Larger of the two signals wins for the displayed count.
+        let mut m2 = metrics_with_subagents(vec![subagent(true)]);
+        m2.pending_agent_tool_count = 2;
+        assert_eq!(subagent_rescue_count("done", 0, Some(&m2)), Some(2));
+    }
+
+    #[test]
+    fn test_no_demote_stale_subagent_while_agent_tool_pending() {
+        // Counter says subagent, all agent JSONLs look quiet — but the parent
+        // transcript still has an unmatched Agent tool_use. The batch is
+        // running; don't demote.
+        let mut m = metrics_with_subagents(vec![subagent(false)]);
+        m.pending_agent_tool_count = 1;
+        let now = 1000.0;
+        assert!(!should_demote_stale_subagent(
+            "subagent",
+            Some(now - 30.0),
+            Some(&m),
+            now,
+        ));
     }
 
     #[test]

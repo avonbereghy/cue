@@ -116,6 +116,13 @@ pub struct ParsedEntry {
     /// `tool_use_id` references from tool_result blocks in this user message.
     /// Used to mark prompting tool_uses as resolved when the user has answered.
     pub tool_result_ids: Vec<String>,
+    /// `id` fields of subagent-spawning tool_use blocks (Agent / Task) in this
+    /// assistant message. An id with no matching tool_result means a foreground
+    /// agent batch is still running — the deterministic "subagents in flight"
+    /// signal that doesn't depend on file mtimes. Robust to parallel batches
+    /// where some agents have already returned their tool_result (the
+    /// stop_reason-based `pending_tool_use` flips false at the first result).
+    pub agent_tool_use_ids: Vec<String>,
 }
 
 /// Tool names that genuinely block the assistant on user input. An unmatched
@@ -123,6 +130,13 @@ pub struct ParsedEntry {
 /// session is "waiting" on the user in the way the dashboard yellow stripes
 /// imply. Kept narrow on purpose — permission prompts are *not* in this set.
 pub const PROMPTING_TOOL_NAMES: &[&str] = &["AskUserQuestion", "ExitPlanMode"];
+
+/// Tool names that spawn subagents. An unmatched tool_use with one of these
+/// names at the transcript tail means a foreground agent batch is in flight —
+/// the parent turn is blocked on the agents by definition. "Task" is the
+/// legacy name of the Agent tool; both appear in real transcripts depending
+/// on Claude Code version.
+pub const AGENT_TOOL_NAMES: &[&str] = &["Agent", "Task"];
 
 /// Parse a JSONL file into a list of entries.
 /// Returns an empty Vec if the file is too large, unreadable, or empty.
@@ -504,6 +518,17 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
                                         entry.prompting_tool_use_ids.push(id.to_string());
                                     }
                                 }
+
+                                // Record agent-spawning tool_uses for the
+                                // subagents-in-flight verdict (same unmatched-
+                                // id mechanism as the prompting tools).
+                                if AGENT_TOOL_NAMES.contains(&name) {
+                                    if let Some(id) =
+                                        block_obj.get("id").and_then(|v| v.as_str())
+                                    {
+                                        entry.agent_tool_use_ids.push(id.to_string());
+                                    }
+                                }
                             }
                         }
                     }
@@ -859,6 +884,13 @@ fn strip_bracket_markers(s: &str) -> String {
     result
 }
 
+/// Crash backstop for subagent liveness: an agent whose transcript tail never
+/// reached `end_turn` (killed process, harness crash) would otherwise count as
+/// active forever. 10 minutes of total transcript silence on an unfinished
+/// agent is the flagged last-resort timer — every deterministic signal
+/// (tail end_turn, parent's unmatched Agent tool_use) is consumed first.
+const SUBAGENT_BACKSTOP_SECS: u64 = 600;
+
 /// Parse a subagent JSONL file and its companion .meta.json into SubagentMetrics.
 pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::SubagentMetrics> {
     let entries = parse_jsonl_file(jsonl_path);
@@ -866,16 +898,28 @@ pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::Subagent
         return None;
     }
 
-    // Check if the file was modified recently (within 60s = active)
-    let is_active = std::fs::metadata(jsonl_path)
+    // Liveness is transcript-state, not recency: a finished agent's LAST
+    // assistant entry carries stop_reason == "end_turn" (verified across live
+    // agent transcripts), while a running agent's tail is a tool_use/result
+    // mid-turn. The previous "mtime within 60s" check misread every long tool
+    // call (real agents show 71–167s silent gaps) as "agent gone", flapping
+    // the parent card subagent→idle→subagent for the whole run. The mtime
+    // window survives only as a crash backstop for agents that never finish.
+    let tail_finished = entries
+        .iter()
+        .rev()
+        .find(|e| e.is_assistant_message)
+        .is_some_and(|e| e.has_end_turn);
+    let within_backstop = std::fs::metadata(jsonl_path)
         .and_then(|meta| meta.modified())
         .map(|mod_time| {
             mod_time
                 .elapsed()
-                .map(|elapsed| elapsed.as_secs() < 60)
+                .map(|elapsed| elapsed.as_secs() < SUBAGENT_BACKSTOP_SECS)
                 .unwrap_or(false)
         })
         .unwrap_or(false);
+    let is_active = !tail_finished && within_backstop;
 
     let mut m = crate::models::SubagentMetrics {
         is_active,
@@ -1151,6 +1195,18 @@ fn aggregate_entries(
             .iter()
             .any(|id| !resolved.contains(id.as_str()))
     });
+
+    // Subagents-in-flight verdict: count Agent/Task tool_uses with no matching
+    // tool_result. While > 0, a foreground agent batch is running — regardless
+    // of how quiet the agent JSONLs are (long tool calls inside an agent leave
+    // its transcript silent for minutes). This is the deterministic signal the
+    // mtime-window check can't provide; `should_demote_stale_subagent` and the
+    // subagent rescue both consume it.
+    m.pending_agent_tool_count = entries
+        .iter()
+        .flat_map(|e| e.agent_tool_use_ids.iter())
+        .filter(|id| !resolved.contains(id.as_str()))
+        .count() as i64;
 
     // Freshness marker: the newest entry timestamp this parse reflects. The
     // waiting verdict gates its demote on this so a hook-seeded `waiting` card
@@ -2155,6 +2211,73 @@ mod tests {
             !m.awaiting_user_prompt,
             "matching tool_result must clear awaiting"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_pending_agent_tool_count_tracks_unmatched_agents() {
+        // 3-way parallel batch, one agent already returned its tool_result →
+        // 2 agents still in flight. The stop_reason-based pending_tool_use
+        // would read false here (tool_result at the tail), which is exactly
+        // why the count uses unmatched ids instead.
+        let batch = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"toolu_a1","name":"Agent","input":{}},{"type":"tool_use","id":"toolu_a2","name":"Agent","input":{}},{"type":"tool_use","id":"toolu_a3","name":"Agent","input":{}}],"stop_reason":"tool_use"}}"#;
+        let result1 = r#"{"type":"user","timestamp":2.0,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_a2","content":"done"}]}}"#;
+
+        let dir = std::env::temp_dir().join("cue_test_agent_pending");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        std::fs::write(&path, format!("{}\n{}", batch, result1)).unwrap();
+
+        let m = super::parse_jsonl_to_session_metrics(&path).unwrap();
+        assert_eq!(m.pending_agent_tool_count, 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_pending_agent_tool_count_zero_when_all_resolved() {
+        let batch = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"toolu_b1","name":"Task","input":{}}],"stop_reason":"tool_use"}}"#;
+        let result = r#"{"type":"user","timestamp":2.0,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_b1","content":"done"}]}}"#;
+
+        let dir = std::env::temp_dir().join("cue_test_agent_resolved");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        std::fs::write(&path, format!("{}\n{}", batch, result)).unwrap();
+
+        let m = super::parse_jsonl_to_session_metrics(&path).unwrap();
+        assert_eq!(m.pending_agent_tool_count, 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_subagent_is_active_by_tail_state_not_mtime() {
+        // Both files have fresh mtimes (just written). The finished agent
+        // (tail end_turn) must read inactive immediately; the mid-turn agent
+        // (tail tool_use) must read active even though it would also pass a
+        // recency check — tail-state decides, mtime is only a crash backstop.
+        let dir = std::env::temp_dir().join("cue_test_subagent_tail");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let finished = dir.join("agent-finished.jsonl");
+        std::fs::write(&finished, concat!(
+            r#"{"type":"assistant","timestamp":1.0,"agentId":"a-fin","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}],"stop_reason":"tool_use"}}"#, "\n",
+            r#"{"type":"user","timestamp":2.0,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#, "\n",
+            r#"{"type":"assistant","timestamp":3.0,"agentId":"a-fin","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}}"#, "\n",
+        )).unwrap();
+        let m_fin = super::parse_subagent_jsonl(&finished).unwrap();
+        assert!(!m_fin.is_active, "tail end_turn ⇒ finished, despite fresh mtime");
+
+        let running = dir.join("agent-running.jsonl");
+        std::fs::write(&running, concat!(
+            r#"{"type":"assistant","timestamp":1.0,"agentId":"a-run","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"t2","name":"Bash","input":{}}],"stop_reason":"tool_use"}}"#, "\n",
+        )).unwrap();
+        let m_run = super::parse_subagent_jsonl(&running).unwrap();
+        assert!(m_run.is_active, "tail tool_use ⇒ still running");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
