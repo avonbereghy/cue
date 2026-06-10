@@ -255,6 +255,38 @@ def make_payload(session_id="abc123", cwd="/Users/x/proj", transcript="", **extr
     return payload
 
 
+class TestPostCompactTrigger:
+    """PostCompact maps by `trigger`: manual /compact between turns must land
+    idle (audit F3 — it previously pinned a false 'working' for 5 minutes),
+    while auto compaction mid-turn keeps working."""
+
+    def _seed(self, hook_env, state="compacting"):
+        hook_env.write_sessions({"abc123": {
+            "id": "abc123", "workspace": "/Users/x/proj", "state": state,
+            "lastActivity": time.time() - 5, "startedAt": time.time() - 100,
+            "activeSubagents": 0,
+        }})
+
+    def test_manual_compact_lands_idle(self, hook_env, invoke_hook):
+        self._seed(hook_env)
+        invoke_hook("working", make_payload(
+            hook_event_name="PostCompact", trigger="manual"))
+        assert hook_env.read_sessions()["abc123"]["state"] == "idle"
+
+    def test_auto_compact_keeps_working(self, hook_env, invoke_hook):
+        self._seed(hook_env)
+        invoke_hook("working", make_payload(
+            hook_event_name="PostCompact", trigger="auto"))
+        assert hook_env.read_sessions()["abc123"]["state"] == "working"
+
+    def test_missing_trigger_keeps_working(self, hook_env, invoke_hook):
+        # Older Claude Code without the trigger field: keep the mid-turn-safe
+        # mapping rather than risk demoting an auto-compaction.
+        self._seed(hook_env)
+        invoke_hook("working", make_payload(hook_event_name="PostCompact"))
+        assert hook_env.read_sessions()["abc123"]["state"] == "working"
+
+
 class TestSubagentCounter:
     """Counter increments/decrements and the clamp at zero."""
 

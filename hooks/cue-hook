@@ -780,6 +780,17 @@ def main():
     raw_mode = hook_data.get("permission_mode") or hook_data.get("permissionMode")
     permission_mode = raw_mode if isinstance(raw_mode, str) and raw_mode else None
 
+    # PostCompact lands LAST in the /compact chain (PreCompact →
+    # SessionStart(source=compact) → PostCompact), so its unconditional
+    # "working" pinned every manual /compact typed between turns on a false
+    # working card until the 5-minute stalled-turn backstop (observed live:
+    # 25+ minutes stale). The payload's `trigger` field is the deterministic
+    # split: "manual" = user ran /compact with no turn in flight → idle;
+    # "auto" = mid-turn compaction, the turn resumes → working. A missing
+    # trigger (older Claude Code) keeps the mid-turn-safe "working".
+    if event_name == "PostCompact" and hook_data.get("trigger") == "manual":
+        action = "idle"
+
     os.makedirs(STATUS_DIR, exist_ok=True)
 
     # PreToolUse fires *before* the AskUserQuestion / ExitPlanMode dialog
