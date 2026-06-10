@@ -800,13 +800,27 @@ def main():
             )
         return
 
-    # PermissionRequest events forward to the dashboard's permission panel
-    # (when enabled) but never change session state for the same reason:
-    # the resolving event isn't reliable. Forward-and-return so the
-    # dashboard can still render the request, sessions.json stays untouched,
-    # and the assistant remains classified as working/thinking (which is
-    # what it is — gated on consent, not waiting on a user-input tool call).
+    # PermissionRequest fires at dialog-open — and ONLY then: verified live
+    # that auto-allowed tools produce PostToolUse with no PermissionRequest,
+    # so this event is proof a consent dialog is actually on screen. Seed
+    # `waiting` immediately (audit F5): the Notification(permission_prompt)
+    # seed below only fires ~6s after the dialog opens (Claude Code's
+    # unanswered-notification delay), leaving the card on blinking-white
+    # "working" while the session is in fact blocked — and never fires at
+    # all for dialogs answered quickly. The Rust resolver demotes exactly as
+    # for the Notification seed: holds while the gated tool_use is pending,
+    # releases on approve→tool_result / deny→rejection / interrupt marker.
+    # Then forward to the dashboard's permission panel (when enabled);
+    # sessions.json state and the forward are independent.
     if event_name == "PermissionRequest":
+        os.makedirs(STATUS_DIR, exist_ok=True)
+        _quick_state_write(
+            session_id, workspace, source, subprocess_label,
+            last_tokens, hook_start_time,
+            team_name=team_name, agent_name=agent_name,
+            permission_mode=(hook_data.get("permission_mode")
+                             or hook_data.get("permissionMode")),
+        )
         if "tool_name" in hook_data:
             decision = _forward_permission_request(hook_data, session_id)
             if decision is not None:
