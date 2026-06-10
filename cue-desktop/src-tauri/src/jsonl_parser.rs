@@ -1106,6 +1106,14 @@ fn aggregate_entries(
             }
         }
 
+        // Tool results: last one wins. Feeds the stalled-turn cap as
+        // proof-of-life for text-quiet turns (see SessionMetrics doc).
+        if entry.is_tool_result {
+            if let Some(ts) = entry.timestamp {
+                m.last_tool_result_ts = Some(ts);
+            }
+        }
+
         if entry.is_user_message {
             m.user_message_count += 1;
             // Last user prompt text wins. Snippet is capped to keep

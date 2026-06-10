@@ -1457,8 +1457,13 @@ const STALLED_TURN_SECS: f64 = 300.0;
 ///   build) keeps the transcript quiet but is genuine work;
 /// - never while `awaiting_user_prompt` — that's the `waiting` path's job;
 /// - keyed on the newest *conversational* timestamp (user prompt / assistant
-///   text / end_turn), not the file mtime, so trailing metadata rows
-///   (`mode`, `permission-mode`, `file-history-snapshot`) can't mask a stall.
+///   text / end_turn / tool_result), not the file mtime, so trailing metadata
+///   rows (`mode`, `permission-mode`, `file-history-snapshot`) can't mask a
+///   stall. tool_result is included (audit F6) because a deep agentic stretch
+///   can run >5 min with neither text nor end_turn — between a tool_result
+///   landing and the next assistant message `pending_tool_use` is briefly
+///   false, and without tool_result proof-of-life the cap misfired in that
+///   seconds-wide window, flashing a working card to idle mid-turn.
 fn should_demote_stalled_turn(
     state: &str,
     metrics: Option<&crate::models::SessionMetrics>,
@@ -1475,6 +1480,7 @@ fn should_demote_stalled_turn(
         metrics.last_user_prompt_ts,
         metrics.last_assistant_text_ts,
         metrics.last_end_turn_ts,
+        metrics.last_tool_result_ts,
     ]
     .into_iter()
     .flatten()
@@ -2231,6 +2237,19 @@ mod tests {
         let m = metrics_stalled(Some(1000.0), Some(1100.0), Some(600.0), false, false);
         assert!(!should_demote_stalled_turn("working", Some(&m), 1100.0 + 240.0));
         assert!(should_demote_stalled_turn("working", Some(&m), 1100.0 + 360.0));
+    }
+
+    #[test]
+    fn test_stalled_turn_counts_tool_results_as_activity() {
+        // Deep agentic stretch: no text for 10+ minutes, but a tool_result
+        // landed seconds ago (and the next assistant message hasn't been
+        // written yet, so pending_tool_use reads false). The cap must treat
+        // the tool_result as proof-of-life and hold (audit F6).
+        let mut m = metrics_stalled(Some(1000.0), None, Some(600.0), false, false);
+        m.last_tool_result_ts = Some(1600.0);
+        assert!(!should_demote_stalled_turn("working", Some(&m), 1600.0 + 5.0));
+        // Once even the tool results go silent past the window, demote.
+        assert!(should_demote_stalled_turn("working", Some(&m), 1600.0 + 360.0));
     }
 
     #[test]

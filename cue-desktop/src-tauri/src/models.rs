@@ -274,6 +274,13 @@ pub struct SessionMetrics {
     /// 5-minute stalled-turn timer).
     #[serde(default)]
     pub last_interrupt_ts: Option<f64>,
+    /// Timestamp (unix secs) of the most recent tool_result entry. Proves the
+    /// turn was alive at that moment even when no text/end_turn/prompt has
+    /// landed for minutes (deep agentic stretches) — the stalled-turn cap
+    /// includes it so the seconds-wide window between a tool_result landing
+    /// and the next assistant message can't read as a 5-minute-old stall.
+    #[serde(default)]
+    pub last_tool_result_ts: Option<f64>,
     /// Timestamp (unix secs) of the newest transcript entry these metrics
     /// reflect — i.e. how far the parse has caught up. The waiting verdict uses
     /// it as a freshness gate: a hook-seeded `waiting` card must not be demoted
