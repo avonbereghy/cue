@@ -123,7 +123,21 @@ pub struct ParsedEntry {
     /// where some agents have already returned their tool_result (the
     /// stop_reason-based `pending_tool_use` flips false at the first result).
     pub agent_tool_use_ids: Vec<String>,
+    /// True if this user-type entry is a harness interrupt marker
+    /// ("[Request interrupted by user]" / "[Request interrupted by user for
+    /// tool use]") rather than a real prompt. Claude Code fires NO hook on
+    /// ESC, so this transcript row is the only deterministic evidence the
+    /// turn was aborted. Marker entries are excluded from user-message
+    /// counting and prompt display, and drive an immediate demote of stuck
+    /// working/thinking cards (previously they pinned for the 5-minute
+    /// stalled-turn timer and polluted the last-prompt pill).
+    pub is_interrupt_marker: bool,
 }
+
+/// Prefix of the user-entry text Claude Code writes when the user interrupts
+/// a turn (ESC). Covers both observed variants: "[Request interrupted by
+/// user]" and "[Request interrupted by user for tool use]".
+const INTERRUPT_MARKER_PREFIX: &str = "[Request interrupted by user";
 
 /// Tool names that genuinely block the assistant on user input. An unmatched
 /// tool_use with one of these names is the only deterministic signal that the
@@ -416,6 +430,17 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
         entry.effort_command = extract_effort_command(obj);
         if entry.effort_command.is_some() {
             entry.effort_command_ts = entry.timestamp;
+        }
+        // Interrupt markers are harness rows, not prompts: don't let them
+        // count as user messages (they'd reset the end_turn scan boundary and
+        // surface as the "last prompt") — record them as the abort signal.
+        if entry
+            .user_prompt_text
+            .as_deref()
+            .is_some_and(|t| t.starts_with(INTERRUPT_MARKER_PREFIX))
+        {
+            entry.is_interrupt_marker = true;
+            entry.user_prompt_text = None;
         }
         entry.is_user_message = entry.user_prompt_text.is_some();
 
@@ -1069,6 +1094,15 @@ fn aggregate_entries(
         if m.agent_name.is_none() {
             if let Some(ref an) = entry.agent_name {
                 m.agent_name = Some(an.clone());
+            }
+        }
+
+        // Interrupt markers: last one wins. Recorded outside the
+        // is_user_message branch since markers are deliberately not counted
+        // as user messages.
+        if entry.is_interrupt_marker {
+            if let Some(ts) = entry.timestamp {
+                m.last_interrupt_ts = Some(ts);
             }
         }
 
@@ -2211,6 +2245,53 @@ mod tests {
             !m.awaiting_user_prompt,
             "matching tool_result must clear awaiting"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_interrupt_marker_not_a_prompt_and_sets_ts() {
+        // ESC writes a user entry with the marker text. It must not count as
+        // a user message (would reset the end_turn scan boundary), must not
+        // become the last-prompt pill, and must set last_interrupt_ts.
+        let prompt = r#"{"type":"user","timestamp":10.0,"message":{"content":"write a story"}}"#;
+        let aborted = r#"{"type":"assistant","timestamp":15.0,"message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"Once upon"}],"stop_reason":"stop_sequence"}}"#;
+        let marker = r#"{"type":"user","timestamp":15.1,"message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#;
+
+        let dir = std::env::temp_dir().join("cue_test_interrupt_marker");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        std::fs::write(&path, format!("{}\n{}\n{}", prompt, aborted, marker)).unwrap();
+
+        let m = super::parse_jsonl_to_session_metrics(&path).unwrap();
+        assert_eq!(m.last_interrupt_ts, Some(15.1));
+        assert_eq!(m.user_message_count, 1, "marker must not count as a prompt");
+        assert_eq!(m.last_prompt.as_deref(), Some("write a story"));
+        assert_eq!(m.last_user_prompt_ts, Some(10.0));
+        assert_eq!(
+            m.last_end_turn_ts, None,
+            "scan must stop at the real prompt, not resurrect a prior end_turn"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_interrupt_marker_tool_use_variant() {
+        // String-content form + "for tool use" suffix (tool interrupt).
+        let marker = r#"{"type":"user","timestamp":9.0,"message":{"content":"[Request interrupted by user for tool use]"}}"#;
+
+        let dir = std::env::temp_dir().join("cue_test_interrupt_tool");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        std::fs::write(&path, marker).unwrap();
+
+        let m = super::parse_jsonl_to_session_metrics(&path).unwrap();
+        assert_eq!(m.last_interrupt_ts, Some(9.0));
+        assert_eq!(m.user_message_count, 0);
+        assert!(m.last_prompt.is_none());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
