@@ -1158,12 +1158,20 @@ impl SessionMonitorState {
     }
 }
 
-/// Encode a workspace path to a directory name, matching Claude Code's convention.
+/// Encode a workspace path to a directory name, matching Claude Code's
+/// convention: every non-alphanumeric character becomes `-`.
 ///
-/// All `/` characters are replaced with `-`.
-/// Example: `/Users/dev/App` -> `-Users-dev-App`
+/// Example: `/Users/dev/my_app.v2` -> `-Users-dev-my-app-v2`
+///
+/// Previously only `/` was replaced, so any workspace containing `_` or `.`
+/// (e.g. `codebase_visualizer` → real dir `-Users-…-codebase-visualizer`)
+/// missed the direct lookup and fell through to the all-dirs scan on every
+/// new session. Verified against the live `~/.claude/projects` dir names.
 pub fn encode_workspace_path(workspace: &str) -> String {
-    workspace.replace('/', "-")
+    workspace
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 /// States that indicate the owning Claude Code process should still be alive.
@@ -1705,9 +1713,25 @@ mod tests {
 
     #[test]
     fn test_encode_workspace_path_no_leading_slash() {
+        // Every non-alphanumeric is encoded — including the drive colon.
         assert_eq!(
             encode_workspace_path("C:/Users/dev/App"),
-            "C:-Users-dev-App"
+            "C--Users-dev-App"
+        );
+    }
+
+    #[test]
+    fn test_encode_workspace_path_special_chars() {
+        // Underscores, dots, and spaces all become '-' (Claude Code's rule).
+        // Verified live: /Users/dev/Projects/Tools/codebase_visualizer maps
+        // to -Users-dev-Projects-Tools-codebase-visualizer on disk.
+        assert_eq!(
+            encode_workspace_path("/Users/dev/my_app.v2"),
+            "-Users-dev-my-app-v2"
+        );
+        assert_eq!(
+            encode_workspace_path("/Users/dev/My Docs/proj"),
+            "-Users-dev-My-Docs-proj"
         );
     }
 

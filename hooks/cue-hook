@@ -274,6 +274,48 @@ def _maybe_clear_stale_subagent_counter(existing, transcript_path, now):
     existing["activeSubagents"] = 0
 
 
+# sessions.json retention. `remove` marks sessions "ended" rather than
+# deleting (the frontend's revived section needs them briefly), but nothing
+# ever pruned them: observed 691 entries / 327 KB, rewritten + fsynced on
+# every hook event. GC runs inside the main locked write.
+_GC_ENDED_MAX_AGE_SECS = 7 * 86400
+_GC_MAX_ENTRIES = 500
+_GC_TERMINAL_STATES = ("ended", "idle", "done", "error")
+
+
+def _gc_sessions(sessions, now, keep_id=None):
+    """Prune dead entries from the sessions dict in place.
+
+    Two passes: drop `ended` tombstones older than 7 days, then enforce a
+    hard entry cap by evicting the oldest terminal-state entries. Active
+    states (working/thinking/subagent/waiting/compacting) and the session
+    being written this invocation are never pruned — a stale active entry is
+    the Rust liveness checks' job to demote, not ours to silently delete.
+    """
+    expired = [
+        sid for sid, e in sessions.items()
+        if sid != keep_id
+        and e.get("state") == "ended"
+        and isinstance(e.get("lastActivity"), (int, float))
+        and (now - e["lastActivity"]) > _GC_ENDED_MAX_AGE_SECS
+    ]
+    for sid in expired:
+        del sessions[sid]
+
+    overflow = len(sessions) - _GC_MAX_ENTRIES
+    if overflow > 0:
+        def _age_key(sid):
+            la = sessions[sid].get("lastActivity")
+            return la if isinstance(la, (int, float)) else 0
+        candidates = sorted(
+            (sid for sid, e in sessions.items()
+             if sid != keep_id and e.get("state") in _GC_TERMINAL_STATES),
+            key=_age_key,
+        )
+        for sid in candidates[:overflow]:
+            del sessions[sid]
+
+
 def _quick_state_write(session_id, workspace, source, subprocess_label,
                        last_tokens, hook_start_time,
                        team_name=None, agent_name=None,
@@ -477,19 +519,16 @@ def _detect_source():
 
 
 def _should_ignore_session(hook_data):
-    """Return True for non-interactive sessions that should not appear in Cue.
+    """Return True for sessions that should not appear in Cue.
 
-    Detects `claude -p` (print mode) and other non-interactive sessions:
-    1. Claude Code's own session_type field (print, pipe, headless)
-    2. CUE_SKIP=1 — generic opt-out for any caller
+    CUE_SKIP=1 is the explicit opt-out for any caller. Note: there is no
+    payload field distinguishing `claude -p` / headless runs (a former
+    `session_type` check here was dead code — verified against live hook
+    payloads and current docs), so print-mode sessions ARE tracked; the
+    sessions.json GC absorbs their `ended` tombstones.
     """
-    # Claude Code includes session_type in hook data for non-interactive modes
-    session_type = hook_data.get("session_type", "")
-    if session_type and session_type != "interactive":
-        return True
-    if os.environ.get("CUE_SKIP") == "1":
-        return True
-    return False
+    _ = hook_data  # kept for signature stability / future payload fields
+    return os.environ.get("CUE_SKIP") == "1"
 
 
 # Known env vars that indicate a subprocess caller.
@@ -922,6 +961,10 @@ def main():
 
             # Task 4: Schema validation
             status = _validate_sessions(status)
+
+            # Retention: prune week-old ended tombstones + enforce the entry
+            # cap before the write, so the file stops growing unboundedly.
+            _gc_sessions(status["sessions"], time.time(), keep_id=session_id)
 
             if ignored_session:
                 # Best-effort cleanup for already-recorded subprocess ghosts.
