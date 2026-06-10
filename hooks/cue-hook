@@ -601,22 +601,74 @@ def _read_last_assistant(transcript_path):
 
 
 def _last_tool_was_ask_question(transcript_path):
-    """Return True if the last assistant message ended with an AskUserQuestion tool call.
+    """Return True if the last assistant message ended with an AskUserQuestion
+    tool call that has NOT been answered (no matching tool_result in the tail).
 
     Used to detect when Claude's turn ended by asking the user a question —
     in that case we want to show 'waiting' rather than 'idle'/'done'.
+
+    The answered check matters twice over (audit F4): the user's answer IS a
+    tool_result, so a turn whose final assistant message in the (possibly
+    write-lagged) transcript is the question must not re-mint `waiting` at
+    Stop after the question was already answered — that pinned a phantom
+    yellow card after every answered-question turn. Mirrors the Rust
+    `awaiting_user_prompt` verdict (unmatched id = the only waiting signal).
     """
-    obj = _read_last_assistant(transcript_path)
-    if not obj:
+    if not transcript_path:
         return False
-    msg = obj.get("message", {})
-    content = msg.get("content", [])
-    if not isinstance(content, list):
-        return False
-    for block in content:
-        if isinstance(block, dict) and block.get("type") == "tool_use":
-            if block.get("name") == "AskUserQuestion":
-                return True
+    try:
+        with open(transcript_path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            if size == 0:
+                return False
+            chunk = min(size, _TAIL_READ_INITIAL)
+            while True:
+                f.seek(-chunk, 2)
+                tail = f.read(chunk).decode("utf-8", errors="ignore")
+                objs = []
+                for line in tail.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        objs.append(json.loads(line))
+                    except Exception:
+                        continue
+                last_idx = None
+                for i in range(len(objs) - 1, -1, -1):
+                    if objs[i].get("type") == "assistant":
+                        last_idx = i
+                        break
+                if last_idx is not None:
+                    msg = objs[last_idx].get("message", {})
+                    content = msg.get("content", [])
+                    ask_ids = set()
+                    if isinstance(content, list):
+                        for block in content:
+                            if (isinstance(block, dict)
+                                    and block.get("type") == "tool_use"
+                                    and block.get("name") == "AskUserQuestion"):
+                                ask_ids.add(block.get("id"))
+                    if not ask_ids:
+                        return False
+                    # Answered? tool_results land after the assistant message
+                    # in file order, so the same window contains them.
+                    for o in objs[last_idx + 1:]:
+                        oc = (o.get("message") or {}).get("content")
+                        if not isinstance(oc, list):
+                            continue
+                        for block in oc:
+                            if (isinstance(block, dict)
+                                    and block.get("type") == "tool_result"
+                                    and block.get("tool_use_id") in ask_ids):
+                                return False
+                    return True
+                if chunk >= size or chunk >= _TAIL_READ_CAP:
+                    return False
+                chunk = min(size, chunk * 2, _TAIL_READ_CAP)
+    except Exception:
+        pass
     return False
 
 
