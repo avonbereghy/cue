@@ -587,6 +587,7 @@ impl SessionMonitorState {
                         && metrics_caught_up(
                             metrics.and_then(|m| m.last_entry_ts),
                             s.state_changed_at,
+                            metrics.and_then(|m| m.parsed_file_mtime),
                         )
                     {
                         s.state = "idle".to_string();
@@ -1335,9 +1336,23 @@ fn should_resolve_waiting(awaiting: bool, pending: bool) -> bool {
 /// timestamp or no `stateChangedAt` — preserving the prior behavior for those
 /// edge cases. The liveness / JSONL-deletion / turn-ended passes remain the
 /// backstops for an abandoned prompt, so holding here never pins forever.
-fn metrics_caught_up(last_entry_ts: Option<f64>, state_changed_at: Option<f64>) -> bool {
+///
+/// `parsed_file_mtime` is a second catch-up proof (audit F4): when `waiting`
+/// is seeded at the very END of a turn (Stop's ask-question path), no newer
+/// *timestamped* entry will ever arrive — the trailing `last-prompt` /
+/// `ai-title` / `mode` rows carry no timestamps — so the entry-ts gate alone
+/// would hold a phantom waiting card forever. The transcript file mtime
+/// advancing past the transition proves the parse reflects the
+/// post-transition file even when content timestamps can't show it.
+fn metrics_caught_up(
+    last_entry_ts: Option<f64>,
+    state_changed_at: Option<f64>,
+    parsed_file_mtime: Option<f64>,
+) -> bool {
     match (last_entry_ts, state_changed_at) {
-        (Some(last), Some(changed)) => last >= changed,
+        (Some(last), Some(changed)) => {
+            last >= changed || parsed_file_mtime.is_some_and(|m| m >= changed)
+        }
         _ => true,
     }
 }
@@ -2985,15 +3000,28 @@ mod tests {
     // waiting verdict) is locked, not just the pure predicates.
 
     #[test]
+    fn test_metrics_caught_up_via_file_mtime() {
+        // End-of-turn seeded waiting: entries stop advancing (trailing
+        // metadata rows are timestampless) but the file mtime moved past the
+        // transition — the parse provably reflects the post-transition file,
+        // so the demote must be allowed (audit F4: phantom waiting pin).
+        assert!(metrics_caught_up(Some(100.0), Some(200.0), Some(200.0)));
+        assert!(metrics_caught_up(Some(100.0), Some(200.0), Some(250.0)));
+        // mtime older than the transition proves nothing — keep holding.
+        assert!(!metrics_caught_up(Some(100.0), Some(200.0), Some(150.0)));
+        assert!(!metrics_caught_up(Some(100.0), Some(200.0), None));
+    }
+
+    #[test]
     fn test_metrics_caught_up_gate() {
         // Stale parse (predates the seed) → hold (don't allow demote).
-        assert!(!metrics_caught_up(Some(100.0), Some(200.0)));
+        assert!(!metrics_caught_up(Some(100.0), Some(200.0), None));
         // Caught-up parse → allow demote.
-        assert!(metrics_caught_up(Some(200.0), Some(200.0)));
-        assert!(metrics_caught_up(Some(250.0), Some(200.0)));
+        assert!(metrics_caught_up(Some(200.0), Some(200.0), None));
+        assert!(metrics_caught_up(Some(250.0), Some(200.0), None));
         // Unknown freshness → preserve prior behavior (allow).
-        assert!(metrics_caught_up(None, Some(200.0)));
-        assert!(metrics_caught_up(Some(100.0), None));
+        assert!(metrics_caught_up(None, Some(200.0), None));
+        assert!(metrics_caught_up(Some(100.0), None, None));
     }
 
     #[test]

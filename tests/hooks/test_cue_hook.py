@@ -255,6 +255,47 @@ def make_payload(session_id="abc123", cwd="/Users/x/proj", transcript="", **extr
     return payload
 
 
+class TestLastToolWasAskQuestion:
+    """Stop's waiting fast-path must fire only for UNANSWERED questions
+    (audit F4 — it previously re-minted waiting after the answer landed)."""
+
+    _ASK = (
+        '{"type":"assistant","timestamp":1.0,"message":{"content":'
+        '[{"type":"tool_use","id":"toolu_q1","name":"AskUserQuestion","input":{}}],'
+        '"stop_reason":"tool_use"}}\n'
+    )
+    _ANSWER = (
+        '{"type":"user","timestamp":2.0,"message":{"role":"user","content":'
+        '[{"type":"tool_result","tool_use_id":"toolu_q1","content":"picked A"}]}}\n'
+    )
+    _TEXT_REPLY = (
+        '{"type":"assistant","timestamp":3.0,"message":{"content":'
+        '[{"type":"text","text":"Got it"}],"stop_reason":"end_turn"}}\n'
+    )
+
+    def test_unanswered_question_is_waiting(self, hook, tmp_path):
+        t = tmp_path / "t.jsonl"
+        t.write_text(self._ASK)
+        assert hook._last_tool_was_ask_question(str(t))
+
+    def test_answered_question_is_not_waiting(self, hook, tmp_path):
+        # The write-lag case captured live: last assistant in the file is
+        # still the question, but its tool_result is present → answered.
+        t = tmp_path / "t.jsonl"
+        t.write_text(self._ASK + self._ANSWER)
+        assert not hook._last_tool_was_ask_question(str(t))
+
+    def test_answered_question_with_final_text_is_not_waiting(self, hook, tmp_path):
+        t = tmp_path / "t.jsonl"
+        t.write_text(self._ASK + self._ANSWER + self._TEXT_REPLY)
+        assert not hook._last_tool_was_ask_question(str(t))
+
+    def test_no_assistant_entries(self, hook, tmp_path):
+        t = tmp_path / "t.jsonl"
+        t.write_text('{"type":"user","timestamp":1.0,"message":{"content":"hi"}}\n')
+        assert not hook._last_tool_was_ask_question(str(t))
+
+
 class TestPostCompactTrigger:
     """PostCompact maps by `trigger`: manual /compact between turns must land
     idle (audit F3 — it previously pinned a false 'working' for 5 minutes),
