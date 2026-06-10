@@ -255,6 +255,61 @@ def make_payload(session_id="abc123", cwd="/Users/x/proj", transcript="", **extr
     return payload
 
 
+class TestSessionsGc:
+    """_gc_sessions prunes ended tombstones >7d old and enforces the entry
+    cap on terminal states, never touching active states or keep_id."""
+
+    def _entry(self, state, age_secs, now):
+        return {"id": "x", "workspace": "/x", "state": state,
+                "lastActivity": now - age_secs, "startedAt": now - age_secs,
+                "activeSubagents": 0}
+
+    def test_prunes_old_ended_keeps_recent(self, hook):
+        now = 1_000_000.0
+        sessions = {
+            "old-ended": self._entry("ended", 8 * 86400, now),
+            "new-ended": self._entry("ended", 3600, now),
+            "old-idle": self._entry("idle", 8 * 86400, now),
+        }
+        hook._gc_sessions(sessions, now)
+        assert "old-ended" not in sessions
+        assert "new-ended" in sessions
+        assert "old-idle" in sessions  # 7d rule is ended-only
+
+    def test_never_prunes_active_or_keep_id(self, hook):
+        now = 1_000_000.0
+        sessions = {
+            "live-working": self._entry("working", 30 * 86400, now),
+            "current": self._entry("ended", 30 * 86400, now),
+        }
+        hook._gc_sessions(sessions, now, keep_id="current")
+        assert "live-working" in sessions
+        assert "current" in sessions
+
+    def test_entry_cap_evicts_oldest_terminal(self, hook):
+        now = 1_000_000.0
+        cap = hook._GC_MAX_ENTRIES
+        sessions = {
+            f"s{i}": self._entry("idle", i, now) for i in range(cap + 10)
+        }
+        hook._gc_sessions(sessions, now)
+        assert len(sessions) == cap
+        # Oldest (largest age) evicted first.
+        assert "s0" in sessions
+        assert f"s{cap + 9}" not in sessions
+
+    def test_main_write_path_runs_gc(self, hook_env, invoke_hook):
+        now = time.time()
+        stale = {"id": "ghost1", "workspace": "/x", "state": "ended",
+                 "lastActivity": now - 9 * 86400, "startedAt": now - 9 * 86400,
+                 "activeSubagents": 0}
+        hook_env.write_sessions({"ghost1": stale})
+        invoke_hook("working", make_payload())
+        sessions = hook_env.read_sessions()
+        assert "ghost1" not in sessions
+        assert "abc123" in sessions
+
+
 class TestPermissionRequestSeedsWaiting:
     """PermissionRequest fires only when a consent dialog is actually shown
     (verified live: auto-allowed tools produce no PermissionRequest), so it
