@@ -11,6 +11,18 @@
 //!
 //! Also honors `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (the same env override the
 //! CLI respects) and the `[1m]` model-name suffix.
+//!
+//! Two extra layers catch models the scan/fallback don't yet name, so a fresh
+//! Anthropic release reads correctly before Cue (or the installed `claude`)
+//! knows its exact id:
+//!   1. **Family floor** — a model whose family already has a 1M member, at a
+//!      version >= the lowest 1M version seen for that family, is assumed 1M.
+//!      Derived from the resolved 1M set, so it's self-maintaining: new opus/
+//!      fable/sonnet versions read 1M, while old opus-4-0/4-1/4-5 fall below
+//!      the opus floor (4-6) and stay 200K — matching Claude Code's own gating.
+//!   2. **Observed-usage escalation** — if a live session is *using* more than
+//!      the default 200K window, its real window is provably larger (a model
+//!      can't hold more live context than its limit), so escalate to 1M.
 
 use std::fs;
 use std::path::PathBuf;
@@ -28,12 +40,22 @@ const FALLBACK_1M_SUBSTRINGS: &[&str] = &[
     "opus-4-6",
     "opus-4-7",
     "opus-4-8",
+    "fable-5",
+    "mythos-5",
 ];
+
+/// Model families recognised when scanning the binary and when deriving the
+/// family-floor heuristic. Order is the search order for `parse_family_version`.
+const KNOWN_FAMILIES: &[&str] = &["opus", "sonnet", "haiku", "fable", "mythos"];
 
 static ONE_M_SUBSTRINGS: OnceLock<Vec<String>> = OnceLock::new();
 
 /// Resolve the context window for a given model id.
-pub fn context_limit_for(model: &str) -> i64 {
+///
+/// `observed_tokens` is the largest live context size seen for the session
+/// (input tokens of the last API call). Pass 0 when no usage is known yet — it
+/// only ever *raises* the limit, never lowers it, so a stale 0 is safe.
+pub fn context_limit_for(model: &str, observed_tokens: i64) -> i64 {
     if let Some(n) = env_override() {
         return n;
     }
@@ -47,7 +69,23 @@ pub fn context_limit_for(model: &str) -> i64 {
         return LARGE_CONTEXT_WINDOW;
     }
     let subs = ONE_M_SUBSTRINGS.get_or_init(detect_1m_substrings);
-    context_limit_from_subs(&lower, subs)
+    // 1. Exact/substring match against the known 1M set (binary scan or fallback).
+    if context_limit_from_subs(&lower, subs) == LARGE_CONTEXT_WINDOW {
+        return LARGE_CONTEXT_WINDOW;
+    }
+    // 2. Forward-looking family floor — covers new opus/fable/sonnet versions
+    //    not yet in the known set, without promoting older sub-floor versions.
+    if family_meets_1m_floor(&lower, subs) {
+        return LARGE_CONTEXT_WINDOW;
+    }
+    // 3. Deterministic backstop — a session can't be *using* more live context
+    //    than its window, so observed usage above the default proves a larger
+    //    window. 1M is the only larger tier we know; add intermediate tiers
+    //    here (smallest that fits) if Anthropic ships them.
+    if observed_tokens > DEFAULT_CONTEXT_WINDOW {
+        return LARGE_CONTEXT_WINDOW;
+    }
+    DEFAULT_CONTEXT_WINDOW
 }
 
 fn context_limit_from_subs(model_lower: &str, subs: &[String]) -> i64 {
@@ -56,6 +94,67 @@ fn context_limit_from_subs(model_lower: &str, subs: &[String]) -> i64 {
     } else {
         DEFAULT_CONTEXT_WINDOW
     }
+}
+
+/// True if `model_lower`'s family already has at least one 1M member in `subs`
+/// and the model's `(major, minor)` version is at or above the lowest 1M
+/// version seen for that family.
+///
+/// Floors are derived from the resolved 1M set, so the heuristic stays in sync
+/// with whatever the binary scan (or fallback) reports: haiku never appears in
+/// the 1M set so it gets no floor; opus's floor is 4-6 (from 4-6/4-7/4-8), so
+/// opus-4-0/4-1/4-5 stay 200K while opus-4-9/5-0 read 1M.
+fn family_meets_1m_floor(model_lower: &str, subs: &[String]) -> bool {
+    let (fam, ver) = match parse_family_version(model_lower) {
+        Some(fv) => fv,
+        None => return false,
+    };
+    let mut floor: Option<(u32, u32)> = None;
+    for s in subs {
+        if let Some((f, v)) = parse_family_version(s) {
+            if f == fam {
+                floor = Some(match floor {
+                    Some(cur) if cur <= v => cur,
+                    _ => v,
+                });
+            }
+        }
+    }
+    match floor {
+        Some(f) => ver >= f,
+        None => false,
+    }
+}
+
+/// Extract `(family, (major, minor))` from a model id. Family is the first of
+/// `KNOWN_FAMILIES` the string contains; the version is the first two digit
+/// groups appearing *after* the family token (minor defaults to 0). Trailing
+/// date/`-fast`/`-v1` suffixes past the first two groups are ignored. Returns
+/// `None` when there's no known family or no version digits follow it (e.g. the
+/// legacy `claude-3-5-sonnet` ordering, which is 200K anyway).
+fn parse_family_version(s: &str) -> Option<(&'static str, (u32, u32))> {
+    let fam = *KNOWN_FAMILIES.iter().find(|f| s.contains(**f))?;
+    let after = &s[s.find(fam)? + fam.len()..];
+    let mut nums: Vec<u32> = Vec::new();
+    for grp in after.split(|c: char| !c.is_ascii_digit()) {
+        if grp.is_empty() {
+            continue;
+        }
+        // A group longer than two digits is a date/build stamp (e.g.
+        // `-20251101`), not a version component. Stop before it — so a legacy
+        // `…-sonnet-20241022` (version *before* the family) yields no version
+        // and `claude-opus-4-20250514` reads as (4, 0), not (4, 20250514).
+        if grp.len() > 2 {
+            break;
+        }
+        nums.push(grp.parse().ok()?);
+        if nums.len() == 2 {
+            break;
+        }
+    }
+    let major = *nums.first()?;
+    let minor = nums.get(1).copied().unwrap_or(0);
+    Some((fam, (major, minor)))
 }
 
 fn env_override() -> Option<i64> {
@@ -342,9 +441,10 @@ fn match_brace(bytes: &[u8], open_idx: usize, cap: usize) -> Option<usize> {
 }
 
 fn body_has_model_family(body: &[u8]) -> bool {
-    body.windows(4).any(|w| w == b"opus")
-        || body.windows(6).any(|w| w == b"sonnet")
-        || body.windows(5).any(|w| w == b"haiku")
+    const FAMILY_BYTES: &[&[u8]] = &[b"opus", b"sonnet", b"haiku", b"fable", b"mythos"];
+    FAMILY_BYTES
+        .iter()
+        .any(|f| body.windows(f.len()).any(|w| w == *f))
 }
 
 /// Walk back from a `return!0`/`return!1` position to the nearest preceding
@@ -517,7 +617,7 @@ fn looks_like_model_id(s: &str) -> bool {
         return false;
     }
     let lower = s.to_ascii_lowercase();
-    let has_family = lower.contains("opus") || lower.contains("sonnet") || lower.contains("haiku");
+    let has_family = KNOWN_FAMILIES.iter().any(|f| lower.contains(f));
     let has_digit = s.chars().any(|c| c.is_ascii_digit());
     has_family && has_digit
 }
@@ -621,10 +721,96 @@ mod tests {
     fn context_limit_for_recognises_brackets_and_synthetic() {
         // These don't depend on binary parsing.
         assert_eq!(
-            context_limit_for("claude-sonnet-3-5[1m]"),
+            context_limit_for("claude-sonnet-3-5[1m]", 0),
             LARGE_CONTEXT_WINDOW
         );
-        assert_eq!(context_limit_for("<synthetic>"), LARGE_CONTEXT_WINDOW);
+        assert_eq!(context_limit_for("<synthetic>", 0), LARGE_CONTEXT_WINDOW);
+    }
+
+    #[test]
+    fn observed_usage_above_default_escalates_to_1m() {
+        // A genuinely-unknown model we can't classify by name. Below the
+        // default window it reads 200K; once observed usage proves the window
+        // is larger, it escalates. This is the deterministic backstop.
+        assert_eq!(
+            context_limit_for("claude-zenith-9", 150_000),
+            DEFAULT_CONTEXT_WINDOW
+        );
+        assert_eq!(
+            context_limit_for("claude-zenith-9", 250_000),
+            LARGE_CONTEXT_WINDOW
+        );
+    }
+
+    #[test]
+    fn fable_resolves_to_1m_via_fallback() {
+        // The screenshot bug: claude-fable-5 must not clamp at 200K. Covered by
+        // the fallback list even when the binary scan can't run, and regardless
+        // of observed usage.
+        let fallback: Vec<String> =
+            FALLBACK_1M_SUBSTRINGS.iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            context_limit_from_subs("claude-fable-5", &fallback),
+            LARGE_CONTEXT_WINDOW
+        );
+        assert_eq!(
+            context_limit_from_subs("claude-mythos-5", &fallback),
+            LARGE_CONTEXT_WINDOW
+        );
+    }
+
+    #[test]
+    fn family_floor_promotes_new_versions_but_not_old() {
+        // Floor derived from the shipping 1M set: opus floor = 4-6, fable = 5,
+        // sonnet = 4-0. New versions clear the floor; pre-floor opus stays 200K.
+        let subs: Vec<String> = FALLBACK_1M_SUBSTRINGS.iter().map(|s| s.to_string()).collect();
+        // Newer-than-floor → 1M (no observed usage needed).
+        assert!(family_meets_1m_floor("claude-opus-4-9", &subs));
+        assert!(family_meets_1m_floor("claude-opus-5-0", &subs));
+        assert!(family_meets_1m_floor("claude-fable-6", &subs));
+        assert!(family_meets_1m_floor("claude-sonnet-4-7", &subs));
+        // At/above the exact floor → 1M.
+        assert!(family_meets_1m_floor("claude-opus-4-6", &subs));
+        // Below the floor → not promoted (matches Claude Code's 200K denylist).
+        assert!(!family_meets_1m_floor("claude-opus-4-5", &subs));
+        assert!(!family_meets_1m_floor("claude-opus-4-1", &subs));
+        assert!(!family_meets_1m_floor("claude-opus-4-0", &subs));
+        // haiku never appears in the 1M set → no floor → never promoted.
+        assert!(!family_meets_1m_floor("claude-haiku-4-5", &subs));
+        assert!(!family_meets_1m_floor("claude-haiku-9-9", &subs));
+    }
+
+    #[test]
+    fn parse_family_version_handles_id_shapes() {
+        assert_eq!(parse_family_version("claude-opus-4-8"), Some(("opus", (4, 8))));
+        assert_eq!(parse_family_version("opus-4-7"), Some(("opus", (4, 7))));
+        assert_eq!(parse_family_version("claude-fable-5"), Some(("fable", (5, 0))));
+        // Date/fast suffixes past the first two groups are ignored.
+        assert_eq!(
+            parse_family_version("claude-opus-4-6-20251101"),
+            Some(("opus", (4, 6)))
+        );
+        assert_eq!(
+            parse_family_version("claude-opus-4-6-fast"),
+            Some(("opus", (4, 6)))
+        );
+        // Legacy version-before-family ordering → no version after family → None.
+        assert_eq!(parse_family_version("claude-3-5-sonnet-20241022"), None);
+        // Original opus-4 (a 200K model): the date must not become the minor.
+        assert_eq!(
+            parse_family_version("claude-opus-4-20250514"),
+            Some(("opus", (4, 0)))
+        );
+        // No known family → None.
+        assert_eq!(parse_family_version("gpt-4o"), None);
+    }
+
+    #[test]
+    fn family_floor_does_not_promote_legacy_dated_ids() {
+        // Regression: date suffixes on legacy ids must not clear the floor.
+        let subs: Vec<String> = FALLBACK_1M_SUBSTRINGS.iter().map(|s| s.to_string()).collect();
+        assert!(!family_meets_1m_floor("claude-3-5-sonnet-20241022", &subs));
+        assert!(!family_meets_1m_floor("claude-opus-4-20250514", &subs));
     }
 
     #[test]
@@ -700,6 +886,31 @@ mod tests {
                 subs
             );
         }
+    }
+
+    #[test]
+    fn scan_handles_bu_style_chain_with_fable_and_mythos() {
+        // Mirrors the live `bU` gate (Claude Code 2.1.170): a positive ===
+        // chain returning !0 that includes the fable/mythos families alongside
+        // opus/sonnet. The negative `if(wP_(H))return!1` is a bare function
+        // call with no literals, so it must not steal anything.
+        let src = br#"if(bU(H))return 1e6;function bU(H){if(y5H())return!1;let _=W9(H);if(wP_(H))return!1;if(_==="claude-fable-5"||_==="claude-mythos-5"||_==="claude-opus-4-8"||_==="claude-opus-4-7"||_==="claude-opus-4-6"||_==="claude-sonnet-4-6"||_==="claude-sonnet-4-5"||_==="claude-sonnet-4-0")return!0;return bE(Rj(H))}"#;
+        let mut subs = scan_for_1m_models(src);
+        subs.sort();
+        assert_eq!(
+            subs,
+            vec![
+                "claude-fable-5",
+                "claude-mythos-5",
+                "claude-opus-4-6",
+                "claude-opus-4-7",
+                "claude-opus-4-8",
+                "claude-sonnet-4-0",
+                "claude-sonnet-4-5",
+                "claude-sonnet-4-6",
+            ],
+            "bU-style chain must extract fable-5/mythos-5 plus opus/sonnet"
+        );
     }
 
     #[test]
@@ -806,6 +1017,8 @@ mod tests {
             "claude-opus-4-7",
             "claude-opus-4-8",
             "claude-sonnet-4-6",
+            "claude-fable-5",
+            "claude-mythos-5",
         ] {
             assert_eq!(
                 context_limit_from_subs(model, &subs),
