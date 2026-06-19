@@ -553,7 +553,8 @@ impl EnrichedSession {
             metrics.model.clone()
         };
 
-        let context_limit = crate::model_context::context_limit_for(&effective_model);
+        let context_limit =
+            crate::model_context::context_limit_for(&effective_model, effective_input_tokens);
 
         let context_usage_percent = if effective_input_tokens > 0 {
             (effective_input_tokens as f64 / context_limit as f64).min(1.0)
