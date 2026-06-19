@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui/nicegui-tauri/refs/heads/main/tauri-2/schema.json",
   "productName": "Cue",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "com.cueapp.desktop",
   "build": {
     "frontendDist": "../dist",
