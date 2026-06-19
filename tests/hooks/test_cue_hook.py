@@ -884,9 +884,10 @@ class TestStopFailure:
         assert entry["errorType"] == "rate_limit"
 
     def test_error_carries_forward_prior_error_type(self, hook_env, invoke_hook):
-        # PostToolUseFailure doesn't carry error_type. If a prior StopFailure
-        # set "rate_limit" and the next event is a PostToolUseFailure with no
-        # error_type, the stored value carries forward.
+        # A PostToolUseFailure must not clobber a real error that's already
+        # showing: if a prior StopFailure set "rate_limit", a benign tool
+        # failure leaves the error in place and carries the errorType forward
+        # (it does NOT downgrade the live rate_limit card to working).
         hook_env.write_sessions({
             "abc123": {"id": "abc123", "workspace": "/x", "state": "error",
                        "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0,
@@ -899,6 +900,30 @@ class TestStopFailure:
         entry = hook_env.read_sessions()["abc123"]
         assert entry["state"] == "error"
         assert entry["errorType"] == "rate_limit"
+
+    def test_tool_failure_does_not_create_sticky_error(self, hook_env, invoke_hook):
+        # Regression (the 55-min stuck "Error" on an idle retenir card): a
+        # PostToolUseFailure from a non-error state (a routine recoverable tool
+        # error like "read the file first") is ongoing work, NOT a session
+        # error. It must land `working` so the turn's Stop→idle isn't blocked.
+        hook_env.write_sessions({
+            "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
+                       "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}
+        })
+        invoke_hook("error", make_payload(hook_event_name="PostToolUseFailure"))
+        assert hook_env.read_sessions()["abc123"]["state"] == "working"
+
+    def test_tool_failure_then_stop_demotes_to_idle(self, hook_env, invoke_hook):
+        # End-to-end of the bug: a tool fails mid-turn, the turn then finishes.
+        # The card must end on `idle`, not pinned red. (Before the fix the
+        # PostToolUseFailure minted `error`, which blocked Stop→idle.)
+        hook_env.write_sessions({
+            "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
+                       "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}
+        })
+        invoke_hook("error", make_payload(hook_event_name="PostToolUseFailure"))
+        invoke_hook("idle", make_payload(hook_event_name="Stop"))
+        assert hook_env.read_sessions()["abc123"]["state"] == "idle"
 
     def test_transition_to_working_drops_error_type(self, hook_env, invoke_hook):
         # Recovery: errorType must NOT persist past the error state.
@@ -1018,13 +1043,15 @@ class TestPermissionRequestNoStateChange:
         assert "pendingPermission" not in entry, "deprecated field must be dropped"
 
     def test_error_during_in_flight_permission_still_surfaces(self, hook_env, invoke_hook):
-        # PostToolUseFailure during what was previously a stuck-waiting session
-        # still cleanly transitions to error — no special marker handling needed.
+        # A StopFailure (real turn-level failure) during what was previously a
+        # stuck-waiting session still cleanly transitions to error — no special
+        # marker handling needed. (Tool-level PostToolUseFailure is covered
+        # separately; it intentionally does NOT surface a session error.)
         hook_env.write_sessions({
             "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
                        "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}
         })
-        invoke_hook("error", make_payload(hook_event_name="PostToolUseFailure"))
+        invoke_hook("error", make_payload(hook_event_name="StopFailure"))
         assert hook_env.read_sessions()["abc123"]["state"] == "error"
 
 
@@ -1042,7 +1069,7 @@ class TestErrorTransitions:
             "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
                        "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}
         })
-        invoke_hook("error", make_payload(hook_event_name="PostToolUseFailure"))
+        invoke_hook("error", make_payload(hook_event_name="StopFailure"))
         assert hook_env.read_sessions()["abc123"]["state"] == "error"
 
     def test_error_from_idle(self, hook_env, invoke_hook):
@@ -1050,7 +1077,7 @@ class TestErrorTransitions:
             "abc123": {"id": "abc123", "workspace": "/x", "state": "idle",
                        "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}
         })
-        invoke_hook("error", make_payload(hook_event_name="PostToolUseFailure"))
+        invoke_hook("error", make_payload(hook_event_name="StopFailure"))
         assert hook_env.read_sessions()["abc123"]["state"] == "error"
 
     def test_error_from_thinking(self, hook_env, invoke_hook):
@@ -1058,7 +1085,7 @@ class TestErrorTransitions:
             "abc123": {"id": "abc123", "workspace": "/x", "state": "thinking",
                        "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}
         })
-        invoke_hook("error", make_payload(hook_event_name="PostToolUseFailure"))
+        invoke_hook("error", make_payload(hook_event_name="StopFailure"))
         assert hook_env.read_sessions()["abc123"]["state"] == "error"
 
     def test_error_resets_state_changed_at(self, hook_env, invoke_hook):
@@ -1069,7 +1096,7 @@ class TestErrorTransitions:
                        "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0,
                        "stateChangedAt": 100.0}
         })
-        invoke_hook("error", make_payload(hook_event_name="PostToolUseFailure"))
+        invoke_hook("error", make_payload(hook_event_name="StopFailure"))
         entry = hook_env.read_sessions()["abc123"]
         assert entry["stateChangedAt"] != 100.0
 
