@@ -1003,6 +1003,23 @@ def main():
                 # Update or create session
                 existing = status["sessions"].get(session_id, {})
 
+                # A single tool returning an error (PostToolUseFailure) is
+                # routine and recoverable — "read the file first", "file
+                # modified since read", a test or typecheck exiting non-zero —
+                # and Claude almost always retries and finishes the turn. It
+                # must NOT mint the sticky red `error` card: doing so flips the
+                # card red mid-turn on every benign retry and, worse, the error
+                # then blocks the follow-up Stop→idle (guard below), pinning an
+                # otherwise-idle session red until the next prompt. The red card
+                # is reserved for StopFailure — a real turn-level API failure
+                # (rate_limit / billing / auth / server_error). So treat a
+                # PostToolUseFailure as ongoing work. The one exception: if a
+                # real error is already showing, leave it untouched so a benign
+                # tool failure can't downgrade or clobber a live rate_limit /
+                # billing card (it stays `error` and carries errorType forward).
+                if action == "error" and event_name == "PostToolUseFailure":
+                    action = "error" if existing.get("state") == "error" else "working"
+
                 # Detect /clear: SessionStart after SessionEnd (state="clearing")
                 # means /clear was run. Also detect via transcript content for
                 # sessions that weren't previously tracked by Cue.
