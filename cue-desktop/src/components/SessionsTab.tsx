@@ -543,7 +543,9 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   //     user-driven +Sub/-Sub because both working and subagent count as
   //     "active" — it only resets when the session leaves both states.
   useEffect(() => {
-    if (!testMode) {
+    if (!testMode || screenshotMode) {
+      // Freeze the simulation in screenshot mode so designed states (working,
+      // thinking) don't auto-escalate to subagent mid-capture.
       sandboxActiveStartRef.current.clear();
       return;
     }
@@ -702,16 +704,16 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     // Re-subscribes only when entering/leaving sandbox mode; SANDBOX_* arrays
     // are stable values baked into the component and read via closure.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [testMode]);
+  }, [testMode, screenshotMode]);
 
-  const makeSandboxSession = useCallback((state: string = "idle", overrides?: Partial<{ title: string; workspace: string; model: string; source: string; branch: string; contextPct: number; tool: [string, string] | null; todoCompleted: number; todoTotal: number; subagentCount: number; tokPerSec: number; durationSecs: number }>): EnrichedSession => {
+  const makeSandboxSession = useCallback((state: string = "idle", overrides?: Partial<{ title: string; workspace: string; model: string; source: string; branch: string; contextPct: number; tool: [string, string] | null; todoCompleted: number; todoTotal: number; subagentCount: number; tokPerSec: number; durationSecs: number; effort: string }>): EnrichedSession => {
     const n = ++sandboxCounterRef.current;
     const model = overrides?.model ?? SANDBOX_MODELS[n % SANDBOX_MODELS.length];
     const source = overrides?.source ?? SANDBOX_SOURCES[n % SANDBOX_SOURCES.length];
     const meta = SANDBOX_STATE_META[state] ?? SANDBOX_STATE_META.idle;
     const contextPct = overrides?.contextPct ?? (Math.random() * 0.6 + 0.05);
     const contextLimit = model.includes("haiku") ? 200_000 : 1_000_000;
-    const modelDisplay = model.includes("opus") ? "Opus 4.6" : model.includes("haiku") ? "Haiku 4.5" : "Sonnet 4.6";
+    const modelDisplay = model.includes("opus") ? "Opus 4.8" : model.includes("haiku") ? "Haiku 4.5" : "Sonnet 4.6";
     const sourceDisplay = source === "vscode" ? "VSCode" : source === "cursor" ? "Cursor" : source === "iterm" ? "iTerm" : "Terminal";
     const branch = overrides?.branch ?? SANDBOX_BRANCHES[n % SANDBOX_BRANCHES.length];
     const workspace = overrides?.workspace ?? SANDBOX_WORKSPACES[n % SANDBOX_WORKSPACES.length];
@@ -778,6 +780,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       todoTotal,
       systemMemory: { totalMb: 32768, usedMb: Math.floor(Math.random() * 16000 + 8000), usagePercent: Math.random() * 50 + 25 },
       claudeVersion: "1.0.33",
+      effortLevel: overrides?.effort,
     };
   }, []);
 
@@ -1117,12 +1120,13 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       build: () => {
         sandboxCounterRef.current = 0;
         return [
-          makeSandboxSession("working", { title: "Building auth middleware", workspace: "api-server", model: "claude-opus-4-6", branch: "feat/auth", contextPct: 0.61, durationSecs: 272, tokPerSec: 14.2, tool: ["Write", "src/middleware/auth.ts"], todoTotal: 7, todoCompleted: 3 }),
-          makeSandboxSession("subagent", { title: "Running test suite", workspace: "cue", model: "claude-sonnet-4-6", branch: "main", contextPct: 0.29, durationSecs: 728, subagentCount: 2, todoTotal: 15, todoCompleted: 11 }),
-          makeSandboxSession("waiting", { title: "Database migration", workspace: "ml-pipeline", model: "claude-sonnet-4-6", branch: "dev", contextPct: 0.45, durationSecs: 156, tool: ["Bash", "prisma migrate deploy"] }),
+          makeSandboxSession("working", { title: "Building auth middleware", workspace: "api-server", model: "claude-opus-4-8", effort: "high", branch: "feat/auth", contextPct: 0.61, durationSecs: 272, tokPerSec: 14.2, tool: ["Write", "src/middleware/auth.ts"], todoTotal: 7, todoCompleted: 3 }),
+          makeSandboxSession("thinking", { title: "Planning the refactor", workspace: "web-client", model: "claude-opus-4-8", effort: "max", branch: "perf/bundle", contextPct: 0.37, durationSecs: 95, tokPerSec: 18.7 }),
+          makeSandboxSession("subagent", { title: "Running test suite", workspace: "cue", model: "claude-sonnet-4-6", effort: "medium", branch: "main", contextPct: 0.29, durationSecs: 728, subagentCount: 2, todoTotal: 15, todoCompleted: 11 }),
+          makeSandboxSession("compacting", { title: "Compacting context", workspace: "ml-pipeline", model: "claude-sonnet-4-6", branch: "dev", contextPct: 0.92, durationSecs: 1240 }),
+          makeSandboxSession("waiting", { title: "Database migration", workspace: "infra", model: "claude-sonnet-4-6", effort: "low", branch: "feat/deploy", contextPct: 0.45, durationSecs: 156, tool: ["Bash", "prisma migrate deploy"] }),
           makeSandboxSession("done", { title: "Documentation complete", workspace: "docs", model: "claude-haiku-4-5-20251001", branch: "main", contextPct: 0.82, durationSecs: 540, tokPerSec: 0, todoTotal: 5, todoCompleted: 5 }),
-          makeSandboxSession("working", { title: "Optimizing bundle size", workspace: "web-client", model: "claude-opus-4-6", branch: "perf/bundle", contextPct: 0.37, durationSecs: 95, tokPerSec: 18.7, tool: ["Edit", "vite.config.ts"] }),
-          makeSandboxSession("idle", { title: "Awaiting review", workspace: "infra", model: "claude-sonnet-4-6", branch: "feat/deploy", contextPct: 0.19, durationSecs: 1200 }),
+          makeSandboxSession("idle", { title: "Awaiting review", workspace: "trader", model: "claude-opus-4-8", branch: "release/v2", contextPct: 0.19, durationSecs: 1200 }),
         ];
       },
     },
@@ -2369,6 +2373,83 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // ---------------------------------------------------------------------------
   // Sandbox mode render
   // ---------------------------------------------------------------------------
+  // Collect card settings for BranchView and SessionCard passthrough.
+  // Memoized so SessionCard's React.memo only re-checks props when an actual
+  // setting changes — prevents the ~60 strict-equality comparisons per card
+  // that previously ran on every parent render (timer ticks, polling, etc.).
+  // Declared before the `if (testMode)` early return so these hooks always run
+  // (Rules of Hooks — a conditional skip throws "Rendered fewer hooks").
+  const cardSettings: CardSettings = useMemo(() => ({
+    titleAnimation, animationSpeed, randomAnimation,
+    signalString: lowPower ? false : signalString,
+    signalFrequency, signalMode, signalAlpha, signalAmplitude, signalEcho,
+    signalBass, signalMids, signalTreble, signalColorDark, signalColorLight,
+    signalOffset, signalEffect: lowPower ? "string" : signalEffect,
+    sandEnabled: lowPower ? false : sandEnabled,
+    sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize,
+    sandTurbulence, sandAlpha,
+    fluxEnabled: lowPower ? false : fluxEnabled,
+    fluxAlpha, fluxIntensity, fluxDensity, fluxSpeed, fluxLineLength, fluxTurbulence,
+    auroraEnabled: lowPower ? false : auroraEnabled,
+    auroraAlpha, auroraSpeed,
+    cordRetractDelay, cordDeployForce,
+    cordRetractForce, stringSpread, stringDeployAngle, keyPressSpeed, keyReleaseSpeed,
+    compactMode, slimMode, contextThreshold, contextDisplay,
+    showToolPills, showCurrentTool, showConfigCounts, showToolCallComets, timerDisplay,
+    lowPower,
+  }), [
+    titleAnimation, animationSpeed, randomAnimation,
+    signalString, signalFrequency, signalMode, signalAlpha, signalAmplitude, signalEcho,
+    signalBass, signalMids, signalTreble, signalColorDark, signalColorLight,
+    signalOffset, signalEffect,
+    sandEnabled, sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize,
+    sandTurbulence, sandAlpha,
+    fluxEnabled, fluxAlpha, fluxIntensity, fluxDensity, fluxSpeed, fluxLineLength, fluxTurbulence,
+    auroraEnabled, auroraAlpha, auroraSpeed,
+    cordRetractDelay, cordDeployForce, cordRetractForce, stringSpread, stringDeployAngle,
+    keyPressSpeed, keyReleaseSpeed,
+    compactMode, slimMode, contextThreshold, contextDisplay,
+    showToolPills, showCurrentTool, showConfigCounts, showToolCallComets, timerDisplay,
+    lowPower,
+  ]);
+
+  // Per-session expand-cycle handlers cached by id so SessionCard's React.memo
+  // sees a stable function reference across parent re-renders. Built lazily
+  // inside the .map() — the captured sessionId never changes, and
+  // `setExpandOverrides` itself is identity-stable from React.
+  const expandCyclersRef = useRef(new Map<string, () => void>());
+  const cycleExpandById = useCallback((sessionId: string) => {
+    setExpandOverrides((prev) => {
+      const current = prev[sessionId] ?? 0;
+      const next = (current + 1) % 3;
+      if (next === 0) {
+        const copy = { ...prev };
+        delete copy[sessionId];
+        return copy;
+      }
+      return { ...prev, [sessionId]: next };
+    });
+  }, []);
+  const getExpandCycle = useCallback((sessionId: string) => {
+    let fn = expandCyclersRef.current.get(sessionId);
+    if (!fn) {
+      fn = () => {
+        setExpandOverrides((prev) => {
+          const current = prev[sessionId] ?? 0;
+          const next = (current + 1) % 3;
+          if (next === 0) {
+            const copy = { ...prev };
+            delete copy[sessionId];
+            return copy;
+          }
+          return { ...prev, [sessionId]: next };
+        });
+      };
+      expandCyclersRef.current.set(sessionId, fn);
+    }
+    return fn;
+  }, []);
+
   if (testMode) {
     // Sort sandbox sessions the same way as real sessions
     const sortedSandbox = (() => {
@@ -2720,80 +2801,10 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const hasTeamChildren = teamChildren.length > 0;
   const showBranchView = branchView && hasTeamChildren && !compactMode;
 
-  // Collect card settings for BranchView and SessionCard passthrough.
-  // Memoized so SessionCard's React.memo only re-checks props when an actual
-  // setting changes — prevents the ~60 strict-equality comparisons per card
-  // that previously ran on every parent render (timer ticks, polling, etc.).
-  const cardSettings: CardSettings = useMemo(() => ({
-    titleAnimation, animationSpeed, randomAnimation,
-    signalString: lowPower ? false : signalString,
-    signalFrequency, signalMode, signalAlpha, signalAmplitude, signalEcho,
-    signalBass, signalMids, signalTreble, signalColorDark, signalColorLight,
-    signalOffset, signalEffect: lowPower ? "string" : signalEffect,
-    sandEnabled: lowPower ? false : sandEnabled,
-    sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize,
-    sandTurbulence, sandAlpha,
-    fluxEnabled: lowPower ? false : fluxEnabled,
-    fluxAlpha, fluxIntensity, fluxDensity, fluxSpeed, fluxLineLength, fluxTurbulence,
-    auroraEnabled: lowPower ? false : auroraEnabled,
-    auroraAlpha, auroraSpeed,
-    cordRetractDelay, cordDeployForce,
-    cordRetractForce, stringSpread, stringDeployAngle, keyPressSpeed, keyReleaseSpeed,
-    compactMode, slimMode, contextThreshold, contextDisplay,
-    showToolPills, showCurrentTool, showConfigCounts, showToolCallComets, timerDisplay,
-    lowPower,
-  }), [
-    titleAnimation, animationSpeed, randomAnimation,
-    signalString, signalFrequency, signalMode, signalAlpha, signalAmplitude, signalEcho,
-    signalBass, signalMids, signalTreble, signalColorDark, signalColorLight,
-    signalOffset, signalEffect,
-    sandEnabled, sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize,
-    sandTurbulence, sandAlpha,
-    fluxEnabled, fluxAlpha, fluxIntensity, fluxDensity, fluxSpeed, fluxLineLength, fluxTurbulence,
-    auroraEnabled, auroraAlpha, auroraSpeed,
-    cordRetractDelay, cordDeployForce, cordRetractForce, stringSpread, stringDeployAngle,
-    keyPressSpeed, keyReleaseSpeed,
-    compactMode, slimMode, contextThreshold, contextDisplay,
-    showToolPills, showCurrentTool, showConfigCounts, showToolCallComets, timerDisplay,
-    lowPower,
-  ]);
-
-  // Per-session expand-cycle handlers cached by id so SessionCard's React.memo
-  // sees a stable function reference across parent re-renders. Built lazily
-  // inside the .map() — the captured sessionId never changes, and
-  // `setExpandOverrides` itself is identity-stable from React.
-  const expandCyclersRef = useRef(new Map<string, () => void>());
-  const cycleExpandById = useCallback((sessionId: string) => {
-    setExpandOverrides((prev) => {
-      const current = prev[sessionId] ?? 0;
-      const next = (current + 1) % 3;
-      if (next === 0) {
-        const copy = { ...prev };
-        delete copy[sessionId];
-        return copy;
-      }
-      return { ...prev, [sessionId]: next };
-    });
-  }, []);
-  const getExpandCycle = useCallback((sessionId: string) => {
-    let fn = expandCyclersRef.current.get(sessionId);
-    if (!fn) {
-      fn = () => {
-        setExpandOverrides((prev) => {
-          const current = prev[sessionId] ?? 0;
-          const next = (current + 1) % 3;
-          if (next === 0) {
-            const copy = { ...prev };
-            delete copy[sessionId];
-            return copy;
-          }
-          return { ...prev, [sessionId]: next };
-        });
-      };
-      expandCyclersRef.current.set(sessionId, fn);
-    }
-    return fn;
-  }, []);
+  // NOTE: cardSettings (useMemo) and the expand-cycle hooks (useRef/useCallback)
+  // were moved above the `if (testMode)` early return to satisfy React's Rules
+  // of Hooks — keeping them here meant they were skipped whenever Sandbox Mode
+  // returned early, throwing "Rendered fewer hooks than expected" (black screen).
 
   // ---------------------------------------------------------------------------
   // Normal mode render
