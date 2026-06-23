@@ -669,9 +669,20 @@ mod tests {
         // set. If this fails, the hook silently no-ops every event that maps
         // to the missing action.
         let valid_actions: std::collections::HashSet<&str> = [
-            "idle", "working", "thinking", "waiting", "done",
-            "remove", "error", "subagent", "subagent_stop", "compacting",
-        ].iter().copied().collect();
+            "idle",
+            "working",
+            "thinking",
+            "waiting",
+            "done",
+            "remove",
+            "error",
+            "subagent",
+            "subagent_stop",
+            "compacting",
+        ]
+        .iter()
+        .copied()
+        .collect();
         for (event, action) in HOOK_EVENTS {
             assert!(
                 valid_actions.contains(*action),
@@ -847,18 +858,18 @@ mod tests {
         // The old deny-list missed space, $, *, ?, etc. The new allowlist
         // closes the whole class.
         for bad in [
-            "/Users/My Apps/cue-hook", // space — broke shell tokenisation
+            "/Users/My Apps/cue-hook",   // space — broke shell tokenisation
             "/Users/foo/$HOME/cue-hook", // literal $ leak
-            "/tmp/*/cue-hook",         // glob
-            "/tmp/cue-hook?",          // glob
-            "/tmp/cue-hook;rm",        // semicolon
-            "/tmp/cue-hook|cat",       // pipe
-            "/tmp/cue\thook",          // tab
-            "/tmp/cue\nhook",          // newline
-            "/tmp/cue#hook",           // comment char
-            "/tmp/cue~hook",           // tilde mid-path
-            "/tmp/{a,b}/cue-hook",     // brace expansion
-            "/tmp/cue-hook ",          // trailing space
+            "/tmp/*/cue-hook",           // glob
+            "/tmp/cue-hook?",            // glob
+            "/tmp/cue-hook;rm",          // semicolon
+            "/tmp/cue-hook|cat",         // pipe
+            "/tmp/cue\thook",            // tab
+            "/tmp/cue\nhook",            // newline
+            "/tmp/cue#hook",             // comment char
+            "/tmp/cue~hook",             // tilde mid-path
+            "/tmp/{a,b}/cue-hook",       // brace expansion
+            "/tmp/cue-hook ",            // trailing space
         ] {
             assert!(
                 assert_safe_for_command(bad, "x").is_err(),

@@ -124,8 +124,7 @@ pub fn provision_token() -> std::io::Result<String> {
 #[cfg(test)]
 pub fn read_token(path: &Path) -> std::io::Result<String> {
     let bytes = std::fs::read(path)?;
-    String::from_utf8(bytes)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    String::from_utf8(bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 /// Constant-time comparison of two byte slices.

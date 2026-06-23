@@ -634,12 +634,9 @@ fn write_sandbox_sessions(sessions: Vec<SandboxSessionPayload>) -> Result<(), St
             .and_then(|c| serde_json::from_str(&c).ok())
             .unwrap_or_else(|| serde_json::json!({ "sessions": {} }));
 
-        let map = status["sessions"]
-            .as_object_mut()
-            .ok_or_else(|| std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Invalid sessions.json",
-            ))?;
+        let map = status["sessions"].as_object_mut().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid sessions.json")
+        })?;
 
         // Remove stale sandbox entries
         map.retain(|k, _| !k.starts_with("sandbox-"));
@@ -1362,8 +1359,7 @@ pub fn run() {
                     if *focused {
                         if window.label() == "main" {
                             if let Some(state) = window.try_state::<AppState>() {
-                                let sessions =
-                                    state.monitor.enriched_sessions.lock_safe().clone();
+                                let sessions = state.monitor.enriched_sessions.lock_safe().clone();
                                 let _ = window.emit("sessions-updated", &sessions);
                             }
                         }
@@ -1539,7 +1535,10 @@ fn spawn_permission_server(
             let permit = match conn_limit.clone().try_acquire_owned() {
                 Ok(p) => p,
                 Err(_) => {
-                    log::debug!("Permission server at capacity ({} conns); dropping", MAX_CONNECTIONS);
+                    log::debug!(
+                        "Permission server at capacity ({} conns); dropping",
+                        MAX_CONNECTIONS
+                    );
                     drop(stream);
                     continue;
                 }
@@ -1584,8 +1583,7 @@ async fn handle_permission_connection(
     // byte at a time (which would otherwise keep resetting a per-read timer
     // forever), capping the whole pre-decision phase. The post-auth user
     // decision wait has its own separate 60s timeout downstream.
-    let ingest_deadline =
-        tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let ingest_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
 
     // Read until we have the \r\n\r\n header terminator or MAX_HEADER_BYTES.
     // A single `read` is not guaranteed to deliver a full header block; fragmented
@@ -1668,7 +1666,8 @@ async fn handle_permission_connection(
             // them. The hook reads STATUS_DIR/permission-token (0600) on
             // every invocation and sends the value verbatim in X-Cue-Token.
             if !token_ok {
-                let response = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                let response =
+                    "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
                 let _ = stream.write_all(response.as_bytes()).await;
                 return Ok(());
             }
@@ -1819,8 +1818,7 @@ async fn handle_permission_connection(
             // reasonable user-deliberation window for a local UI prompt and
             // well below Python's urlopen 300s ceiling, so the hook still
             // gets a clean 504 well before its own timeout fires.
-            const PERMISSION_WAIT_TIMEOUT: std::time::Duration =
-                std::time::Duration::from_secs(60);
+            const PERMISSION_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
             let decision = match tokio::time::timeout(PERMISSION_WAIT_TIMEOUT, rx).await {
                 Ok(Ok(d)) => d,
                 Ok(Err(_)) | Err(_) => {
