@@ -628,11 +628,15 @@ fn write_sandbox_sessions(sessions: Vec<SandboxSessionPayload>) -> Result<(), St
     // silently overwrites the hook's update. F-correctness-002.
     let lock_path = paths::sessions_lock_path();
     security::with_sessions_lock(&lock_path, || {
-        // Read existing sessions.json, strip old sandbox entries, merge new ones
-        let mut status: serde_json::Value = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|c| serde_json::from_str(&c).ok())
-            .unwrap_or_else(|| serde_json::json!({ "sessions": {} }));
+        // Read existing sessions.json, strip old sandbox entries, merge new ones.
+        // Bounded read: same untrusted-boundary treatment as every other
+        // sessions.json read (a same-uid process could drop a huge file here too).
+        const SESSIONS_JSON_MAX_BYTES: u64 = 4 * 1024 * 1024;
+        let mut status: serde_json::Value =
+            security::read_to_string_bounded(&path, SESSIONS_JSON_MAX_BYTES)
+                .ok()
+                .and_then(|c| serde_json::from_str(&c).ok())
+                .unwrap_or_else(|| serde_json::json!({ "sessions": {} }));
 
         let map = status["sessions"].as_object_mut().ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid sessions.json")
@@ -672,10 +676,12 @@ fn clear_sandbox_sessions() -> Result<(), String> {
 
     let lock_path = paths::sessions_lock_path();
     security::with_sessions_lock(&lock_path, || {
-        let mut status: serde_json::Value = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|c| serde_json::from_str(&c).ok())
-            .unwrap_or_else(|| serde_json::json!({ "sessions": {} }));
+        const SESSIONS_JSON_MAX_BYTES: u64 = 4 * 1024 * 1024;
+        let mut status: serde_json::Value =
+            security::read_to_string_bounded(&path, SESSIONS_JSON_MAX_BYTES)
+                .ok()
+                .and_then(|c| serde_json::from_str(&c).ok())
+                .unwrap_or_else(|| serde_json::json!({ "sessions": {} }));
 
         if let Some(map) = status["sessions"].as_object_mut() {
             map.retain(|k, _| !k.starts_with("sandbox-"));
@@ -1055,13 +1061,15 @@ fn is_executable(path: &std::path::Path) -> bool {
 /// Returns (registered_count, with_timeout_count, total_expected).
 fn check_settings_hooks(settings_path: &std::path::Path) -> (usize, usize, usize) {
     let total = env_detect::HOOK_EVENTS.len();
-    let settings: serde_json::Value = match std::fs::read_to_string(settings_path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-    {
-        Some(v) => v,
-        None => return (0, 0, total),
-    };
+    const CLAUDE_SETTINGS_MAX_BYTES: u64 = 4 * 1024 * 1024;
+    let settings: serde_json::Value =
+        match security::read_to_string_bounded(settings_path, CLAUDE_SETTINGS_MAX_BYTES)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+        {
+            Some(v) => v,
+            None => return (0, 0, total),
+        };
 
     let hooks = match settings.get("hooks").and_then(|h| h.as_object()) {
         Some(h) => h,
