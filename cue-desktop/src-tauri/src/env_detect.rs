@@ -278,20 +278,121 @@ fn resolve_hook_path(raw: &str) -> Result<PathBuf, String> {
     Ok(expanded)
 }
 
-/// Configure Claude Code hooks in `~/.claude/settings.json`.
-///
-/// Reads the existing settings, backs up the original to `settings.json.bak`,
-/// and adds/updates hook entries for Claude Code lifecycle events.
-/// Uses `security::atomic_write()` for safe file writes.
+/// Configure Claude Code hooks in `~/.claude/settings.json` for a hook script
+/// at an explicit path. Validates the path (rejecting shell metacharacters and
+/// path traversal), resolves a Python 3 interpreter, and registers entries for
+/// every lifecycle event with a 5s timeout. Used by `deploy_bundled_hook` and
+/// available for advanced/manual installs.
 pub fn configure_hooks(hook_path: &str) -> Result<(), String> {
-    // Security: validate hook_path to prevent command injection
+    // Security: validate hook_path to prevent command injection.
     let resolved = resolve_hook_path(hook_path)?;
-    let hook_path = resolved.to_string_lossy().to_string();
+    configure_hooks_via_interpreter(&resolved)
+}
 
+/// Standard per-user install location for the cue-hook script.
+/// `~/.claude/hooks/cue-hook` — the same directory Claude Code uses for its
+/// own hook scripts, so it survives a Cue reinstall and is easy to find.
+pub fn deployed_hook_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".claude/hooks/cue-hook"))
+}
+
+/// Locate a Python 3 interpreter by scanning `PATH` (no subprocess spawn — this
+/// module stays side-effect free). Returns the absolute path to the first
+/// match. Claude Code invokes the hook as `<python> <hook> <state>`, so the
+/// script needs no execute bit; this is what makes the hook portable to
+/// Windows, where shebang lines are not honored.
+pub fn find_python() -> Option<PathBuf> {
+    let names: &[&str] = if cfg!(target_os = "windows") {
+        &["python.exe", "python3.exe", "py.exe"]
+    } else {
+        &["python3", "python"]
+    };
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        for name in names {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// Deploy the bundled `cue-hook` script to `~/.claude/hooks/cue-hook` and wire
+/// it into Claude Code's `settings.json`. `bundled_hook` is the path to the
+/// script shipped inside the app bundle (resolved by the caller through the
+/// Tauri resource API). Returns the deployed path on success.
+///
+/// This is the single, platform-agnostic install path used by both the
+/// onboarding wizard and the Settings "reinstall" button — it does not depend
+/// on any pre-existing files outside the app bundle.
+pub fn deploy_bundled_hook(bundled_hook: &std::path::Path) -> Result<String, String> {
+    let bytes = std::fs::read(bundled_hook).map_err(|e| {
+        format!(
+            "Could not read the bundled cue-hook script at {}: {e}",
+            bundled_hook.display()
+        )
+    })?;
+
+    let dest = deployed_hook_path().ok_or("Cannot determine home directory")?;
+    let hooks_dir = dest
+        .parent()
+        .ok_or("Invalid hook destination path")?
+        .to_path_buf();
+    std::fs::create_dir_all(&hooks_dir)
+        .map_err(|e| format!("Failed to create {}: {e}", hooks_dir.display()))?;
+
+    // atomic_write lands the file at 0600. Because the hook is invoked via the
+    // Python interpreter (not executed directly), 0600 is correct and the
+    // least-privilege choice — no execute bit required.
+    security::atomic_write(&dest, &bytes)
+        .map_err(|e| format!("Failed to write cue-hook script: {e}"))?;
+
+    configure_hooks_via_interpreter(&dest)?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
+/// Build the `<python> <hook>` command prefix and register hook entries.
+///
+/// We verify a Python 3 interpreter exists on `PATH`, but write its *bare name*
+/// (e.g. `python3`) into the command rather than its absolute path. This keeps
+/// the command portable: the shell resolves it at hook time, and we never trip
+/// over an install path that contains a space (common on Windows, e.g.
+/// `C:\Program Files\Python\python.exe`) — which the command-safety allowlist
+/// would otherwise reject.
+fn configure_hooks_via_interpreter(hook: &std::path::Path) -> Result<(), String> {
+    let hook_str = hook.to_string_lossy();
+    assert_safe_for_command(&hook_str, "cue-hook")?;
+
+    let python = find_python().ok_or(
+        "Python 3 was not found on your PATH. Cue's hook is a Python 3 script — \
+         install Python 3 (python.org or your package manager) and run setup again.",
+    )?;
+    // Use the interpreter's file name (python3 / python / python.exe), not its
+    // absolute path. file_name() is always present for a resolved interpreter.
+    let interpreter = python
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "python3".to_string());
+    assert_safe_for_command(&interpreter, "python")?;
+
+    let prefix = format!("{} {}", interpreter, hook_str);
+    write_hook_settings(&prefix)
+}
+
+/// Write/refresh cue-hook entries in `~/.claude/settings.json`.
+///
+/// `command_prefix` is everything before the per-event state argument, e.g.
+/// `/usr/bin/python3 /home/u/.claude/hooks/cue-hook`. Backs up the existing
+/// settings to `settings.json.bak`, preserves every other key, and is
+/// idempotent — any prior cue-hook entry for an event is replaced (other
+/// tools' hooks on the same event are left untouched). Each entry carries a
+/// 5s timeout so a wedged hook can never stall Claude Code.
+fn write_hook_settings(command_prefix: &str) -> Result<(), String> {
     let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
     let settings_path = home.join(".claude/settings.json");
 
-    // Read existing settings or start with empty object
     let mut settings: serde_json::Value = if settings_path.exists() {
         let content = std::fs::read_to_string(&settings_path)
             .map_err(|e| format!("Failed to read settings: {}", e))?;
@@ -300,10 +401,7 @@ pub fn configure_hooks(hook_path: &str) -> Result<(), String> {
         serde_json::json!({})
     };
 
-    // Backup existing settings before modification. Write through atomic_write
-    // so the backup lands at 0600 (fs::copy would inherit source perms or apply
-    // umask, potentially exposing the hook config to other local users on a
-    // shared system).
+    // Back up the original through atomic_write so the backup lands at 0600.
     if settings_path.exists() {
         let backup_path = settings_path.with_extension("json.bak");
         let backup_bytes = std::fs::read(&settings_path)
@@ -312,11 +410,9 @@ pub fn configure_hooks(hook_path: &str) -> Result<(), String> {
             .map_err(|e| format!("Failed to backup settings: {}", e))?;
     }
 
-    // Ensure "hooks" key exists as an object
     if !settings.get("hooks").is_some_and(|h| h.is_object()) {
         settings["hooks"] = serde_json::json!({});
     }
-
     let hooks = settings["hooks"].as_object_mut().unwrap();
 
     for (event, state) in HOOK_EVENTS {
@@ -324,53 +420,29 @@ pub fn configure_hooks(hook_path: &str) -> Result<(), String> {
             "matcher": "",
             "hooks": [{
                 "type": "command",
-                "command": format!("{} {}", hook_path, state)
+                "command": format!("{} {}", command_prefix, state),
+                "timeout": 5000
             }]
         });
 
-        // Get or create the event's hook array
         if !hooks.contains_key(*event) {
             hooks.insert(event.to_string(), serde_json::json!([]));
         }
+        let arr = hooks
+            .get_mut(*event)
+            .unwrap()
+            .as_array_mut()
+            .ok_or("hooks entry is not an array")?;
 
-        let event_hooks = hooks.get_mut(*event).unwrap();
-
-        // Check if a hook from this path already exists (update rather than duplicate)
-        let existing_idx = event_hooks.as_array().and_then(|arr| {
-            arr.iter().position(|entry| {
-                entry
-                    .get("hooks")
-                    .and_then(|h| h.as_array())
-                    .map(|hooks_arr| {
-                        hooks_arr.iter().any(|h| {
-                            h.get("command")
-                                .and_then(|c| c.as_str())
-                                .map(|c| c.starts_with(hook_path.as_str()))
-                                .unwrap_or(false)
-                        })
-                    })
-                    .unwrap_or(false)
-            })
-        });
-
-        if let Some(idx) = existing_idx {
-            // Update existing entry in place
-            if let Some(arr) = event_hooks.as_array_mut() {
-                arr[idx] = new_entry;
-            }
-        } else {
-            // Append new entry
-            if let Some(arr) = event_hooks.as_array_mut() {
-                arr.push(new_entry);
-            }
-        }
+        // Drop any prior cue-hook entry, then insert ours first so state
+        // updates land before slower hooks (retenir, audits, etc.).
+        arr.retain(|e| !entry_contains_cue_hook(e));
+        arr.insert(0, new_entry);
     }
 
-    // Serialize and write atomically
     let content = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
 
-    // Ensure the .claude directory exists
     if let Some(parent) = settings_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create directory: {}", e))?;
@@ -387,6 +459,7 @@ pub fn configure_hooks(hook_path: &str) -> Result<(), String> {
 /// Finds the cue-hook script and hook-runner, then adds entries for all
 /// lifecycle events using the hook-runner wrapper pattern with 5s timeouts.
 /// Idempotent — safe to call repeatedly.
+#[allow(dead_code)]
 pub fn install_hooks() -> Result<(), String> {
     let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
     let settings_path = home.join(".claude/settings.json");
@@ -631,6 +704,29 @@ mod tests {
     #[test]
     fn test_hook_events_count() {
         assert_eq!(HOOK_EVENTS.len(), 15);
+    }
+
+    #[test]
+    fn test_find_python_no_panic() {
+        // Resolution scans PATH; on CI runners Python is usually present, but
+        // either outcome is valid — we only assert it doesn't panic and, when
+        // found, returns an absolute path that exists.
+        if let Some(p) = find_python() {
+            assert!(p.is_absolute(), "python path should be absolute: {p:?}");
+            assert!(p.is_file(), "resolved python should be a file: {p:?}");
+        }
+    }
+
+    #[test]
+    fn test_deployed_hook_path_under_claude_hooks() {
+        // Should resolve to ~/.claude/hooks/cue-hook when a home dir exists.
+        if let Some(p) = deployed_hook_path() {
+            assert!(p.ends_with("cue-hook"));
+            assert!(p.to_string_lossy().contains(".claude"));
+            // The deployed path must itself pass the command-safety allowlist
+            // (otherwise we could never wire it into settings.json).
+            assert!(assert_safe_for_command(&p.to_string_lossy(), "deployed").is_ok());
+        }
     }
 
     #[test]
