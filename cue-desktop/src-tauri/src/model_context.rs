@@ -330,8 +330,8 @@ fn gate_function_names(bytes: &[u8]) -> std::collections::HashSet<String> {
     }
     // Strip JS keywords and obvious non-gates.
     for kw in [
-        "if", "return", "typeof", "await", "async", "function", "new",
-        "isNaN", "parseInt", "includes",
+        "if", "return", "typeof", "await", "async", "function", "new", "isNaN", "parseInt",
+        "includes",
     ] {
         out.remove(kw);
     }
@@ -388,8 +388,7 @@ fn find_function_declarations(bytes: &[u8]) -> Vec<(usize, usize, usize)> {
             continue;
         }
         // Skip whitespace, then expect '{'.
-        while j < scan_end && (bytes[j] == b' ' || bytes[j] == b'\n' || bytes[j] == b'\t')
-        {
+        while j < scan_end && (bytes[j] == b' ' || bytes[j] == b'\n' || bytes[j] == b'\t') {
             j += 1;
         }
         if j < scan_end && bytes[j] == b'{' {
@@ -747,8 +746,10 @@ mod tests {
         // The screenshot bug: claude-fable-5 must not clamp at 200K. Covered by
         // the fallback list even when the binary scan can't run, and regardless
         // of observed usage.
-        let fallback: Vec<String> =
-            FALLBACK_1M_SUBSTRINGS.iter().map(|s| s.to_string()).collect();
+        let fallback: Vec<String> = FALLBACK_1M_SUBSTRINGS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert_eq!(
             context_limit_from_subs("claude-fable-5", &fallback),
             LARGE_CONTEXT_WINDOW
@@ -763,7 +764,10 @@ mod tests {
     fn family_floor_promotes_new_versions_but_not_old() {
         // Floor derived from the shipping 1M set: opus floor = 4-6, fable = 5,
         // sonnet = 4-0. New versions clear the floor; pre-floor opus stays 200K.
-        let subs: Vec<String> = FALLBACK_1M_SUBSTRINGS.iter().map(|s| s.to_string()).collect();
+        let subs: Vec<String> = FALLBACK_1M_SUBSTRINGS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         // Newer-than-floor → 1M (no observed usage needed).
         assert!(family_meets_1m_floor("claude-opus-4-9", &subs));
         assert!(family_meets_1m_floor("claude-opus-5-0", &subs));
@@ -782,9 +786,15 @@ mod tests {
 
     #[test]
     fn parse_family_version_handles_id_shapes() {
-        assert_eq!(parse_family_version("claude-opus-4-8"), Some(("opus", (4, 8))));
+        assert_eq!(
+            parse_family_version("claude-opus-4-8"),
+            Some(("opus", (4, 8)))
+        );
         assert_eq!(parse_family_version("opus-4-7"), Some(("opus", (4, 7))));
-        assert_eq!(parse_family_version("claude-fable-5"), Some(("fable", (5, 0))));
+        assert_eq!(
+            parse_family_version("claude-fable-5"),
+            Some(("fable", (5, 0)))
+        );
         // Date/fast suffixes past the first two groups are ignored.
         assert_eq!(
             parse_family_version("claude-opus-4-6-20251101"),
@@ -808,7 +818,10 @@ mod tests {
     #[test]
     fn family_floor_does_not_promote_legacy_dated_ids() {
         // Regression: date suffixes on legacy ids must not clear the floor.
-        let subs: Vec<String> = FALLBACK_1M_SUBSTRINGS.iter().map(|s| s.to_string()).collect();
+        let subs: Vec<String> = FALLBACK_1M_SUBSTRINGS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert!(!family_meets_1m_floor("claude-3-5-sonnet-20241022", &subs));
         assert!(!family_meets_1m_floor("claude-opus-4-20250514", &subs));
     }
@@ -962,11 +975,7 @@ mod tests {
         subs.sort();
         assert_eq!(
             subs,
-            vec![
-                "claude-opus-4-6",
-                "claude-opus-4-8",
-                "claude-sonnet-4-6",
-            ],
+            vec!["claude-opus-4-6", "claude-opus-4-8", "claude-sonnet-4-6",],
             "union across ap+te should cover opus-4-6/8 and sonnet-4-6"
         );
     }
@@ -1046,8 +1055,10 @@ mod tests {
     fn context_limit_for_opus_4_8_via_fallback() {
         // If the binary scan can't locate the gate functions, the baked-in
         // fallback list must still cover the currently-shipping 1M models.
-        let fallback: Vec<String> =
-            FALLBACK_1M_SUBSTRINGS.iter().map(|s| s.to_string()).collect();
+        let fallback: Vec<String> = FALLBACK_1M_SUBSTRINGS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         for model in [
             "claude-opus-4-6",
             "claude-opus-4-7",

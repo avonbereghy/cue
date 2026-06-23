@@ -33,7 +33,8 @@ pub(crate) trait LockSafe<T> {
 
 impl<T> LockSafe<T> for Mutex<T> {
     fn lock_safe(&self) -> std::sync::MutexGuard<'_, T> {
-        self.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -161,10 +162,7 @@ impl SessionMonitorState {
 
     /// Poll sessions.json for current session states (called every ~1s).
     pub fn poll_status(&self) {
-        self.poll_status_with(
-            paths::sessions_json_path(),
-            paths::claude_projects_path(),
-        );
+        self.poll_status_with(paths::sessions_json_path(), paths::claude_projects_path());
     }
 
     /// Path-injected core of `poll_status`. Extracted so tests can drive the
@@ -172,11 +170,7 @@ impl SessionMonitorState {
     /// waiting verdict → turn-ended) against fixture files instead of the real
     /// `~/.../sessions.json` and `~/.claude/projects` (F-tests-001/003). The
     /// public wrapper above passes the production paths.
-    fn poll_status_with(
-        &self,
-        status_path: std::path::PathBuf,
-        projects_path: std::path::PathBuf,
-    ) {
+    fn poll_status_with(&self, status_path: std::path::PathBuf, projects_path: std::path::PathBuf) {
         // sessions.json is the untrusted boundary (the Python hook writes it,
         // but any local process can race-write that path). Read through the
         // size-bounded reader so a runaway/hostile producer can't OOM the
@@ -226,11 +220,7 @@ impl SessionMonitorState {
                         .duration_since(SystemTime::UNIX_EPOCH)
                         .map(|d| d.as_secs())
                         .unwrap_or(0);
-                    let corrupt_path = format!(
-                        "{}.corrupt-{}",
-                        status_path.display(),
-                        timestamp
-                    );
+                    let corrupt_path = format!("{}.corrupt-{}", status_path.display(), timestamp);
                     if let Err(rename_err) = std::fs::rename(&status_path, &corrupt_path) {
                         log::warn!(
                             "sessions.json self-repair: rename aside failed: {}",
@@ -238,10 +228,9 @@ impl SessionMonitorState {
                         );
                         return;
                     }
-                    if let Err(write_err) = security::atomic_write(
-                        &status_path,
-                        b"{\"sessions\":{}}",
-                    ) {
+                    if let Err(write_err) =
+                        security::atomic_write(&status_path, b"{\"sessions\":{}}")
+                    {
                         log::warn!(
                             "sessions.json self-repair: seed write failed: {}",
                             write_err
@@ -250,7 +239,8 @@ impl SessionMonitorState {
                     }
                     log::warn!(
                         "sessions.json self-repaired after {} parse failures (corrupt copy at {})",
-                        *failures, corrupt_path
+                        *failures,
+                        corrupt_path
                     );
                     *failures = 0;
                     return;
@@ -287,7 +277,8 @@ impl SessionMonitorState {
                 }
                 log::warn!(
                     "sessions.json unreadable after {} polls ({}); clearing session list",
-                    *failures, e
+                    *failures,
+                    e
                 );
                 *self.enriched_sessions.lock_safe() = Vec::new();
                 *failures = 0;
@@ -429,9 +420,7 @@ impl SessionMonitorState {
                     // Process name guards F-reliability-005: on first sight,
                     // accept only processes that look like Claude Code so a
                     // recycled PID doesn't get anchored.
-                    let live_name = process
-                        .and_then(|p| p.name().to_str())
-                        .map(str::to_owned);
+                    let live_name = process.and_then(|p| p.name().to_str()).map(str::to_owned);
                     let cached = identity.get(&s.id).copied();
                     match resolve_liveness(pid, live_start, cached, live_name.as_deref()) {
                         LivenessOutcome::Alive { cache } => {
@@ -499,11 +488,7 @@ impl SessionMonitorState {
                 .map(|mut s| {
                     let metrics = cache.get(&s.id);
                     if should_demote_stalled_turn(&s.state, metrics, now_secs) {
-                        log::debug!(
-                            "stalled-turn-demote id={} state={} → idle",
-                            s.id,
-                            s.state,
-                        );
+                        log::debug!("stalled-turn-demote id={} state={} → idle", s.id, s.state,);
                         s.state = "idle".to_string();
                     }
                     s
@@ -524,12 +509,8 @@ impl SessionMonitorState {
                 .into_iter()
                 .map(|mut s| {
                     let metrics = cache.get(&s.id);
-                    if should_demote_stale_subagent(
-                        &s.state,
-                        s.state_changed_at,
-                        metrics,
-                        now_secs,
-                    ) {
+                    if should_demote_stale_subagent(&s.state, s.state_changed_at, metrics, now_secs)
+                    {
                         log::debug!(
                             "stale-subagent-demote id={} active_subagents={} → idle",
                             s.id,
@@ -576,10 +557,8 @@ impl SessionMonitorState {
                 .into_iter()
                 .map(|mut s| {
                     let metrics = cache.get(&s.id);
-                    let awaiting =
-                        metrics.map(|m| m.awaiting_user_prompt).unwrap_or(false);
-                    let pending =
-                        metrics.map(|m| m.pending_tool_use).unwrap_or(false);
+                    let awaiting = metrics.map(|m| m.awaiting_user_prompt).unwrap_or(false);
+                    let pending = metrics.map(|m| m.pending_tool_use).unwrap_or(false);
                     if awaiting && is_promotable_to_waiting(&s.state) {
                         s.state = "waiting".to_string();
                     } else if s.state == "waiting"
@@ -698,8 +677,7 @@ impl SessionMonitorState {
                     // mid-tool-call never re-qualified. The `rescued` map now
                     // throttles only the debug log (once per cohort), never the
                     // state assignment.
-                    if let Some(live) =
-                        subagent_rescue_count(&s.state, s.active_subagents, metrics)
+                    if let Some(live) = subagent_rescue_count(&s.state, s.active_subagents, metrics)
                     {
                         let latest_started = metrics
                             .map(|m| {
@@ -719,7 +697,9 @@ impl SessionMonitorState {
                             // investigating rescue cycles.
                             log::debug!(
                                 "subagent-rescue-latched id={} state={}→subagent live={}",
-                                s.id, s.state, live
+                                s.id,
+                                s.state,
+                                live
                             );
                             rescued.insert(s.id.clone(), latest_started);
                         }
@@ -1068,10 +1048,10 @@ impl SessionMonitorState {
                 .join(encode_workspace_path(&path_str))
                 .join(&filename);
             if candidate.exists() {
-                self.resolved_paths
-                    .lock()
-                    .unwrap()
-                    .insert(session_id.to_string(), candidate.to_string_lossy().to_string());
+                self.resolved_paths.lock().unwrap().insert(
+                    session_id.to_string(),
+                    candidate.to_string_lossy().to_string(),
+                );
                 return true;
             }
             match path.parent() {
@@ -1084,10 +1064,10 @@ impl SessionMonitorState {
             for entry in dirs.flatten() {
                 let candidate = entry.path().join(&filename);
                 if candidate.exists() {
-                    self.resolved_paths
-                        .lock()
-                        .unwrap()
-                        .insert(session_id.to_string(), candidate.to_string_lossy().to_string());
+                    self.resolved_paths.lock().unwrap().insert(
+                        session_id.to_string(),
+                        candidate.to_string_lossy().to_string(),
+                    );
                     return true;
                 }
             }
@@ -1290,8 +1270,7 @@ pub(crate) fn dedup_sessions(
         }) {
             let p_new = dedup_state_priority(&session.state);
             let p_old = dedup_state_priority(&existing.state);
-            if p_new > p_old || (p_new == p_old && session.last_activity > existing.last_activity)
-            {
+            if p_new > p_old || (p_new == p_old && session.last_activity > existing.last_activity) {
                 let stable_id = existing.id.clone();
                 *existing = session;
                 existing.id = stable_id;
@@ -1964,8 +1943,8 @@ mod tests {
             "thinking",
             latched,
             Some(42.0),
-            None,   // text_ts not visible this poll
-            false,  // last_assistant_has_text temporarily false
+            None,  // text_ts not visible this poll
+            false, // last_assistant_has_text temporarily false
         );
         assert_eq!(d, PromoteDecision::Held);
     }
@@ -2173,12 +2152,7 @@ mod tests {
         // because a clean end_turn after the error proves the user retried
         // and the issue resolved.
         let m = metrics_with_end_turn(Some(200.0), false);
-        for st in [
-            "subagent",
-            "compacting",
-            "idle",
-            "done",
-        ] {
+        for st in ["subagent", "compacting", "idle", "done"] {
             assert!(
                 !should_demote_turn_ended(st, Some(100.0), Some(&m)),
                 "state {} should not be demoted",
@@ -2227,22 +2201,38 @@ mod tests {
         // now = 1000 + 6min. Last end_turn is from a *prior* turn (t=600), so
         // should_demote_turn_ended can't fire — but this cap does.
         let m = metrics_stalled(Some(1000.0), None, Some(600.0), false, false);
-        assert!(should_demote_stalled_turn("working", Some(&m), 1000.0 + 360.0));
-        assert!(should_demote_stalled_turn("thinking", Some(&m), 1000.0 + 360.0));
+        assert!(should_demote_stalled_turn(
+            "working",
+            Some(&m),
+            1000.0 + 360.0
+        ));
+        assert!(should_demote_stalled_turn(
+            "thinking",
+            Some(&m),
+            1000.0 + 360.0
+        ));
     }
 
     #[test]
     fn test_stalled_turn_no_demote_within_window() {
         // Same shape but only 4 minutes of silence — still inside the grace.
         let m = metrics_stalled(Some(1000.0), None, Some(600.0), false, false);
-        assert!(!should_demote_stalled_turn("working", Some(&m), 1000.0 + 240.0));
+        assert!(!should_demote_stalled_turn(
+            "working",
+            Some(&m),
+            1000.0 + 240.0
+        ));
     }
 
     #[test]
     fn test_stalled_turn_no_demote_pending_tool() {
         // A long-running tool keeps the transcript quiet but is genuine work.
         let m = metrics_stalled(Some(1000.0), None, Some(600.0), true, false);
-        assert!(!should_demote_stalled_turn("working", Some(&m), 1000.0 + 600.0));
+        assert!(!should_demote_stalled_turn(
+            "working",
+            Some(&m),
+            1000.0 + 600.0
+        ));
     }
 
     #[test]
@@ -2250,7 +2240,11 @@ mod tests {
         // Awaiting an AskUserQuestion/ExitPlanMode answer is the waiting
         // path's domain, not a stall.
         let m = metrics_stalled(Some(1000.0), None, Some(600.0), false, true);
-        assert!(!should_demote_stalled_turn("working", Some(&m), 1000.0 + 600.0));
+        assert!(!should_demote_stalled_turn(
+            "working",
+            Some(&m),
+            1000.0 + 600.0
+        ));
     }
 
     #[test]
@@ -2259,8 +2253,16 @@ mod tests {
         // then stalled. The cap keys off the newest activity (1100), so at
         // 1100 + 4min it must NOT yet demote even though the prompt is older.
         let m = metrics_stalled(Some(1000.0), Some(1100.0), Some(600.0), false, false);
-        assert!(!should_demote_stalled_turn("working", Some(&m), 1100.0 + 240.0));
-        assert!(should_demote_stalled_turn("working", Some(&m), 1100.0 + 360.0));
+        assert!(!should_demote_stalled_turn(
+            "working",
+            Some(&m),
+            1100.0 + 240.0
+        ));
+        assert!(should_demote_stalled_turn(
+            "working",
+            Some(&m),
+            1100.0 + 360.0
+        ));
     }
 
     #[test]
@@ -2271,15 +2273,31 @@ mod tests {
         // the tool_result as proof-of-life and hold (audit F6).
         let mut m = metrics_stalled(Some(1000.0), None, Some(600.0), false, false);
         m.last_tool_result_ts = Some(1600.0);
-        assert!(!should_demote_stalled_turn("working", Some(&m), 1600.0 + 5.0));
+        assert!(!should_demote_stalled_turn(
+            "working",
+            Some(&m),
+            1600.0 + 5.0
+        ));
         // Once even the tool results go silent past the window, demote.
-        assert!(should_demote_stalled_turn("working", Some(&m), 1600.0 + 360.0));
+        assert!(should_demote_stalled_turn(
+            "working",
+            Some(&m),
+            1600.0 + 360.0
+        ));
     }
 
     #[test]
     fn test_stalled_turn_no_demote_non_active_states() {
         let m = metrics_stalled(Some(1000.0), None, Some(600.0), false, false);
-        for st in ["idle", "done", "ended", "error", "waiting", "subagent", "compacting"] {
+        for st in [
+            "idle",
+            "done",
+            "ended",
+            "error",
+            "waiting",
+            "subagent",
+            "compacting",
+        ] {
             assert!(
                 !should_demote_stalled_turn(st, Some(&m), 1000.0 + 600.0),
                 "state {} should not be demoted by stalled-turn cap",
@@ -2293,7 +2311,11 @@ mod tests {
         assert!(!should_demote_stalled_turn("working", None, 1_000_000.0));
         // Metrics present but no conversational timestamp parsed yet.
         let m = metrics_stalled(None, None, None, false, false);
-        assert!(!should_demote_stalled_turn("working", Some(&m), 1_000_000.0));
+        assert!(!should_demote_stalled_turn(
+            "working",
+            Some(&m),
+            1_000_000.0
+        ));
     }
 
     // ── is_promotable_to_waiting ────────────────────────────────────────
@@ -2586,7 +2608,12 @@ mod tests {
     fn test_no_demote_stale_subagent_without_state_changed_at() {
         // Missing stateChangedAt → can't compute the grace window. Stay put.
         let m = metrics_with_subagents(vec![]);
-        assert!(!should_demote_stale_subagent("subagent", None, Some(&m), 1000.0));
+        assert!(!should_demote_stale_subagent(
+            "subagent",
+            None,
+            Some(&m),
+            1000.0
+        ));
     }
 
     #[test]
@@ -2672,7 +2699,11 @@ mod tests {
     fn test_demote_stuck_active_compacting_past_60s() {
         // /compact errored before its resolving hook; card is pinned on
         // `compacting` for >60s. Cap fires.
-        assert!(should_demote_stuck_active("compacting", Some(900.0), 1000.0));
+        assert!(should_demote_stuck_active(
+            "compacting",
+            Some(900.0),
+            1000.0
+        ));
     }
 
     #[test]
@@ -2686,12 +2717,18 @@ mod tests {
     #[test]
     fn test_no_demote_stuck_active_within_cap() {
         // 30s in — still in the normal transient window.
-        assert!(!should_demote_stuck_active("compacting", Some(970.0), 1000.0));
+        assert!(!should_demote_stuck_active(
+            "compacting",
+            Some(970.0),
+            1000.0
+        ));
     }
 
     #[test]
     fn test_no_demote_stuck_active_for_unrelated_states() {
-        for st in ["working", "thinking", "idle", "done", "error", "waiting", "subagent"] {
+        for st in [
+            "working", "thinking", "idle", "done", "error", "waiting", "subagent",
+        ] {
             assert!(
                 !should_demote_stuck_active(st, Some(900.0), 1000.0),
                 "stuck-active cap must only fire for compacting, not {}",
@@ -2744,13 +2781,13 @@ mod tests {
     fn test_dedup_priority_ordering_top_to_bottom() {
         // Pin the full ordering. error > waiting > {working,subagent} >
         // {thinking,compacting,clearing} > {done,idle} > {ended}.
-        let order = [
-            "error", "waiting", "working", "thinking", "idle", "ended",
-        ];
+        let order = ["error", "waiting", "working", "thinking", "idle", "ended"];
         for pair in order.windows(2) {
             assert!(
                 dedup_state_priority(pair[0]) > dedup_state_priority(pair[1]),
-                "{} should outrank {}", pair[0], pair[1]
+                "{} should outrank {}",
+                pair[0],
+                pair[1]
             );
         }
     }

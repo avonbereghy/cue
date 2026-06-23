@@ -210,10 +210,7 @@ pub fn sanitize_workspace_path(path: &str) -> io::Result<PathBuf> {
                 "path contains control characters",
             ));
         }
-        let is_metachar = matches!(
-            ch,
-            '"' | '\'' | '`' | '$' | ';' | '|' | '&' | '\n' | '\r'
-        );
+        let is_metachar = matches!(ch, '"' | '\'' | '`' | '$' | ';' | '|' | '&' | '\n' | '\r');
         #[cfg(not(windows))]
         let is_metachar = is_metachar || ch == '\\';
         if is_metachar {
@@ -426,12 +423,11 @@ mod tests {
 
     #[test]
     fn test_validate_session_id_rejects_shell_metacharacters() {
-        for bad in &["foo$bar", "foo bar", "foo|bar", "foo;bar", "foo&bar",
-                     "foo`bar", "foo'bar", "foo\"bar", "foo*bar", "foo?bar"] {
-            assert!(
-                validate_session_id(bad).is_err(),
-                "should reject {:?}", bad
-            );
+        for bad in &[
+            "foo$bar", "foo bar", "foo|bar", "foo;bar", "foo&bar", "foo`bar", "foo'bar",
+            "foo\"bar", "foo*bar", "foo?bar",
+        ] {
+            assert!(validate_session_id(bad).is_err(), "should reject {:?}", bad);
         }
     }
 
@@ -721,7 +717,10 @@ mod tests {
         let lock_path = dir.join("sessions.lock");
         assert!(!lock_path.exists());
         with_sessions_lock(&lock_path, || Ok::<(), io::Error>(())).unwrap();
-        assert!(lock_path.exists(), "lock file should be created on first acquire");
+        assert!(
+            lock_path.exists(),
+            "lock file should be created on first acquire"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -747,9 +746,8 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let lock_path = dir.join("sessions.lock");
-        let result: io::Result<()> = with_sessions_lock(&lock_path, || {
-            Err(io::Error::other("boom"))
-        });
+        let result: io::Result<()> =
+            with_sessions_lock(&lock_path, || Err(io::Error::other("boom")));
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Other);
         let _ = fs::remove_dir_all(&dir);
