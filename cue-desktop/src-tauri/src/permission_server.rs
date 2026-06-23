@@ -3,11 +3,9 @@
 //! Listens on 127.0.0.1:{port} for POST /permission-request from Claude Code.
 //! Holds the HTTP connection open until the user approves/denies via the dashboard.
 //! GET /health returns 200 for testing.
-//!
-//! Wave 1: defines PendingRequests and response formatting.
-//! Wave 2: wires the TCP listener and integrates with lib.rs.
 
 use crate::models::PermissionDecision;
+use crate::session_monitor::LockSafe;
 use crate::{paths, security};
 use std::collections::HashMap;
 use std::path::Path;
@@ -41,7 +39,7 @@ impl PendingRequests {
     /// Returns None if the pending-request cap is already saturated; callers
     /// should respond 503 and drop the connection.
     pub fn insert(&self, request_id: &str) -> Option<oneshot::Receiver<PermissionDecision>> {
-        let mut map = self.requests.lock().unwrap();
+        let mut map = self.requests.lock_safe();
         if map.len() >= MAX_PENDING {
             return None;
         }
@@ -54,8 +52,7 @@ impl PendingRequests {
     pub fn resolve(&self, request_id: &str, decision: PermissionDecision) -> Result<(), String> {
         let sender = self
             .requests
-            .lock()
-            .unwrap()
+            .lock_safe()
             .remove(request_id)
             .ok_or_else(|| format!("No pending request: {}", request_id))?;
         sender
@@ -65,17 +62,17 @@ impl PendingRequests {
 
     /// Check if a request is still pending.
     pub fn is_pending(&self, request_id: &str) -> bool {
-        self.requests.lock().unwrap().contains_key(request_id)
+        self.requests.lock_safe().contains_key(request_id)
     }
 
     /// Remove a request without resolving (e.g., on timeout).
     pub fn remove(&self, request_id: &str) {
-        self.requests.lock().unwrap().remove(request_id);
+        self.requests.lock_safe().remove(request_id);
     }
 
     /// Return the number of currently pending requests.
     pub fn len(&self) -> usize {
-        self.requests.lock().unwrap().len()
+        self.requests.lock_safe().len()
     }
 
     /// Return true if there are no pending requests.
@@ -232,6 +229,38 @@ mod tests {
         assert!(pending.is_pending("a"));
         assert!(!pending.is_pending("b"));
         assert!(pending.is_pending("c"));
+    }
+
+    #[test]
+    fn test_insert_returns_none_at_cap() {
+        // F-tests-003: the MAX_PENDING flood backstop. A hostile local process
+        // spamming permission requests must not grow the map (and its tokio
+        // tasks + oneshot channels) without bound — insert returns None at the
+        // cap so the caller can 503 and drop the connection.
+        let pending = PendingRequests::new();
+        let mut held = Vec::new();
+        for i in 0..MAX_PENDING {
+            let rx = pending
+                .insert(&format!("req-{i}"))
+                .expect("inserts below the cap succeed");
+            held.push(rx);
+        }
+        assert_eq!(pending.len(), MAX_PENDING);
+        // The next insert is over the cap.
+        assert!(
+            pending.insert("over-the-cap").is_none(),
+            "insert past MAX_PENDING must return None"
+        );
+        assert_eq!(pending.len(), MAX_PENDING, "a rejected insert adds nothing");
+
+        // Freeing one slot lets a new request in again.
+        pending.remove("req-0");
+        assert_eq!(pending.len(), MAX_PENDING - 1);
+        assert!(
+            pending.insert("after-release").is_some(),
+            "a slot freed below the cap accepts a new request"
+        );
+        assert_eq!(pending.len(), MAX_PENDING);
     }
 
     #[test]
