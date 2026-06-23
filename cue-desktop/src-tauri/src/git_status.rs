@@ -5,8 +5,73 @@
 //! but fast (porcelain output is designed for machine parsing).
 
 use crate::models::GitStatus;
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// Wall-clock ceiling for any single git subprocess. This module runs on the
+/// 5s supplemental-refresh task (a single `spawn_blocking` the loop awaits), so
+/// an indefinitely-hung git (stale `.git/index.lock`, stalled NFS/SMB/sshfs
+/// mount, slow `core.fsmonitor`/credential helper) would otherwise freeze every
+/// refresh — git status, rate limits, memory, config counts, JSONL metrics —
+/// and leak the blocking thread. Bound each call instead.
+const GIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Run a child process with a wall-clock timeout. stdout is drained on a
+/// reader thread so output larger than the OS pipe buffer can't deadlock the
+/// child while we poll for completion. Returns captured stdout only on a
+/// successful exit within `timeout`; None on spawn failure, timeout, or
+/// non-zero exit. On timeout the child is killed and reaped (no leak).
+fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Option<Vec<u8>> {
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        buf
+    });
+
+    let deadline = Instant::now() + timeout;
+    let exit = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+
+    // The reader unblocks once the pipe closes (process exit or kill).
+    let buf = reader.join().unwrap_or_default();
+    match exit {
+        Some(status) if status.success() => Some(buf),
+        _ => None,
+    }
+}
+
+/// Run `git <args>` in `workspace` with the module timeout, returning stdout on success.
+fn run_git(workspace: &str, args: &[&str]) -> Option<String> {
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(workspace);
+    run_with_timeout(cmd, GIT_TIMEOUT).map(|b| String::from_utf8_lossy(&b).into_owned())
+}
 
 /// Get git status for a workspace directory. Returns None for non-git workspaces.
 pub fn get_git_status(workspace: &str) -> Option<GitStatus> {
@@ -33,30 +98,20 @@ pub fn get_git_status(workspace: &str) -> Option<GitStatus> {
     let mut status = GitStatus::default();
 
     // git status --porcelain for file stats
-    if let Ok(output) = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(workspace)
-        .output()
-    {
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            parse_porcelain(&stdout, &mut status);
-        }
+    if let Some(stdout) = run_git(workspace, &["status", "--porcelain"]) {
+        parse_porcelain(&stdout, &mut status);
     }
 
     // git rev-list --count --left-right @{upstream}...HEAD for ahead/behind
-    if let Ok(output) = Command::new("git")
-        .args(["rev-list", "--count", "--left-right", "@{upstream}...HEAD"])
-        .current_dir(workspace)
-        .output()
-    {
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let parts: Vec<&str> = stdout.split('\t').collect();
-            if parts.len() == 2 {
-                status.behind = parts[0].parse().unwrap_or(0);
-                status.ahead = parts[1].parse().unwrap_or(0);
-            }
+    if let Some(stdout) = run_git(
+        workspace,
+        &["rev-list", "--count", "--left-right", "@{upstream}...HEAD"],
+    ) {
+        let stdout = stdout.trim();
+        let parts: Vec<&str> = stdout.split('\t').collect();
+        if parts.len() == 2 {
+            status.behind = parts[0].parse().unwrap_or(0);
+            status.ahead = parts[1].parse().unwrap_or(0);
         }
         // If upstream doesn't exist, ahead/behind stay 0 (no error)
     }
@@ -135,5 +190,37 @@ mod tests {
         assert_eq!(status.ahead, 0);
         assert_eq!(status.behind, 0);
         assert_eq!(status.modified, 0);
+    }
+
+    // F-reliability-002: a hung git must not freeze the refresh loop.
+    #[cfg(unix)]
+    #[test]
+    fn test_run_with_timeout_kills_slow_process() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("30");
+        let start = Instant::now();
+        let out = run_with_timeout(cmd, Duration::from_millis(150));
+        assert!(out.is_none(), "a process exceeding the timeout returns None");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "must return shortly after the deadline, not wait for the process to finish"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_with_timeout_captures_fast_process() {
+        let mut cmd = Command::new("printf");
+        cmd.arg("hello");
+        let out = run_with_timeout(cmd, Duration::from_secs(5));
+        assert_eq!(out.as_deref(), Some(&b"hello"[..]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_with_timeout_nonzero_exit_is_none() {
+        let cmd = Command::new("false");
+        let out = run_with_timeout(cmd, Duration::from_secs(5));
+        assert!(out.is_none(), "non-zero exit yields None even when fast");
     }
 }
