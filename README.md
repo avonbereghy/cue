@@ -5,7 +5,6 @@ A real-time session monitor for Claude Code — see at a glance if Claude is wor
 ![Rust](https://img.shields.io/badge/Rust-Tauri_v2-000000?logo=rust&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-macOS_|_Windows_|_Linux-blue)
 ![License](https://img.shields.io/badge/License-MIT-blue)
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy_Me_A_Coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/avonbereghy)
 
 <table align="center">
   <tr>
