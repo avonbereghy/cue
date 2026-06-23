@@ -18,3 +18,14 @@ cue-desktop/src-tauri/sidecar/cue-audio-tap
 # Python bytecode cache
 __pycache__/
 *.pyc
+
+# Local env / secrets
+.env
+.env.*
+
+# Internal planning, prompts, audit docs, and feature specs — not for the public repo
+plans/
+specs/
+
+# Stray dir created by a relative-~ path accident
+/~/
