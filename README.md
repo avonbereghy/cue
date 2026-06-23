@@ -20,11 +20,13 @@ Each Claude Code session appears as a colored dot in your menu bar / system tray
 | Color | Meaning |
 |-------|---------|
 | Blinking white | Claude is working |
+| Blinking orange | Claude is thinking (prompt received, before tools run) |
 | Blinking cyan | Subagent(s) running |
 | Yellow | Waiting for your permission |
+| Blinking periwinkle | Compacting the context window |
 | Red | Tool error |
 | Green | Done |
-| Dim white | Idle |
+| Soft amber | Idle |
 | Hollow ring | No active sessions |
 
 Multiple sessions show as a grid of dots — see all your sessions at once. Click the icon for a popover with every session's status, model, and token usage (shown top-right above).
@@ -117,20 +119,23 @@ Cue uses [Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code/hook
 
 ```
 SessionStart       → idle
-PreToolUse         → working
+UserPromptSubmit   → thinking
+PreToolUse         → working      (waiting, for AskUserQuestion / ExitPlanMode)
 PostToolUse        → working
-UserPromptSubmit   → working
 PermissionRequest  → waiting
 PostToolUseFailure → error
+StopFailure        → error
 SubagentStart      → subagent
-SubagentStop       → working
-Stop               → done
+SubagentStop       → working/idle (when the last subagent finishes)
+PreCompact         → compacting
+PostCompact        → working
+Stop               → idle
 TaskCompleted      → done
-Notification       → done
+Notification       → waiting      (permission / elicitation dialogs)
 SessionEnd         → remove
 ```
 
-The app reads `sessions.json` and renders the dot grid. Metrics are parsed incrementally from Claude's `.jsonl` conversation logs — only new bytes are read on each cycle, keeping CPU near 0%.
+The `waiting` and `done` states are refined by the Rust backend from the transcript (e.g. `waiting` is cleared once you answer, `done` is set on turn completion). The app reads `sessions.json` and renders the dot grid. Metrics are parsed incrementally from Claude's `.jsonl` conversation logs — only new bytes are read on each cycle, keeping CPU near 0%.
 
 ### Rate limits (optional statusline bridge)
 
