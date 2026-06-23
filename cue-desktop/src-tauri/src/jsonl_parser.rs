@@ -510,7 +510,12 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
                                 if !trimmed.is_empty() {
                                     entry.has_text_content = true;
                                     if entry.assistant_text.is_none() {
-                                        entry.assistant_text = Some(trimmed.to_string());
+                                        // Cap at parse time: aggregate_entries
+                                        // only ever ships this through
+                                        // cap_snippet, so storing the full body
+                                        // per cached entry just bloats memory
+                                        // over a long-running session.
+                                        entry.assistant_text = Some(cap_snippet(trimmed));
                                     }
                                 }
                             }
@@ -765,7 +770,11 @@ fn extract_user_prompt_text(obj: &serde_json::Map<String, Value>) -> Option<Stri
         return None;
     }
 
-    Some(trimmed.to_string())
+    // Cap to the snippet limit (the field doc already promises "truncated").
+    // The interrupt-marker prefix check and aggregate's cap_snippet both work
+    // on the capped value; storing the full prompt per cached entry only bloats
+    // memory over a long session.
+    Some(cap_snippet(trimmed))
 }
 
 /// Extract the `/effort X` argument from a user message, if present.
@@ -976,10 +985,12 @@ pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::Subagent
             if !entry.model.is_empty() {
                 m.model = entry.model.clone();
             }
-            m.input_tokens += entry.input_tokens;
-            m.output_tokens += entry.output_tokens;
-            m.cache_creation_tokens += entry.cache_creation_tokens;
-            m.cache_read_tokens += entry.cache_read_tokens;
+            m.input_tokens = m.input_tokens.saturating_add(entry.input_tokens);
+            m.output_tokens = m.output_tokens.saturating_add(entry.output_tokens);
+            m.cache_creation_tokens = m
+                .cache_creation_tokens
+                .saturating_add(entry.cache_creation_tokens);
+            m.cache_read_tokens = m.cache_read_tokens.saturating_add(entry.cache_read_tokens);
             for (tool, count) in &entry.tool_counts {
                 *m.tool_counts.entry(tool.clone()).or_insert(0) += count;
             }
@@ -1138,17 +1149,20 @@ fn aggregate_entries(
                 m.model = entry.model.clone();
             }
 
-            m.input_tokens += entry.input_tokens;
-            m.output_tokens += entry.output_tokens;
-            m.cache_creation_tokens += entry.cache_creation_tokens;
-            m.cache_read_tokens += entry.cache_read_tokens;
+            m.input_tokens = m.input_tokens.saturating_add(entry.input_tokens);
+            m.output_tokens = m.output_tokens.saturating_add(entry.output_tokens);
+            m.cache_creation_tokens = m
+                .cache_creation_tokens
+                .saturating_add(entry.cache_creation_tokens);
+            m.cache_read_tokens = m.cache_read_tokens.saturating_add(entry.cache_read_tokens);
 
             // Context usage = input tokens + output tokens for the last message
             // (output tokens become part of conversation history for the next turn)
-            m.last_input_tokens = entry.input_tokens
-                + entry.cache_creation_tokens
-                + entry.cache_read_tokens
-                + entry.output_tokens;
+            m.last_input_tokens = entry
+                .input_tokens
+                .saturating_add(entry.cache_creation_tokens)
+                .saturating_add(entry.cache_read_tokens)
+                .saturating_add(entry.output_tokens);
 
             // Latest assistant entry's text-content status wins.
             m.last_assistant_has_text = entry.has_text_content;
@@ -1430,6 +1444,28 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(entries[0].is_user_message);
         assert!(!entries[0].is_assistant_message);
+    }
+
+    /// F-reliability-003: long message bodies are capped to the snippet limit
+    /// at parse time so a marathon session's cached entries don't grow RAM with
+    /// the full transcript. Behavior-preserving: aggregate already cap_snippets
+    /// these, so the visible value is unchanged.
+    #[test]
+    fn test_long_text_capped_at_parse_time() {
+        let big = "x".repeat(50_000);
+        let user = format!(
+            r#"{{"type":"user","timestamp":1.0,"message":{{"role":"user","content":"{big}"}}}}"#
+        );
+        let assistant = format!(
+            r#"{{"type":"assistant","timestamp":2.0,"message":{{"role":"assistant","stop_reason":"end_turn","content":[{{"type":"text","text":"{big}"}}],"usage":{{"input_tokens":1}}}}}}"#
+        );
+        let u = parse_line(&user).expect("user entry");
+        let a = parse_line(&assistant).expect("assistant entry");
+        // Capped well under the 50k input (SNIPPET_CHAR_CAP + ellipsis).
+        let ulen = u.user_prompt_text.as_ref().unwrap().chars().count();
+        let alen = a.assistant_text.as_ref().unwrap().chars().count();
+        assert!(ulen <= SNIPPET_CHAR_CAP + 1, "user prompt not capped: {ulen}");
+        assert!(alen <= SNIPPET_CHAR_CAP + 1, "assistant text not capped: {alen}");
     }
 
     /// Regression: tool_result entries are `type: "user"` in Claude Code JSONL,
