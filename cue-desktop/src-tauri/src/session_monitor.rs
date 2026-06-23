@@ -740,12 +740,10 @@ impl SessionMonitorState {
             // `active_since`; these caches are acquired AFTER it in the
             // documented order, so the chained locks below are safe.
             self.metrics_cache
-                .lock()
-                .unwrap()
+                .lock_safe()
                 .retain(|id, _| current_ids.contains(id.as_str()));
             self.jsonl_entry_cache
-                .lock()
-                .unwrap()
+                .lock_safe()
                 .retain(|id, _| current_ids.contains(id.as_str()));
             // `file_mod_dates` also stores subagent-dir entries keyed as
             // `<sid>-subagents`, so prefix-match the live ids.
@@ -754,12 +752,10 @@ impl SessionMonitorState {
                 current_ids.contains(stripped)
             });
             self.resolved_paths
-                .lock()
-                .unwrap()
+                .lock_safe()
                 .retain(|id, _| current_ids.contains(id.as_str()));
             self.output_speed_cache
-                .lock()
-                .unwrap()
+                .lock_safe()
                 .retain(|id, _| current_ids.contains(id.as_str()));
             for s in &active {
                 if is_active_state(&s.state) {
@@ -917,8 +913,7 @@ impl SessionMonitorState {
                 }
 
                 self.metrics_cache
-                    .lock()
-                    .unwrap()
+                    .lock_safe()
                     .insert(id.clone(), metrics);
             }
         }
@@ -1048,7 +1043,7 @@ impl SessionMonitorState {
                 .join(encode_workspace_path(&path_str))
                 .join(&filename);
             if candidate.exists() {
-                self.resolved_paths.lock().unwrap().insert(
+                self.resolved_paths.lock_safe().insert(
                     session_id.to_string(),
                     candidate.to_string_lossy().to_string(),
                 );
@@ -1064,7 +1059,7 @@ impl SessionMonitorState {
             for entry in dirs.flatten() {
                 let candidate = entry.path().join(&filename);
                 if candidate.exists() {
-                    self.resolved_paths.lock().unwrap().insert(
+                    self.resolved_paths.lock_safe().insert(
                         session_id.to_string(),
                         candidate.to_string_lossy().to_string(),
                     );
@@ -1100,8 +1095,7 @@ impl SessionMonitorState {
             if candidate.exists() {
                 let result = candidate.to_string_lossy().to_string();
                 self.resolved_paths
-                    .lock()
-                    .unwrap()
+                    .lock_safe()
                     .insert(session_id.to_string(), result.clone());
                 return result;
             }
@@ -1120,8 +1114,7 @@ impl SessionMonitorState {
                 if candidate.exists() {
                     let result = candidate.to_string_lossy().to_string();
                     self.resolved_paths
-                        .lock()
-                        .unwrap()
+                        .lock_safe()
                         .insert(session_id.to_string(), result.clone());
                     return result;
                 }
@@ -1396,6 +1389,17 @@ fn should_demote_turn_ended(
     // on the resume rewrite even though content timestamps don't). That gate
     // also absorbs the ~5s metrics-refresh lag on a real new turn, so a freshly
     // working card never flickers to idle before the parse catches up.
+    //
+    // F-correctness-001: this bare-mtime fallback is restricted to
+    // `working`/`thinking`. For `error`/`waiting` an mtime advance is NOT proof
+    // the condition cleared — the error may be unresolved and a partial JSONL
+    // write or a later re-stat bumps mtime past `stateChangedAt`, which would
+    // silently demote a red error (or a real waiting) card to idle. Those
+    // states demote only via the stronger `end_turn`/interrupt checks above
+    // (a clean end_turn newer than the error == a proven successful retry).
+    if !matches!(state, "working" | "thinking") {
+        return false;
+    }
     metrics
         .parsed_file_mtime
         .is_some_and(|mtime| mtime >= boundary)
@@ -2123,6 +2127,34 @@ mod tests {
         };
         assert!(should_demote_turn_ended("working", Some(200.0), Some(&m)));
         assert!(should_demote_turn_ended("thinking", Some(200.0), Some(&m)));
+    }
+
+    #[test]
+    fn test_no_bare_mtime_demote_for_error_or_waiting() {
+        // F-correctness-001: same caught-up-parse shape as above (a prior turn's
+        // end_turn at 100, stateChangedAt at 200, parse mtime 250), but the card
+        // is `error`/`waiting`. The bare-mtime fallback must NOT fire here — a
+        // partial JSONL write / re-stat bumping mtime is not proof the error
+        // resolved, so the red card must survive. `working`/`thinking` still
+        // demote (asserted above).
+        let m = crate::models::SessionMetrics {
+            last_end_turn_ts: Some(100.0),
+            pending_tool_use: false,
+            parsed_file_mtime: Some(250.0),
+            ..Default::default()
+        };
+        assert!(!should_demote_turn_ended("error", Some(200.0), Some(&m)));
+        assert!(!should_demote_turn_ended("waiting", Some(200.0), Some(&m)));
+
+        // But a clean end_turn NEWER than the error transition is a proven
+        // retry → error still demotes via the stronger end_turn check.
+        let recovered = crate::models::SessionMetrics {
+            last_end_turn_ts: Some(300.0),
+            pending_tool_use: false,
+            parsed_file_mtime: Some(350.0),
+            ..Default::default()
+        };
+        assert!(should_demote_turn_ended("error", Some(200.0), Some(&recovered)));
     }
 
     #[test]
