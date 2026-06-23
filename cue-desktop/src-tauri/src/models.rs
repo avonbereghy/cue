@@ -1306,7 +1306,8 @@ mod tests {
                 }
             }
         }"#;
-        let data: StatusData = serde_json::from_str(json).expect("hook-shaped JSON must deserialize");
+        let data: StatusData =
+            serde_json::from_str(json).expect("hook-shaped JSON must deserialize");
         let s = data
             .sessions
             .get("11111111-1111-1111-1111-111111111111")

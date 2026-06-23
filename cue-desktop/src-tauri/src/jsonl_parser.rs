@@ -537,9 +537,7 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
                                 // needed — the matching tool_result references
                                 // it via tool_use_id.
                                 if PROMPTING_TOOL_NAMES.contains(&name) {
-                                    if let Some(id) =
-                                        block_obj.get("id").and_then(|v| v.as_str())
-                                    {
+                                    if let Some(id) = block_obj.get("id").and_then(|v| v.as_str()) {
                                         entry.prompting_tool_use_ids.push(id.to_string());
                                     }
                                 }
@@ -548,9 +546,7 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
                                 // subagents-in-flight verdict (same unmatched-
                                 // id mechanism as the prompting tools).
                                 if AGENT_TOOL_NAMES.contains(&name) {
-                                    if let Some(id) =
-                                        block_obj.get("id").and_then(|v| v.as_str())
-                                    {
+                                    if let Some(id) = block_obj.get("id").and_then(|v| v.as_str()) {
                                         entry.agent_tool_use_ids.push(id.to_string());
                                     }
                                 }
@@ -2124,8 +2120,8 @@ mod tests {
         // The fixtures/malformed.jsonl file contains two valid lines and
         // two malformed lines. parse must skip the bad ones without
         // returning an error or losing the good entries.
-        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/malformed.jsonl");
+        let fixture =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/malformed.jsonl");
         let entries = super::parse_jsonl_file(&fixture);
         assert_eq!(entries.len(), 2, "expected 2 valid entries from fixture");
     }
@@ -2359,7 +2355,10 @@ mod tests {
             r#"{"type":"assistant","timestamp":3.0,"agentId":"a-fin","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}}"#, "\n",
         )).unwrap();
         let m_fin = super::parse_subagent_jsonl(&finished).unwrap();
-        assert!(!m_fin.is_active, "tail end_turn ⇒ finished, despite fresh mtime");
+        assert!(
+            !m_fin.is_active,
+            "tail end_turn ⇒ finished, despite fresh mtime"
+        );
 
         let running = dir.join("agent-running.jsonl");
         std::fs::write(&running, concat!(
