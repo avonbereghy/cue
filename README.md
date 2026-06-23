@@ -6,12 +6,15 @@ A real-time session monitor for Claude Code — see at a glance if Claude is wor
 ![Platform](https://img.shields.io/badge/Platform-macOS_|_Windows_|_Linux-blue)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 
-<table align="center">
-  <tr>
-    <td align="center" valign="top"><img src="assets/dashboard-demo.png" width="560" alt="Cue dashboard showing multiple Claude Code sessions in working, thinking, compacting, subagent, waiting, done, and idle states"></td>
-    <td align="center" valign="top"><img src="assets/menubar.png" width="230" alt="Cue menu bar popover showing per-session status, model, and token usage"></td>
-  </tr>
-</table>
+<p align="center">
+  <img src="assets/dashboard-demo.png" width="640" alt="Cue dashboard showing multiple Claude Code sessions in working, thinking, compacting, subagent, waiting, done, and idle states">
+</p>
+
+<!-- Menu bar popover screenshot — hidden for now; re-enable if desired:
+<p align="center">
+  <img src="assets/menubar.png" width="340" alt="Cue menu bar popover showing per-session status, model, and token usage">
+</p>
+-->
 
 ## Status Indicators
 
@@ -29,7 +32,7 @@ Each Claude Code session appears as a colored dot in your menu bar / system tray
 | Soft amber | Idle |
 | Hollow ring | No active sessions |
 
-Multiple sessions show as a grid of dots — see all your sessions at once. Click the icon for a popover with every session's status, model, and token usage (shown top-right above).
+Multiple sessions show as a grid of dots — see all your sessions at once. Click the icon for a popover with every session's status, model, and token usage.
 
 ## Features
 
