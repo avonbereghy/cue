@@ -129,20 +129,24 @@ fn parse_porcelain(output: &str, status: &mut GitStatus) {
         let (x, y) = (bytes[0], bytes[1]);
         if x == b'?' && y == b'?' {
             status.untracked += 1;
-        } else {
-            match x {
-                b'A' => status.added += 1,
-                b'D' => status.deleted += 1,
-                b'M' | b'R' | b'C' => status.modified += 1,
-                _ => {}
-            }
-            if x == b' ' {
-                match y {
-                    b'M' => status.modified += 1,
-                    b'D' => status.deleted += 1,
-                    _ => {}
-                }
-            }
+            continue;
+        }
+        // Porcelain v1 is "XY <path>": X = index/staged column, Y = worktree
+        // column, each independently signalling a change (e.g. "MM" = staged
+        // AND worktree modified, "MD" = staged-modified + worktree-deleted,
+        // "AM" = staged-added + worktree-modified). Count both columns —
+        // previously Y was only read when X was blank, so combined statuses
+        // were undercounted and worktree deletes in "MD" were missed.
+        match x {
+            b'A' => status.added += 1,
+            b'D' => status.deleted += 1,
+            b'M' | b'R' | b'C' => status.modified += 1,
+            _ => {}
+        }
+        match y {
+            b'M' => status.modified += 1,
+            b'D' => status.deleted += 1,
+            _ => {}
         }
     }
     status.dirty = status.modified + status.added + status.deleted + status.untracked > 0;
@@ -166,6 +170,19 @@ mod tests {
         assert_eq!(status.added, 1);
         assert_eq!(status.deleted, 1);
         assert_eq!(status.untracked, 1);
+        assert!(status.dirty);
+    }
+
+    #[test]
+    fn test_parse_porcelain_combined_statuses() {
+        // Combined index+worktree statuses must count BOTH columns.
+        let output = "MM a.rs\nAM b.rs\nMD c.rs\n";
+        let mut status = GitStatus::default();
+        parse_porcelain(output, &mut status);
+        // MM → modified+modified; AM → added+modified; MD → modified+deleted.
+        assert_eq!(status.modified, 4, "MM(2)+AM(1)+MD(1)");
+        assert_eq!(status.added, 1, "AM");
+        assert_eq!(status.deleted, 1, "MD worktree delete");
         assert!(status.dirty);
     }
 
