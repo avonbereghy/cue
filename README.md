@@ -96,7 +96,7 @@ Multiple sessions show as a grid of dots — see all your sessions at once. Clic
 
 ### Install
 
-Download the installer for your platform from the [latest release](https://github.com/avonbereghy/cue/releases/latest), or build from source (below). On first launch, the **onboarding wizard** installs the hook for you: it copies the bundled `cue-hook` script to `~/.claude/hooks/cue-hook` and registers it in `~/.claude/settings.json` (your existing settings are backed up to `settings.json.bak`). No manual editing required — and no dependency on any pre-existing setup.
+Download the installer for your platform from the [latest release](https://github.com/avonbereghy/cue/releases/latest), or build from source (below). On first launch, the **onboarding wizard** installs the hook for you: it copies the bundled `cue-hook` script to `~/.claude/hooks/cue-hook` and registers it in `~/.claude/settings.json` (your original settings are backed up once to `settings.json.bak`, preserved across reinstalls). No manual editing required — and no dependency on any pre-existing setup.
 
 After setup, Cue appears as a normal app: a **Dock icon on macOS**, a **taskbar/Start-menu entry on Windows**, and an **application-launcher entry on Linux**, plus a status dot in the menu bar / system tray.
 
