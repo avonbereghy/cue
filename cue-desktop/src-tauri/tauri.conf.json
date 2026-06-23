@@ -87,7 +87,7 @@
     "updater": {
       "active": true,
       "endpoints": [
-        "https://github.com/ClaudeStage/cue/releases/latest/download/latest.json"
+        "https://github.com/avonbereghy/cue/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5RTU0ODU4QjAwNzM2NTMKUldSVE5nZXdXRWpsR2JUTmRQbUFvajROWldFTkZtbFhYYSt1amIreUd3L2dYWnozWVd4ZzNjZU8K",
       "dialog": true

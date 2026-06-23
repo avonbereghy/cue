@@ -1,6 +1,6 @@
 # Installing Cue
 
-Cue is a cross-platform desktop app that monitors your Claude Code sessions and shows their status in the system tray. Pre-built installers are available for Windows and Linux from the [Releases](https://github.com/your-org/ClaudeStage/releases) page.
+Cue is a cross-platform desktop app that monitors your Claude Code sessions and shows their status in the system tray. Pre-built installers are available for Windows and Linux from the [Releases](https://github.com/avonbereghy/cue/releases) page.
 
 ## Prerequisites
 
