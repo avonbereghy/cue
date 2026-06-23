@@ -97,8 +97,13 @@ fn dim(text: &str, use_color: bool) -> String {
 // ---------------------------------------------------------------------------
 
 fn load_sessions() -> Vec<EnrichedSession> {
+    // sessions.json lives in a user-writable data dir and is treated as an
+    // untrusted boundary (CLAUDE.md). Bound the read like every other reader
+    // of this file (session_monitor::poll_status_with, lib.rs sandbox writers)
+    // so a co-resident process can't OOM `cue --status` with a giant file.
+    const SESSIONS_JSON_MAX_BYTES: u64 = 4 * 1024 * 1024;
     let path = paths::sessions_json_path();
-    let content = match std::fs::read_to_string(&path) {
+    let content = match security::read_to_string_bounded(&path, SESSIONS_JSON_MAX_BYTES) {
         Ok(c) => c,
         Err(_) => return Vec::new(),
     };

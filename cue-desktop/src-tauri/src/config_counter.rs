@@ -6,6 +6,12 @@
 use crate::models::ConfigCounts;
 use std::path::Path;
 
+/// Cap for reading `settings.json`. These files live outside Cue's data dir
+/// and project-scope copies come from attacker-influenceable workspaces, so
+/// bound the read (this runs on the 30s supplemental refresh for every active
+/// workspace) — a runaway/huge settings file must not stall the poll thread.
+const SETTINGS_JSON_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
 /// Count all Claude configuration files relevant to a workspace.
 pub fn count_config(workspace: &str) -> ConfigCounts {
     let mut counts = ConfigCounts::default();
@@ -43,7 +49,7 @@ pub fn count_config(workspace: &str) -> ConfigCounts {
 
     // MCP servers and hooks from ~/.claude/settings.json
     let settings_path = home.join(".claude/settings.json");
-    if let Ok(content) = std::fs::read_to_string(&settings_path) {
+    if let Ok(content) = crate::security::read_to_string_bounded(&settings_path, SETTINGS_JSON_MAX_BYTES) {
         if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&content) {
             // Count MCP servers (minus disabled ones)
             if let Some(mcp) = settings.get("mcpServers").and_then(|v| v.as_object()) {
@@ -61,7 +67,7 @@ pub fn count_config(workspace: &str) -> ConfigCounts {
 
     // Also check project-scope settings
     let project_settings = ws.join(".claude/settings.json");
-    if let Ok(content) = std::fs::read_to_string(&project_settings) {
+    if let Ok(content) = crate::security::read_to_string_bounded(&project_settings, SETTINGS_JSON_MAX_BYTES) {
         if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&content) {
             if let Some(mcp) = settings.get("mcpServers").and_then(|v| v.as_object()) {
                 counts.mcp_servers += mcp
