@@ -235,16 +235,6 @@ hooks/
 - **DevTools disabled** — in release builds
 - **Privacy** — workspace paths show leaf directory name only
 
-## avonbereghy
-
-Cue is part of [avonbereghy](https://github.com/avonbereghy), a collection of tools for Claude Code:
-
-| Project | What It Does |
-|---------|-------------|
-| **[Claude Symphony](https://github.com/avonbereghy/claude-symphony)** | Workflow methodology + slash commands for project generation |
-| **[Claude Conductor](https://github.com/avonbereghy/claude-conductor)** | Native macOS app for managing Claude Code configuration |
-| **[Cue](https://github.com/avonbereghy/cue)** | Status line indicator for Claude Code sessions |
-
 ## License
 
 MIT
