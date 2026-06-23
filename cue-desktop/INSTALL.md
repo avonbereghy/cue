@@ -98,8 +98,9 @@ On first launch, Cue presents an onboarding wizard that:
 1. Detects your Claude Code installation and confirms Python 3 is available.
 2. Copies the bundled `cue-hook` script to `~/.claude/hooks/cue-hook`.
 3. Registers it for every lifecycle event in `~/.claude/settings.json`, invoking
-   it as `<python3> ~/.claude/hooks/cue-hook <state>`. Your existing settings
-   are backed up to `settings.json.bak` first.
+   it as `<python3> ~/.claude/hooks/cue-hook <state>`. Your original, pre-Cue
+   settings are backed up to `settings.json.bak` on the first install and
+   preserved across reinstalls (uninstalling removes the backup).
 
 The hook is run through the Python interpreter rather than executed directly, so
 it needs no execute bit and the exact same mechanism works on macOS, Linux, and

@@ -1009,23 +1009,30 @@ fn uninstall_cue(app: AppHandle) -> UninstallReport {
 /// Delete Cue's local data directories (sessions/state, settings, presets).
 /// Returns true if every existing directory was removed cleanly.
 fn remove_app_data(errors: &mut Vec<String>) -> bool {
-    let mut dirs_to_remove: Vec<std::path::PathBuf> = Vec::new();
-    for p in [
+    let dirs: Vec<std::path::PathBuf> = [
         paths::sessions_json_path(),
         paths::settings_path(),
         paths::presets_dir(),
-    ] {
-        if let Some(parent) = p.parent() {
-            dirs_to_remove.push(parent.to_path_buf());
-        }
-    }
-    dirs_to_remove.sort();
-    dirs_to_remove.dedup();
+    ]
+    .iter()
+    .filter_map(|p| p.parent().map(|parent| parent.to_path_buf()))
+    .collect();
+    remove_data_dirs(&dirs, errors)
+}
+
+/// Dedup `dirs` and `remove_dir_all` each that exists. Returns false (recording
+/// per-dir errors) if any removal failed. Split out from `remove_app_data` so
+/// this destructive loop is unit-testable against injected temp dirs without
+/// touching the real app-data locations.
+fn remove_data_dirs(dirs: &[std::path::PathBuf], errors: &mut Vec<String>) -> bool {
+    let mut unique: Vec<&std::path::PathBuf> = dirs.iter().collect();
+    unique.sort();
+    unique.dedup();
 
     let mut ok = true;
-    for dir in dirs_to_remove {
+    for dir in unique {
         if dir.exists() {
-            if let Err(e) = std::fs::remove_dir_all(&dir) {
+            if let Err(e) = std::fs::remove_dir_all(dir) {
                 ok = false;
                 errors.push(format!("Data dir {}: {e}", dir.display()));
             }
@@ -1113,16 +1120,31 @@ fn move_to_trash_macos(bundle: &std::path::Path) -> Result<(), String> {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| name.clone());
 
-    let mut dest = trash.join(&name);
+    let dest = next_trash_name(&trash, &name, &stem, |p| p.exists())?;
+    std::fs::rename(bundle, &dest).map_err(|e| e.to_string())
+}
+
+/// Pick a destination path in `trash` for a bundle named `name` (file stem
+/// `stem`), suffixing " N.app" on collision and bailing after 100 tries. The
+/// existence check is injected so the collision loop + bailout are unit-testable
+/// without creating real files. (Not macOS-gated so tests run on any host.)
+#[cfg(any(target_os = "macos", test))]
+fn next_trash_name(
+    trash: &std::path::Path,
+    name: &str,
+    stem: &str,
+    exists: impl Fn(&std::path::Path) -> bool,
+) -> Result<std::path::PathBuf, String> {
+    let mut dest = trash.join(name);
     let mut n = 1;
-    while dest.exists() {
+    while exists(&dest) {
         dest = trash.join(format!("{stem} {n}.app"));
         n += 1;
         if n > 100 {
             return Err("Trash already holds many old copies of Cue".into());
         }
     }
-    std::fs::rename(bundle, &dest).map_err(|e| e.to_string())
+    Ok(dest)
 }
 
 // ---------------------------------------------------------------------------
@@ -1166,12 +1188,9 @@ fn get_hook_status() -> Vec<HookStatusCheck> {
         },
     });
 
-    // 3. Cue hook script — the deployed copy, plus a legacy symphony fallback.
-    let hook_paths = [
-        home.join(".claude/hooks/cue-hook"),
-        home.join(".claude/symphony-root/cue/hooks/cue-hook"),
-    ];
-    let hook_found = hook_paths.iter().find(|p| p.exists());
+    // 3. Cue hook script — the deployed copy under ~/.claude/hooks.
+    let hook_path = home.join(".claude/hooks/cue-hook");
+    let hook_found = Some(&hook_path).filter(|p| p.exists());
     checks.push(HookStatusCheck {
         label: "Cue Hook Script".into(),
         ok: hook_found.is_some(),
@@ -2612,6 +2631,89 @@ fn update_tray(
             }
 
             *last_menu_key.lock_safe() = menu_key;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — uninstall is destructive (remove_dir_all on user data, trash-move
+// of the running app). These cover the pieces that don't need a live AppHandle.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn test_next_trash_name_no_collision() {
+        // Nothing in the Trash → keep the original name.
+        let got = next_trash_name(Path::new("/T"), "Cue.app", "Cue", |_| false).unwrap();
+        assert_eq!(got, PathBuf::from("/T/Cue.app"));
+    }
+
+    #[test]
+    fn test_next_trash_name_one_collision() {
+        // "Cue.app" exists, "Cue 1.app" doesn't.
+        let got = next_trash_name(Path::new("/T"), "Cue.app", "Cue", |p| {
+            p == Path::new("/T/Cue.app")
+        })
+        .unwrap();
+        assert_eq!(got, PathBuf::from("/T/Cue 1.app"));
+    }
+
+    #[test]
+    fn test_next_trash_name_bails_after_many_collisions() {
+        // Everything collides → bail rather than loop forever.
+        let result = next_trash_name(Path::new("/T"), "Cue.app", "Cue", |_| true);
+        assert!(result.is_err(), "must bail when the Trash is saturated");
+    }
+
+    #[test]
+    fn test_remove_data_dirs_removes_seeded_and_skips_missing() {
+        let base = std::env::temp_dir().join("cue_test_remove_data_dirs");
+        let _ = std::fs::remove_dir_all(&base);
+        let a = base.join("Cue");
+        let b = base.join("com.cueapp");
+        std::fs::create_dir_all(a.join("nested")).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(a.join("sessions.json"), "{}").unwrap();
+        let missing = base.join("never_existed");
+
+        let mut errors = Vec::new();
+        // Pass a duplicate to exercise dedup, plus a nonexistent dir.
+        let ok = remove_data_dirs(&[a.clone(), a.clone(), b.clone(), missing], &mut errors);
+
+        assert!(ok, "removal of existing dirs should succeed: {errors:?}");
+        assert!(errors.is_empty());
+        assert!(!a.exists(), "seeded dir not removed");
+        assert!(!b.exists(), "seeded dir not removed");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_app_data_parents_are_app_scoped() {
+        // F-tests-002 tripwire: remove_app_data calls remove_dir_all on the
+        // PARENT of each of these paths. That is only safe while every parent
+        // is an app-owned directory. If a future paths.rs edit made one resolve
+        // to a shared root (~, Application Support, ~/.config, ~/.local/share),
+        // uninstall would delete unrelated data. Pin the invariant here.
+        let app_scoped = ["Cue", "com.cueapp", "cue"];
+        for path in [
+            paths::sessions_json_path(),
+            paths::settings_path(),
+            paths::presets_dir(),
+        ] {
+            let parent = path.parent().expect("data path has a parent");
+            let leaf = parent
+                .file_name()
+                .and_then(|n| n.to_str())
+                .expect("parent has a name");
+            assert!(
+                app_scoped.contains(&leaf),
+                "remove_app_data would remove_dir_all a non-app-scoped dir: {} (leaf {leaf:?})",
+                parent.display()
+            );
         }
     }
 }

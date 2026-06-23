@@ -6,7 +6,7 @@
 
 use crate::security;
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
 // Environment Info
@@ -391,25 +391,70 @@ fn configure_hooks_via_interpreter(hook: &std::path::Path) -> Result<(), String>
 /// 5s timeout so a wedged hook can never stall Claude Code.
 fn write_hook_settings(command_prefix: &str) -> Result<(), String> {
     let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
-    let settings_path = home.join(".claude/settings.json");
+    write_hook_settings_at(&home.join(".claude/settings.json"), command_prefix)
+}
 
-    let mut settings: serde_json::Value = if settings_path.exists() {
-        let content = std::fs::read_to_string(&settings_path)
-            .map_err(|e| format!("Failed to read settings: {}", e))?;
-        serde_json::from_str(&content).map_err(|e| format!("Failed to parse settings: {}", e))?
+/// Cap for reading the user's `settings.json`. It lives outside Cue's data dir
+/// and is touched by other tooling; a runaway writer must not stall install or
+/// uninstall on a multi-GB read.
+const SETTINGS_JSON_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Path-injected core of `write_hook_settings` so the file behaviour (backup,
+/// preservation, idempotence) is unit-testable against a temp dir.
+fn write_hook_settings_at(settings_path: &Path, command_prefix: &str) -> Result<(), String> {
+    let existing = if settings_path.exists() {
+        Some(
+            security::read_to_string_bounded(settings_path, SETTINGS_JSON_MAX_BYTES)
+                .map_err(|e| format!("Failed to read settings: {}", e))?,
+        )
     } else {
-        serde_json::json!({})
+        None
     };
 
-    // Back up the original through atomic_write so the backup lands at 0600.
-    if settings_path.exists() {
+    let mut settings: serde_json::Value = match existing {
+        Some(ref content) => {
+            serde_json::from_str(content).map_err(|e| format!("Failed to parse settings: {}", e))?
+        }
+        None => serde_json::json!({}),
+    };
+
+    // Back up the ORIGINAL settings exactly once — the first time Cue touches
+    // them — so the pristine pre-Cue copy survives later reinstalls (both the
+    // onboarding wizard and the Settings "reinstall" button re-run this). The
+    // README/INSTALL advertise this `.bak` as the revert path; overwriting it
+    // on every reinstall (the old behaviour) destroyed that guarantee.
+    if let Some(ref content) = existing {
         let backup_path = settings_path.with_extension("json.bak");
-        let backup_bytes = std::fs::read(&settings_path)
-            .map_err(|e| format!("Failed to read settings for backup: {}", e))?;
-        security::atomic_write(&backup_path, &backup_bytes)
-            .map_err(|e| format!("Failed to backup settings: {}", e))?;
+        if !backup_path.exists() {
+            security::atomic_write(&backup_path, content.as_bytes())
+                .map_err(|e| format!("Failed to backup settings: {}", e))?;
+        }
     }
 
+    apply_cue_hook_entries(&mut settings, command_prefix)?;
+
+    let content = serde_json::to_string_pretty(&settings)
+        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+
+    if let Some(parent) = settings_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+
+    security::atomic_write(settings_path, content.as_bytes())
+        .map_err(|e| format!("Failed to write settings: {}", e))?;
+
+    Ok(())
+}
+
+/// Insert/refresh cue-hook entries for every `HOOK_EVENTS` event on `settings`.
+/// Pure JSON transform (no I/O) so it's directly unit-testable. Idempotent: any
+/// prior cue entry on an event is replaced and ours is inserted first (so state
+/// updates land before slower hooks); other tools' hooks are left untouched.
+fn apply_cue_hook_entries(
+    settings: &mut serde_json::Value,
+    command_prefix: &str,
+) -> Result<(), String> {
     if !settings.get("hooks").is_some_and(|h| h.is_object()) {
         settings["hooks"] = serde_json::json!({});
     }
@@ -434,133 +479,40 @@ fn write_hook_settings(command_prefix: &str) -> Result<(), String> {
             .as_array_mut()
             .ok_or("hooks entry is not an array")?;
 
-        // Drop any prior cue-hook entry, then insert ours first so state
-        // updates land before slower hooks (retenir, audits, etc.).
         arr.retain(|e| !entry_contains_cue_hook(e));
         arr.insert(0, new_entry);
     }
-
-    let content = serde_json::to_string_pretty(&settings)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-
-    if let Some(parent) = settings_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create directory: {}", e))?;
-    }
-
-    security::atomic_write(&settings_path, content.as_bytes())
-        .map_err(|e| format!("Failed to write settings: {}", e))?;
-
     Ok(())
 }
 
-/// Install cue hooks into `~/.claude/settings.json`.
+/// Remove all cue hooks from `~/.claude/settings.json` and reverse install.
 ///
-/// Finds the cue-hook script and hook-runner, then adds entries for all
-/// lifecycle events using the hook-runner wrapper pattern with 5s timeouts.
-/// Idempotent — safe to call repeatedly.
-#[allow(dead_code)]
-pub fn install_hooks() -> Result<(), String> {
-    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
-    let settings_path = home.join(".claude/settings.json");
-
-    // Find the cue-hook script
-    let hook_candidates = [
-        home.join(".claude/symphony-root/cue/hooks/cue-hook"),
-        home.join(".claude/hooks/cue-hook"),
-    ];
-    let hook_path = hook_candidates
-        .iter()
-        .find(|p| p.exists())
-        .ok_or("cue-hook script not found")?;
-
-    // Find hook-runner.sh
-    let runner = home.join(".claude/hooks/hook-runner.sh");
-    if !runner.exists() {
-        return Err("hook-runner.sh not found".to_string());
-    }
-
-    let runner_str = runner.to_string_lossy();
-    let hook_str = hook_path.to_string_lossy();
-
-    // Defense-in-depth: paths derived from $HOME/%USERPROFILE% should not
-    // contain shell metacharacters, but if they do we'd be writing a broken
-    // (or worse) command string into Claude Code's settings.json.
-    assert_safe_for_command(&runner_str, "hook-runner")?;
-    assert_safe_for_command(&hook_str, "cue-hook")?;
-
-    // Read existing settings
-    let mut settings: serde_json::Value = if settings_path.exists() {
-        let content = std::fs::read_to_string(&settings_path)
-            .map_err(|e| format!("Failed to read settings: {}", e))?;
-        serde_json::from_str(&content).map_err(|e| format!("Failed to parse settings: {}", e))?
-    } else {
-        serde_json::json!({})
-    };
-
-    if !settings.get("hooks").is_some_and(|h| h.is_object()) {
-        settings["hooks"] = serde_json::json!({});
-    }
-    let hooks = settings["hooks"].as_object_mut().unwrap();
-
-    for (event, state) in HOOK_EVENTS {
-        let command = format!("{} cue-hook {} {}", runner_str, hook_str, state);
-        let new_entry = serde_json::json!({
-            "hooks": [{
-                "type": "command",
-                "command": command,
-                "timeout": 5000
-            }]
-        });
-
-        if !hooks.contains_key(*event) {
-            hooks.insert(event.to_string(), serde_json::json!([]));
-        }
-
-        let event_hooks = hooks.get_mut(*event).unwrap();
-        let arr = event_hooks
-            .as_array_mut()
-            .ok_or("hooks entry is not an array")?;
-
-        // Remove any existing cue-hook entries first (clean reinstall)
-        arr.retain(|entry| !entry_contains_cue_hook(entry));
-
-        // Insert cue-hook as the first entry so state updates happen before
-        // slower hooks (retenir, symphony-audit, etc.)
-        arr.insert(0, new_entry);
-    }
-
-    let content = serde_json::to_string_pretty(&settings)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-
-    if let Some(parent) = settings_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create directory: {}", e))?;
-    }
-
-    security::atomic_write(&settings_path, content.as_bytes())
-        .map_err(|e| format!("Failed to write settings: {}", e))?;
-
-    // Remove .disabled file if present
-    let disabled = home.join(".claude/hooks/cue-hook.disabled");
-    let _ = std::fs::remove_file(disabled);
-
-    Ok(())
-}
-
-/// Remove all cue hooks from `~/.claude/settings.json`.
-///
-/// Strips every hook entry containing "cue-hook" from all events.
+/// Strips every cue-hook entry from all events, drops the hook-event arrays Cue
+/// created and emptied, removes the `hooks` object if nothing else uses it, and
+/// removes the `settings.json.bak` Cue wrote — a clean reversal of install.
 /// Also clears sessions.json so the dashboard shows a clean state.
 pub fn uninstall_hooks() -> Result<(), String> {
     let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
-    let settings_path = home.join(".claude/settings.json");
+    uninstall_hooks_at(&home.join(".claude/settings.json"))?;
 
+    // Clear sessions.json so the dashboard shows a clean state.
+    let sessions_path = crate::paths::sessions_json_path();
+    if sessions_path.exists() {
+        security::atomic_write(&sessions_path, b"{\"sessions\":{}}")
+            .map_err(|e| format!("Failed to clear sessions: {}", e))?;
+    }
+
+    Ok(())
+}
+
+/// Path-injected core of `uninstall_hooks` so the full-reversal behaviour is
+/// unit-testable against a temp dir.
+fn uninstall_hooks_at(settings_path: &Path) -> Result<(), String> {
     if !settings_path.exists() {
         return Ok(()); // Nothing to uninstall
     }
 
-    let content = std::fs::read_to_string(&settings_path)
+    let content = security::read_to_string_bounded(settings_path, SETTINGS_JSON_MAX_BYTES)
         .map_err(|e| format!("Failed to read settings: {}", e))?;
     let mut settings: serde_json::Value =
         serde_json::from_str(&content).map_err(|e| format!("Failed to parse settings: {}", e))?;
@@ -571,20 +523,39 @@ pub fn uninstall_hooks() -> Result<(), String> {
                 arr.retain(|entry| !entry_contains_cue_hook(entry));
             }
         }
+        // Install creates a fresh `"<event>": []` for any HOOK_EVENTS event the
+        // user lacked; drop the cue-managed arrays we just emptied so a clean
+        // install→uninstall round trip leaves no orphaned cue keys. Non-cue
+        // events (and any the user populated) are untouched.
+        hooks.retain(|event, entries| {
+            let cue_managed = HOOK_EVENTS.iter().any(|(e, _)| e == event);
+            let emptied = entries.as_array().is_some_and(|a| a.is_empty());
+            !(cue_managed && emptied)
+        });
+    }
+
+    // If the hooks object is now empty (Cue was the only thing using it), drop
+    // it entirely so the file returns to its pre-Cue shape.
+    let hooks_empty = settings
+        .get("hooks")
+        .and_then(|h| h.as_object())
+        .is_some_and(|o| o.is_empty());
+    if hooks_empty {
+        if let Some(obj) = settings.as_object_mut() {
+            obj.remove("hooks");
+        }
     }
 
     let out = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
 
-    security::atomic_write(&settings_path, out.as_bytes())
+    security::atomic_write(settings_path, out.as_bytes())
         .map_err(|e| format!("Failed to write settings: {}", e))?;
 
-    // Clear sessions.json
-    let sessions_path = crate::paths::sessions_json_path();
-    if sessions_path.exists() {
-        security::atomic_write(&sessions_path, b"{\"sessions\":{}}")
-            .map_err(|e| format!("Failed to clear sessions: {}", e))?;
-    }
+    // Remove the backup Cue wrote. The live settings are now cue-free, so the
+    // `.bak` (Cue's pre-install snapshot) is residue after a "full uninstall".
+    let backup_path = settings_path.with_extension("json.bak");
+    let _ = std::fs::remove_file(&backup_path);
 
     Ok(())
 }
@@ -787,66 +758,196 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_configure_hooks_json_structure() {
-        // Test the JSON manipulation logic without touching the real filesystem
-        let mut settings: serde_json::Value = serde_json::json!({});
-        settings["hooks"] = serde_json::json!({});
+    // F-tests-001: exercise the REAL install/uninstall functions (not a
+    // hand-copied reimplementation) against an injected settings path, so a
+    // regression that corrupts the user's settings.json is actually caught.
 
-        let hook_path = "/usr/local/bin/cue-hook";
-        let hooks = settings["hooks"].as_object_mut().unwrap();
-
-        for (event, state) in HOOK_EVENTS {
-            let entry = serde_json::json!({
-                "matcher": "",
-                "hooks": [{
-                    "type": "command",
-                    "command": format!("{} {}", hook_path, state)
-                }]
-            });
-            hooks.insert(event.to_string(), serde_json::json!([entry]));
-        }
-
-        // Verify all events were configured
-        let hooks_obj = settings["hooks"].as_object().unwrap();
-        assert_eq!(hooks_obj.len(), HOOK_EVENTS.len());
-
-        // Verify key event commands
-        let check = |event: &str, expected_state: &str| {
-            let hook = &hooks_obj[event];
-            let cmd = hook[0]["hooks"][0]["command"].as_str().unwrap();
-            assert_eq!(cmd, format!("/usr/local/bin/cue-hook {}", expected_state));
-        };
-        check("SessionStart", "idle");
-        check("PreToolUse", "working");
-        check("PostToolUse", "working");
-        check("PermissionRequest", "waiting");
-        check("Stop", "idle");
-        check("SessionEnd", "remove");
+    /// command of the first hook registered for `event`, if any.
+    fn first_command<'a>(settings: &'a serde_json::Value, event: &str) -> Option<&'a str> {
+        settings["hooks"][event][0]["hooks"][0]["command"].as_str()
     }
 
     #[test]
-    fn test_configure_hooks_preserves_existing_settings() {
-        // Verify that hook configuration preserves other settings keys
-        let mut settings: serde_json::Value = serde_json::json!({
-            "apiKey": "sk-test",
+    fn test_write_hook_settings_structure_and_preserves_other_keys() {
+        let dir = std::env::temp_dir().join("cue_test_write_hooks_structure");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        // Seed with unrelated keys and a non-cue hook that must survive.
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "model": "claude-sonnet-4-6",
+                "hooks": {
+                    "PreToolUse": [{
+                        "matcher": "",
+                        "hooks": [{"type": "command", "command": "/opt/retenir/run"}]
+                    }]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        write_hook_settings_at(&path, "python3 /home/u/.claude/hooks/cue-hook").unwrap();
+
+        let out: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        // Every HOOK_EVENTS event is registered with the right state arg.
+        for (event, state) in HOOK_EVENTS {
+            assert_eq!(
+                first_command(&out, event),
+                Some(format!("python3 /home/u/.claude/hooks/cue-hook {state}").as_str()),
+                "cue entry missing/wrong for {event}"
+            );
+        }
+        // Unrelated key preserved; the user's non-cue PreToolUse hook preserved
+        // (cue is inserted first, the retenir hook follows).
+        assert_eq!(out["model"].as_str(), Some("claude-sonnet-4-6"));
+        let pre = out["hooks"]["PreToolUse"].as_array().unwrap();
+        assert!(
+            pre.iter().any(|e| e["hooks"][0]["command"] == "/opt/retenir/run"),
+            "user's non-cue hook was dropped"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_install_uninstall_round_trip() {
+        let dir = std::env::temp_dir().join("cue_test_install_round_trip");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let original = serde_json::json!({
             "model": "claude-sonnet-4-6",
-            "hooks": {}
+            "hooks": {
+                "Stop": [{
+                    "matcher": "",
+                    "hooks": [{"type": "command", "command": "/opt/other-tool/run"}]
+                }]
+            }
         });
+        std::fs::write(&path, serde_json::to_string_pretty(&original).unwrap()).unwrap();
 
-        let hook_path = "/path/to/cue-hook";
-        let hooks = settings["hooks"].as_object_mut().unwrap();
+        write_hook_settings_at(&path, "python3 /h/cue-hook").unwrap();
+        uninstall_hooks_at(&path).unwrap();
 
-        let entry = serde_json::json!({
-            "matcher": "",
-            "hooks": [{"type": "command", "command": format!("{} working", hook_path)}]
-        });
-        hooks.insert("PreToolUse".to_string(), serde_json::json!([entry]));
+        let out: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        // No cue residue anywhere.
+        let serialized = serde_json::to_string(&out).unwrap();
+        assert!(!serialized.contains("cue-hook"), "cue residue after uninstall");
+        // No orphaned empty cue-managed arrays.
+        for (event, _) in HOOK_EVENTS {
+            if event == &"Stop" {
+                continue;
+            }
+            assert!(
+                out["hooks"].get(event).is_none(),
+                "orphaned empty array left for {event}"
+            );
+        }
+        // Unrelated key + the user's own hook survive.
+        assert_eq!(out["model"].as_str(), Some("claude-sonnet-4-6"));
+        assert_eq!(first_command(&out, "Stop"), Some("/opt/other-tool/run"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
-        // Original keys should still be present
-        assert_eq!(settings["apiKey"].as_str().unwrap(), "sk-test");
-        assert_eq!(settings["model"].as_str().unwrap(), "claude-sonnet-4-6");
-        assert!(settings["hooks"]["PreToolUse"].is_array());
+    #[test]
+    fn test_uninstall_drops_empty_hooks_object() {
+        // A user with no prior hooks: install creates the hooks object, uninstall
+        // must remove it entirely so the file returns to its pre-Cue shape.
+        let dir = std::env::temp_dir().join("cue_test_uninstall_drops_hooks");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, r#"{"model":"x"}"#).unwrap();
+
+        write_hook_settings_at(&path, "python3 /h/cue-hook").unwrap();
+        uninstall_hooks_at(&path).unwrap();
+
+        let out: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(out.get("hooks").is_none(), "empty hooks object not removed");
+        assert_eq!(out["model"].as_str(), Some("x"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_reinstall_is_idempotent() {
+        let dir = std::env::temp_dir().join("cue_test_reinstall_idempotent");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "{}").unwrap();
+
+        write_hook_settings_at(&path, "python3 /h/cue-hook").unwrap();
+        write_hook_settings_at(&path, "python3 /h/cue-hook").unwrap();
+
+        let out: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        // Exactly one cue entry per event after two installs.
+        for (event, _) in HOOK_EVENTS {
+            let arr = out["hooks"][event].as_array().unwrap();
+            let cue_count = arr.iter().filter(|e| entry_contains_cue_hook(e)).count();
+            assert_eq!(cue_count, 1, "reinstall duplicated cue entry on {event}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_backup_is_not_clobbered_on_reinstall() {
+        // F-dx-002 / F-correctness-002: the pristine pre-Cue .bak must survive a
+        // reinstall. The first install snapshots the original; the second must
+        // NOT overwrite it with the already-cue-modified settings.
+        let dir = std::env::temp_dir().join("cue_test_backup_preserved");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let pristine = r#"{"model":"pristine"}"#;
+        std::fs::write(&path, pristine).unwrap();
+
+        write_hook_settings_at(&path, "python3 /h/cue-hook").unwrap();
+        write_hook_settings_at(&path, "python3 /h/cue-hook").unwrap();
+
+        let bak = path.with_extension("json.bak");
+        let bak_content = std::fs::read_to_string(&bak).unwrap();
+        assert!(
+            !bak_content.contains("cue-hook"),
+            ".bak was clobbered with cue-modified settings: {bak_content}"
+        );
+        assert!(bak_content.contains("pristine"), "pristine backup lost");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_install_into_invalid_json_errors_without_writing() {
+        let dir = std::env::temp_dir().join("cue_test_invalid_json");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "{ this is not json").unwrap();
+
+        let result = write_hook_settings_at(&path, "python3 /h/cue-hook");
+        assert!(result.is_err(), "invalid JSON must error, not silently overwrite");
+        // The malformed file is left untouched (atomic_write never ran).
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ this is not json");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // F-tests-004: deploy_bundled_hook is the single production install entry
+    // point (onboarding + Settings reinstall). Cover its failure modes.
+
+    #[test]
+    fn test_deploy_bundled_hook_missing_bundle_errors() {
+        let missing = std::env::temp_dir().join("cue_test_no_such_bundle/cue-hook");
+        let _ = std::fs::remove_dir_all(missing.parent().unwrap());
+        let result = deploy_bundled_hook(&missing);
+        assert!(result.is_err(), "missing bundle must error");
+        assert!(
+            result.unwrap_err().contains(&missing.display().to_string()),
+            "error should name the missing bundle path"
+        );
     }
 
     #[test]
@@ -986,40 +1087,5 @@ mod tests {
         // safely through arbitrary shells (different normalisation forms,
         // homoglyph confusion) — reject defensively.
         assert!(assert_safe_for_command("/tmp/cue-hökk", "x").is_err());
-    }
-
-    #[test]
-    fn test_configure_hooks_dedup_by_path() {
-        // Simulate the deduplication logic
-        let hook_path = "/usr/local/bin/cue-hook";
-        let entry = serde_json::json!({
-            "matcher": "",
-            "hooks": [{"type": "command", "command": format!("{} working", hook_path)}]
-        });
-
-        let mut arr = vec![entry.clone()];
-
-        // Check if hook already exists
-        let already_exists = arr.iter().any(|e| {
-            e.get("hooks")
-                .and_then(|h| h.as_array())
-                .map(|hooks_arr| {
-                    hooks_arr.iter().any(|h| {
-                        h.get("command")
-                            .and_then(|c| c.as_str())
-                            .map(|c| c.starts_with(hook_path))
-                            .unwrap_or(false)
-                    })
-                })
-                .unwrap_or(false)
-        });
-
-        assert!(already_exists, "Should detect existing hook by path prefix");
-
-        // Should not add a duplicate
-        if !already_exists {
-            arr.push(entry);
-        }
-        assert_eq!(arr.len(), 1);
     }
 }
