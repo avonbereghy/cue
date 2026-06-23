@@ -88,9 +88,19 @@ Multiple sessions show as a grid of dots — see all your sessions at once. Clic
 - **File locking** — concurrent hooks don't clobber each other's updates
 - **Accessibility** — ARIA labels, keyboard navigation, high contrast, reduced motion support
 
-## Install
+### Prerequisites
 
-### macOS
+- **Claude Code** installed (the `~/.claude` directory must exist).
+- **Python 3** on your `PATH` — Cue's hook is a small Python 3 script. Verify with `python3 --version` (macOS/Linux) or `python --version` (Windows).
+- For building from source: **Node.js 18+** and the **Rust toolchain** (`rustup`).
+
+### Install
+
+Download the installer for your platform from the [latest release](https://github.com/avonbereghy/cue/releases/latest), or build from source (below). On first launch, the **onboarding wizard** installs the hook for you: it copies the bundled `cue-hook` script to `~/.claude/hooks/cue-hook` and registers it in `~/.claude/settings.json` (your existing settings are backed up to `settings.json.bak`). No manual editing required — and no dependency on any pre-existing setup.
+
+After setup, Cue appears as a normal app: a **Dock icon on macOS**, a **taskbar/Start-menu entry on Windows**, and an **application-launcher entry on Linux**, plus a status dot in the menu bar / system tray.
+
+### Build from source — macOS
 
 ```bash
 cd cue-desktop
@@ -100,9 +110,7 @@ cp -R src-tauri/target/release/bundle/macos/Cue.app ~/Applications/
 open ~/Applications/Cue.app
 ```
 
-The onboarding wizard configures the Claude Code hooks automatically on first launch.
-
-To start on login: **System Settings > General > Login Items > add "Cue"**
+To start on login: toggle **Start at login** in Cue's settings, or **System Settings > General > Login Items > add "Cue"**.
 
 ### Windows & Linux
 
@@ -198,11 +206,12 @@ The CLI displays the same data as the GUI dashboard: session ID, messages, input
 
 ## Uninstall
 
-```bash
-rm -rf ~/Applications/Cue.app
-```
+1. In Cue: **Settings → Installation Status → Uninstall** strips the hook entries from `~/.claude/settings.json` automatically.
+2. Remove the app (`rm -rf ~/Applications/Cue.app` on macOS; uninstall the MSI/`.deb` or delete the AppImage elsewhere).
+3. Optionally delete the deployed hook script: `rm ~/.claude/hooks/cue-hook`.
+4. If you enabled the rate-limit bridge, clear the `statusLine` setting too.
 
-Then remove the hook entries from `~/.claude/settings.json` (search for `cue-hook`) and the statusline setting (search for `statusLine`).
+(You can also remove the hook entries by hand — search `~/.claude/settings.json` for `cue-hook`.)
 
 ## Architecture
 

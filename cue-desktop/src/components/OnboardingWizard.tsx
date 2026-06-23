@@ -16,6 +16,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
     null,
   );
   const [hookError, setHookError] = useState<string | null>(null);
+  const [hookPath, setHookPath] = useState<string | null>(null);
   const [showManual, setShowManual] = useState(false);
 
   const loadEnv = useCallback(async () => {
@@ -37,12 +38,10 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
     setHookError(null);
 
     try {
-      // Determine hook path based on platform
-      const hookPath = envInfo?.platform === "windows"
-        ? "%USERPROFILE%\\.claude\\symphony-root\\cue\\hooks\\cue-hook"
-        : "~/.claude/symphony-root/cue/hooks/cue-hook";
-
-      await invoke("configure_hooks", { hookPath });
+      // Deploys the bundled cue-hook to ~/.claude/hooks/cue-hook and wires it
+      // into ~/.claude/settings.json. Returns the deployed script path.
+      const path = await invoke<string>("configure_hooks");
+      setHookPath(path);
       setHookResult("success");
     } catch (err) {
       setHookResult("error");
@@ -147,10 +146,10 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         )}
         {step === 1 && (
           <StepHooks
-            envInfo={envInfo}
             configuring={hookConfiguring}
             result={hookResult}
             error={hookError}
+            hookPath={hookPath}
             showManual={showManual}
             onConfigure={handleConfigureHooks}
             onToggleManual={() => setShowManual(!showManual)}
@@ -324,20 +323,20 @@ function EnvRow({
 // ---------------------------------------------------------------------------
 
 interface StepHooksProps {
-  envInfo: EnvironmentInfo | null;
   configuring: boolean;
   result: "success" | "error" | null;
   error: string | null;
+  hookPath: string | null;
   showManual: boolean;
   onConfigure: () => void;
   onToggleManual: () => void;
 }
 
 function StepHooks({
-  envInfo,
   configuring,
   result,
   error,
+  hookPath,
   showManual,
   onConfigure,
   onToggleManual,
@@ -348,8 +347,10 @@ function StepHooks({
         Configure Hooks
       </h2>
       <p className="text-sm text-white/60 mb-6">
-        Cue uses Claude Code hooks to track session states. This will add
-        entries to your <code className="bg-white/10 px-1 rounded">~/.claude/settings.json</code>.
+        Cue uses Claude Code hooks to track session states. This installs the
+        hook script to <code className="bg-white/10 px-1 rounded">~/.claude/hooks/cue-hook</code> and
+        registers it in your <code className="bg-white/10 px-1 rounded">~/.claude/settings.json</code>.
+        Requires Python 3 on your PATH.
       </p>
 
       <button
@@ -376,9 +377,11 @@ function StepHooks({
         <p className="mt-2 text-xs text-red-400/70">{error}</p>
       )}
 
-      {result === "success" && envInfo && !envInfo.claudeSettingsExists && (
+      {result === "success" && (
         <p className="mt-2 text-xs text-green-400/70">
-          Created ~/.claude/settings.json with hook configuration.
+          Hook installed{hookPath ? <> to <code className="bg-white/10 px-1 rounded">{hookPath}</code></> : null} and
+          registered. Existing settings were backed up to{" "}
+          <code className="bg-white/10 px-1 rounded">settings.json.bak</code>.
         </p>
       )}
 
@@ -402,23 +405,27 @@ function StepHooks({
             </p>
             <pre className="text-xs text-white/50 overflow-x-auto whitespace-pre-wrap">
 {`"hooks": {
-  "SessionStart": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<hook-path> idle", "timeout": 5000 }] }],
-  "PreToolUse": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<hook-path> working", "timeout": 5000 }] }],
-  "PostToolUse": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<hook-path> working", "timeout": 5000 }] }],
-  "UserPromptSubmit": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<hook-path> working", "timeout": 5000 }] }],
-  "PermissionRequest": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<hook-path> waiting", "timeout": 5000 }] }],
-  "PostToolUseFailure": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<hook-path> error", "timeout": 5000 }] }],
-  "SubagentStart": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<hook-path> subagent", "timeout": 5000 }] }],
-  "SubagentStop": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<hook-path> working", "timeout": 5000 }] }],
-  "Stop": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<hook-path> done", "timeout": 5000 }] }],
-  "TaskCompleted": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<hook-path> done", "timeout": 5000 }] }],
-  "Notification": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<hook-path> done", "timeout": 5000 }] }],
-  "SessionEnd": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<hook-path> remove", "timeout": 5000 }] }]
+  "SessionStart": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<cmd> idle", "timeout": 5000 }] }],
+  "UserPromptSubmit": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<cmd> thinking", "timeout": 5000 }] }],
+  "PreToolUse": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<cmd> working", "timeout": 5000 }] }],
+  "PostToolUse": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<cmd> working", "timeout": 5000 }] }],
+  "PermissionRequest": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<cmd> waiting", "timeout": 5000 }] }],
+  "PostToolUseFailure": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<cmd> error", "timeout": 5000 }] }],
+  "StopFailure": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<cmd> error", "timeout": 5000 }] }],
+  "SubagentStart": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<cmd> subagent", "timeout": 5000 }] }],
+  "SubagentStop": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<cmd> subagent_stop", "timeout": 5000 }] }],
+  "Stop": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<cmd> idle", "timeout": 5000 }] }],
+  "TaskCompleted": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<cmd> done", "timeout": 5000 }] }],
+  "Notification": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<cmd> waiting", "timeout": 5000 }] }],
+  "PreCompact": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<cmd> compacting", "timeout": 5000 }] }],
+  "PostCompact": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<cmd> working", "timeout": 5000 }] }],
+  "SessionEnd": [{ "matcher": "", "hooks": [{ "type": "command", "command": "<cmd> remove", "timeout": 5000 }] }]
 }`}
             </pre>
             <p className="text-xs text-white/40 mt-2">
-              Replace <code className="bg-white/10 px-1 rounded">&lt;hook-path&gt;</code> with
-              the full path to the cue-hook script.
+              Replace <code className="bg-white/10 px-1 rounded">&lt;cmd&gt;</code> with{" "}
+              <code className="bg-white/10 px-1 rounded">python3 ~/.claude/hooks/cue-hook</code> (the
+              interpreter path plus the full path to the cue-hook script).
             </p>
           </div>
         )}

@@ -502,9 +502,20 @@ fn detect_environment() -> env_detect::EnvironmentInfo {
     env_detect::detect_environment()
 }
 
+/// Resolve the `cue-hook` script bundled as an app resource. In a packaged
+/// build this lives under the platform resource dir; in `tauri dev` it is
+/// copied next to the dev binary. The deploy step reads this and copies it to
+/// `~/.claude/hooks/cue-hook`.
+fn resolve_bundled_hook(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .resolve("cue-hook", tauri::path::BaseDirectory::Resource)
+        .map_err(|e| format!("Could not locate the bundled cue-hook script: {e}"))
+}
+
 #[tauri::command]
-fn configure_hooks(hook_path: String) -> Result<(), String> {
-    env_detect::configure_hooks(&hook_path)
+fn configure_hooks(app: AppHandle) -> Result<String, String> {
+    let bundled = resolve_bundled_hook(&app)?;
+    env_detect::deploy_bundled_hook(&bundled)
 }
 
 fn record_permission_decision(
@@ -913,13 +924,205 @@ fn spawn_terminal_with_resume(_session_id: &str, _workspace: &str) -> Result<(),
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-fn install_cue_hooks() -> Result<(), String> {
-    env_detect::install_hooks()
+fn install_cue_hooks(app: AppHandle) -> Result<String, String> {
+    let bundled = resolve_bundled_hook(&app)?;
+    env_detect::deploy_bundled_hook(&bundled)
 }
 
 #[tauri::command]
 fn uninstall_cue_hooks() -> Result<(), String> {
     env_detect::uninstall_hooks()
+}
+
+/// Result of a full uninstall, surfaced to the UI so the user sees exactly
+/// what was removed and what (if anything) they still need to do by hand.
+#[derive(serde::Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct UninstallReport {
+    hooks_removed: bool,
+    hook_script_removed: bool,
+    autostart_disabled: bool,
+    data_removed: bool,
+    app_removed: bool,
+    app_path: Option<String>,
+    manual_steps: Vec<String>,
+    errors: Vec<String>,
+}
+
+/// Fully uninstall Cue. Disconnects from Claude Code (strips the hook entries
+/// from `settings.json` and deletes the deployed hook script), disables login
+/// autostart, removes Cue's local data, and moves the app bundle to the Trash
+/// on macOS (other platforms report the manual step for their package manager).
+///
+/// Best-effort: a failure in any one step is recorded in `errors`/`manual_steps`
+/// rather than aborting, so a partially-broken environment still gets cleaned
+/// as much as possible. The frontend shows the report and then quits the app.
+#[tauri::command]
+fn uninstall_cue(app: AppHandle) -> UninstallReport {
+    let mut report = UninstallReport::default();
+    let home = dirs::home_dir();
+
+    // 1. Remove hook entries from settings.json (also clears sessions.json).
+    match env_detect::uninstall_hooks() {
+        Ok(()) => report.hooks_removed = true,
+        Err(e) => report.errors.push(format!("Hook removal: {e}")),
+    }
+
+    // 2. Delete the deployed hook script and any .disabled marker.
+    if let Some(hook) = env_detect::deployed_hook_path() {
+        let mut ok = true;
+        if hook.exists() {
+            if let Err(e) = std::fs::remove_file(&hook) {
+                ok = false;
+                report.errors.push(format!("Hook script: {e}"));
+            }
+        }
+        if let Some(h) = &home {
+            let _ = std::fs::remove_file(h.join(".claude/hooks/cue-hook.disabled"));
+        }
+        report.hook_script_removed = ok;
+    }
+
+    // 3. Disable login autostart.
+    {
+        use tauri_plugin_autostart::ManagerExt;
+        let autostart = app.autolaunch();
+        match autostart.is_enabled() {
+            Ok(true) => match autostart.disable() {
+                Ok(()) => report.autostart_disabled = true,
+                Err(e) => report.errors.push(format!("Autostart: {e}")),
+            },
+            // Already disabled (or state unknown) — nothing left to do.
+            _ => report.autostart_disabled = true,
+        }
+    }
+
+    // 4. Remove Cue's local data directories.
+    report.data_removed = remove_app_data(&mut report.errors);
+
+    // 5. Remove the app bundle (macOS) or report the manual step.
+    remove_app_bundle(&mut report);
+
+    report
+}
+
+/// Delete Cue's local data directories (sessions/state, settings, presets).
+/// Returns true if every existing directory was removed cleanly.
+fn remove_app_data(errors: &mut Vec<String>) -> bool {
+    let mut dirs_to_remove: Vec<std::path::PathBuf> = Vec::new();
+    for p in [
+        paths::sessions_json_path(),
+        paths::settings_path(),
+        paths::presets_dir(),
+    ] {
+        if let Some(parent) = p.parent() {
+            dirs_to_remove.push(parent.to_path_buf());
+        }
+    }
+    dirs_to_remove.sort();
+    dirs_to_remove.dedup();
+
+    let mut ok = true;
+    for dir in dirs_to_remove {
+        if dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&dir) {
+                ok = false;
+                errors.push(format!("Data dir {}: {e}", dir.display()));
+            }
+        }
+    }
+    ok
+}
+
+/// Remove the installed application. On macOS the running `.app` bundle is
+/// moved to the Trash (reversible). On Windows/Linux self-removal of a packaged
+/// install isn't reliable, so we record the manual step instead. When running
+/// from a dev build (no `.app` ancestor) we never delete anything.
+fn remove_app_bundle(report: &mut UninstallReport) {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            report.errors.push(format!("Locate app: {e}"));
+            return;
+        }
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        let bundle = exe
+            .ancestors()
+            .find(|p| p.extension().map(|e| e == "app").unwrap_or(false));
+        match bundle {
+            Some(b) => {
+                report.app_path = Some(b.display().to_string());
+                match move_to_trash_macos(b) {
+                    Ok(()) => report.app_removed = true,
+                    Err(e) => {
+                        report.errors.push(format!("Move to Trash: {e}"));
+                        report
+                            .manual_steps
+                            .push(format!("Drag {} to the Trash to finish.", b.display()));
+                    }
+                }
+            }
+            None => {
+                report.app_path = Some(exe.display().to_string());
+                report
+                    .manual_steps
+                    .push("Running from a dev build — app bundle not removed.".into());
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        report.app_path = Some(exe.display().to_string());
+        report.manual_steps.push(
+            "Uninstall Cue from Settings → Apps (or the original installer) to remove the app."
+                .into(),
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        report.app_path = Some(exe.display().to_string());
+        report.manual_steps.push(
+            "Remove the Cue package with your package manager (e.g. `sudo apt remove cue`) \
+             or delete the AppImage."
+                .into(),
+        );
+    }
+}
+
+/// Move a macOS app bundle to `~/.Trash`, suffixing the name on collision.
+/// Uses a same-volume rename (Applications and the Trash share the Data volume
+/// on modern macOS), so it is fast and reversible from the Finder.
+#[cfg(target_os = "macos")]
+fn move_to_trash_macos(bundle: &std::path::Path) -> Result<(), String> {
+    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+    let trash = home.join(".Trash");
+    std::fs::create_dir_all(&trash).map_err(|e| e.to_string())?;
+
+    let name = bundle
+        .file_name()
+        .ok_or("Invalid bundle path")?
+        .to_string_lossy()
+        .to_string();
+    let stem = bundle
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| name.clone());
+
+    let mut dest = trash.join(&name);
+    let mut n = 1;
+    while dest.exists() {
+        dest = trash.join(format!("{stem} {n}.app"));
+        n += 1;
+        if n > 100 {
+            return Err("Trash already holds many old copies of Cue".into());
+        }
+    }
+    std::fs::rename(bundle, &dest).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -951,35 +1154,30 @@ fn get_hook_status() -> Vec<HookStatusCheck> {
         },
     });
 
-    // 2. Hook runner
-    let runner = home.join(".claude/hooks/hook-runner.sh");
-    let runner_ok = runner.exists() && is_executable(&runner);
+    // 2. Python 3 interpreter — the hook is invoked as `<python> <hook> <state>`,
+    // so a Python 3 on PATH is what makes the hook runnable on every platform.
+    let python = env_detect::find_python();
     checks.push(HookStatusCheck {
-        label: "Hook Runner".into(),
-        ok: runner_ok,
-        detail: if !runner.exists() {
-            "~/.claude/hooks/hook-runner.sh not found".into()
-        } else if !is_executable(&runner) {
-            "hook-runner.sh not executable".into()
-        } else {
-            "hook-runner.sh OK".into()
+        label: "Python 3".into(),
+        ok: python.is_some(),
+        detail: match &python {
+            Some(p) => format!("{}", p.display()),
+            None => "python3 not found on PATH".into(),
         },
     });
 
-    // 3. Cue hook script — check both possible locations
+    // 3. Cue hook script — the deployed copy, plus a legacy symphony fallback.
     let hook_paths = [
-        home.join(".claude/symphony-root/cue/hooks/cue-hook"),
         home.join(".claude/hooks/cue-hook"),
+        home.join(".claude/symphony-root/cue/hooks/cue-hook"),
     ];
     let hook_found = hook_paths.iter().find(|p| p.exists());
-    let hook_ok = hook_found.map(|p| is_executable(p)).unwrap_or(false);
     checks.push(HookStatusCheck {
         label: "Cue Hook Script".into(),
-        ok: hook_ok,
+        ok: hook_found.is_some(),
         detail: match hook_found {
-            Some(p) if is_executable(p) => format!("{}", p.display()),
-            Some(p) => format!("{} (not executable)", p.display()),
-            None => "cue-hook not found".into(),
+            Some(p) => format!("{}", p.display()),
+            None => "cue-hook not installed — run Configure Hooks".into(),
         },
     });
 
@@ -1041,20 +1239,6 @@ fn get_hook_status() -> Vec<HookStatusCheck> {
     });
 
     checks
-}
-
-fn is_executable(path: &std::path::Path) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        path.metadata()
-            .map(|m| m.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
-    }
-    #[cfg(not(unix))]
-    {
-        path.exists()
-    }
 }
 
 /// Check settings.json for cue-hook registration across all expected events.
@@ -1341,6 +1525,7 @@ pub fn run() {
             get_hook_status,
             install_cue_hooks,
             uninstall_cue_hooks,
+            uninstall_cue,
             hide_tray_popover,
             resize_tray_popover,
             open_dashboard_from_tray,

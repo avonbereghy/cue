@@ -408,6 +408,150 @@ function HookStatus() {
   );
 }
 
+interface UninstallReport {
+  hooksRemoved: boolean;
+  hookScriptRemoved: boolean;
+  autostartDisabled: boolean;
+  dataRemoved: boolean;
+  appRemoved: boolean;
+  appPath: string | null;
+  manualSteps: string[];
+  errors: string[];
+}
+
+/** Full uninstall: disconnect from Claude Code (hooks + hook script), disable
+ *  autostart, wipe local data, and move the app to the Trash. Two-step confirm,
+ *  then a report and a Quit button. */
+function UninstallCue() {
+  const [phase, setPhase] = useState<"idle" | "confirm" | "running" | "done">("idle");
+  const [report, setReport] = useState<UninstallReport | null>(null);
+
+  const run = async () => {
+    setPhase("running");
+    try {
+      const r = await invoke<UninstallReport>("uninstall_cue");
+      setReport(r);
+    } catch (err) {
+      setReport({
+        hooksRemoved: false,
+        hookScriptRemoved: false,
+        autostartDisabled: false,
+        dataRemoved: false,
+        appRemoved: false,
+        appPath: null,
+        manualSteps: [],
+        errors: [String(err)],
+      });
+    } finally {
+      setPhase("done");
+    }
+  };
+
+  const quit = () => {
+    invoke("quit_app").catch(() => {});
+  };
+
+  const Line = ({ ok, label }: { ok: boolean; label: string }) => (
+    <div className="flex items-center gap-2 py-0.5">
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${ok ? "bg-green-400/80" : "bg-white/20"}`} />
+      <span className="text-[0.625rem] text-white/60">{label}</span>
+    </div>
+  );
+
+  return (
+    <details className="rounded-lg bg-red-500/5 border border-red-500/15 px-3 py-2">
+      <summary className="flex items-center gap-2 text-xs cursor-pointer hover:text-white/70 transition-colors select-none">
+        <span className="w-2 h-2 rounded-full shrink-0 bg-red-400/70" />
+        <span className="text-white/50">Uninstall Cue</span>
+      </summary>
+      <div className="mt-2 pb-1">
+        {phase === "idle" && (
+          <>
+            <p className="text-[0.625rem] text-white/50 leading-relaxed mb-2">
+              Removes Cue's connection to Claude Code (hook entries in{" "}
+              <code className="bg-white/10 px-1 rounded">~/.claude/settings.json</code> and the{" "}
+              <code className="bg-white/10 px-1 rounded">~/.claude/hooks/cue-hook</code> script),
+              disables start-at-login, deletes Cue's local data, and moves the app to the Trash.
+              Claude Code keeps working normally afterward.
+            </p>
+            <button
+              onClick={() => setPhase("confirm")}
+              className="px-2.5 py-1 rounded text-[0.625rem] font-medium bg-red-500/15 hover:bg-red-500/25 text-red-400 transition-colors"
+            >
+              Uninstall Cue…
+            </button>
+          </>
+        )}
+
+        {phase === "confirm" && (
+          <>
+            <p className="text-[0.625rem] text-red-400/80 leading-relaxed mb-2">
+              This cannot be undone (the app moves to the Trash, where you can recover it; data and
+              hook config are permanently removed). Continue?
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={run}
+                className="px-2.5 py-1 rounded text-[0.625rem] font-medium bg-red-500/25 hover:bg-red-500/35 text-red-300 transition-colors"
+              >
+                Yes, remove everything
+              </button>
+              <button
+                onClick={() => setPhase("idle")}
+                className="px-2.5 py-1 rounded text-[0.625rem] font-medium bg-white/10 hover:bg-white/15 text-white/50 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </>
+        )}
+
+        {phase === "running" && (
+          <p className="text-[0.625rem] text-white/50">Uninstalling…</p>
+        )}
+
+        {phase === "done" && report && (
+          <>
+            <div className="space-y-0.5 mb-2">
+              <Line ok={report.hooksRemoved} label="Hook entries removed from settings.json" />
+              <Line ok={report.hookScriptRemoved} label="Hook script deleted" />
+              <Line ok={report.autostartDisabled} label="Start-at-login disabled" />
+              <Line ok={report.dataRemoved} label="Local data removed" />
+              <Line
+                ok={report.appRemoved}
+                label={report.appRemoved ? "App moved to Trash" : "App removal — see steps below"}
+              />
+            </div>
+
+            {report.manualSteps.length > 0 && (
+              <ul className="mb-2 space-y-0.5 list-disc list-inside">
+                {report.manualSteps.map((s, i) => (
+                  <li key={i} className="text-[0.625rem] text-yellow-400/70">{s}</li>
+                ))}
+              </ul>
+            )}
+
+            {report.errors.length > 0 && (
+              <ul className="mb-2 space-y-0.5 list-disc list-inside">
+                {report.errors.map((s, i) => (
+                  <li key={i} className="text-[0.625rem] text-red-400/70">{s}</li>
+                ))}
+              </ul>
+            )}
+
+            <button
+              onClick={quit}
+              className="px-2.5 py-1 rounded text-[0.625rem] font-medium bg-red-500/20 hover:bg-red-500/30 text-red-400 transition-colors"
+            >
+              Quit Cue
+            </button>
+          </>
+        )}
+      </div>
+    </details>
+  );
+}
+
 export function SettingsView() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const initialLoadRef = useRef(true);
@@ -1179,6 +1323,9 @@ export function SettingsView() {
 
       {/* Hook Status */}
       <HookStatus />
+
+      {/* Uninstall */}
+      <UninstallCue />
 
       {/* Reference (collapsed by default) */}
       <details className="rounded-lg bg-white/5 border border-white/10 px-3 py-2">

@@ -95,11 +95,20 @@ Then log out and back in, and enable the extension in GNOME Extensions.
 
 On first launch, Cue presents an onboarding wizard that:
 
-1. Detects your Claude Code installation
-2. Installs the session-monitoring hook into Claude Code's hook directory
-3. Verifies the hook is working by checking for session data
+1. Detects your Claude Code installation and confirms Python 3 is available.
+2. Copies the bundled `cue-hook` script to `~/.claude/hooks/cue-hook`.
+3. Registers it for every lifecycle event in `~/.claude/settings.json`, invoking
+   it as `<python3> ~/.claude/hooks/cue-hook <state>`. Your existing settings
+   are backed up to `settings.json.bak` first.
 
-No manual configuration is needed. The hook runs automatically whenever Claude Code starts or updates a session.
+The hook is run through the Python interpreter rather than executed directly, so
+it needs no execute bit and the exact same mechanism works on macOS, Linux, and
+Windows. No manual editing is required, and the install does not depend on any
+pre-existing files outside the app bundle. You can re-run it any time from
+**Settings → Installation Status → Reinstall**.
+
+If Python 3 is not on your `PATH`, setup fails with a clear message — install
+Python 3 and click **Configure Hooks** again.
 
 ## Uninstall
 
