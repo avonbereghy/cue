@@ -5,8 +5,11 @@ A real-time session monitor for Claude Code — see at a glance if Claude is wor
 ![Rust](https://img.shields.io/badge/Rust-Tauri_v2-000000?logo=rust&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-macOS_|_Windows_|_Linux-blue)
 ![License](https://img.shields.io/badge/License-MIT-blue)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy_Me_A_Coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/avonbereghy)
 
-![Cue Dashboard](assets/dashboard-demo.png)
+<p align="center">
+  <img src="assets/dashboard-demo.png" width="640" alt="Cue dashboard showing multiple Claude Code sessions in working, thinking, compacting, subagent, waiting, done, and idle states">
+</p>
 
 ## Status Indicators
 
@@ -22,7 +25,11 @@ Each Claude Code session appears as a colored dot in your menu bar / system tray
 | Dim white | Idle |
 | Hollow ring | No active sessions |
 
-Multiple sessions show as a grid of dots — see all your sessions at once.
+Multiple sessions show as a grid of dots — see all your sessions at once. Click the icon for a popover with every session's status, model, and token usage:
+
+<p align="center">
+  <img src="assets/menubar.png" width="340" alt="Cue menu bar popover showing per-session status, model, and token usage">
+</p>
 
 ## Features
 
@@ -32,7 +39,7 @@ Multiple sessions show as a grid of dots — see all your sessions at once.
 - **Subagent awareness** — tracks active subagent count per session, displays "Subagents(N)" badge with live count; parent sessions stay in subagent state while children are running (won't falsely drop to idle/error/waiting from subagent events)
 - **Session dashboard** — detailed view with workspace, duration, model, git branch, tool usage, context usage bar
 - **Token metrics** — incremental JSONL parsing for input/output/cache token counts per session, aggregated across parent and all subagents
-- **Context usage bar** — color-coded progress bar (green → amber → red) showing token usage relative to model context limit (auto-detected: 1M for Opus/Sonnet 4.6, 200K for older models)
+- **Context usage bar** — color-coded progress bar (green → amber → red) showing token usage relative to model context limit (auto-detected: 1M for current models like Opus 4.8 / Sonnet 4.6, 200K for older models)
 - **Running tool display** — fixed-width pill showing the currently executing tool and its target (file path, command, pattern) in real-time
 - **Output speed** — tokens/sec badge calculated from output token deltas between poll intervals
 - **Todo/task progress** — tracks TodoWrite and TaskCreate/TaskUpdate tools, shows completed/total counter with checkbox icon
@@ -234,6 +241,12 @@ hooks/
 - **Minimal capabilities** — Tauri frontend has no shell, HTTP, or filesystem access
 - **DevTools disabled** — in release builds
 - **Privacy** — workspace paths show leaf directory name only
+
+## Support
+
+Cue is free and open source. If it saves you time, you can support development:
+
+<a href="https://buymeacoffee.com/avonbereghy"><img src="https://img.shields.io/badge/Buy_Me_A_Coffee-FFDD00?logo=buymeacoffee&logoColor=black&style=for-the-badge" alt="Buy Me A Coffee"></a>
 
 ## License
 
