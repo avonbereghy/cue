@@ -217,7 +217,10 @@ mod tests {
         cmd.arg("30");
         let start = Instant::now();
         let out = run_with_timeout(cmd, Duration::from_millis(150));
-        assert!(out.is_none(), "a process exceeding the timeout returns None");
+        assert!(
+            out.is_none(),
+            "a process exceeding the timeout returns None"
+        );
         assert!(
             start.elapsed() < Duration::from_secs(5),
             "must return shortly after the deadline, not wait for the process to finish"

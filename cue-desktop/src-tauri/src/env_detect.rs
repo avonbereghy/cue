@@ -806,7 +806,8 @@ mod tests {
         assert_eq!(out["model"].as_str(), Some("claude-sonnet-4-6"));
         let pre = out["hooks"]["PreToolUse"].as_array().unwrap();
         assert!(
-            pre.iter().any(|e| e["hooks"][0]["command"] == "/opt/retenir/run"),
+            pre.iter()
+                .any(|e| e["hooks"][0]["command"] == "/opt/retenir/run"),
             "user's non-cue hook was dropped"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -836,7 +837,10 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         // No cue residue anywhere.
         let serialized = serde_json::to_string(&out).unwrap();
-        assert!(!serialized.contains("cue-hook"), "cue residue after uninstall");
+        assert!(
+            !serialized.contains("cue-hook"),
+            "cue residue after uninstall"
+        );
         // No orphaned empty cue-managed arrays.
         for (event, _) in HOOK_EVENTS {
             if event == &"Stop" {
@@ -929,9 +933,15 @@ mod tests {
         std::fs::write(&path, "{ this is not json").unwrap();
 
         let result = write_hook_settings_at(&path, "python3 /h/cue-hook");
-        assert!(result.is_err(), "invalid JSON must error, not silently overwrite");
+        assert!(
+            result.is_err(),
+            "invalid JSON must error, not silently overwrite"
+        );
         // The malformed file is left untouched (atomic_write never ran).
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ this is not json");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{ this is not json"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

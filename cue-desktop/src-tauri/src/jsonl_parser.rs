@@ -1464,8 +1464,14 @@ mod tests {
         // Capped well under the 50k input (SNIPPET_CHAR_CAP + ellipsis).
         let ulen = u.user_prompt_text.as_ref().unwrap().chars().count();
         let alen = a.assistant_text.as_ref().unwrap().chars().count();
-        assert!(ulen <= SNIPPET_CHAR_CAP + 1, "user prompt not capped: {ulen}");
-        assert!(alen <= SNIPPET_CHAR_CAP + 1, "assistant text not capped: {alen}");
+        assert!(
+            ulen <= SNIPPET_CHAR_CAP + 1,
+            "user prompt not capped: {ulen}"
+        );
+        assert!(
+            alen <= SNIPPET_CHAR_CAP + 1,
+            "assistant text not capped: {alen}"
+        );
     }
 
     /// Regression: tool_result entries are `type: "user"` in Claude Code JSONL,
