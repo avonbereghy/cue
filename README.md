@@ -98,6 +98,11 @@ Multiple sessions show as a grid of dots — see all your sessions at once. Clic
 
 Download the installer for your platform from the [latest release](https://github.com/avonbereghy/cue/releases/latest), or build from source (below). On first launch, the **onboarding wizard** installs the hook for you: it copies the bundled `cue-hook` script to `~/.claude/hooks/cue-hook` and registers it in `~/.claude/settings.json` (your original settings are backed up once to `settings.json.bak`, preserved across reinstalls). No manual editing required — and no dependency on any pre-existing setup.
 
+> **macOS — opening the app the first time.** Cue is a free, personal open-source project and its downloads are **not signed with an Apple Developer ID**, so on first launch macOS Gatekeeper will say Cue is "from an unidentified developer" or "cannot be opened." This is expected and only needs handling once — do any one of:
+> - **Right-click** (or Control-click) **Cue** in Finder → **Open**, then click **Open** in the dialog; or
+> - open **System Settings → Privacy & Security**, find the "Cue was blocked" message near the bottom, and click **Open Anyway**; or
+> - run `xattr -dr com.apple.quarantine /Applications/Cue.app` in Terminal.
+
 After setup, Cue appears as a normal app: a **Dock icon on macOS**, a **taskbar/Start-menu entry on Windows**, and an **application-launcher entry on Linux**, plus a status dot in the menu bar / system tray.
 
 ### Build from source — macOS

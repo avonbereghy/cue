@@ -13,7 +13,12 @@ Cue is a cross-platform desktop app that monitors your Claude Code sessions and 
 
 1. Download `Cue_x.y.z_universal.dmg` from the latest release.
 2. Open the DMG and drag **Cue** into your Applications folder.
-3. Launch from Applications. Signed and notarized builds open without Gatekeeper warnings; auto-update is enabled.
+3. Launch from Applications. Cue's release builds are **not signed with an Apple Developer ID** (it's a free, personal open-source project), so macOS Gatekeeper warns on first launch. Do any one of the following, once:
+   - **Right-click** (or Control-click) **Cue** in Finder → **Open** → **Open**; or
+   - open **System Settings → Privacy & Security**, find the "Cue was blocked" message, and click **Open Anyway**; or
+   - run `xattr -dr com.apple.quarantine /Applications/Cue.app`.
+
+   In-app auto-update (the Tauri updater) still works — it uses its own signing key, independent of Apple notarization.
 
 ### Build from source
 
@@ -59,6 +64,8 @@ Then remove the hook entries from `~/.claude/settings.json` (search for `cue-hoo
 1. Download `Cue_x.y.z_x64-setup.exe` from the latest release.
 2. Run the installer and follow the prompts.
 3. Launch **Cue** from the Start Menu.
+
+> **Unsigned installer.** Cue's Windows builds are not code-signed, so SmartScreen may show "Windows protected your PC." Click **More info → Run anyway** to proceed.
 
 ## Linux
 
