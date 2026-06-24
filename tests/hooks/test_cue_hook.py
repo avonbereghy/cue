@@ -696,7 +696,7 @@ class TestRemoveAction:
                 "lastActivity": 100.0,
                 "startedAt": 50.0,
                 "activeSubagents": 3,
-                "subprocess": "retenir",
+                "subprocess": "orchestrator",
             }
         })
         invoke_hook("remove", make_payload(session_id="abc123", hook_event_name="SessionEnd"))
@@ -706,7 +706,7 @@ class TestRemoveAction:
         # The remove path doesn't touch the entry beyond the state — counter
         # and subprocess label carry through, which the revive UI surfaces.
         assert entry.get("activeSubagents") == 3
-        assert entry.get("subprocess") == "retenir"
+        assert entry.get("subprocess") == "orchestrator"
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -902,7 +902,7 @@ class TestStopFailure:
         assert entry["errorType"] == "rate_limit"
 
     def test_tool_failure_does_not_create_sticky_error(self, hook_env, invoke_hook):
-        # Regression (the 55-min stuck "Error" on an idle retenir card): a
+        # Regression (the 55-min stuck "Error" on an idle subprocess card): a
         # PostToolUseFailure from a non-error state (a routine recoverable tool
         # error like "read the file first") is ongoing work, NOT a session
         # error. It must land `working` so the turn's Stop→idle isn't blocked.

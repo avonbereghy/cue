@@ -6,8 +6,8 @@
  * push on nearby line targets. Flux lines bend aside, spring back, then the
  * whole effect fades out once the strings have arrived.
  *
- * Inspired by the retenir activity-dashboard pattern where event dots push the
- * flux field as they traverse edge lines. We key the registry per-card (by
+ * The pattern is an activity-dashboard effect where moving event markers push
+ * the flux field as they traverse edge lines. We key the registry per-card (by
  * session id / seed) so sibling cards don't bleed displacement into each other.
  */
 

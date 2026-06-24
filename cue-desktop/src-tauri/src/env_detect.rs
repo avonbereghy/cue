@@ -781,7 +781,7 @@ mod tests {
                 "hooks": {
                     "PreToolUse": [{
                         "matcher": "",
-                        "hooks": [{"type": "command", "command": "/opt/retenir/run"}]
+                        "hooks": [{"type": "command", "command": "/opt/other-tool/run"}]
                     }]
                 }
             }))
@@ -802,12 +802,12 @@ mod tests {
             );
         }
         // Unrelated key preserved; the user's non-cue PreToolUse hook preserved
-        // (cue is inserted first, the retenir hook follows).
+        // (cue is inserted first, the user's other hook follows).
         assert_eq!(out["model"].as_str(), Some("claude-sonnet-4-6"));
         let pre = out["hooks"]["PreToolUse"].as_array().unwrap();
         assert!(
             pre.iter()
-                .any(|e| e["hooks"][0]["command"] == "/opt/retenir/run"),
+                .any(|e| e["hooks"][0]["command"] == "/opt/other-tool/run"),
             "user's non-cue hook was dropped"
         );
         let _ = std::fs::remove_dir_all(&dir);

@@ -11,7 +11,7 @@ export interface SessionInfo {
   source?: string;
   /** Number of currently active subagents (from hook). */
   activeSubagents?: number;
-  /** Subprocess label if spawned by a known caller (e.g. "retenir"). */
+  /** Subprocess label if a wrapping tool set CUE_SUBPROCESS_LABEL (e.g. an orchestrator). */
   subprocess?: string;
   /** Team name if this session was spawned as a team agent. */
   teamName?: string;
