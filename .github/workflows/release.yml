@@ -125,6 +125,10 @@ jobs:
       # signal that compensates for unsigned binaries. UNTESTED until a real
       # release tag is pushed — confirm the bundle globs match on the first run.
       - name: Attest build provenance
+        # Non-fatal on the first run: if a bundle glob doesn't match on some
+        # platform, the release still succeeds and we fix the globs from the run
+        # logs. Tighten to required once verified.
+        continue-on-error: true
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: |
