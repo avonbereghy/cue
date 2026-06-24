@@ -31,10 +31,16 @@ on:
     tags:
       - 'v*'
 
+# Least-privilege default for the whole workflow; jobs elevate only what they need.
+permissions:
+  contents: read
+
 jobs:
   publish:
     permissions:
-      contents: write
+      contents: write # create/upload the release
+      id-token: write # mint the Sigstore OIDC token for build provenance
+      attestations: write # persist the provenance attestation
     strategy:
       fail-fast: false
       matrix:
@@ -112,3 +118,42 @@ jobs:
           # latest.json is the manifest tauri-plugin-updater fetches; the
           # action generates and uploads it alongside the bundles.
           updaterJsonPreferNsis: true
+
+      # Cryptographic build provenance (SLSA Build L2) via Sigstore. Public repos
+      # use the Sigstore public-good transparency log; consumers verify with
+      # `gh attestation verify <file> --repo avonbereghy/cue`. This is the trust
+      # signal that compensates for unsigned binaries. UNTESTED until a real
+      # release tag is pushed — confirm the bundle globs match on the first run.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: |
+            cue-desktop/src-tauri/target/**/release/bundle/dmg/*.dmg
+            cue-desktop/src-tauri/target/**/release/bundle/macos/*.app.tar.gz
+            cue-desktop/src-tauri/target/**/release/bundle/msi/*.msi
+            cue-desktop/src-tauri/target/**/release/bundle/nsis/*.exe
+            cue-desktop/src-tauri/target/**/release/bundle/appimage/*.AppImage
+            cue-desktop/src-tauri/target/**/release/bundle/deb/*.deb
+
+  # After every platform bundle is uploaded to the draft release, hash them all
+  # and publish a SHA256SUMS file so users can verify downloads. UNTESTED until a
+  # real release runs.
+  checksums:
+    needs: publish
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Generate and upload SHA256SUMS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ github.ref_name }}"
+          tmp="$(mktemp -d)"; cd "$tmp"
+          gh release download "$tag" -R "${{ github.repository }}" --pattern '*' --skip-existing || true
+          if [ -n "$(ls -A .)" ]; then
+            sha256sum * > SHA256SUMS
+            gh release upload "$tag" SHA256SUMS -R "${{ github.repository }}" --clobber
+          else
+            echo "No assets found to checksum (draft may be empty)"
+          fi

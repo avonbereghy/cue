@@ -13,6 +13,11 @@ on:
   pull_request:
     branches: [main]
 
+# Least-privilege default: the GITHUB_TOKEN gets read-only access. CI needs
+# nothing more (no writes to the repo, releases, or checks).
+permissions:
+  contents: read
+
 jobs:
   rust:
     runs-on: macos-14

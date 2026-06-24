@@ -1,0 +1,50 @@
+# Supply-chain auditing: RUSTSEC advisories (cargo-audit) + npm advisories.
+# Unlike CodeQL / Scorecard / Dependency Review, these are plain CLI tools, so
+# they run while the repo is still private too.
+#
+# Third-party actions are pinned to commit SHAs (FIND-006); the trailing comment
+# records the human-readable tag. Bump both together.
+name: security-audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '37 4 * * 1' # Mondays 04:37 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-audit:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: taiki-e/install-action@ace6ebe54a6a0c86dfb5f7764b17f793b6925bc3 # v2
+        with:
+          tool: cargo-audit
+      - name: cargo audit
+        working-directory: cue-desktop/src-tauri
+        # These two advisories are accepted in dependabot.yml (rand 0.7 and
+        # glib<0.20 reached only via the Tauri build-dep chain on code paths Cue
+        # does not exercise). Keep this ignore list in sync with that file.
+        run: cargo audit --ignore RUSTSEC-2026-0097 --ignore RUSTSEC-2024-0429
+
+  npm-audit:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: cue-desktop/package-lock.json
+      - name: Install
+        working-directory: cue-desktop
+        run: npm ci
+      - name: npm audit (production deps, high and above)
+        working-directory: cue-desktop
+        run: npm audit --omit=dev --audit-level=high
