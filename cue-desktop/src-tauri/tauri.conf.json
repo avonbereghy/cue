@@ -78,7 +78,6 @@
     "macOS": {
       "frameworks": [],
       "minimumSystemVersion": "14.2",
-      "signingIdentity": "Developer ID Application: Example Developer (TEAMID0000)",
       "hardenedRuntime": true,
       "entitlements": "macos/Cue.entitlements"
     },
