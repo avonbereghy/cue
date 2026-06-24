@@ -57,7 +57,7 @@ pub struct SessionInfo {
     /// Number of currently active subagents (written by hook).
     #[serde(default)]
     pub active_subagents: i64,
-    /// Subprocess label if this session was spawned by a known caller (e.g. "retenir").
+    /// Subprocess label if a wrapping tool set `CUE_SUBPROCESS_LABEL` (e.g. an orchestrator).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subprocess: Option<String>,
     /// Team name if this session was spawned as a team agent.

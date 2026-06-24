@@ -531,21 +531,22 @@ def _should_ignore_session(hook_data):
     return os.environ.get("CUE_SKIP") == "1"
 
 
-# Known env vars that indicate a subprocess caller.
-# Maps env var name → display label for the Cue pill.
-_SUBPROCESS_ENV_MARKERS = {
-    "RETENIR_SUBPROCESS": "retenir",
-    "SYMPHONY_SUBPROCESS": "symphony",
-    "CONDUCTOR_SUBPROCESS": "conductor",
-}
+# A wrapping tool (e.g. an orchestrator that runs `claude` as a subprocess) can
+# set CUE_SUBPROCESS_LABEL to a short name; Cue shows it as the session's
+# subprocess pill. Generic on purpose — any caller can opt in by exporting this
+# env var, with no code change here.
+_SUBPROCESS_LABEL_ENV = "CUE_SUBPROCESS_LABEL"
+_SUBPROCESS_LABEL_MAX_LEN = 32
 
 
 def _detect_subprocess():
-    """Return a subprocess label if this session is a known subprocess, else None."""
-    for env_var, label in _SUBPROCESS_ENV_MARKERS.items():
-        if os.environ.get(env_var):
-            return label
-    return None
+    """Return the caller-supplied subprocess label (CUE_SUBPROCESS_LABEL), else None."""
+    label = os.environ.get(_SUBPROCESS_LABEL_ENV, "").strip()
+    if not label:
+        return None
+    # Same-user trust boundary; just cap length so a stray value can't bloat the
+    # pill or the sessions.json entry.
+    return label[:_SUBPROCESS_LABEL_MAX_LEN]
 
 
 def _detect_team(transcript_path=None):
