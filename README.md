@@ -1,6 +1,6 @@
 # Cue
 
-A fun, lightweight way to keep an eye on all your Claude Code sessions at once. Cue shows each session as a colored dot — working, thinking, waiting on you, or done — in your menu bar, with a full dashboard a click away. Cross-platform desktop app for macOS, Windows, and Linux.
+A simple, visually intuitive way to monitor all your Claude Code sessions at once — each a colored dot (working, thinking, waiting, done), auto-sorted so whatever needs you surfaces first. Menu bar at a glance, full dashboard a click away. Cross-platform: macOS, Windows, and Linux.
 
 ![Rust](https://img.shields.io/badge/Rust-Tauri_v2-000000?logo=rust&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-macOS_|_Windows_|_Linux-blue)
