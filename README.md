@@ -262,6 +262,23 @@ hooks/
 - **DevTools disabled** — in release builds
 - **Privacy** — workspace paths show leaf directory name only
 
+## Roadmap
+
+Directions I'm exploring — not commitments or timelines. Ideas and feedback welcome via [issues](https://github.com/avonbereghy/cue/issues).
+
+**Near-term**
+
+- **Notifications** — get pinged (desktop + optional sound) when a session needs you (permission or input) or a long run finishes, so you don't have to watch it.
+- **Usage & cost insights** — token and cost trends per session and per day, built from data Cue already parses.
+- **Sturdier live-state detection** — harden the edge cases in the working / waiting / idle state machine.
+- **Inline actions** — approve permissions, revive, and jump-to-terminal straight from the dashboard and tray.
+
+**Exploring**
+
+- **Beyond Claude Code — pluggable harness adapters.** Monitor other agent harnesses (Codex, Aider, opencode, …) through per-tool adapters that map each one's lifecycle into Cue's shared state model — turning Cue into a single pane of glass for all your agents. CLI agents are the tractable path; editor-based tools (e.g. Cursor) are harder and may need their own integration. This same adapter layer lets orchestrators and wrappers feed Cue custom session context (building on the `CUE_SUBPROCESS_LABEL` hook).
+- **LAN multi-device monitoring** — one Cue watching sessions across machines on your local network. Strictly opt-in, authenticated, and LAN-only — no cloud, no telemetry.
+- **At-a-glance away from the desk** — a lightweight companion view, likely built on the same authenticated local-network layer as LAN monitoring.
+
 ## Support
 
 Cue is free and open source. If it saves you time, you can support development:
