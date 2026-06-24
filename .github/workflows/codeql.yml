@@ -1,0 +1,36 @@
+# CodeQL static analysis for the TypeScript/JavaScript frontend. Free on public
+# repos; needs GitHub Advanced Security on private repos — so the job is gated on
+# visibility and skips (never fails) while private. The Rust backend is covered
+# by cargo-audit (security-audit.yml); CodeQL's Rust support is newer/limited.
+#
+# Actions pinned to commit SHAs (FIND-006); trailing comment is the tag.
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '43 6 * * 3' # Wednesdays 06:43 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (javascript-typescript)
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-22.04
+    permissions:
+      security-events: write
+      packages: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: github/codeql-action/init@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+        with:
+          languages: javascript-typescript
+          build-mode: none
+      - uses: github/codeql-action/analyze@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+        with:
+          category: '/language:javascript-typescript'
