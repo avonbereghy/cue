@@ -912,9 +912,7 @@ impl SessionMonitorState {
                     speed_cache.insert(id.clone(), (metrics.output_tokens, now_ts));
                 }
 
-                self.metrics_cache
-                    .lock_safe()
-                    .insert(id.clone(), metrics);
+                self.metrics_cache.lock_safe().insert(id.clone(), metrics);
             }
         }
     }
@@ -2154,7 +2152,11 @@ mod tests {
             parsed_file_mtime: Some(350.0),
             ..Default::default()
         };
-        assert!(should_demote_turn_ended("error", Some(200.0), Some(&recovered)));
+        assert!(should_demote_turn_ended(
+            "error",
+            Some(200.0),
+            Some(&recovered)
+        ));
     }
 
     #[test]
