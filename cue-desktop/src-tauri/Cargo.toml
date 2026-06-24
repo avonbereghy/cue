@@ -35,12 +35,18 @@ uuid = { version = "1", features = ["v4"] }
 tiny-skia = "0.12"
 png = "0.18"
 sysinfo = "0.39"
-objc2-foundation = "0.3.2"
-objc2 = "0.6.4"
 raw-window-handle = "0.6"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# objc2 only compiles on Apple platforms (the crate has a compile_error! guard
+# for non-Apple targets), so it must be gated to macOS specifically — NOT
+# cfg(unix), since Linux is unix too and would still try to build it. All objc2
+# usage in src/lib.rs is already behind #[cfg(target_os = "macos")].
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-foundation = "0.3.2"
+objc2 = "0.6.4"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
