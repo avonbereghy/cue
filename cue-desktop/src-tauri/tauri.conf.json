@@ -16,6 +16,7 @@
         "title": "Cue",
         "width": 1200,
         "height": 900,
+        "maximized": true,
         "resizable": true,
         "fullscreen": false,
         "transparent": true,
@@ -91,7 +92,7 @@
       "endpoints": [
         "https://github.com/avonbereghy/cue/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5RTU0ODU4QjAwNzM2NTMKUldSVE5nZXdXRWpsR2JUTmRQbUFvajROWldFTkZtbFhYYSt1amIreUd3L2dYWnozWVd4ZzNjZU8K",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVGQTFFQjYwNzVBRUJCMUEKUldRYXU2NTFZT3VoWHo1aUtQbmR2enpJS1hwNFBDOU9hL0xwZW5kV3kwczI1clZGWUFYWFpYZE0K",
       "dialog": true
     }
   }
