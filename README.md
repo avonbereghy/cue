@@ -48,7 +48,6 @@ Multiple sessions show as a grid of dots — see all your sessions at once. Clic
 - **Todo/task progress** — tracks TodoWrite and TaskCreate/TaskUpdate tools, shows completed/total counter with checkbox icon
 - **Git status** — dirty indicator (`*`), ahead (`↑N`), behind (`↓N`) counts next to branch name, per-workspace with 10s cache
 - **Config counts** — CLAUDE.md files, .mdc rules, MCP servers, and hooks counts shown in detail view, per-workspace with 30s cache
-- **Rate limits** — 5-hour and 7-day usage progress bars with color coding (blue < 75%, purple 75–90%, red > 90%) and limit-reached warning
 - **Provider detection** — shows "(Bedrock)" or "(Vertex)" next to model name when using non-API providers
 - **System info** — RAM usage bar and Claude Code version displayed in the top bar
 - **Agent team tracking** — expandable subagent view showing active and completed agents with token/tool breakdowns
@@ -155,7 +154,7 @@ The `waiting` and `done` states are refined by the Rust backend from the transcr
 
 ### Rate limits (optional statusline bridge)
 
-Rate limit data is only available through Claude Code's statusline plugin protocol. To enable the rate limit bars, configure the `cue-statusline` bridge:
+Rate limit data is only available through Claude Code's statusline plugin protocol, so the rate-limit bars are **opt-in** today: the `cue-statusline` bridge ships in the repo's `hooks/` (not yet bundled in the installer or auto-configured — see the Roadmap). To enable the bars, point Claude Code's statusline at the bridge:
 
 ```bash
 claude settings set statusLine.command /path/to/hooks/cue-statusline
@@ -272,6 +271,7 @@ Directions I'm exploring — not commitments or timelines. Ideas and feedback we
 - **Usage & cost insights** — token and cost trends per session and per day, built from data Cue already parses.
 - **Sturdier live-state detection** — harden the edge cases in the working / waiting / idle state machine.
 - **Inline actions** — approve permissions, revive, and jump-to-terminal straight from the dashboard and tray.
+- **Rate-limit usage bars out of the box** — the 5h/7d usage bars (color thresholds + limit-reached warning) are already built into the UI, but today they need the `cue-statusline` bridge wired up manually. Goal: bundle and auto-install the bridge, and confirm Claude Code's statusline payload, so the bars just work.
 
 **Exploring**
 
