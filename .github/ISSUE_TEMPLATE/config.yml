@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Question or idea
+    url: https://github.com/avonbereghy/cue/discussions
+    about: Ask questions and share ideas in Discussions — please don't open an issue for these.
   - name: Security vulnerability
     url: https://github.com/avonbereghy/cue/security/advisories/new
     about: Please report security issues privately via GitHub, not as a public issue.
