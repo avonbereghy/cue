@@ -1,10 +1,11 @@
 # Cue
 
-A real-time session monitor for Claude Code — see at a glance if Claude is working, waiting for permission, spawning subagents, hit an error, or finished. Cross-platform desktop app for macOS, Windows, and Linux.
+A fun, lightweight way to keep an eye on all your Claude Code sessions at once. Cue shows each session as a colored dot — working, thinking, waiting on you, or done — in your menu bar, with a full dashboard a click away. Cross-platform desktop app for macOS, Windows, and Linux.
 
 ![Rust](https://img.shields.io/badge/Rust-Tauri_v2-000000?logo=rust&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-macOS_|_Windows_|_Linux-blue)
 ![License](https://img.shields.io/badge/License-MIT-blue)
+[![Project Status: Active](https://www.repostatus.org/badges/latest/active.svg)](https://www.repostatus.org/#active)
 
 <p align="center">
   <img src="assets/dashboard-demo.png" width="640" alt="Cue dashboard showing multiple Claude Code sessions in working, thinking, compacting, subagent, waiting, done, and idle states">
@@ -253,6 +254,7 @@ hooks/
 ## Security
 
 - **No outbound network calls** — all data stays local, no telemetry, no HTTP clients. Localhost-only server (`127.0.0.1`) for hook communication
+- **Zero Claude usage** — Cue reads local session data and hook events only; it never calls the Claude API and doesn't draw from your subscription or rate limits
 - **Atomic file writes** — temp file → fsync → rename prevents data corruption
 - **File permissions** — 0600 on Unix for all data files
 - **Path sanitization** — rejects `..` traversal, validates workspace paths
@@ -284,6 +286,10 @@ Directions I'm exploring — not commitments or timelines. Ideas and feedback we
 Cue is free and open source. If it saves you time, you can support development:
 
 <a href="https://buymeacoffee.com/avonbereghy"><img src="https://img.shields.io/badge/Buy_Me_A_Coffee-FFDD00?logo=buymeacoffee&logoColor=black&style=for-the-badge" alt="Buy Me A Coffee"></a>
+
+## Disclaimer
+
+Cue is an independent, open-source project and is **not affiliated with, endorsed by, or sponsored by Anthropic**. "Claude" and "Claude Code" are trademarks of Anthropic, PBC, used here only to describe compatibility.
 
 ## License
 
