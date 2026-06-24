@@ -45,7 +45,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg", "nsis", "msi", "deb", "appimage"],
+    "targets": ["app", "dmg", "nsis", "msi", "deb"],
     "createUpdaterArtifacts": true,
     "resources": {
       "../../hooks/cue-hook": "cue-hook"
