@@ -93,6 +93,11 @@ jobs:
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Linux AppImage: GitHub runners have no FUSE, so linuxdeploy/appimagetool
+          # must extract-and-run instead of mounting. NO_STRIP avoids a strip step
+          # that can fail in the AppImage tooling. (No-ops on macOS/Windows.)
+          APPIMAGE_EXTRACT_AND_RUN: 1
+          NO_STRIP: true
           # App code-signing is intentionally OFF for now — builds ship unsigned
           # (see README / INSTALL.md for the macOS Gatekeeper + Windows SmartScreen
           # steps). Passing empty APPLE_*/WINDOWS_* secrets makes tauri-action
