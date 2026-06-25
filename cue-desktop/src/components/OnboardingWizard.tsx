@@ -442,13 +442,9 @@ function StepDone() {
   return (
     <div className="flex flex-col items-center justify-center text-center py-12">
       <div className="text-4xl mb-4">&#10003;</div>
-      <h2 className="text-xl font-semibold text-white mb-2">
+      <h2 className="text-xl font-semibold text-white">
         You're all set
       </h2>
-      <p className="text-sm text-white/60 max-w-sm">
-        Cue will monitor your Claude Code sessions and display real-time
-        status in the system tray. Click "Get Started" to open the dashboard.
-      </p>
     </div>
   );
 }
