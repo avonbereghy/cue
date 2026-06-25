@@ -210,7 +210,7 @@ pub struct SubagentMetrics {
 
 impl SubagentMetrics {
     pub fn total_tokens(&self) -> i64 {
-        self.input_tokens + self.output_tokens
+        self.input_tokens.saturating_add(self.output_tokens)
     }
 
     pub fn total_tool_uses(&self) -> i64 {
@@ -364,8 +364,13 @@ pub struct SessionMetrics {
 impl SessionMetrics {
     pub fn total_tokens(&self) -> i64 {
         self.input_tokens
-            + self.output_tokens
-            + self.subagents.iter().map(|s| s.total_tokens()).sum::<i64>()
+            .saturating_add(self.output_tokens)
+            .saturating_add(
+                self.subagents
+                    .iter()
+                    .map(|s| s.total_tokens())
+                    .fold(0i64, i64::saturating_add),
+            )
     }
 
     pub fn total_tool_uses(&self) -> i64 {

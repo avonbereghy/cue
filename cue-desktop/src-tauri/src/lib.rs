@@ -289,8 +289,7 @@ fn get_system_memory(state: State<'_, AppState>) -> models::SystemMemory {
     state
         .monitor
         .supplemental
-        .lock()
-        .unwrap()
+        .lock_safe()
         .system_memory
         .clone()
 }
@@ -300,8 +299,7 @@ fn get_claude_version(state: State<'_, AppState>) -> Option<String> {
     state
         .monitor
         .supplemental
-        .lock()
-        .unwrap()
+        .lock_safe()
         .claude_version
         .clone()
 }
@@ -2001,8 +1999,7 @@ async fn handle_permission_connection(
             // entry. With metadata-first, any resolve that finds pending also
             // finds metadata, so the audit log can't lose decisions.
             metadata
-                .lock()
-                .unwrap()
+                .lock_safe()
                 .insert(request_id.clone(), permission_req);
 
             // Reserve the pending-request slot. If we're saturated (local
@@ -2332,8 +2329,7 @@ fn show_tray_popover(app: &AppHandle, rect: tauri::Rect) {
         .map(|s| {
             s.monitor
                 .enriched_sessions
-                .lock()
-                .unwrap()
+                .lock_safe()
                 .iter()
                 .filter(|sess| sess.info.state.as_str() != "ended")
                 .count()

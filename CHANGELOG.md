@@ -33,6 +33,19 @@ Pre-public UI polish: a calmer default look and a properly sized window.
 - Detail-mode cards no longer overlap the prompt subtitle with the metrics row.
 - macOS: clicking the Dock icon reopens the dashboard window.
 
+### Security
+- Pre-public security review (no Critical/High findings). Hardened the items found:
+  - `cue --status` (CLI) now validates the session id before using it as a path
+    component, matching the GUI poll path — closes a local path-traversal vector
+    via a hostile `sessions.json` id.
+  - Token aggregates use saturating arithmetic, so a crafted oversized JSONL can
+    no longer overflow the total.
+  - Replaced raw mutex `lock().unwrap()` sites with the poison-safe `lock_safe()`
+    wrapper to prevent a panic cascade.
+  - The hook creates its data directory owner-only (`0700`).
+  - The release workflow passes the git ref name via `env` rather than inlining
+    it into a shell step.
+
 ### Added
 - `cue-desktop/build.sh` — builds the release bundle and deploys it to
   `~/Applications` (tolerating the benign local updater-signing error).

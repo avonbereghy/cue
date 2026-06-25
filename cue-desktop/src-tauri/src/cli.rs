@@ -117,7 +117,14 @@ fn load_sessions() -> Vec<EnrichedSession> {
         status
             .sessions
             .into_values()
-            .filter(|s| security::sanitize_workspace_path(&s.workspace).is_ok()),
+            .filter(|s| {
+                // Mirror the GUI poll admission filter: a session id flows into a
+                // JSONL path (`{id}.jsonl`), so reject ids that fail the
+                // allowlist before any path join — otherwise a hostile
+                // sessions.json id (e.g. `../../foo`) escapes the projects dir.
+                security::validate_session_id(&s.id).is_ok()
+                    && security::sanitize_workspace_path(&s.workspace).is_ok()
+            }),
     );
 
     let projects_path = paths::claude_projects_path();

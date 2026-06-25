@@ -152,8 +152,11 @@ jobs:
       - name: Generate and upload SHA256SUMS
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Pass the ref name via env (not inlined into the shell) so a crafted
+          # tag name can't break out of the script. Quote on use below.
+          TAG: ${{ github.ref_name }}
         run: |
-          tag="${{ github.ref_name }}"
+          tag="$TAG"
           tmp="$(mktemp -d)"; cd "$tmp"
           gh release download "$tag" -R "${{ github.repository }}" --pattern '*' --skip-existing || true
           if [ -n "$(ls -A .)" ]; then

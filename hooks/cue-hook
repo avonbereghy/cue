@@ -123,6 +123,18 @@ STATUS_DIR = get_status_dir()
 STATUS_FILE = os.path.join(STATUS_DIR, "sessions.json")
 LOCK_FILE = os.path.join(STATUS_DIR, "sessions.lock")
 
+
+def _ensure_status_dir():
+    """Create STATUS_DIR owner-only (0700). The files inside are written 0600,
+    but the directory itself must not be group/world-listable on multi-user
+    hosts — `exist_ok=True` ignores `mode` for an existing dir, so chmod too."""
+    os.makedirs(STATUS_DIR, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(STATUS_DIR, 0o700)
+    except OSError:
+        pass
+
+
 # Required keys and their expected types for session validation (Task 4)
 _SESSION_SCHEMA = {
     "id": str,
@@ -829,7 +841,7 @@ def main():
     # on the 1 Hz Rust re-parse; the Rust side owns the demote.
     if event_name == "Notification":
         notif_type = hook_data.get("notification_type")
-        os.makedirs(STATUS_DIR, exist_ok=True)
+        _ensure_status_dir()
         if notif_type in ("elicitation_dialog", "permission_prompt"):
             _quick_state_write(
                 session_id, workspace, source, subprocess_label,
@@ -853,7 +865,7 @@ def main():
     # Then forward to the dashboard's permission panel (when enabled);
     # sessions.json state and the forward are independent.
     if event_name == "PermissionRequest":
-        os.makedirs(STATUS_DIR, exist_ok=True)
+        _ensure_status_dir()
         _quick_state_write(
             session_id, workspace, source, subprocess_label,
             last_tokens, hook_start_time,
@@ -897,7 +909,7 @@ def main():
     if event_name == "PostCompact" and hook_data.get("trigger") == "manual":
         action = "idle"
 
-    os.makedirs(STATUS_DIR, exist_ok=True)
+    _ensure_status_dir()
 
     # PreToolUse fires *before* the AskUserQuestion / ExitPlanMode dialog
     # actually opens — Claude Code may or may not also send a Notification
