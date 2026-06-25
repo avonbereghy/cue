@@ -115,6 +115,8 @@ cp -R src-tauri/target/release/bundle/macos/Cue.app ~/Applications/
 open ~/Applications/Cue.app
 ```
 
+> **The build ends with `Error: A public key has been found, but no private key`.** This is expected when building from source, and safe to ignore — your app is already built. Cue's auto-updater is configured with a public key, so `tauri build` tries to sign the updater artifact (`Cue.app.tar.gz`) with the matching **private** key, which lives only in the maintainer's CI secrets and is never in the repo. The error fires *after* the bundles are built — note the `Finished 2 bundles at: …` line just above it — so `Cue.app` and the `.dmg` are complete and runnable under `src-tauri/target/release/bundle/`. Only the optional updater signature is skipped, and you don't need it locally (released builds are signed by CI). For day-to-day development, `npm run tauri dev` avoids this step entirely.
+
 To start on login: toggle **Start at login** in Cue's settings, or **System Settings > General > Login Items > add "Cue"**.
 
 ### Windows & Linux
