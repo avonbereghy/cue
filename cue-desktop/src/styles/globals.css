@@ -9,7 +9,9 @@ html {
   /* Scale ALL text: Tailwind's rem-based sizes (text-xs, text-sm, etc.)
      resolve against the root font-size, so scaling here propagates everywhere.
      The [10px] pixel overrides below convert to rem equivalents. */
-  font-size: calc(16px * var(--font-scale, 1));
+  /* Base rebased to 18.4px (formerly 16px) so a font-scale of 1.0 renders at
+     the old 1.15 size — the slider's 1.0 default is now that larger baseline. */
+  font-size: calc(18.4px * var(--font-scale, 1));
 }
 
 html[data-theme="light"]:not([data-glass]) {

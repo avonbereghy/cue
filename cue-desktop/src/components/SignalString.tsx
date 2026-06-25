@@ -135,6 +135,8 @@ interface SignalStringProps {
   signalOffset?: number;
   /** Visual effect mode: "string" (waveform lines) or "sand" (blown grains) */
   signalEffect?: string;
+  /** Whether the signal strings effect (working state) is enabled */
+  stringsEnabled?: boolean;
   /** Whether sand effect is enabled */
   sandEnabled?: boolean;
   /** Sand intensity multiplier */
@@ -200,7 +202,7 @@ interface SignalStringProps {
    * each successive progressive working string (strings 1..5 from SessionCard)
    * a slightly louder amplitude than the one before. Defaults to [1,1,1].
    */
-  baseBandsAmpMuls?: [number, number, number];
+  baseBandsAmpMuls?: number[];
 }
 
 export interface ExtraBandSpec {
@@ -220,7 +222,7 @@ export interface ExtraBandSpec {
   phaseJitter?: number;
 }
 
-export function SignalString({ state, frequency = 1.0, revived = false, pulses, comets, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 0.5, cordDeployForce = 1.0, cordRetractForce = 1.0, stringSpread = 0.15, stringDeployAngle = -16, sessionId = "", contentRef, keyReleaseSpeed: _keyReleaseSpeed = 0.4, onStringsConnected, extraBands, suppressBaseBands = false, baseBandsTarget = 3, baseBandsAmpMuls = [1, 1, 1] }: SignalStringProps) {
+export function SignalString({ state, frequency = 1.0, revived = false, pulses, comets, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", stringsEnabled = true, sandEnabled = true, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 0.5, cordDeployForce = 1.0, cordRetractForce = 1.0, stringSpread = 0.15, stringDeployAngle = -16, sessionId = "", contentRef, keyReleaseSpeed: _keyReleaseSpeed = 0.4, onStringsConnected, extraBands, suppressBaseBands = false, baseBandsTarget = 3, baseBandsAmpMuls = [1, 1, 1] }: SignalStringProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const pageVisible = usePageVisible();
@@ -305,6 +307,12 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     return () => clearTimeout(timer);
   }, [stateIsActive, stringsStayDeployed]);
 
+  // Up to 5 progressive working strings (see STRING_THRESHOLDS_MS in
+  // SessionCard). The first three are the real audio bands (treble, mids,
+  // bass); strings 4 and 5 reuse the bass/mids waveforms at wider vertical
+  // offsets and only appear on very long sessions.
+  const NUM_STRINGS = 5;
+
   const isAudio = signalMode === "preset" || signalMode === "audio";
   // Track when session became inactive for decay timing
   const deactivatedAtRef = useRef<number | null>(null);
@@ -314,7 +322,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // Cached canvas bounding rect — updated by ResizeObserver, not every frame
   const rectCacheRef = useRef<DOMRect | null>(null);
   // Onset impulse accumulators per band (decays each frame)
-  const onsetRef = useRef<Float64Array>(new Float64Array(3));
+  const onsetRef = useRef<Float64Array>(new Float64Array(NUM_STRINGS));
   // Sand grains: blown across the card, driven by audio energy
   const sandGrainsRef = useRef<{ x: number; y: number; vx: number; vy: number; size: number; band: number; birth: number; life: number }[]>([]);
   // Tracks when the session went inactive — drives wind ramp-down and gravity transition
@@ -326,9 +334,9 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   //   priority[0] = treble  (below center)
   //   priority[1] = mids    (center)
   //   priority[2] = bass    (above center)
-  const BAND_PRIORITY = [2, 1, 0] as const;
+  const BAND_PRIORITY = [2, 1, 0, 3, 4] as const;
   const bandEnabled = (bandIdx: number, target: number) =>
-    BAND_PRIORITY.indexOf(bandIdx as 0 | 1 | 2) < target;
+    BAND_PRIORITY.indexOf(bandIdx as 0 | 1 | 2 | 3 | 4) < target;
   const baseBandsTargetRef = useRef(baseBandsTarget);
   baseBandsTargetRef.current = baseBandsTarget;
 
@@ -337,16 +345,16 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // start at zero so mounting into an already-active turn still plays the
   // deploy animation — the isActive useEffect below runs on mount and schedules
   // the staggered deploy for whichever bands baseBandsTarget currently enables.
-  const clipFractionsRef = useRef(new Float64Array(3));
-  const clipVelsRef = useRef(new Float64Array(3));
+  const clipFractionsRef = useRef(new Float64Array(NUM_STRINGS));
+  const clipVelsRef = useRef(new Float64Array(NUM_STRINGS));
   // Per-band ready flags and timers — indexed by physical band [bass, mids,
   // treble]. With the treble→mids→bass deploy order, treble (band 2) fires
   // first, mids (band 1) at 400ms, bass (band 0) at 520ms.
-  const bandStaggerMs = [520, 400, 0];
-  const retractTimersRef = useRef<(number | null)[]>([null, null, null]);
-  const retractReadyRef = useRef<boolean[]>([true, true, true]);
-  const deployTimersRef = useRef<(number | null)[]>([null, null, null]);
-  const deployReadyRef = useRef<boolean[]>([false, false, false]);
+  const bandStaggerMs = [520, 400, 0, 660, 780];
+  const retractTimersRef = useRef<(number | null)[]>([null, null, null, null, null]);
+  const retractReadyRef = useRef<boolean[]>([true, true, true, true, true]);
+  const deployTimersRef = useRef<(number | null)[]>([null, null, null, null, null]);
+  const deployReadyRef = useRef<boolean[]>([false, false, false, false, false]);
 
   // Store tuning props in a ref so the draw loop reads them live
   // without tearing down the animation pipeline on every slider change
@@ -354,14 +362,14 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     signalAlpha, signalAmplitude, signalEcho, frequency,
     signalBass, signalMids, signalTreble,
     signalColorDark, signalColorLight, signalOffset,
-    signalEffect, sandEnabled, sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize, sandTurbulence, sandAlpha,
+    signalEffect, stringsEnabled, sandEnabled, sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize, sandTurbulence, sandAlpha,
     cordRetractDelay, cordDeployForce, cordRetractForce, stringSpread, stringDeployAngle, signalMode,
   });
   configRef.current = {
     signalAlpha, signalAmplitude, signalEcho, frequency,
     signalBass, signalMids, signalTreble,
     signalColorDark, signalColorLight, signalOffset,
-    signalEffect, sandEnabled, sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize, sandTurbulence, sandAlpha,
+    signalEffect, stringsEnabled, sandEnabled, sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize, sandTurbulence, sandAlpha,
     cordRetractDelay, cordDeployForce, cordRetractForce, stringSpread, stringDeployAngle, signalMode,
   };
 
@@ -418,7 +426,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
 
   useEffect(() => {
     const clearAllTimers = () => {
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < NUM_STRINGS; i++) {
         if (retractTimersRef.current[i] !== null) {
           clearTimeout(retractTimersRef.current[i]!);
           retractTimersRef.current[i] = null;
@@ -433,14 +441,14 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     if (isActive) {
       deactivatedAtRef.current = null;
       // Cancel any pending retract
-      retractReadyRef.current = [false, false, false];
+      retractReadyRef.current = [false, false, false, false, false];
       clearAllTimers();
       // Staggered deploy: only for bands the parent currently wants (per
       // baseBandsTarget). Disabled bands stay at clipFraction=0 and will be
       // deployed later by the progressive-deploy effect if the target grows.
-      deployReadyRef.current = [false, false, false];
-      const bandNudge = [0.15, 0.15, 0.35]; // first band (treble) gets a stronger initial push
-      for (let i = 0; i < 3; i++) {
+      deployReadyRef.current = [false, false, false, false, false];
+      const bandNudge = [0.15, 0.15, 0.35, 0.15, 0.15]; // first band (treble) gets a stronger initial push
+      for (let i = 0; i < NUM_STRINGS; i++) {
         if (!bandEnabled(i, baseBandsTargetRef.current)) continue;
         const delay = 850 + bandStaggerMs[i];
         deployTimersRef.current[i] = window.setTimeout(() => {
@@ -456,18 +464,18 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       }
     } else {
       // Cancel any pending deploy
-      deployReadyRef.current = [false, false, false];
+      deployReadyRef.current = [false, false, false, false, false];
       clearAllTimers();
       if (deactivatedFromThinkingRef.current) {
         // Deactivated from thinking — strings were never deployed, keep them retracted
         clipFractionsRef.current.fill(0);
         clipVelsRef.current.fill(0);
-        retractReadyRef.current = [false, false, false];
+        retractReadyRef.current = [false, false, false, false, false];
       } else {
         // Staggered retract: band 0 first, band 1 after 500ms, band 2 after 600ms
-        retractReadyRef.current = [false, false, false];
-        const whipAmps = [1.1, 1.6, 2.2]; // treble retracts first; biggest whip on the leader
-        for (let i = 0; i < 3; i++) {
+        retractReadyRef.current = [false, false, false, false, false];
+        const whipAmps = [1.1, 1.6, 2.2, 0.9, 0.75]; // treble retracts first; biggest whip on the leader
+        for (let i = 0; i < NUM_STRINGS; i++) {
           const delay = cordRetractDelay * 1000 + bandStaggerMs[i];
           retractTimersRef.current[i] = window.setTimeout(() => {
             retractReadyRef.current[i] = true;
@@ -513,7 +521,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       // "instant 3 lines" the moment the next turn enters working.
       const t = baseBandsTargetRef.current;
       let matchesTarget = true;
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < NUM_STRINGS; i++) {
         const enabled = bandEnabled(i, t);
         const frac = clipFractionsRef.current[i];
         if (enabled ? frac < 0.9 : frac > 0.05) { matchesTarget = false; break; }
@@ -529,11 +537,11 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       reverseRetractingRef.current = false;
       clipFractionsRef.current.fill(0);
       clipVelsRef.current.fill(0);
-      retractReadyRef.current = [false, false, false];
-      deployReadyRef.current = [false, false, false];
+      retractReadyRef.current = [false, false, false, false, false];
+      deployReadyRef.current = [false, false, false, false, false];
       // Arm the latch so onStringsConnected fires after this redeploy lands.
       stringsConnectedFiredRef.current = false;
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < NUM_STRINGS; i++) {
         if (deployTimersRef.current[i] !== null) {
           clearTimeout(deployTimersRef.current[i]!);
           deployTimersRef.current[i] = null;
@@ -543,8 +551,8 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           retractTimersRef.current[i] = null;
         }
       }
-      const bandNudge = [0.15, 0.15, 0.35];
-      for (let i = 0; i < 3; i++) {
+      const bandNudge = [0.15, 0.15, 0.35, 0.15, 0.15];
+      for (let i = 0; i < NUM_STRINGS; i++) {
         // Respect progressive deploy: only kick off bands the parent currently
         // wants (baseBandsTarget). The remainder stay at clipFraction=0 until
         // the target grows and the baseBandsTarget effect below deploys them.
@@ -578,8 +586,8 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   useEffect(() => {
     if (!stateIsActive) return;
     const target = baseBandsTarget;
-    const bandNudge = [0.15, 0.15, 0.35];
-    for (let i = 0; i < 3; i++) {
+    const bandNudge = [0.15, 0.15, 0.35, 0.15, 0.15];
+    for (let i = 0; i < NUM_STRINGS; i++) {
       const enabled = bandEnabled(i, target);
       if (enabled) {
         // Cancel any lingering retract from a prior turn — we want to keep
@@ -734,8 +742,8 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     if (suppressBaseBands) {
       // Schedule staggered retract for base bands — mirror the isActive=false
       // path timing so the motion reads as familiar.
-      deployReadyRef.current = [false, false, false];
-      for (let i = 0; i < 3; i++) {
+      deployReadyRef.current = [false, false, false, false, false];
+      for (let i = 0; i < NUM_STRINGS; i++) {
         if (deployTimersRef.current[i] !== null) {
           window.clearTimeout(deployTimersRef.current[i]!);
           deployTimersRef.current[i] = null;
@@ -745,9 +753,9 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           retractTimersRef.current[i] = null;
         }
       }
-      retractReadyRef.current = [false, false, false];
-      const whipAmps = [1.1, 1.6, 2.2]; // treble retracts first; biggest whip on the leader
-      for (let i = 0; i < 3; i++) {
+      retractReadyRef.current = [false, false, false, false, false];
+      const whipAmps = [1.1, 1.6, 2.2, 0.9, 0.75]; // treble retracts first; biggest whip on the leader
+      for (let i = 0; i < NUM_STRINGS; i++) {
         const delay = 100 + bandStaggerMs[i];
         retractTimersRef.current[i] = window.setTimeout(() => {
           retractReadyRef.current[i] = true;
@@ -767,16 +775,16 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       if (stateRef.current === "working" || stateRef.current === "subagent") {
         clipFractionsRef.current.fill(0);
         clipVelsRef.current.fill(0);
-        retractReadyRef.current = [false, false, false];
-        deployReadyRef.current = [false, false, false];
-        for (let i = 0; i < 3; i++) {
+        retractReadyRef.current = [false, false, false, false, false];
+        deployReadyRef.current = [false, false, false, false, false];
+        for (let i = 0; i < NUM_STRINGS; i++) {
           if (deployTimersRef.current[i] !== null) {
             window.clearTimeout(deployTimersRef.current[i]!);
             deployTimersRef.current[i] = null;
           }
         }
-        const bandNudge = [0.15, 0.15, 0.35];
-        for (let i = 0; i < 3; i++) {
+        const bandNudge = [0.15, 0.15, 0.35, 0.15, 0.15];
+        for (let i = 0; i < NUM_STRINGS; i++) {
           const delay = 150 + bandStaggerMs[i];
           deployTimersRef.current[i] = window.setTimeout(() => {
             deployReadyRef.current[i] = true;
@@ -880,7 +888,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       const { signalAlpha, signalAmplitude, signalEcho, frequency,
         signalBass, signalMids, signalTreble,
         signalColorDark, signalColorLight, signalOffset,
-        signalEffect: _cfgEffect, sandEnabled: _cfgSandEnabled, sandIntensity: cfgSandIntensity,
+        signalEffect: _cfgEffect, stringsEnabled: cfgStringsEnabled, sandEnabled: cfgSandEnabled, sandIntensity: cfgSandIntensity,
         sandDirection: cfgSandDirection, sandDensity: cfgSandDensity, sandSpeed: cfgSandSpeed,
         sandGrainSize: cfgSandGrainSize, sandTurbulence: cfgSandTurbulence, sandAlpha: cfgSandAlpha,
         stringSpread: cfgStringSpread } = cfg;
@@ -909,13 +917,14 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       // Strings stay visible through working↔thinking so the card retains a
       // sense of continuity during re-thinking; flux coexists above.
       const drawStrings =
+        cfgStringsEnabled &&
         sandBlend < 0.99 &&
         !deactivatedFromThinkingRef.current &&
         // While suppressed, base bands shouldn't draw — but only fully gate
         // off once they've fully retracted, otherwise they'd pop out of view
         // mid-retract.
         (!baseSuppressedRef.current || clipFractionsRef.current[0] > 0.005 || clipFractionsRef.current[1] > 0.005 || clipFractionsRef.current[2] > 0.005);
-      const drawSand = sandBlend > 0.01 || sandGrainsRef.current.length > 0;
+      const drawSand = cfgSandEnabled && (sandBlend > 0.01 || sandGrainsRef.current.length > 0);
       const isGlass = document.documentElement.hasAttribute("data-glass");
       const isDark = isGlass || document.documentElement.getAttribute("data-theme") !== "light";
       const defaultColor = isDark ? hexToRgb(signalColorDark) : hexToRgb(signalColorLight);
@@ -986,7 +995,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       // Skip for revived mode (lightning bolts don't retract)
       // Each of the 3 strings (bass/mids/treble) travels at a slightly different rate
       // bandForceMult: bass=slowest, treble=fastest (staggered arrival)
-      const bandForceMult = [0.85, 0.75, 0.70];
+      const bandForceMult = [0.85, 0.75, 0.70, 0.70, 0.70];
       if (!revived) {
         const { cordDeployForce: deployF, cordRetractForce: retractF } = cfg;
         const clipDt = 1 / 60; // approximate frame dt
@@ -994,7 +1003,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         const vels = clipVelsRef.current;
 
         const baseEffectivelyActive = isActiveRef.current && !baseSuppressedRef.current;
-        for (let i = 0; i < 3; i++) {
+        for (let i = 0; i < NUM_STRINGS; i++) {
           const clip = fracs[i];
           const fm = bandForceMult[i];
 
@@ -1027,7 +1036,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           // landed. At baseBandsTarget=1 just band 1 (mids) needs to be up.
           const t = baseBandsTargetRef.current;
           let allLanded = true;
-          for (let i = 0; i < 3; i++) {
+          for (let i = 0; i < NUM_STRINGS; i++) {
             if (!bandEnabled(i, t)) continue;
             if (fracs[i] < 0.98) { allLanded = false; break; }
           }
@@ -1054,8 +1063,8 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           const list: FluxDisturbance[] = [];
           // Three bands stacked vertically; exact y doesn't matter much
           // given the generous push radius, just needs to cover the card.
-          const bandYs = [midY - h * 0.25, midY, midY + h * 0.25];
-          for (let i = 0; i < 3; i++) {
+          const bandYs = [midY - h * 0.25, midY, midY + h * 0.25, midY - h * 0.4, midY + h * 0.4];
+          for (let i = 0; i < NUM_STRINGS; i++) {
             const f = fracs[i];
             // Parabolic sweep strength: 0 at ends, 1 at midpoint. Keeps the
             // displacement from popping on entry or lingering after settle.
@@ -1327,11 +1336,17 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           // bright pinch-point "dots" at x=1/3, 2/3 where modes 3 etc. share nodes.
           { enabled: signalMids, bandIdx: 1, binStart: Math.floor(numBins * 0.25), binEnd: Math.floor(numBins * 0.6), startMode: 2, numModes: 4, speed: 1.4, travel: 0.55, phaseOff: 2.1, gain: 1.8 * amp, lw: 1.0, opacity: 0.25, baseDamping: 5 },
           { enabled: signalTreble, bandIdx: 2, binStart: Math.floor(numBins * 0.6), binEnd: numBins, startMode: 4, numModes: 6, speed: 2.8, travel: 0.4, phaseOff: 4.5, gain: 1.5 * amp, lw: 0.75, opacity: 0.2, baseDamping: 6 },
+          // Strings 4 & 5 — extra lines for very long sessions. They reuse the
+          // bass / mids waveforms (same bin ranges) with their own phase + a
+          // wider vertical offset (bandYOffsets[3..4]) so they read as distinct
+          // strings. Only deploy once baseBandsTarget reaches 4 / 5.
+          { enabled: signalBass, bandIdx: 3, binStart: 0, binEnd: Math.floor(numBins * 0.25), startMode: 1, numModes: 3, speed: 0.9, travel: -0.4, phaseOff: 1.3, gain: 2.0 * amp, lw: 1.3, opacity: 0.26, baseDamping: 4 },
+          { enabled: signalMids, bandIdx: 4, binStart: Math.floor(numBins * 0.25), binEnd: Math.floor(numBins * 0.6), startMode: 2, numModes: 4, speed: 1.6, travel: 0.5, phaseOff: 3.4, gain: 1.7 * amp, lw: 0.9, opacity: 0.22, baseDamping: 5 },
         ];
         const bands = allBands.filter(b => b.enabled);
 
-        // Initialize oscillator state if needed (max 3 bands × 6 modes = 18 slots)
-        const totalModes = 18;
+        // Initialize oscillator state if needed (max 5 bands × 6 modes = 30 slots)
+        const totalModes = 30;
         if (!modeStateRef.current) {
           modeStateRef.current = { pos: new Float64Array(totalModes), vel: new Float64Array(totalModes) };
         }
@@ -1346,7 +1361,9 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         const onsets = getOnsets();
         const onsetArr = onsetRef.current;
         const onsetValues = [onsets.bass, onsets.mids, onsets.treble];
-        for (let i = 0; i < 3; i++) {
+        // 3 real frequency bands — strings 4/5 reuse these via their bin ranges
+        // and receive no independent onset impulse.
+        for (let i = 0; i < onsetValues.length; i++) {
           if (onsetValues[i] > 0) onsetArr[i] = Math.min(onsetArr[i] + onsetValues[i] * 12, 4.0);
           else onsetArr[i] *= 0.8; // decay impulse
         }
@@ -1495,7 +1512,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
 
         // Per-band Y offsets: bass above center (-), mids at center, treble below (+)
         // Indexed by bandIdx (0=bass, 1=mids, 2=treble)
-        const bandYOffsets = [-cfgStringSpread * halfH, 0, cfgStringSpread * halfH];
+        const bandYOffsets = [-cfgStringSpread * halfH, 0, cfgStringSpread * halfH, -1.8 * cfgStringSpread * halfH, 1.8 * cfgStringSpread * halfH];
 
         // Working-state tilt. The sweep math below stays horizontal — we apply
         // a ctx rotation around the card center just for the draw calls, so

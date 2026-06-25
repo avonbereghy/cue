@@ -754,7 +754,7 @@ pub struct Settings {
     #[serde(default)]
     pub random_animation: bool,
     /// Show animated signal string separator in session cards
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub signal_string: bool,
     /// Signal string frequency multiplier (0.3 = slow, 1.0 = normal, 3.0 = fast)
     #[serde(default = "default_signal_frequency")]
@@ -799,8 +799,11 @@ pub struct Settings {
     /// Visual effect mode: "string" (waveform lines) or "sand" (blown grains)
     #[serde(default = "default_signal_effect")]
     pub signal_effect: String,
-    /// Whether sand effect is enabled (only active when signal_effect = "sand")
+    /// Whether the signal strings effect (working state) is enabled
     #[serde(default)]
+    pub strings_enabled: bool,
+    /// Whether the sand effect (idle state) is enabled
+    #[serde(default = "default_true")]
     pub sand_enabled: bool,
     /// Sand intensity multiplier (0.1 = subtle, 1.0 = normal, 3.0 = intense)
     #[serde(default = "default_sand_intensity")]
@@ -824,7 +827,7 @@ pub struct Settings {
     #[serde(default = "default_sand_alpha")]
     pub sand_alpha: f64,
     /// Aurora wash effect — enabled while a session sits in `done`.
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub aurora_enabled: bool,
     /// Aurora overall opacity multiplier (0.05 = faint, 1.0 = solid).
     #[serde(default = "default_aurora_alpha")]
@@ -1046,7 +1049,7 @@ fn default_context_threshold() -> String {
 }
 
 fn default_context_display() -> String {
-    "percent".to_string()
+    "compact".to_string()
 }
 
 fn default_cord_retract_delay() -> f64 {
@@ -1066,7 +1069,7 @@ fn default_timer_display() -> String {
 }
 
 fn default_menu_bar_style() -> String {
-    "default".to_string()
+    "bars".to_string()
 }
 
 fn default_tray_shortcut() -> String {
@@ -1086,7 +1089,7 @@ impl Default for Settings {
             title_animation: "none".to_string(),
             animation_speed: 1.2,
             random_animation: false,
-            signal_string: true,
+            signal_string: false,
             signal_frequency: 1.0,
             signal_mode: "preset".to_string(),
             signal_alpha: 0.6,
@@ -1102,7 +1105,8 @@ impl Default for Settings {
             active_theme_id: String::new(),
             signal_offset: 0.5,
             signal_effect: "string".to_string(),
-            sand_enabled: false,
+            strings_enabled: false,
+            sand_enabled: true,
             sand_intensity: 1.51,
             sand_direction: -60.0,
             sand_density: 2.0,
@@ -1110,7 +1114,7 @@ impl Default for Settings {
             sand_grain_size: 0.4,
             sand_turbulence: 0.9,
             sand_alpha: 0.7,
-            aurora_enabled: true,
+            aurora_enabled: false,
             aurora_alpha: 0.75,
             aurora_speed: 0.55,
             key_press_speed: 0.35,
@@ -1122,7 +1126,7 @@ impl Default for Settings {
             compact_mode: false,
             slim_mode: true,
             context_threshold: "always".to_string(),
-            context_display: "percent".to_string(),
+            context_display: "compact".to_string(),
             low_power: false,
             cord_retract_delay: 0.5,
             cord_deploy_force: 1.0,
@@ -1135,7 +1139,7 @@ impl Default for Settings {
             show_tool_call_comets: false,
             timer_display: "seconds".to_string(),
             show_in_menu_bar: true,
-            menu_bar_style: "default".to_string(),
+            menu_bar_style: "bars".to_string(),
             show_in_dock: true,
             start_at_login: true,
             tray_shortcut_enabled: false,

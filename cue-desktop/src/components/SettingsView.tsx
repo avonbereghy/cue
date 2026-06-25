@@ -4,6 +4,7 @@ import { Settings, TITLE_ANIMATIONS, ANIMATION_SPEEDS, SIGNAL_THEMES, applyTheme
 import type { PresetSummary, SignalPreset } from "@/lib/types";
 import { extractPreset } from "@/lib/audioExtractor";
 import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, getCurrentTime as getPresetTime, seek as presetSeek, setGate as setGateEngine } from "@/lib/presetEngine";
+import { DEFAULT_PRESET } from "@/lib/defaultPreset";
 
 function Toggle({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) {
   return (
@@ -563,14 +564,19 @@ export function SettingsView() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
 
-  // Load active preset on mount if preset mode
+  // Load active preset on mount if preset mode. With no user preset selected,
+  // fall back to the baked-in default audio so strings always have motion.
   useEffect(() => {
     if (!settings) return;
     const mode = settings.signalMode === "audio" ? "preset" : (settings.signalMode ?? "simulated");
-    if (mode !== "preset" || isPresetLoaded() || !settings.activePresetId) return;
+    if (mode !== "preset" || isPresetLoaded()) return;
+    if (!settings.activePresetId) {
+      loadPresetEngine(DEFAULT_PRESET);
+      return;
+    }
     invoke<SignalPreset>("load_preset", { id: settings.activePresetId })
       .then((preset) => loadPresetEngine(preset))
-      .catch((err) => console.error("Failed to load preset:", err));
+      .catch(() => loadPresetEngine(DEFAULT_PRESET));
   }, [settings?.signalMode, settings?.activePresetId]);
 
   const loadSettings = useCallback(async () => {
@@ -658,9 +664,10 @@ export function SettingsView() {
   const handleDeletePreset = async (presetId: string) => {
     try {
       await invoke("delete_preset", { id: presetId });
-      // If active preset was deleted, clear it
+      // If active preset was deleted, clear it and fall back to the baked default
       if (settings?.activePresetId === presetId) {
         setSettings({ ...settings, activePresetId: "" });
+        loadPresetEngine(DEFAULT_PRESET);
       }
       await loadPresets();
     } catch (err) {
@@ -697,7 +704,7 @@ export function SettingsView() {
       titleAnimation: "ripple",
       animationSpeed: 3.5,
       randomAnimation: false,
-      signalString: true,
+      signalString: false,
       signalFrequency: 1.0,
       signalMode: "preset",
       signalAlpha: 0.7,
@@ -713,6 +720,7 @@ export function SettingsView() {
       activeThemeId: "default",
       signalOffset: 0.5,
       signalEffect: "string",
+      stringsEnabled: false,
       sandEnabled: true,
       sandIntensity: 1.51,
       sandDirection: -60,
@@ -728,7 +736,7 @@ export function SettingsView() {
       fluxSpeed: 1.0,
       fluxLineLength: 0.55,
       fluxTurbulence: 1.0,
-      auroraEnabled: true,
+      auroraEnabled: false,
       auroraAlpha: 0.75,
       auroraSpeed: 0.55,
       cordRetractDelay: 0.2,
@@ -744,7 +752,7 @@ export function SettingsView() {
       compactMode: false,
       slimMode: false,
       contextThreshold: "always",
-      contextDisplay: "percent",
+      contextDisplay: "compact",
       lowPower: false,
       showToolPills: false,
       showCurrentTool: false,
@@ -752,7 +760,7 @@ export function SettingsView() {
       showToolCallComets: false,
       timerDisplay: "seconds",
       showInMenuBar: true,
-      menuBarStyle: "default",
+      menuBarStyle: "bars",
       showInDock: true,
       startAtLogin: true,
       trayShortcutEnabled: false,
@@ -880,8 +888,8 @@ export function SettingsView() {
             { id: "after200k", label: "When High (200k Opus / 120k other)" },
           ]} onChange={(v) => setSettings({ ...settings, contextThreshold: v })} />
         </SettingRow>
-        <SettingRow label="Context Display" description="How to show context usage values" onReset={(settings.contextDisplay ?? "percent") !== "percent" ? () => setSettings({ ...settings, contextDisplay: "percent" }) : undefined}>
-          <Select value={settings.contextDisplay ?? "percent"} options={[
+        <SettingRow label="Context Display" description="How to show context usage values" onReset={(settings.contextDisplay ?? "compact") !== "compact" ? () => setSettings({ ...settings, contextDisplay: "compact" }) : undefined}>
+          <Select value={settings.contextDisplay ?? "compact"} options={[
             { id: "percent", label: "Percent" },
             { id: "tokens", label: "Tokens" },
             { id: "remaining", label: "Remaining" },
@@ -901,8 +909,8 @@ export function SettingsView() {
 
       {/* Special Effects */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
-        <SettingRow label="Special Effects" description="Strings on working, sand on idle, flux streamlines on thinking" onReset={!settings.signalString ? () => setSettings({ ...settings, signalString: true }) : undefined}>
-          <Toggle checked={settings.signalString} onChange={() => setSettings({ ...settings, signalString: !settings.signalString })} label="Special effects" />
+        <SettingRow label="Special Effects" description="Strings on working, sand on idle, flux streamlines on thinking" onReset={settings.signalString ? () => setSettings({ ...settings, signalString: false }) : undefined}>
+          <Toggle checked={settings.signalString ?? false} onChange={() => setSettings({ ...settings, signalString: !(settings.signalString ?? false) })} label="Special effects" />
         </SettingRow>
 
         {settings.signalString && (
@@ -911,8 +919,18 @@ export function SettingsView() {
             <div className="flex items-center gap-2 py-2.5 px-1">
               <span className="text-xs font-semibold text-white/70 uppercase tracking-wider">Strings</span>
               <span className="text-xs text-white/40">Working state</span>
+              <span className="text-[0.625rem] text-amber-400/70 italic">beta · resource heavy</span>
+              <span className="ml-auto">
+                <Toggle
+                  checked={settings.stringsEnabled ?? false}
+                  onChange={() => setSettings({ ...settings, stringsEnabled: !(settings.stringsEnabled ?? false) })}
+                  label="Strings enabled"
+                />
+              </span>
             </div>
 
+            {(settings.stringsEnabled ?? false) && (
+              <>
             <SettingRow label="Opacity" description="String transparency">
               <Slider value={settings.signalAlpha ?? 0.75} min={0.05} max={1.0} step={0.01} defaultValue={0.75} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, signalAlpha: v })} />
             </SettingRow>
@@ -940,13 +958,24 @@ export function SettingsView() {
             <SettingRow label="Deploy Angle" description="Tilt of working strings around the card center (negative = bottom-left → top-right)">
               <Slider value={settings.stringDeployAngle ?? -16} min={-90} max={90} step={1} defaultValue={-16} format={(v) => `${v.toFixed(0)}°`} onChange={(v) => setSettings({ ...settings, stringDeployAngle: v })} />
             </SettingRow>
+              </>
+            )}
 
             {/* ── Sand settings (active during idle state) ── */}
             <div className="flex items-center gap-2 py-2.5 px-1">
               <span className="text-xs font-semibold text-white/70 uppercase tracking-wider">Sand</span>
               <span className="text-xs text-white/40">Idle state</span>
+              <span className="ml-auto">
+                <Toggle
+                  checked={settings.sandEnabled ?? true}
+                  onChange={() => setSettings({ ...settings, sandEnabled: !(settings.sandEnabled ?? true) })}
+                  label="Sand enabled"
+                />
+              </span>
             </div>
 
+            {(settings.sandEnabled ?? true) && (
+              <>
             <SettingRow label="Intensity" description="How strongly energy drives the sandstorm">
               <Slider value={settings.sandIntensity ?? 1.51} min={0.1} max={6.0} step={0.01} defaultValue={1.51} format={formatMul} onChange={(v) => setSettings({ ...settings, sandIntensity: v })} />
             </SettingRow>
@@ -968,6 +997,8 @@ export function SettingsView() {
             <SettingRow label="Opacity" description="Brightness of sand grains">
               <Slider value={settings.sandAlpha ?? 0.9} min={0.05} max={1.0} step={0.01} defaultValue={0.9} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, sandAlpha: v })} />
             </SettingRow>
+              </>
+            )}
 
             {/* ── Flux settings (active during thinking state) ── */}
             <div className="flex items-center gap-2 py-2.5 px-1">
@@ -1009,16 +1040,17 @@ export function SettingsView() {
             <div className="flex items-center gap-2 py-2.5 px-1">
               <span className="text-xs font-semibold text-white/70 uppercase tracking-wider">Aurora</span>
               <span className="text-xs text-white/40">Done state</span>
+              <span className="text-[0.625rem] text-amber-400/70 italic">under construction</span>
               <span className="ml-auto">
                 <Toggle
-                  checked={settings.auroraEnabled ?? true}
-                  onChange={() => setSettings({ ...settings, auroraEnabled: !(settings.auroraEnabled ?? true) })}
+                  checked={settings.auroraEnabled ?? false}
+                  onChange={() => setSettings({ ...settings, auroraEnabled: !(settings.auroraEnabled ?? false) })}
                   label="Aurora enabled"
                 />
               </span>
             </div>
 
-            {(settings.auroraEnabled ?? true) && (
+            {(settings.auroraEnabled ?? false) && (
               <>
                 <SettingRow label="Opacity" description="Overall aurora wash transparency">
                   <Slider value={settings.auroraAlpha ?? 0.75} min={0.05} max={1.0} step={0.01} defaultValue={0.75} format={formatPct} isPct onChange={(v) => setSettings({ ...settings, auroraAlpha: v })} />
@@ -1219,9 +1251,9 @@ export function SettingsView() {
             label="Show in menu bar"
           />
         </SettingRow>
-        <SettingRow label="Menu bar style" description="Dot grid (up to 8), clock dial (up to 12), or context bar chart (up to 12)" onReset={(settings.menuBarStyle ?? "default") !== "default" ? () => setSettings({ ...settings, menuBarStyle: "default" }) : undefined}>
+        <SettingRow label="Menu bar style" description="Dot grid (up to 8), clock dial (up to 12), or context bar chart (up to 12)" onReset={(settings.menuBarStyle ?? "bars") !== "bars" ? () => setSettings({ ...settings, menuBarStyle: "bars" }) : undefined}>
           <Select
-            value={settings.menuBarStyle ?? "default"}
+            value={settings.menuBarStyle ?? "bars"}
             options={[
               { id: "default", label: "Default" },
               { id: "clock", label: "Clock" },

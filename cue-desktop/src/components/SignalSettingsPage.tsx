@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { SignalPreset, Settings } from "@/lib/types";
 import { loadPreset as loadPresetEngine, isPlaying as isPresetPlaying, getCurrentTime as getPresetTime, getDuration as getPresetDuration, togglePlayPause, seek as presetSeek, isLoaded as isPresetLoaded, setGate } from "@/lib/presetEngine";
+import { DEFAULT_PRESET } from "@/lib/defaultPreset";
 import { drawBandEnvelopes } from "./SettingsView";
 import { decodeFile, extractFromPcm, type DecodedPcm } from "@/lib/audioExtractor";
 import { processPcm, DEFAULT_EDIT_PARAMS, type EditParams } from "@/lib/audioEditor";
@@ -75,13 +76,20 @@ export function SignalSettingsPage() {
       setBass(s.signalBass ?? true);
       setMids(s.signalMids ?? true);
       setTreble(s.signalTreble ?? true);
+      const loadDefault = () => {
+        presetRef.current = DEFAULT_PRESET;
+        setLoaded(true);
+        if (!isPresetLoaded()) loadPresetEngine(DEFAULT_PRESET);
+      };
       if (s.activePresetId) {
         invoke<SignalPreset>("load_preset", { id: s.activePresetId }).then((p) => {
           presetRef.current = p;
           setPresetName(p.name);
           setLoaded(true);
           if (!isPresetLoaded()) loadPresetEngine(p);
-        });
+        }).catch(loadDefault);
+      } else {
+        loadDefault();
       }
     });
   }, []);
