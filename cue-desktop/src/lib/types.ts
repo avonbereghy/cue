@@ -184,6 +184,8 @@ export interface Settings {
   signalOffset: number;
   /** Visual effect mode: "string" (waveform lines) or "sand" (blown grains) */
   signalEffect: string;
+  /** Signal strings effect (working state) */
+  stringsEnabled: boolean;
   sandEnabled: boolean;
   sandIntensity: number;
   sandDirection: number;
@@ -358,6 +360,16 @@ export const SIGNAL_THEMES: SignalTheme[] = [
     colorDark: "#ffffff", colorLight: "#000000", alpha: 0.75, amplitude: 0.10, echo: 1.50,
     ...SAND_OFF,
     ...DARK_SURFACES, accentColor: "#3b82f6", accentBg: "rgba(59,130,246,0.15)" },
+  { id: "glass",    label: "Glass", accent: "#c0c0c0",
+    colorDark: "#ffffff", colorLight: "#333333", alpha: 0.35, amplitude: 0.18, echo: 1.2,
+    ...SAND_OFF,
+    appBg: "transparent", appText: "rgba(255,255,255,0.95)",
+    cardFloatBg: "rgba(255,255,255,0.08)", cardFloatBorder: "rgba(255,255,255,0.25)",
+    cardFloatShadow: "none",
+    cardPressBg: "rgba(255,255,255,0.04)", cardPressBorder: "rgba(255,255,255,0.15)",
+    cardPressShadow: "none",
+    surfaceBg: "rgba(255,255,255,0.06)", surfaceBorder: "rgba(255,255,255,0.12)",
+    accentColor: "#ffffff", accentBg: "rgba(255,255,255,0.12)" },
   { id: "minimal",  label: "Minimal",  accent: "#888888",
     colorDark: "#ffffff", colorLight: "#000000", alpha: 0.5, amplitude: 0.15, echo: 0.3,
     ...SAND_OFF,
@@ -454,17 +466,6 @@ export const SIGNAL_THEMES: SignalTheme[] = [
     cardPressShadow: "inset 0 2px 8px rgba(0,0,0,0.7), inset 0 0 12px rgba(179,229,252,0.03)",
     surfaceBg: "rgba(179,229,252,0.03)", surfaceBorder: "rgba(179,229,252,0.08)",
     accentColor: "#b3e5fc", accentBg: "rgba(179,229,252,0.12)" },
-  // --- Special ---
-  { id: "glass",    label: "Glass", accent: "#c0c0c0",
-    colorDark: "#ffffff", colorLight: "#333333", alpha: 0.35, amplitude: 0.18, echo: 1.2,
-    ...SAND_OFF,
-    appBg: "transparent", appText: "rgba(255,255,255,0.95)",
-    cardFloatBg: "rgba(255,255,255,0.08)", cardFloatBorder: "rgba(255,255,255,0.25)",
-    cardFloatShadow: "none",
-    cardPressBg: "rgba(255,255,255,0.04)", cardPressBorder: "rgba(255,255,255,0.15)",
-    cardPressShadow: "none",
-    surfaceBg: "rgba(255,255,255,0.06)", surfaceBorder: "rgba(255,255,255,0.12)",
-    accentColor: "#ffffff", accentBg: "rgba(255,255,255,0.12)" },
 ];
 
 /** Parse a hex color like "#ff4081" into [r, g, b]. */

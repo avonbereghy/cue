@@ -10,6 +10,33 @@ Being pre-1.0, minor (`0.x`) releases may include breaking changes.
 
 _Nothing yet._
 
+## [0.5.1] - 2026-06-25
+
+Pre-public UI polish: a calmer default look and a properly sized window.
+
+### Changed
+- Main window opens at 800×900, centered, and is clamped (640–960 × 560–1100)
+  instead of launching maximized to full-screen width.
+- Default look is now minimal: **Special Effects off**, context bar in
+  **compact** mode, and menu-bar style **Bar Chart**. All remain toggleable in
+  Settings.
+- Strings and Aurora effects default off (labeled _beta_ / _under construction_)
+  and are gated behind the Special Effects master switch, so turning it off
+  means no effects render.
+- Font scale rebased so the `1.0` default renders at the former `1.15` size.
+- Signal strings scale up to five lines on long-running sessions (was three).
+- Defaults are now consistent across the Rust and TypeScript layers, so a fresh
+  install reflects them.
+
+### Fixed
+- Compact-density rows vertically center their content.
+- Detail-mode cards no longer overlap the prompt subtitle with the metrics row.
+- macOS: clicking the Dock icon reopens the dashboard window.
+
+### Added
+- `cue-desktop/build.sh` — builds the release bundle and deploys it to
+  `~/Applications` (tolerating the benign local updater-signing error).
+
 ## [0.5.0] - 2026-06-24
 
 First public open-source release.
@@ -46,5 +73,6 @@ First public open-source release.
 ### Fixed
 - Git status now counts both porcelain columns for combined statuses (e.g. `MM`).
 
-[Unreleased]: https://github.com/avonbereghy/cue/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/avonbereghy/cue/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/avonbereghy/cue/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/avonbereghy/cue/releases/tag/v0.5.0

@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import type { EnrichedSession, Settings, SignalPreset } from "@/lib/types";
 import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, setGate as setGateEngine } from "@/lib/presetEngine";
+import { DEFAULT_PRESET } from "@/lib/defaultPreset";
 import { SessionCard } from "./SessionCard";
 import { BranchView } from "./BranchView";
 import {
@@ -81,6 +82,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [signalColorLight, setSignalColorLight] = useState("#000000");
   const [signalOffset, setSignalOffset] = useState(0.5);
   const [signalEffect, setSignalEffect] = useState("string");
+  const [stringsEnabled, setStringsEnabled] = useState(false);
   const [sandEnabled, setSandEnabled] = useState(true);
   const [sandIntensity, setSandIntensity] = useState(0.8);
   const [sandDirection, setSandDirection] = useState(-40);
@@ -96,7 +98,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [fluxSpeed, setFluxSpeed] = useState(1.0);
   const [fluxLineLength, setFluxLineLength] = useState(0.55);
   const [fluxTurbulence, setFluxTurbulence] = useState(1.0);
-  const [auroraEnabled, setAuroraEnabled] = useState(true);
+  const [auroraEnabled, setAuroraEnabled] = useState(false);
   const [auroraAlpha, setAuroraAlpha] = useState(0.75);
   const [auroraSpeed, setAuroraSpeed] = useState(0.55);
   const [cordRetractDelay, setCordRetractDelay] = useState(0.2);
@@ -110,7 +112,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [compactMode, setCompactMode] = useState(false);
   const [slimMode, setSlimMode] = useState(false);
   const [contextThreshold, setContextThreshold] = useState("always");
-  const [contextDisplay, setContextDisplay] = useState("percent");
+  const [contextDisplay, setContextDisplay] = useState("compact");
   const [lowPower, setLowPower] = useState(false);
   const [showToolPills, setShowToolPills] = useState(false);
   const [showCurrentTool, setShowCurrentTool] = useState(false);
@@ -312,6 +314,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setSignalColorLight(s.signalColorLight ?? "#000000");
     setSignalOffset(s.signalOffset ?? 0.5);
     setSignalEffect(s.signalEffect ?? "string");
+    setStringsEnabled(s.stringsEnabled ?? false);
     setSandEnabled(s.sandEnabled ?? true);
     setSandIntensity(s.sandIntensity ?? 0.8);
     setSandDirection(s.sandDirection ?? -40);
@@ -327,7 +330,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setFluxSpeed(s.fluxSpeed ?? 1.0);
     setFluxLineLength(s.fluxLineLength ?? 0.55);
     setFluxTurbulence(s.fluxTurbulence ?? 1.0);
-    setAuroraEnabled(s.auroraEnabled ?? true);
+    setAuroraEnabled(s.auroraEnabled ?? false);
     setAuroraAlpha(s.auroraAlpha ?? 0.75);
     setAuroraSpeed(s.auroraSpeed ?? 0.55);
     setCordRetractDelay(s.cordRetractDelay ?? 0.2);
@@ -346,7 +349,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     if (!(s.compactMode ?? false)) setExpandOverrides({});
     setSlimMode(s.slimMode ?? false);
     setContextThreshold(s.contextThreshold ?? "always");
-    setContextDisplay(s.contextDisplay ?? "percent");
+    setContextDisplay(s.contextDisplay ?? "compact");
     setLowPower(s.lowPower ?? false);
     setShowToolPills(s.showToolPills ?? false);
     setShowCurrentTool(s.showCurrentTool ?? false);
@@ -420,14 +423,19 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     return () => window.removeEventListener("keydown", handleDetail);
   }, []);
 
-  // Auto-load active preset on launch when preset mode is configured
+  // Auto-load the active preset on launch when preset mode is configured.
+  // With no user preset selected, fall back to the baked-in default audio so
+  // the strings always have motion out of the box.
   useEffect(() => {
     if (presetBootAttempted || signalMode !== "preset" || isPresetLoaded()) return;
-    if (!activePresetId) return;
     setPresetBootAttempted(true);
+    if (!activePresetId) {
+      loadPresetEngine(DEFAULT_PRESET);
+      return;
+    }
     invoke<SignalPreset>("load_preset", { id: activePresetId })
       .then((preset) => loadPresetEngine(preset))
-      .catch(() => {});
+      .catch(() => loadPresetEngine(DEFAULT_PRESET));
   }, [signalMode, activePresetId, presetBootAttempted]);
 
   const toggleSessionCollapse = (sessionId: string) => {
@@ -2385,6 +2393,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     signalFrequency, signalMode, signalAlpha, signalAmplitude, signalEcho,
     signalBass, signalMids, signalTreble, signalColorDark, signalColorLight,
     signalOffset, signalEffect: lowPower ? "string" : signalEffect,
+    stringsEnabled: lowPower ? false : stringsEnabled,
     sandEnabled: lowPower ? false : sandEnabled,
     sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize,
     sandTurbulence, sandAlpha,
@@ -2402,7 +2411,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     signalString, signalFrequency, signalMode, signalAlpha, signalAmplitude, signalEcho,
     signalBass, signalMids, signalTreble, signalColorDark, signalColorLight,
     signalOffset, signalEffect,
-    sandEnabled, sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize,
+    stringsEnabled, sandEnabled, sandIntensity, sandDirection, sandDensity, sandSpeed, sandGrainSize,
     sandTurbulence, sandAlpha,
     fluxEnabled, fluxAlpha, fluxIntensity, fluxDensity, fluxSpeed, fluxLineLength, fluxTurbulence,
     auroraEnabled, auroraAlpha, auroraSpeed,
@@ -2691,7 +2700,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             </div>
           </div>
         ) : (
-          <div ref={listRef} className={`flex-1 ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 pb-12 space-y-3"}`}>
+          <div ref={listRef} className={`flex-1 w-full max-w-5xl mx-auto ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 pb-12 space-y-3"}`}>
             {sortedSandbox.map((session) => {
               // Apply keyboard state override if active
               const overrideState = stateOverrides[session.info.id];
@@ -2819,7 +2828,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           <span className="text-sm text-white/40">Sessions will appear here when Claude Code is running</span>
         </div>
       ) : (
-        <div ref={listRef} className={`flex-1 ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 pb-12 space-y-3"}`}>
+        <div ref={listRef} className={`flex-1 w-full max-w-5xl mx-auto ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 pb-12 space-y-3"}`}>
           {/* Empty active sessions message */}
           {sessions.length === 0 && revivedSessions.length > 0 && (
             <div className="flex flex-col items-center justify-center text-white/60 gap-2 py-12">

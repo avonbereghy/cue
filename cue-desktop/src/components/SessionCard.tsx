@@ -83,6 +83,7 @@ export interface SessionCardProps {
   signalColorLight?: string;
   signalOffset?: number;
   signalEffect?: string;
+  stringsEnabled?: boolean;
   sandEnabled?: boolean;
   sandIntensity?: number;
   sandDirection?: number;
@@ -211,7 +212,7 @@ function PromptPopup({ text, onClose, isDark }: {
   );
 }
 
-function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", sandEnabled = false, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, fluxEnabled = true, fluxAlpha = 0.9, fluxIntensity = 1.5, fluxDensity = 1.0, fluxSpeed = 1.0, fluxLineLength = 0.55, fluxTurbulence = 1.0, auroraEnabled = true, auroraAlpha = 0.75, auroraSpeed = 0.55, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, stringSpread = 0.15, stringDeployAngle = -16, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "percent", showToolPills = false, showCurrentTool = false, showConfigCounts = false, showToolCallComets = false, timerDisplay = "seconds", expandOverride, onExpandCycle, isDuplicate = false, lowPower = false }: SessionCardProps) {
+function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", stringsEnabled = false, sandEnabled = true, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, fluxEnabled = true, fluxAlpha = 0.9, fluxIntensity = 1.5, fluxDensity = 1.0, fluxSpeed = 1.0, fluxLineLength = 0.55, fluxTurbulence = 1.0, auroraEnabled = false, auroraAlpha = 0.75, auroraSpeed = 0.55, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, stringSpread = 0.15, stringDeployAngle = -16, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "compact", showToolPills = false, showCurrentTool = false, showConfigCounts = false, showToolCallComets = false, timerDisplay = "seconds", expandOverride, onExpandCycle, isDuplicate = false, lowPower = false }: SessionCardProps) {
   // Effective display mode: expandOverride takes precedence over global compact/slim
   const effectiveCompact = expandOverride !== undefined ? expandOverride === 0 : compactMode;
   const effectiveSlim = expandOverride !== undefined ? expandOverride <= 1 : slimMode;
@@ -931,13 +932,16 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   // promoted until we return to working.
   const activeGenMsRef = useRef(0);
   const lastTickMsRef = useRef<number | null>(null);
-  // Cumulative active-generation thresholds for strings 1..3. The first
+  // Cumulative active-generation thresholds for strings 1..5. The first
   // string gets a short warm-up so the card doesn't snap straight to a
-  // deployed state the instant work starts.
-  //   1st string →  1s    (short warm-up)
-  //   2nd string →  2:00
-  //   3rd string →  5:00
-  const STRING_THRESHOLDS_MS = [1_000, 120_000, 300_000];
+  // deployed state the instant work starts; strings 4 and 5 are reserved for
+  // very long sessions.
+  //   1st string →  1s     (short warm-up)
+  //   2nd string → 10:00
+  //   3rd string → 30:00
+  //   4th string → 60:00
+  //   5th string → 120:00
+  const STRING_THRESHOLDS_MS = [1_000, 600_000, 1_800_000, 3_600_000, 7_200_000];
 
   useEffect(() => {
     if (!isTurnOngoing) {
@@ -989,12 +993,13 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       for (const ms of STRING_THRESHOLDS_MS) {
         if (elapsed >= ms) target += 1;
       }
-      // Hard cap at 3 working strings per session — one per audio band
-      // (subagents add their own extra bands on top, accounted separately).
-      target = Math.min(3, target);
+      // Hard cap at 5 working strings per session — the 3 audio bands plus 2
+      // extra long-session lines (subagents add their own extra bands on top,
+      // accounted separately).
+      target = Math.min(5, target);
       setStringCount(c => {
         const next = c < target ? target : c;
-        return Math.min(3, next);
+        return Math.min(5, next);
       });
     };
     tick();
@@ -1041,10 +1046,12 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   //   string 2 → mids   (bandIdx 1) → 1.05
   //   string 3 → bass   (bandIdx 0) → 1.1025
   const AMP_STEP = 1.05;
-  const baseBandsAmpMuls: [number, number, number] = [
-    AMP_STEP,           // bandIdx 0 (bass)   = string 2
-    1,                  // bandIdx 1 (mids)   = string 1
-    AMP_STEP * AMP_STEP, // bandIdx 2 (treble) = string 3
+  const baseBandsAmpMuls: number[] = [
+    AMP_STEP,                 // bandIdx 0 (bass)   = string 2
+    1,                        // bandIdx 1 (mids)   = string 1
+    AMP_STEP * AMP_STEP,      // bandIdx 2 (treble) = string 3
+    AMP_STEP ** 3,            // bandIdx 3          = string 4
+    AMP_STEP ** 4,            // bandIdx 4          = string 5
   ];
 
   const combinedExtraBands = subagentExtraBands;
@@ -1107,7 +1114,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
 
       {/* Aurora wash — done-state ambient background. Slow FBM flow; mounts
           on done, fades out via AURORA_EXIT_MS when state leaves. */}
-      {!lowPower && auroraEnabled && auroraMounted && (revived || info.state !== "ended") && (
+      {signalString && !lowPower && auroraEnabled && auroraMounted && (revived || info.state !== "ended") && (
         <AuroraEffect
           seed={info.id}
           active={auroraActive}
@@ -1121,7 +1128,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           re-importing CompactTankEffect and reinstating the alpha ramp. */}
 
       {/* Signal String / Sand — renders behind all content */}
-      {signalString && (revived || info.state !== "ended") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} comets={cometsRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={signalEffect} sandEnabled={sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} stringDeployAngle={stringDeployAngle} sessionId={info.id} contentRef={contentRef} keyReleaseSpeed={keyReleaseSpeed} onStringsConnected={handleStringsConnected} extraBands={combinedExtraBands} suppressBaseBands={suppressBaseBands} baseBandsTarget={baseBandsTarget} baseBandsAmpMuls={baseBandsAmpMuls} />}
+      {signalString && (revived || info.state !== "ended") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} comets={cometsRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={signalEffect} stringsEnabled={stringsEnabled} sandEnabled={sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} stringDeployAngle={stringDeployAngle} sessionId={info.id} contentRef={contentRef} keyReleaseSpeed={keyReleaseSpeed} onStringsConnected={handleStringsConnected} extraBands={combinedExtraBands} suppressBaseBands={suppressBaseBands} baseBandsTarget={baseBandsTarget} baseBandsAmpMuls={baseBandsAmpMuls} />}
 
       {/* Flux streamline overlay on thinking cards, tinted by the state color.
           Mounted by a linger timer: stays while thinking is active, lingers
@@ -1129,7 +1136,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           before the component unmounts. `active={fluxActive}` drives the
           enter/exit growth ramp; sibling cards get different stagger phases
           via their session id seed. */}
-      {fluxEnabled && fluxMounted && (revived || info.state !== "ended") && (
+      {signalString && fluxEnabled && fluxMounted && (revived || info.state !== "ended") && (
         <FluxEffect
           color={fluxTintHex}
           seed={info.id}
@@ -1146,7 +1153,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
         />
       )}
 
-      <div ref={contentRef} className={`${effectiveCompact ? "space-y-0" : "space-y-2.5"} ${effectiveSlim && !effectiveCompact ? "flex flex-col flex-1" : ""}`} style={{ position: "relative", zIndex: 10 }}>
+      <div ref={contentRef} className={`${effectiveCompact ? "space-y-0 flex flex-col justify-center min-h-full" : "space-y-2.5"} ${effectiveSlim && !effectiveCompact ? "flex flex-col flex-1" : ""}`} style={{ position: "relative", zIndex: 10 }}>
           {/* Row 1: Status dot + state badge + title + prompt pill + duration
               Shrink priority: prompt pill first (shrinks → hides), timer second, title last */}
           <div className="relative flex items-center gap-2 min-w-0 overflow-hidden">
@@ -1403,6 +1410,9 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
               ? `Branch from ${branchedFrom ? branchedFrom.slice(0, 8) : "session"}`
               : (cleanedTitle || null);
             if (!subtitle) return null;
+            // Subtitle is a detail/slim affordance only — compact rows stay to
+            // a single centered line (status + state + title).
+            if (effectiveCompact) return null;
             const isBranchSubtitle = branchedFrom !== null && !teamName;
             const copyParent = (e: React.MouseEvent) => {
               e.stopPropagation();
@@ -1413,7 +1423,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
               }).catch(() => {});
             };
             return (
-              <div style={{ position: "relative", height: 0, overflow: "visible", paddingLeft: "calc(20px + 0.5rem)", marginTop: "-0.5rem" }}>
+              <div style={{ position: "relative", paddingLeft: "calc(20px + 0.5rem)", marginTop: "-0.25rem", lineHeight: 1 }}>
                 {isBranchSubtitle && branchedFrom ? (
                   <button
                     type="button"
