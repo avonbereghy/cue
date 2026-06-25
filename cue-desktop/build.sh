@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the Cue desktop release bundle and deploy it to ~/Applications.
+# Build the Cue desktop release bundle and deploy it to /Applications.
 #
 # The Tauri updater is configured with a public key, so `tauri build` attempts
 # to sign the updater artifact (Cue.app.tar.gz) at the very end. The private key
@@ -18,7 +18,10 @@ cd "$SCRIPT_DIR"
 
 APP_NAME="Cue.app"
 BUNDLE_DIR="src-tauri/target/release/bundle/macos"
-DEST="$HOME/Applications"
+# /Applications is the macOS-standard install location and matches where end
+# users drag the DMG. It's group-writable by admins (no sudo needed on a
+# typical admin account); we fall back to sudo only if it isn't writable.
+DEST="/Applications"
 
 echo ">> Building release bundle..."
 npm run tauri build || echo "WARN: tauri build exited non-zero (expected: updater signing has no local private key)"
@@ -29,8 +32,13 @@ if [[ ! -d "${BUNDLE_DIR}/${APP_NAME}" ]]; then
 fi
 
 echo ">> Deploying to ${DEST}/${APP_NAME} ..."
-mkdir -p "${DEST}"
-rm -rf "${DEST:?}/${APP_NAME}"
-cp -R "${BUNDLE_DIR}/${APP_NAME}" "${DEST}/"
+if [ -w "${DEST}" ]; then
+  rm -rf "${DEST:?}/${APP_NAME}"
+  cp -R "${BUNDLE_DIR}/${APP_NAME}" "${DEST}/"
+else
+  echo "   (${DEST} not writable — using sudo; you may be prompted for your password)"
+  sudo rm -rf "${DEST:?}/${APP_NAME}"
+  sudo cp -R "${BUNDLE_DIR}/${APP_NAME}" "${DEST}/"
+fi
 
 echo "OK: deployed. Launch with: open \"${DEST}/${APP_NAME}\""

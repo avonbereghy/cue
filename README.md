@@ -1,6 +1,8 @@
 # Cue
 
-A simple, visually intuitive way to monitor all your Claude Code sessions at once — each a colored dot (working, thinking, waiting, done), auto-sorted so whatever needs you surfaces first. Menu bar at a glance, full dashboard a click away. Cross-platform: macOS, Windows, and Linux.
+A simple, visually intuitive way to monitor all your Claude Code sessions at once (working, thinking, waiting, compacting, idle, done, and more), auto-sorted so whatever needs you surfaces first. Menu bar and full dashboard to easily check context. Cross-platform: macOS, Windows, and Linux.
+
+This was a tech demo for some animations, but it became more useful than that.
 
 ![Rust](https://img.shields.io/badge/Rust-Tauri_v2-000000?logo=rust&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-macOS_|_Windows_|_Linux-blue)

@@ -29,3 +29,7 @@ specs/
 
 # Stray dir created by a relative-~ path accident
 /~/
+
+# Editor local-history snapshots (VS Code Local History extension). These hold
+# copies of old file versions and must never be committed.
+.history/
