@@ -2088,6 +2088,14 @@ fn render_tray_icon(
     tick: u32,
     size: u32,
 ) -> Vec<u8> {
+    // No sessions to draw → fall back to the dot-grid's hollow-ring "no active
+    // sessions" placeholder for every style, so the menu bar never shows blank
+    // tool space. This is hit at startup (zero sessions) and, with the tray
+    // idle timeout, whenever every session has idled out of the icon — the
+    // bars/clock renderers draw nothing for an empty list.
+    if sessions.is_empty() {
+        return tray::render_dot_grid(sessions, blink_on, size);
+    }
     match style {
         "clock" => tray::render_clock(sessions, blink_on, size),
         "bars" => tray::render_bar_chart(sessions, tick, size),
@@ -2835,6 +2843,28 @@ mod tests {
             tray_active_sessions(&sessions).len(),
             4,
             "stale idle stays in the tooltip/menu list"
+        );
+    }
+
+    #[test]
+    fn test_render_tray_icon_empty_uses_ring_placeholder_not_blank() {
+        // When every session has idled out (or there are none), the bars/clock
+        // renderers draw a blank icon. render_tray_icon must instead fall back
+        // to the dot-grid hollow-ring placeholder so the tray is never blank.
+        let empty: Vec<EnrichedSession> = Vec::new();
+        let ring = tray::render_dot_grid(&empty, true, 44);
+        let bars_blank = tray::render_bar_chart(&empty, 0, 44);
+
+        for style in ["bars", "clock", "dots"] {
+            let got = render_tray_icon(style, &empty, true, 0, 44);
+            assert_eq!(
+                got, ring,
+                "empty {style} icon must render the hollow-ring placeholder"
+            );
+        }
+        assert_ne!(
+            ring, bars_blank,
+            "sanity: the ring placeholder differs from the blank bar-chart icon"
         );
     }
 
