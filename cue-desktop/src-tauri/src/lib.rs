@@ -286,12 +286,7 @@ fn get_theme() -> String {
 
 #[tauri::command]
 fn get_system_memory(state: State<'_, AppState>) -> models::SystemMemory {
-    state
-        .monitor
-        .supplemental
-        .lock_safe()
-        .system_memory
-        .clone()
+    state.monitor.supplemental.lock_safe().system_memory.clone()
 }
 
 #[tauri::command]
