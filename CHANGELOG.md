@@ -10,6 +10,15 @@ Being pre-1.0, minor (`0.x`) releases may include breaking changes.
 
 _Nothing yet._
 
+## [0.5.2] - 2026-06-26
+
+### Changed
+- Menu-bar icon stays focused on active work: a session drops off the icon
+  (bars/dots/clock) once it has sat **idle with no activity for 2 minutes**.
+  Only `idle` times out — active, waiting/error, and done states stay. Longer
+  idles still appear in the tray tooltip, the native menu, the popover, and the
+  dashboard; they just leave the menu bar up top.
+
 ## [0.5.1] - 2026-06-25
 
 Pre-public UI polish: a calmer default look and a properly sized window.
@@ -86,6 +95,7 @@ First public open-source release.
 ### Fixed
 - Git status now counts both porcelain columns for combined statuses (e.g. `MM`).
 
-[Unreleased]: https://github.com/avonbereghy/cue/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/avonbereghy/cue/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/avonbereghy/cue/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/avonbereghy/cue/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/avonbereghy/cue/releases/tag/v0.5.0
