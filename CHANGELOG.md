@@ -10,6 +10,14 @@ Being pre-1.0, minor (`0.x`) releases may include breaking changes.
 
 _Nothing yet._
 
+## [0.5.3] - 2026-06-26
+
+### Fixed
+- Menu-bar icon no longer goes blank when every session has idled out (or at
+  startup with no sessions). The bars and clock styles now fall back to the
+  same hollow-ring "no active sessions" placeholder the dot grid already used,
+  so the tray never shows empty tool space.
+
 ## [0.5.2] - 2026-06-26
 
 ### Changed
@@ -95,7 +103,8 @@ First public open-source release.
 ### Fixed
 - Git status now counts both porcelain columns for combined statuses (e.g. `MM`).
 
-[Unreleased]: https://github.com/avonbereghy/cue/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/avonbereghy/cue/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/avonbereghy/cue/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/avonbereghy/cue/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/avonbereghy/cue/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/avonbereghy/cue/releases/tag/v0.5.0

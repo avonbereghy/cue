@@ -1,6 +1,6 @@
 [package]
 name = "cue-desktop"
-version = "0.5.2"
+version = "0.5.3"
 description = "Cross-platform Claude Code session monitor"
 authors = ["Andrew von Bereghy"]
 license = "MIT"
