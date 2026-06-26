@@ -2105,6 +2105,28 @@ fn tray_active_sessions(sessions: &[EnrichedSession]) -> Vec<EnrichedSession> {
         .collect()
 }
 
+/// How long an `idle` session may sit before it drops off the menu-bar icon.
+/// It stays in the tooltip, native menu, popover, and dashboard.
+const TRAY_ICON_IDLE_TIMEOUT_SECS: f64 = 120.0;
+
+/// Sessions to draw in the menu-bar ICON. Same as the tray list, minus `idle`
+/// sessions quiet for >2 min — keeps the up-top glance tight. Only `idle`
+/// times out; active/attention/`done` states always stay.
+fn tray_icon_sessions(sessions: &[EnrichedSession]) -> Vec<EnrichedSession> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    sessions
+        .iter()
+        .filter(|s| {
+            !(s.info.state.as_str() == "idle"
+                && now - s.info.last_activity > TRAY_ICON_IDLE_TIMEOUT_SECS)
+        })
+        .cloned()
+        .collect()
+}
+
 /// Format a descriptive tooltip showing session count and state breakdown.
 fn format_tooltip(sessions: &[EnrichedSession]) -> String {
     let count = sessions.len();
@@ -2560,6 +2582,21 @@ fn menu_cache_key(sessions: &[EnrichedSession]) -> String {
     key
 }
 
+/// Cache key for the menu-bar ICON's session set (count + IDs + states). Distinct
+/// from `menu_cache_key`: it tracks the idle-filtered icon list and covers up to the
+/// bar-chart max (12, vs the menu's 8), so dropping any visible bar — including the
+/// 9th–12th — flips the key and forces a re-render within one blink tick.
+fn icon_cache_key(sessions: &[EnrichedSession]) -> String {
+    let mut key = format!("n{};", sessions.len());
+    for s in sessions.iter().take(tray::BAR_CHART_MAX_SESSIONS) {
+        key.push_str(&s.info.id);
+        key.push(':');
+        key.push_str(&s.info.state);
+        key.push(',');
+    }
+    key
+}
+
 /// Sessions whose colour/alpha changes between the on and off blink phases.
 fn has_blinking_state(sessions: &[EnrichedSession]) -> bool {
     sessions.iter().any(|s| {
@@ -2586,25 +2623,30 @@ fn update_tray(
     // Preserve historical 500ms blink cadence under the 250ms tick.
     let blink_on = (tick / 2).is_multiple_of(2);
 
+    // The ICON drops idle sessions quiet for >2 min so the menu bar stays tight.
+    // The tooltip + native menu below keep using the full `sessions` list, so
+    // those (and the popover/dashboard) still show longer idles.
+    let icon_sessions = tray_icon_sessions(sessions);
+
     // Only fold animation phase into the icon key when it actually affects
     // pixels — otherwise unchanged states would re-render every 250ms.
     let phase_key: String = match style.as_str() {
         "bars" => {
-            if has_blinking_state(sessions) {
+            if has_blinking_state(&icon_sessions) {
                 format!("s{}", tick % tray::BAR_SHINE_CYCLE)
             } else {
                 "static".to_string()
             }
         }
         _ => {
-            if has_blinking_state(sessions) {
+            if has_blinking_state(&icon_sessions) {
                 format!("b{}", blink_on as u8)
             } else {
                 "static".to_string()
             }
         }
     };
-    let icon_key = format!("{}:{}:{}", menu_key, phase_key, style);
+    let icon_key = format!("{}:{}:{}", icon_cache_key(&icon_sessions), phase_key, style);
 
     let icon_changed = {
         let last = last_icon_key.lock_safe();
@@ -2614,7 +2656,7 @@ fn update_tray(
     if let Some(tray) = handle.tray_by_id("cue-tray") {
         // Only render + push a new PNG when the visual state actually changed
         if icon_changed {
-            let png_bytes = render_tray_icon(&style, sessions, blink_on, tick, 44);
+            let png_bytes = render_tray_icon(&style, &icon_sessions, blink_on, tick, 44);
             if let Ok(icon) = tauri::image::Image::from_bytes(&png_bytes) {
                 let _ = tray.set_icon(Some(icon));
             }
@@ -2719,5 +2761,98 @@ mod tests {
                 parent.display()
             );
         }
+    }
+
+    fn mk_enriched(id: &str, state: &str, last_activity: f64) -> EnrichedSession {
+        let info = crate::models::SessionInfo {
+            id: id.to_string(),
+            workspace: "/tmp/test-project".to_string(),
+            state: state.to_string(),
+            last_activity,
+            started_at: last_activity - 60.0,
+            state_changed_at: None,
+            source: None,
+            hook_input_tokens: 0,
+            hook_output_tokens: 0,
+            hook_model: String::new(),
+            active_subagents: 0,
+            subprocess: None,
+            team_name: None,
+            agent_name: None,
+            pid: None,
+            permission_mode: None,
+            error_type: None,
+            pending_permission: None,
+        };
+        EnrichedSession::from_info_and_metrics(
+            info,
+            crate::models::SessionMetrics::default(),
+            &crate::models::SupplementalData::default(),
+        )
+    }
+
+    #[test]
+    fn test_tray_icon_sessions_times_out_only_stale_idle() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+
+        // 300s > 120s threshold; 30s is under it.
+        let sessions = vec![
+            mk_enriched("idle-stale", "idle", now - 300.0), // dropped from icon
+            mk_enriched("idle-fresh", "idle", now - 30.0),  // kept (under 2 min)
+            mk_enriched("done-stale", "done", now - 300.0), // kept (done never times out)
+            mk_enriched("working-stale", "working", now - 300.0), // kept (active never times out)
+        ];
+
+        let icon: Vec<String> = tray_icon_sessions(&sessions)
+            .iter()
+            .map(|s| s.info.id.clone())
+            .collect();
+
+        assert!(
+            !icon.contains(&"idle-stale".to_string()),
+            "idle quiet >2 min must drop from the menu-bar icon"
+        );
+        assert!(
+            icon.contains(&"idle-fresh".to_string()),
+            "idle under 2 min stays on the icon"
+        );
+        assert!(
+            icon.contains(&"done-stale".to_string()),
+            "done never times out — only idle does"
+        );
+        assert!(
+            icon.contains(&"working-stale".to_string()),
+            "active states never time out off the icon"
+        );
+        assert_eq!(icon.len(), 3, "exactly the one stale-idle session drops");
+
+        // The tooltip + native menu path (tray_active_sessions) is unaffected:
+        // longer idles still show there (and in the popover/dashboard).
+        assert_eq!(
+            tray_active_sessions(&sessions).len(),
+            4,
+            "stale idle stays in the tooltip/menu list"
+        );
+    }
+
+    #[test]
+    fn test_icon_cache_key_changes_when_a_bar_drops() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        let before = vec![
+            mk_enriched("a", "working", now),
+            mk_enriched("b", "idle", now),
+        ];
+        let after = vec![mk_enriched("a", "working", now)];
+        assert_ne!(
+            icon_cache_key(&before),
+            icon_cache_key(&after),
+            "dropping a bar must flip the icon cache key so the icon re-renders"
+        );
     }
 }
