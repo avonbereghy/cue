@@ -8,41 +8,25 @@ import { SettingsView } from "./SettingsView";
 import type { Settings } from "@/lib/types";
 
 type Tab = "Sessions" | "Settings";
-type Density = "standard" | "detailed";
-
-const DENSITIES: { id: Density; label: string }[] = [
-  { id: "standard", label: "Standard" },
-  { id: "detailed", label: "Detailed" },
-];
 
 export function Dashboard() {
   const [tab, setTab] = useState<Tab>("Sessions");
-  const [compactMode, setCompactMode] = useState(false);
-  const [slimMode, setSlimMode] = useState(false);
   const [frameless, setFrameless] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [justExpanded, setJustExpanded] = useState(false);
   const sessions = useSessionMonitor();
   useSessionAnnouncements(sessions);
 
+  // Compact and Standard (slim) densities are retired from the dashboard — the
+  // menu-bar dots + tray popover own the lean/compact glance, so the dashboard
+  // is always the full Detailed view. Migrate any persisted density off once so
+  // a returning user isn't stuck in a mode the UI no longer exposes.
   useEffect(() => {
     invoke<Settings>("get_settings").then((s) => {
-      // Compact is retired from the dashboard (the tray owns the compact
-      // glance); migrate any persisted value off so nobody is stuck in a mode
-      // the toolbar no longer exposes.
-      setCompactMode(false);
-      setSlimMode(s.slimMode ?? false);
-      if (s.compactMode) {
-        invoke("update_settings", { newSettings: { ...s, compactMode: false } }).catch(() => {});
+      if (s.compactMode || s.slimMode) {
+        invoke("update_settings", { newSettings: { ...s, compactMode: false, slimMode: false } }).catch(() => {});
       }
     }).catch(() => {});
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    listen<Settings>("settings-changed", (e) => {
-      setCompactMode(false);
-      setSlimMode(e.payload.slimMode ?? false);
-    }).then((fn) => { if (cancelled) fn(); else unlisten = fn; });
-    return () => { cancelled = true; unlisten?.(); };
   }, []);
 
   // Listen for frameless restore from tray menu
@@ -111,20 +95,6 @@ export function Dashboard() {
     return () => { cancelled = true; if (timer) clearTimeout(timer); unlisten?.(); };
   }, []);
 
-  // Standard (lean, persistent, uncapped) vs Detailed (full metrics). Compact
-  // is retired here — the menu-bar dots + tray popover own the compact glance.
-  const currentDensity: Density = slimMode ? "standard" : "detailed";
-  const setDensity = useCallback((mode: Density) => {
-    const slim = mode === "standard";
-    setCompactMode(false);
-    setSlimMode(slim);
-    invoke<Settings>("get_settings")
-      .then((s) =>
-        invoke("update_settings", { newSettings: { ...s, compactMode: false, slimMode: slim } }),
-      )
-      .catch(console.error);
-  }, []);
-
   useEffect(() => {
     localStorage.setItem("selectedDashboardTab", tab);
   }, [tab]);
@@ -136,7 +106,7 @@ export function Dashboard() {
 
   return (
     <div
-      className={`relative flex flex-col ${compactMode ? "" : "h-screen"} ${frameless ? "rounded-xl overflow-hidden" : ""} ${justExpanded ? "dashboard-expand-in" : ""}`}
+      className={`relative flex flex-col h-screen ${frameless ? "rounded-xl overflow-hidden" : ""} ${justExpanded ? "dashboard-expand-in" : ""}`}
       style={{ backgroundColor: "var(--app-bg)" }}
     >
       {/* Focus Mode: a thin draggable strip keeps the window movable when the
@@ -185,27 +155,8 @@ export function Dashboard() {
             </span>
           )}
 
-          {/* Right: density control + tools */}
+          {/* Right: tools */}
           <div className="ml-auto flex items-center gap-2">
-            {/* Density (segmented control) */}
-            <div role="group" aria-label="Card density" className="flex items-center rounded-md bg-white/5 p-0.5 text-[0.6875rem] font-medium">
-              {DENSITIES.map((opt) => {
-                const active = currentDensity === opt.id;
-                return (
-                  <button
-                    key={opt.id}
-                    onClick={() => setDensity(opt.id)}
-                    aria-pressed={active}
-                    className={`px-2.5 py-1 rounded transition-colors ${
-                      active ? "bg-white/15 text-white" : "text-white/55 hover:text-white/85"
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                );
-              })}
-            </div>
-
             {/* Settings */}
             <button
               onClick={() => setTab(tab === "Settings" ? "Sessions" : "Settings")}
