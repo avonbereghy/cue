@@ -1449,29 +1449,18 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           {!effectiveCompact && !effectiveSlim && (<>
           {/* Row 2: Metrics */}
           <div className="relative flex items-center gap-1.5 flex-wrap text-xs text-white/50">
-            {truncatedId && (
-              <button
-                onClick={copySessionId}
-                className="flex items-center gap-1 font-mono text-[0.625rem] px-1.5 py-0.5 rounded-full bg-white/10 text-white/30 hover:text-white/60 transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                title={`Copy session ID: ${info.id}`}
-                aria-label={`Copy session ID ${info.id}`}
-              >
-                {truncatedId}&hellip;
-                {copied && <span>{"\u2713"}</span>}
-              </button>
-            )}
-            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap" title="User / Total messages">
-              &#128172; {metrics.userMessageCount}/{metrics.messageCount}
+            {/* Live throughput leads; cold metadata (source, session ID) is
+                demoted to the end and dimmed. Labels + exact-value tooltips
+                replace the cryptic emoji glyphs. */}
+            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/45 whitespace-nowrap" title={`Input: ${aggregatedInputTokens.toLocaleString()} tokens`}>
+              {formatTokens(aggregatedInputTokens)} in
             </span>
-            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
-              &#8595; {formatTokens(aggregatedInputTokens)} in
-            </span>
-            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
-              &#8593; {formatTokens(aggregatedOutputTokens)} out
+            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/45 whitespace-nowrap" title={`Output: ${aggregatedOutputTokens.toLocaleString()} tokens`}>
+              {formatTokens(aggregatedOutputTokens)} out
             </span>
             {aggregatedToolUses > 0 && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
-                &#128295; {aggregatedToolUses} tools
+              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/45 whitespace-nowrap" title={`${aggregatedToolUses.toLocaleString()} tool calls`}>
+                {aggregatedToolUses} tools
               </span>
             )}
             {hasSubagents && (
@@ -1480,30 +1469,45 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 className="flex items-center gap-1 text-blue-600 hover:text-blue-500 transition-colors cursor-pointer text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full border border-blue-600/40 hover:border-blue-500/50 whitespace-nowrap"
                 aria-label={expanded ? "Collapse agent team" : "Expand agent team"}
                 aria-expanded={expanded}
+                title={`${subagents.length} active subagent${subagents.length === 1 ? "" : "s"}`}
               >
                 <span>{expanded ? "\u25BE" : "\u25B8"}</span>
                 <span>{subagents.length} agents</span>
               </button>
             )}
             {session.todoTotal > 0 && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap" title={session.todoCurrent || undefined}>
-                {"\u2610"} {session.todoCompleted}/{session.todoTotal}
-              </span>
-            )}
-            {session.totalDurationSecs > 0 && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap" title="Total session time">
-                &#9201; {formatDuration(session.totalDurationSecs)}
+              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/45 whitespace-nowrap" title={session.todoCurrent ? `Current todo: ${session.todoCurrent}` : `${session.todoCompleted} of ${session.todoTotal} todos done`}>
+                {session.todoCompleted}/{session.todoTotal} todos
               </span>
             )}
             {session.outputTokensPerSec > 0 && (info.state === "working" || info.state === "thinking" || info.state === "subagent") && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
+              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/45 whitespace-nowrap" title="Output speed \u2014 tokens per second">
                 {session.outputTokensPerSec.toFixed(1)} tok/s
               </span>
             )}
+            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/45 whitespace-nowrap" title={`${metrics.userMessageCount} of your messages \u00B7 ${metrics.messageCount} total messages`}>
+              {metrics.userMessageCount}/{metrics.messageCount} msgs
+            </span>
+            {session.totalDurationSecs > 0 && (
+              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/45 whitespace-nowrap" title="Active session time">
+                {formatDuration(session.totalDurationSecs)}
+              </span>
+            )}
             {!isNarrow && session.sourceDisplay !== "\u2014" && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
+              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/30 whitespace-nowrap" title={`Launched from ${session.sourceDisplay}`}>
                 {session.sourceDisplay}
               </span>
+            )}
+            {truncatedId && (
+              <button
+                onClick={copySessionId}
+                className="flex items-center gap-1 font-mono text-[0.625rem] px-1.5 py-0.5 rounded-full bg-white/10 text-white/25 hover:text-white/60 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                title={`Session ID \u2014 click to copy: ${info.id}`}
+                aria-label={`Copy session ID ${info.id}`}
+              >
+                {truncatedId}&hellip;
+                {copied && <span>{"\u2713"}</span>}
+              </button>
             )}
           </div>
 
