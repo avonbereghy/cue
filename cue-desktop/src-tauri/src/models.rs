@@ -840,6 +840,31 @@ pub struct Settings {
     /// Aurora time-evolution multiplier (0.1 = glacial, 4.0 = lively).
     #[serde(default = "default_aurora_speed")]
     pub aurora_speed: f64,
+    /// Flux streamlines effect — animated flow-field needles shown while a
+    /// session sits in `thinking`. These previously existed only on the TS
+    /// side, so serde silently dropped them on save and the UI reset them on
+    /// every restart; persisting them here closes that data-loss path. The
+    /// defaults below match the TS UI fallbacks exactly (no behavior change).
+    #[serde(default = "default_true")]
+    pub flux_enabled: bool,
+    /// Flux overall opacity multiplier (0.05 = faint, 1.0 = solid).
+    #[serde(default = "default_flux_alpha")]
+    pub flux_alpha: f64,
+    /// Flux needle intensity / brightness multiplier.
+    #[serde(default = "default_flux_intensity")]
+    pub flux_intensity: f64,
+    /// Flux needle spawn density multiplier.
+    #[serde(default = "default_one")]
+    pub flux_density: f64,
+    /// Flux flow speed multiplier.
+    #[serde(default = "default_one")]
+    pub flux_speed: f64,
+    /// Flux needle length multiplier.
+    #[serde(default = "default_flux_line_length")]
+    pub flux_line_length: f64,
+    /// Flux turbulence / scatter intensity.
+    #[serde(default = "default_one")]
+    pub flux_turbulence: f64,
     /// Piano key press-down speed in seconds
     #[serde(default = "default_key_press_speed")]
     pub key_press_speed: f64,
@@ -1033,6 +1058,18 @@ fn default_aurora_speed() -> f64 {
     0.55
 }
 
+fn default_flux_alpha() -> f64 {
+    0.9
+}
+
+fn default_flux_intensity() -> f64 {
+    1.5
+}
+
+fn default_flux_line_length() -> f64 {
+    0.55
+}
+
 fn default_key_press_speed() -> f64 {
     0.35
 }
@@ -1122,6 +1159,13 @@ impl Default for Settings {
             aurora_enabled: false,
             aurora_alpha: 0.75,
             aurora_speed: 0.55,
+            flux_enabled: true,
+            flux_alpha: 0.9,
+            flux_intensity: 1.5,
+            flux_density: 1.0,
+            flux_speed: 1.0,
+            flux_line_length: 0.55,
+            flux_turbulence: 1.0,
             key_press_speed: 0.35,
             key_release_speed: 0.4,
             auto_reorder: false,
