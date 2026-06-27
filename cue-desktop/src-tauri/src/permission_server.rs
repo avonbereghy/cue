@@ -142,6 +142,84 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
+// ---------------------------------------------------------------------------
+// Request parsing & authorization
+//
+// These pure helpers carry the permission server's entire security-enforcement
+// logic (request routing, the DNS-rebinding Host check, Origin rejection, the
+// per-launch token check, body-size bounding). They are split out of the async
+// connection handler in lib.rs so the enforcement decisions can be unit-tested
+// against raw header buffers without standing up a TCP socket. The handler
+// calls these and keeps only the byte-level stream IO.
+// ---------------------------------------------------------------------------
+
+/// Parse the HTTP request line, returning `(method, path)`. Empty strings if
+/// the request line is missing or malformed. Borrows from `header_str`.
+pub fn request_method_and_path(header_str: &str) -> (&str, &str) {
+    let first_line = header_str.lines().next().unwrap_or("");
+    let mut parts = first_line.split_whitespace();
+    let method = parts.next().unwrap_or("");
+    let path = parts.next().unwrap_or("");
+    (method, path)
+}
+
+/// True if the request carries a `Host:` header naming the loopback interface
+/// (`127.0.0.1` or `localhost`). DNS-rebinding defense: browsers always send the
+/// original hostname in `Host:`, so a rebinding page is rejected here.
+///
+/// NOTE: this is a prefix match, so `Host: localhost.evil.com` currently passes.
+/// P2-4 tightens this to an exact `host[:port]` match.
+pub fn host_header_ok(header_str: &str) -> bool {
+    header_str.lines().any(|line| {
+        let lower = line.to_lowercase();
+        if !lower.starts_with("host:") {
+            return false;
+        }
+        let val = lower.split(':').skip(1).collect::<Vec<_>>().join(":");
+        let val = val.trim();
+        val.starts_with("127.0.0.1") || val.starts_with("localhost")
+    })
+}
+
+/// True if the request carries any `Origin:` header. The legitimate Python hook
+/// sends none; a browser cross-origin request always does — so any `Origin` is a
+/// signal to reject (CSRF defense).
+pub fn has_origin_header(header_str: &str) -> bool {
+    header_str
+        .lines()
+        .any(|line| line.to_lowercase().starts_with("origin:"))
+}
+
+/// True if the request presents an `X-Cue-Token` header whose value matches
+/// `expected_token` in constant time. Header name compared case-insensitively
+/// per RFC 7230 §3.2; value is trimmed of surrounding whitespace.
+pub fn token_header_matches(header_str: &str, expected_token: &str) -> bool {
+    header_str.lines().any(|line| {
+        let Some((name, value)) = line.split_once(':') else {
+            return false;
+        };
+        if !name.eq_ignore_ascii_case(TOKEN_HEADER) {
+            return false;
+        }
+        constant_time_eq(value.trim().as_bytes(), expected_token.as_bytes())
+    })
+}
+
+/// Parse the `Content-Length` header value, or `0` if absent or unparseable.
+pub fn parse_content_length(header_str: &str) -> usize {
+    header_str
+        .lines()
+        .find_map(|line| {
+            let lower = line.to_lowercase();
+            if lower.starts_with("content-length:") {
+                lower.split(':').nth(1)?.trim().parse().ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0)
+}
+
 // Silence dead_code warnings when only the test suite uses the helper above.
 #[allow(dead_code)]
 fn _ensure_paths_referenced(_: &Path) {}
@@ -362,5 +440,110 @@ mod tests {
         let read_back = read_token(&path).unwrap();
         assert_eq!(read_back, original);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Request parsing & authorization ─────────────────────────────────
+
+    #[test]
+    fn test_request_method_and_path() {
+        assert_eq!(
+            request_method_and_path("GET /health HTTP/1.1\r\nHost: x\r\n"),
+            ("GET", "/health")
+        );
+        assert_eq!(
+            request_method_and_path("POST /permission-request HTTP/1.1"),
+            ("POST", "/permission-request")
+        );
+        assert_eq!(request_method_and_path(""), ("", ""));
+        assert_eq!(request_method_and_path("GARBAGE"), ("GARBAGE", ""));
+    }
+
+    #[test]
+    fn test_host_header_ok_accepts_loopback() {
+        assert!(host_header_ok("GET / HTTP/1.1\r\nHost: 127.0.0.1:3002\r\n"));
+        assert!(host_header_ok("GET / HTTP/1.1\r\nHost: localhost\r\n"));
+        assert!(host_header_ok("GET / HTTP/1.1\r\nHost: localhost:3002\r\n"));
+        // Header name is matched case-insensitively.
+        assert!(host_header_ok("GET / HTTP/1.1\r\nhOsT: 127.0.0.1\r\n"));
+    }
+
+    #[test]
+    fn test_host_header_ok_rejects_non_loopback_and_missing() {
+        assert!(!host_header_ok("GET / HTTP/1.1\r\n\r\n")); // no Host
+        assert!(!host_header_ok("GET / HTTP/1.1\r\nHost: evil.com\r\n"));
+        assert!(!host_header_ok("GET / HTTP/1.1\r\nHost: 10.0.0.5\r\n"));
+    }
+
+    #[test]
+    fn test_host_header_ok_known_prefix_looseness() {
+        // KNOWN looseness: the current prefix match accepts any hostname that
+        // merely *starts with* localhost / 127.0.0.1. P2-4 tightens this to an
+        // exact host[:port] match — flip these assertions when that lands.
+        assert!(host_header_ok(
+            "GET / HTTP/1.1\r\nHost: localhost.evil.com\r\n"
+        ));
+        assert!(host_header_ok(
+            "GET / HTTP/1.1\r\nHost: 127.0.0.1.evil.com\r\n"
+        ));
+    }
+
+    #[test]
+    fn test_has_origin_header() {
+        assert!(has_origin_header(
+            "GET / HTTP/1.1\r\nOrigin: https://evil.com\r\n"
+        ));
+        assert!(has_origin_header("GET / HTTP/1.1\r\norigin: null\r\n"));
+        assert!(!has_origin_header("GET / HTTP/1.1\r\nHost: localhost\r\n"));
+    }
+
+    #[test]
+    fn test_token_header_matches() {
+        let tok = "deadbeefcafef00d0011223344556677";
+        assert!(token_header_matches(
+            &format!("POST /x HTTP/1.1\r\nX-Cue-Token: {tok}\r\n"),
+            tok
+        ));
+        // Header name compared case-insensitively.
+        assert!(token_header_matches(
+            &format!("POST /x HTTP/1.1\r\nx-cue-token: {tok}\r\n"),
+            tok
+        ));
+        // Value is trimmed of surrounding whitespace.
+        assert!(token_header_matches(
+            &format!("POST /x HTTP/1.1\r\nX-Cue-Token:   {tok}  \r\n"),
+            tok
+        ));
+        // Wrong token is rejected.
+        assert!(!token_header_matches(
+            &format!("POST /x HTTP/1.1\r\nX-Cue-Token: {tok}\r\n"),
+            "wrongtoken"
+        ));
+        // Missing token header is rejected.
+        assert!(!token_header_matches(
+            "POST /x HTTP/1.1\r\nHost: localhost\r\n",
+            tok
+        ));
+    }
+
+    #[test]
+    fn test_parse_content_length() {
+        assert_eq!(
+            parse_content_length("POST /x HTTP/1.1\r\nContent-Length: 42\r\n"),
+            42
+        );
+        assert_eq!(
+            parse_content_length("POST /x HTTP/1.1\r\ncontent-length: 7\r\n"),
+            7
+        );
+        // Absent header -> 0.
+        assert_eq!(
+            parse_content_length("POST /x HTTP/1.1\r\nHost: localhost\r\n"),
+            0
+        );
+        // Unparseable value -> 0.
+        assert_eq!(
+            parse_content_length("POST /x HTTP/1.1\r\nContent-Length: notanumber\r\n"),
+            0
+        );
     }
 }

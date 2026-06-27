@@ -1829,28 +1829,15 @@ async fn handle_permission_connection(
     let raw = &buf[..];
     let header_str = String::from_utf8_lossy(&raw[..header_end]);
 
-    let first_line = header_str.lines().next().unwrap_or("");
-    let parts: Vec<&str> = first_line.split_whitespace().collect();
-    let method = parts.first().copied().unwrap_or("");
-    let path = parts.get(1).copied().unwrap_or("");
+    let (method, path) = permission_server::request_method_and_path(&header_str);
 
     // DNS-rebinding defense: only accept requests whose Host header names the
     // loopback address or localhost. A webpage that rebinds attacker.example to
     // 127.0.0.1 would reach the socket, but browsers always send the original
     // hostname in Host:, so this blocks cross-origin loopback abuse.
     // Reject any Origin header too — the legit Python hook sends none.
-    let host_ok = header_str.lines().any(|line| {
-        let lower = line.to_lowercase();
-        if !lower.starts_with("host:") {
-            return false;
-        }
-        let val = lower.split(':').skip(1).collect::<Vec<_>>().join(":");
-        let val = val.trim();
-        val.starts_with("127.0.0.1") || val.starts_with("localhost")
-    });
-    let has_origin = header_str
-        .lines()
-        .any(|line| line.to_lowercase().starts_with("origin:"));
+    let host_ok = permission_server::host_header_ok(&header_str);
+    let has_origin = permission_server::has_origin_header(&header_str);
     if !host_ok || has_origin {
         let response = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
         let _ = stream.write_all(response.as_bytes()).await;
@@ -1864,15 +1851,7 @@ async fn handle_permission_connection(
     // the token file"). Anything that produces a side effect — currently
     // just /permission-request — must present the matching X-Cue-Token
     // header. Header parsing is case-insensitive per RFC 7230 §3.2.
-    let token_ok = header_str.lines().any(|line| {
-        let Some((name, value)) = line.split_once(':') else {
-            return false;
-        };
-        if !name.eq_ignore_ascii_case(permission_server::TOKEN_HEADER) {
-            return false;
-        }
-        permission_server::constant_time_eq(value.trim().as_bytes(), expected_token.as_bytes())
-    });
+    let token_ok = permission_server::token_header_matches(&header_str, expected_token.as_str());
 
     match (method, path) {
         ("GET", "/health") => {
@@ -1890,17 +1869,7 @@ async fn handle_permission_connection(
                 return Ok(());
             }
             // Parse Content-Length to ensure we have the full body
-            let content_length: usize = header_str
-                .lines()
-                .find_map(|line| {
-                    let lower = line.to_lowercase();
-                    if lower.starts_with("content-length:") {
-                        lower.split(':').nth(1)?.trim().parse().ok()
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(0);
+            let content_length: usize = permission_server::parse_content_length(&header_str);
 
             // Cap body size so a hostile local caller can't claim Content-Length
             // of 4 GB and OOM the process before we even try to read.
