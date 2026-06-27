@@ -232,12 +232,12 @@ export function Dashboard() {
 
       {/* Tab content */}
       {tab === "Sessions" && (
-        <div role="tabpanel" id="panel-sessions" aria-labelledby="tab-Sessions" className="flex flex-col flex-1 min-h-0">
+        <div role="tabpanel" id="panel-sessions" aria-label="Sessions" className="flex flex-col flex-1 min-h-0">
           <SessionsTab sessions={sessions} />
         </div>
       )}
       {tab === "Settings" && (
-        <div role="tabpanel" id="panel-settings" aria-labelledby="tab-Settings" className="flex-1 overflow-y-auto">
+        <div role="tabpanel" id="panel-settings" aria-label="Settings" className="flex-1 overflow-y-auto">
           <SettingsView />
         </div>
       )}
