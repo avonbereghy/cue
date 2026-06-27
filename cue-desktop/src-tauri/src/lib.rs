@@ -1497,6 +1497,7 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -1696,6 +1697,14 @@ pub fn run() {
                         let _ = app_handle.emit("navigate-settings", ());
                     }
                 });
+            }
+
+            // --- Notifications: request permission up front so the
+            // "a session needs you" alert can fire (best-effort; macOS prompts
+            // once). ---
+            {
+                use tauri_plugin_notification::NotificationExt;
+                let _ = handle.notification().request_permission();
             }
 
             // --- Menu-bar / Dock / login settings ---
@@ -2041,6 +2050,20 @@ async fn handle_permission_connection(
                 "hookEventName": hook_event_name,
                 "receivedAt": now,
             });
+
+            // Native notification so a blocked session reaches the user even
+            // when the dashboard is hidden in the tray (the whole point of a
+            // menu-bar app). Fired from the backend so it works regardless of
+            // whether any window is open. Best-effort.
+            {
+                use tauri_plugin_notification::NotificationExt;
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title(format!("Permission needed · {}", tool_name))
+                    .body(&summary)
+                    .show();
+            }
 
             // Emit to React frontend
             let _ = app.emit("permission-request", &frontend_payload);
