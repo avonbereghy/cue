@@ -1241,5 +1241,36 @@ def main():
             _unlock(lock)
 
 
+def run_safe():
+    """Entry-point backstop: a monitoring hook must NEVER surface a traceback
+    into the user's Claude Code session. A few operations in main() run before
+    or outside the inner try/except guards — `_ensure_status_dir`'s makedirs,
+    opening the lock file, and writing the permission decision to stdout — so
+    any of them could otherwise escape. On error we fail safe and silent: the
+    hook exits 0 and writes nothing, so Claude Code simply proceeds (and for
+    PermissionRequest falls back to its own prompt).
+
+    Set CUE_HOOK_DEBUG=1 to print the traceback to stderr for diagnosis.
+    """
+    try:
+        main()
+    except BrokenPipeError:
+        # Claude Code closed our stdout (e.g. it reaped the hook after its
+        # timeout while the permission forward was still blocking). Redirect
+        # stdout to devnull so the interpreter's shutdown flush doesn't raise
+        # a second BrokenPipeError onto stderr.
+        try:
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+        except Exception:
+            pass
+    except Exception:
+        if os.environ.get("CUE_HOOK_DEBUG"):
+            import traceback
+            traceback.print_exc()
+        # Otherwise: fail safe and silent. A monitor must never break the
+        # session it is observing.
+
+
 if __name__ == "__main__":
-    main()
+    run_safe()
