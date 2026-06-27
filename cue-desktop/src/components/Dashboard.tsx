@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSessionMonitor } from "@/hooks/useSessionMonitor";
@@ -40,6 +40,32 @@ export function Dashboard() {
     return () => { cancelled = true; unlisten?.(); };
   }, []);
 
+  const enterFocusMode = useCallback(() => {
+    setFrameless(true);
+    invoke("set_frameless", { frameless: true }).catch(() => {});
+  }, []);
+  const exitFocusMode = useCallback(() => {
+    setFrameless(false);
+    invoke("set_frameless", { frameless: false }).catch(() => {});
+  }, []);
+
+  // Focus Mode must never be a one-way trap: Esc exits, ⌘⇧F (Ctrl+Shift+F)
+  // toggles — so there is always a keyboard escape even if the chrome is gone.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && frameless) {
+        e.preventDefault();
+        exitFocusMode();
+      } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === "f" || e.key === "F")) {
+        e.preventDefault();
+        if (frameless) exitFocusMode();
+        else enterFocusMode();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [frameless, enterFocusMode, exitFocusMode]);
+
 
 
   useEffect(() => {
@@ -53,19 +79,20 @@ export function Dashboard() {
       className={`relative flex flex-col ${compactMode ? "" : "h-screen"} ${frameless ? "rounded-xl overflow-hidden" : ""}`}
       style={{ backgroundColor: "var(--app-bg)" }}
     >
-      {/* Frameless restore button — hover top-right to reveal */}
+      {/* Focus Mode: a thin draggable strip keeps the window movable when the
+          title bar is hidden, and an always-visible restore chip guarantees an
+          obvious way out (plus Esc / ⌘⇧F). Never a one-way trap. */}
       {frameless && (
         <div
-          className="absolute top-0 right-0 z-50 p-1.5 opacity-0 hover:opacity-100 transition-opacity duration-200"
-          style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+          className="absolute top-0 left-0 right-0 z-50 h-7 flex items-center justify-end px-1.5"
+          style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
         >
           <button
-            onClick={() => {
-              setFrameless(false);
-              invoke("set_frameless", { frameless: false }).catch(() => {});
-            }}
-            className="flex items-center justify-center w-6 h-6 rounded-md text-white/40 hover:text-white/80 hover:bg-white/10 transition-colors"
-            title="Show Title Bar"
+            onClick={exitFocusMode}
+            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+            className="flex items-center justify-center w-6 h-6 rounded-md text-white/40 hover:text-white/90 hover:bg-white/10 transition-colors"
+            aria-label="Exit Focus Mode and show the title bar"
+            title="Exit Focus Mode  ·  ⌘⇧F or Esc"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <polyline points="15 3 21 3 21 9" />
@@ -91,12 +118,10 @@ export function Dashboard() {
           )}
           <div className="ml-auto flex items-center gap-0.5">
             <button
-              onClick={() => {
-                setFrameless(true);
-                invoke("set_frameless", { frameless: true }).catch(() => {});
-              }}
+              onClick={enterFocusMode}
               className="flex items-center justify-center w-7 h-7 rounded-md text-sm transition-colors text-white/50 hover:text-white/80 hover:bg-white/10"
-              title="Hide Title Bar (restore via tray menu)"
+              aria-label="Enter Focus Mode (hide the title bar)"
+              title="Focus Mode  ·  ⌘⇧F"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <polyline points="4 14 10 14 10 20" />
