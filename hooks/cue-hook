@@ -328,6 +328,32 @@ def _gc_sessions(sessions, now, keep_id=None):
             del sessions[sid]
 
 
+def _read_status_or_recover():
+    """Read sessions.json, recovering from corruption without data loss.
+
+    A present-but-malformed file (partial write, disk corruption) is renamed
+    aside to STATUS_FILE.corrupt-<ts> before returning an empty set, so a
+    single bad file can't silently erase every other tracked session's entry.
+    Missing or otherwise-unreadable files reset cleanly. The caller still runs
+    the result through _validate_sessions. Shared by the fast write-path and
+    the main read-modify-write so their recovery behaviour can't drift.
+    """
+    try:
+        with open(STATUS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"sessions": {}}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        try:
+            corrupt_path = f"{STATUS_FILE}.corrupt-{int(time.time())}"
+            os.replace(STATUS_FILE, corrupt_path)
+        except OSError:
+            pass
+        return {"sessions": {}}
+    except Exception:
+        return {"sessions": {}}
+
+
 def _quick_state_write(session_id, workspace, source, subprocess_label,
                        last_tokens, hook_start_time,
                        team_name=None, agent_name=None,
@@ -348,11 +374,10 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
             lock.seek(0)
             _lock(lock)
             try:
-                try:
-                    with open(STATUS_FILE, "r", encoding="utf-8") as f:
-                        status = json.load(f)
-                except Exception:
-                    status = {"sessions": {}}
+                # Recover (not silently wipe) a corrupt sessions.json. This path
+                # used to reset to {} here with no forensic copy, erasing every
+                # other tracked session — now it mirrors the main path.
+                status = _read_status_or_recover()
 
                 status = _validate_sessions(status)
 
@@ -953,24 +978,10 @@ def main():
         except Exception:
             return
         try:
-            # Read existing sessions. If the file is present but malformed
-            # (partial write, disk corruption), rename it aside instead of
-            # silently resetting — that's data loss affecting every tracked
-            # session on next hook.
-            try:
-                with open(STATUS_FILE, "r", encoding="utf-8") as f:
-                    status = json.load(f)
-            except FileNotFoundError:
-                status = {"sessions": {}}
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                try:
-                    corrupt_path = f"{STATUS_FILE}.corrupt-{int(time.time())}"
-                    os.replace(STATUS_FILE, corrupt_path)
-                except OSError:
-                    pass
-                status = {"sessions": {}}
-            except Exception:
-                status = {"sessions": {}}
+            # Read existing sessions. A present-but-malformed file is renamed
+            # aside (not silently reset) so corruption never erases every
+            # tracked session — see _read_status_or_recover.
+            status = _read_status_or_recover()
 
             # Task 4: Schema validation
             status = _validate_sessions(status)
