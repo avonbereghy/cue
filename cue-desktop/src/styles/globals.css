@@ -76,6 +76,37 @@ body {
   }
 }
 
+/* "Expand" gesture: the dashboard blooms in from the top-right (where the tray
+   popover lives) when opened via the popover's Expand button. */
+@keyframes dashboard-expand-in {
+  from { opacity: 0; transform: scale(0.975); }
+  to { opacity: 1; transform: scale(1); }
+}
+.dashboard-expand-in {
+  animation: dashboard-expand-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform-origin: top right;
+}
+
+/* Tray popover "Expand to full dashboard" button. */
+.tray-expand-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--tray-muted);
+  cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+.tray-expand-btn:hover {
+  color: var(--tray-text);
+  background-color: rgba(128, 128, 128, 0.16);
+}
+
 /* Pulsing dot for active session states */
 @keyframes dot-pulse {
   0%, 100% { opacity: 1; }

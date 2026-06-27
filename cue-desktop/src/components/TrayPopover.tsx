@@ -401,7 +401,7 @@ export function TrayPopoverPage() {
 
   return (
     <div ref={rootRef} className="tray-popover" data-tray-light={isLight ? "1" : "0"}>
-      <div className="tray-header">
+      <div className="tray-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
           <span style={{
             fontWeight: 700,
@@ -422,6 +422,19 @@ export function TrayPopoverPage() {
               : `${visibleSessions.length} session${visibleSessions.length === 1 ? "" : "s"}${activeCount > 0 ? ` · ${activeCount} active` : ""}`}
           </span>
         </div>
+        <button
+          className="tray-expand-btn"
+          onClick={() => { invoke("open_dashboard_from_tray").catch(() => {}); }}
+          title="Open full dashboard"
+          aria-label="Expand to full dashboard"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polyline points="15 3 21 3 21 9" />
+            <polyline points="9 21 3 21 3 15" />
+            <line x1="21" y1="3" x2="14" y2="10" />
+            <line x1="3" y1="21" x2="10" y2="14" />
+          </svg>
+        </button>
       </div>
 
       <div className="tray-list">
