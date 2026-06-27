@@ -1350,3 +1350,46 @@ class TestLockFailureDegradesGracefully:
         monkeypatch.setattr(hook, "_lock", boom)
         invoke_hook("working", make_payload(hook_event_name="PostToolUse"))  # must not raise
         assert hook_env.read_sessions()["abc123"]["state"] == "waiting"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Entry-point fail-safe: run_safe() must never let a traceback reach the
+# user's Claude Code session. A few ops in main() (makedirs, opening the
+# lock file, the permission stdout write) run outside the inner guards, so
+# the entry point is the backstop. Only CUE_HOOK_DEBUG reveals the error.
+# ─────────────────────────────────────────────────────────────────────
+
+class TestEntryPointFailSafe:
+    def test_swallows_unexpected_exception(self, hook, monkeypatch):
+        def boom():
+            raise RuntimeError("boom")
+        monkeypatch.setattr(hook, "main", boom)
+        hook.run_safe()  # must not raise
+
+    def test_swallows_broken_pipe(self, hook, monkeypatch):
+        def boom():
+            raise BrokenPipeError()
+        monkeypatch.setattr(hook, "main", boom)
+        # Stub the devnull redirect so it can't clobber the test runner's real
+        # stdout (sys.stdout.fileno() is a live fd when capsys isn't active).
+        monkeypatch.setattr(hook.os, "open", lambda *a, **k: -1)
+        monkeypatch.setattr(hook.os, "dup2", lambda *a, **k: None)
+        hook.run_safe()  # must not raise
+
+    def test_silent_without_debug(self, hook, monkeypatch, capsys):
+        def boom():
+            raise RuntimeError("secret-detail")
+        monkeypatch.setattr(hook, "main", boom)
+        monkeypatch.delenv("CUE_HOOK_DEBUG", raising=False)
+        hook.run_safe()
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        assert "secret-detail" not in captured.out
+
+    def test_prints_traceback_with_debug(self, hook, monkeypatch, capsys):
+        def boom():
+            raise RuntimeError("diag-marker")
+        monkeypatch.setattr(hook, "main", boom)
+        monkeypatch.setenv("CUE_HOOK_DEBUG", "1")
+        hook.run_safe()
+        assert "diag-marker" in capsys.readouterr().err
