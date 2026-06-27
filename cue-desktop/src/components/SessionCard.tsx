@@ -1453,18 +1453,18 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           {!effectiveCompact && !effectiveSlim && (<>
           {/* Row 2: Metrics */}
           <div className="relative flex items-center gap-1.5 flex-wrap text-xs text-white/50">
-            {/* Live throughput leads; cold metadata (source, session ID) is
-                demoted to the end and dimmed. Labels + exact-value tooltips
-                replace the cryptic emoji glyphs. */}
-            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/45 whitespace-nowrap" title={`Input: ${aggregatedInputTokens.toLocaleString()} tokens`}>
-              {formatTokens(aggregatedInputTokens)} in
-            </span>
-            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/45 whitespace-nowrap" title={`Output: ${aggregatedOutputTokens.toLocaleString()} tokens`}>
-              {formatTokens(aggregatedOutputTokens)} out
-            </span>
-            {aggregatedToolUses > 0 && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/45 whitespace-nowrap" title={`${aggregatedToolUses.toLocaleString()} tool calls`}>
-                {aggregatedToolUses} tools
+            {/* Act-on metrics first, anchored as pills: progress + liveness. */}
+            {session.todoTotal > 0 && (
+              <span className="flex items-center gap-1.5 text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/70 whitespace-nowrap" title={session.todoCurrent ? `Current todo: ${session.todoCurrent}` : `${session.todoCompleted} of ${session.todoTotal} todos done`}>
+                <span className="inline-block w-6 h-1 rounded-full bg-white/15 overflow-hidden align-middle">
+                  <span className="block h-full rounded-full bg-white/70" style={{ width: `${Math.round((session.todoCompleted / session.todoTotal) * 100)}%` }} />
+                </span>
+                {session.todoCompleted}/{session.todoTotal} todos
+              </span>
+            )}
+            {session.outputTokensPerSec > 0 && (info.state === "working" || info.state === "thinking" || info.state === "subagent") && (
+              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/60 whitespace-nowrap" title="Output speed \u2014 tokens per second">
+                {session.outputTokensPerSec.toFixed(1)} tok/s
               </span>
             )}
             {hasSubagents && (
@@ -1479,40 +1479,19 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 <span>{subagents.length} agents</span>
               </button>
             )}
-            {session.todoTotal > 0 && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/45 whitespace-nowrap" title={session.todoCurrent ? `Current todo: ${session.todoCurrent}` : `${session.todoCompleted} of ${session.todoTotal} todos done`}>
-                {session.todoCompleted}/{session.todoTotal} todos
-              </span>
-            )}
-            {session.outputTokensPerSec > 0 && (info.state === "working" || info.state === "thinking" || info.state === "subagent") && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/45 whitespace-nowrap" title="Output speed \u2014 tokens per second">
-                {session.outputTokensPerSec.toFixed(1)} tok/s
-              </span>
-            )}
-            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/45 whitespace-nowrap" title={`${metrics.userMessageCount} of your messages \u00B7 ${metrics.messageCount} total messages`}>
-              {metrics.userMessageCount}/{metrics.messageCount} msgs
-            </span>
-            {session.totalDurationSecs > 0 && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/45 whitespace-nowrap" title="Active session time">
-                {formatDuration(session.totalDurationSecs)}
-              </span>
-            )}
-            {!isNarrow && session.sourceDisplay !== "\u2014" && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/30 whitespace-nowrap" title={`Launched from ${session.sourceDisplay}`}>
-                {session.sourceDisplay}
-              </span>
-            )}
-            {truncatedId && (
-              <button
-                onClick={copySessionId}
-                className="flex items-center gap-1 font-mono text-[0.625rem] px-1.5 py-0.5 rounded-full bg-white/10 text-white/25 hover:text-white/60 transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                title={`Session ID \u2014 click to copy: ${info.id}`}
-                aria-label={`Copy session ID ${info.id}`}
-              >
-                {truncatedId}&hellip;
-                {copied && <span>{"\u2713"}</span>}
-              </button>
-            )}
+            {/* Reference metrics: present but visually quiet \u2014 no pill chrome,
+                dimmed, dot-separated. Tooltips still carry the exact values. */}
+            <div className="flex items-center gap-1.5 flex-wrap text-[0.625rem] font-mono text-white/30 min-w-0">
+              <span title={`Input: ${aggregatedInputTokens.toLocaleString()} tokens`}>{formatTokens(aggregatedInputTokens)} in</span>
+              <span aria-hidden className="text-white/15">\u00B7</span>
+              <span title={`Output: ${aggregatedOutputTokens.toLocaleString()} tokens`}>{formatTokens(aggregatedOutputTokens)} out</span>
+              {aggregatedToolUses > 0 && (<><span aria-hidden className="text-white/15">\u00B7</span><span title={`${aggregatedToolUses.toLocaleString()} tool calls`}>{aggregatedToolUses} tools</span></>)}
+              <span aria-hidden className="text-white/15">\u00B7</span>
+              <span title={`${metrics.userMessageCount} of your messages \u00B7 ${metrics.messageCount} total messages`}>{metrics.userMessageCount}/{metrics.messageCount} msgs</span>
+              {session.totalDurationSecs > 0 && (<><span aria-hidden className="text-white/15">\u00B7</span><span title="Active session time">{formatDuration(session.totalDurationSecs)}</span></>)}
+              {!isNarrow && session.sourceDisplay !== "\u2014" && (<><span aria-hidden className="text-white/15">\u00B7</span><span title={`Launched from ${session.sourceDisplay}`}>{session.sourceDisplay}</span></>)}
+              {truncatedId && (<><span aria-hidden className="text-white/15">\u00B7</span><button onClick={copySessionId} className="font-mono hover:text-white/60 transition-colors cursor-pointer" title={`Session ID \u2014 click to copy: ${info.id}`} aria-label={`Copy session ID ${info.id}`}>{truncatedId}&hellip;{copied && <span>{"\u2713"}</span>}</button></>)}
+            </div>
           </div>
 
           {/* Row 3: Tool chips (beta) */}
@@ -1687,7 +1666,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           ) && (
             <div className="relative flex items-center gap-1.5 text-[0.625rem] text-white/30 mono-nums">
               <span className="text-white/40 shrink-0">Tokens</span>
-              <span>{formatTokens(metrics.inputTokens - metrics.cacheReadTokens - metrics.cacheCreationTokens)} input</span>
+              <span>{formatTokens(metrics.inputTokens)} input</span>
               {metrics.cacheReadTokens > 0 && (
                 <span>{"\u00B7"} <span className="text-blue-400/60">{formatTokens(metrics.cacheReadTokens)}</span> cache read</span>
               )}
