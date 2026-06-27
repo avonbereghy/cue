@@ -57,6 +57,9 @@ jobs:
       - name: Build
         working-directory: cue-desktop
         run: npm run build
+      - name: Test
+        working-directory: cue-desktop
+        run: npm test
 
   # The Python hook is the canonical writer of sessions.json and the single
   # most behaviorally-subtle component in the project. Its ~1,350-line suite
