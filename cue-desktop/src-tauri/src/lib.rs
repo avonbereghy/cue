@@ -25,7 +25,7 @@ use models::{EnrichedSession, Settings};
 use session_monitor::{LockSafe, SessionMonitorState};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, Theme, WebviewUrl,
@@ -1649,6 +1649,54 @@ pub fn run() {
 
             // --- System Tray ---
             setup_tray(&handle, &monitor_tray)?;
+
+            // --- Native macOS app menu ---
+            // Without this there is no menu bar, so Cmd-Q/Cmd-,/Cmd-W/Cmd-M do
+            // nothing and the app feels un-Mac-like. Quit/Window/Edit use the
+            // standard predefined items; Settings (Cmd-,) reuses the same path
+            // as the tray. Distinct id ("app-settings") so it never collides
+            // with the tray menu's own handler.
+            #[cfg(target_os = "macos")]
+            {
+                let settings_item = MenuItemBuilder::with_id("app-settings", "Settings…")
+                    .accelerator("CmdOrCtrl+,")
+                    .build(app)?;
+                let app_menu = SubmenuBuilder::new(app, "Cue")
+                    .about(None)
+                    .separator()
+                    .item(&settings_item)
+                    .separator()
+                    .hide()
+                    .hide_others()
+                    .show_all()
+                    .separator()
+                    .quit()
+                    .build()?;
+                let edit_menu = SubmenuBuilder::new(app, "Edit")
+                    .undo()
+                    .redo()
+                    .separator()
+                    .cut()
+                    .copy()
+                    .paste()
+                    .select_all()
+                    .build()?;
+                let window_menu = SubmenuBuilder::new(app, "Window")
+                    .minimize()
+                    .separator()
+                    .close_window()
+                    .build()?;
+                let menu = MenuBuilder::new(app)
+                    .items(&[&app_menu, &edit_menu, &window_menu])
+                    .build()?;
+                app.set_menu(menu)?;
+                app.on_menu_event(|app_handle, event| {
+                    if event.id().as_ref() == "app-settings" {
+                        reveal_main(app_handle);
+                        let _ = app_handle.emit("navigate-settings", ());
+                    }
+                });
+            }
 
             // --- Menu-bar / Dock / login settings ---
             let startup_settings = settings::load_settings();
