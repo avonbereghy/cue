@@ -895,9 +895,6 @@ export function SettingsView() {
         <SettingRow label="Font Scale" description="Adjust text size across the entire app">
           <Slider value={settings.fontScale ?? 1.0} min={0.75} max={1.5} step={0.05} defaultValue={1.0} format={(v) => `${v.toFixed(2)}x`} onChange={(v) => { setSettings({ ...settings, fontScale: v }); document.documentElement.style.setProperty("--font-scale", String(v)); }} />
         </SettingRow>
-        <SettingRow label="Compact Mode" description="Mini cards with just title, status, and animation" onReset={settings.compactMode ? () => setSettings({ ...settings, compactMode: false }) : undefined}>
-          <Toggle checked={settings.compactMode ?? false} onChange={() => setSettings({ ...settings, compactMode: !(settings.compactMode ?? false) })} label="Compact mode" />
-        </SettingRow>
         <SettingRow label="Context Bar" description="When to show the context usage bar" onReset={(settings.contextThreshold ?? "always") !== "always" ? () => setSettings({ ...settings, contextThreshold: "always" }) : undefined}>
           <Select value={settings.contextThreshold ?? "always"} options={[
             { id: "always", label: "Always Show" },

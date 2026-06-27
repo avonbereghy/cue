@@ -8,10 +8,9 @@ import { SettingsView } from "./SettingsView";
 import type { Settings } from "@/lib/types";
 
 type Tab = "Sessions" | "Settings";
-type Density = "compact" | "standard" | "detailed";
+type Density = "standard" | "detailed";
 
 const DENSITIES: { id: Density; label: string }[] = [
-  { id: "compact", label: "Compact" },
   { id: "standard", label: "Standard" },
   { id: "detailed", label: "Detailed" },
 ];
@@ -28,13 +27,19 @@ export function Dashboard() {
 
   useEffect(() => {
     invoke<Settings>("get_settings").then((s) => {
-      setCompactMode(s.compactMode ?? false);
+      // Compact is retired from the dashboard (the tray owns the compact
+      // glance); migrate any persisted value off so nobody is stuck in a mode
+      // the toolbar no longer exposes.
+      setCompactMode(false);
       setSlimMode(s.slimMode ?? false);
+      if (s.compactMode) {
+        invoke("update_settings", { newSettings: { ...s, compactMode: false } }).catch(() => {});
+      }
     }).catch(() => {});
     let cancelled = false;
     let unlisten: (() => void) | undefined;
     listen<Settings>("settings-changed", (e) => {
-      setCompactMode(e.payload.compactMode ?? false);
+      setCompactMode(false);
       setSlimMode(e.payload.slimMode ?? false);
     }).then((fn) => { if (cancelled) fn(); else unlisten = fn; });
     return () => { cancelled = true; unlisten?.(); };
@@ -106,15 +111,16 @@ export function Dashboard() {
     return () => { cancelled = true; if (timer) clearTimeout(timer); unlisten?.(); };
   }, []);
 
-  const currentDensity: Density = compactMode ? "compact" : slimMode ? "standard" : "detailed";
+  // Standard (lean, persistent, uncapped) vs Detailed (full metrics). Compact
+  // is retired here — the menu-bar dots + tray popover own the compact glance.
+  const currentDensity: Density = slimMode ? "standard" : "detailed";
   const setDensity = useCallback((mode: Density) => {
-    const compact = mode === "compact";
     const slim = mode === "standard";
-    setCompactMode(compact);
+    setCompactMode(false);
     setSlimMode(slim);
     invoke<Settings>("get_settings")
       .then((s) =>
-        invoke("update_settings", { newSettings: { ...s, compactMode: compact, slimMode: slim } }),
+        invoke("update_settings", { newSettings: { ...s, compactMode: false, slimMode: slim } }),
       )
       .catch(console.error);
   }, []);
