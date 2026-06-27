@@ -107,6 +107,23 @@ body {
   background-color: rgba(128, 128, 128, 0.16);
 }
 
+/* Items inside the popover's "⋯" overflow menu (Settings / Quit) */
+.tray-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--tray-text);
+  transition: background-color 100ms ease;
+}
+.tray-menu-item:hover { background-color: rgba(128, 128, 128, 0.16); }
+.tray-menu-item-danger { color: var(--tray-danger); }
+
 /* Pulsing dot for active session states */
 @keyframes dot-pulse {
   0%, 100% { opacity: 1; }
@@ -1066,24 +1083,6 @@ html[data-glass] .session-card--error {
 }
 .tray-row:hover {
   background-color: var(--tray-row-hover);
-}
-
-.tray-footer {
-  flex: 0 0 auto;
-  display: flex;
-  gap: 6px;
-  padding: 8px;
-  border-top: 1px solid var(--tray-divider);
-}
-
-.tray-footer-btn:hover {
-  background-color: var(--tray-row-hover) !important;
-  border-color: var(--tray-border) !important;
-}
-.tray-footer-btn:active { transform: scale(0.98); }
-.tray-footer-btn:focus-visible {
-  outline: 2px solid rgb(124,197,255);
-  outline-offset: 1px;
 }
 
 @keyframes tray-pulse-anim {

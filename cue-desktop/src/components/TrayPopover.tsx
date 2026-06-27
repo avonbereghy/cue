@@ -280,38 +280,6 @@ function Badge({ text, tint, isLight }: { text: string; tint: "violet" | "blue" 
   );
 }
 
-function FooterButton({
-  label,
-  onClick,
-  variant = "default",
-}: {
-  label: string;
-  onClick: () => void;
-  variant?: "default" | "danger";
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="tray-footer-btn"
-      data-variant={variant}
-      style={{
-        flex: "1 1 auto",
-        padding: "6px 10px",
-        borderRadius: 6,
-        fontSize: 11.5,
-        fontWeight: 500,
-        background: "transparent",
-        border: "1px solid var(--tray-border)",
-        color: variant === "danger" ? "var(--tray-danger)" : "var(--tray-text)",
-        cursor: "pointer",
-        transition: "background 120ms ease, border-color 120ms ease",
-      }}
-    >
-      {label}
-    </button>
-  );
-}
-
 export function TrayPopoverPage() {
   const sessions = useSessionMonitor();
 
@@ -384,6 +352,7 @@ export function TrayPopoverPage() {
   // root.scrollHeight because `.tray-list` has overflow:auto, which clips its
   // own offsetHeight to the available flex space.
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) return;
@@ -422,19 +391,74 @@ export function TrayPopoverPage() {
               : `${visibleSessions.length} session${visibleSessions.length === 1 ? "" : "s"}${activeCount > 0 ? ` · ${activeCount} active` : ""}`}
           </span>
         </div>
-        <button
-          className="tray-expand-btn"
-          onClick={() => { invoke("open_dashboard_from_tray").catch(() => {}); }}
-          title="Open full dashboard"
-          aria-label="Expand to full dashboard"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <polyline points="15 3 21 3 21 9" />
-            <polyline points="9 21 3 21 3 15" />
-            <line x1="21" y1="3" x2="14" y2="10" />
-            <line x1="3" y1="21" x2="10" y2="14" />
-          </svg>
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+          <button
+            className="tray-expand-btn"
+            onClick={() => { invoke("open_dashboard_from_tray").catch(() => {}); }}
+            title="Open full dashboard"
+            aria-label="Expand to full dashboard"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="15 3 21 3 21 9" />
+              <polyline points="9 21 3 21 3 15" />
+              <line x1="21" y1="3" x2="14" y2="10" />
+              <line x1="3" y1="21" x2="10" y2="14" />
+            </svg>
+          </button>
+          <div style={{ position: "relative" }}>
+            <button
+              className="tray-expand-btn"
+              onClick={() => setMenuOpen((o) => !o)}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              title="More"
+              aria-label="More"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <circle cx="5" cy="12" r="1.6" />
+                <circle cx="12" cy="12" r="1.6" />
+                <circle cx="19" cy="12" r="1.6" />
+              </svg>
+            </button>
+            {menuOpen && (
+              <>
+                <div onClick={() => setMenuOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 40 }} aria-hidden="true" />
+                <div
+                  role="menu"
+                  style={{
+                    position: "absolute",
+                    right: 0,
+                    top: "100%",
+                    marginTop: 4,
+                    zIndex: 50,
+                    minWidth: 150,
+                    backgroundColor: isLight ? "#ffffff" : "#1e1e20",
+                    border: `1px solid ${isLight ? "rgba(0,0,0,0.10)" : "rgba(255,255,255,0.10)"}`,
+                    borderRadius: 8,
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
+                    padding: "4px 0",
+                    overflow: "hidden",
+                  }}
+                >
+                  <button
+                    role="menuitem"
+                    className="tray-menu-item"
+                    onClick={() => { setMenuOpen(false); invoke("open_settings_from_tray").catch(() => {}); }}
+                  >
+                    Settings
+                  </button>
+                  <button
+                    role="menuitem"
+                    className="tray-menu-item tray-menu-item-danger"
+                    onClick={() => { setMenuOpen(false); invoke("quit_app").catch(() => {}); }}
+                  >
+                    Quit
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="tray-list">
@@ -455,21 +479,6 @@ export function TrayPopoverPage() {
         )}
       </div>
 
-      <div className="tray-footer">
-        <FooterButton
-          label="Settings"
-          onClick={() => {
-            invoke("open_settings_from_tray").catch(() => {});
-          }}
-        />
-        <FooterButton
-          label="Quit"
-          variant="danger"
-          onClick={() => {
-            invoke("quit_app").catch(() => {});
-          }}
-        />
-      </div>
     </div>
   );
 }
