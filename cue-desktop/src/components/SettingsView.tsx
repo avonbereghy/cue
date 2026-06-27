@@ -813,6 +813,7 @@ export function SettingsView() {
         </button>
       </div>
 
+      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Appearance</h3>
       {/* Theme */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1">
         <SettingRow label="Theme" description="Light, Dark, or follow system" onReset={(settings.theme ?? "auto") !== "auto" ? () => { setSettings({ ...settings, theme: "auto" }); const win = window as unknown as Record<string, unknown>; if (typeof win.__applyTheme === "function") (win.__applyTheme as (p: string) => void)("auto"); } : undefined}>
@@ -831,6 +832,7 @@ export function SettingsView() {
         </SettingRow>
       </section>
 
+      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Performance</h3>
       {/* Low Power */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
         <SettingRow label="Low Power Mode" description="Force default theme, disable signal strings, sand, and blur effects">
@@ -859,6 +861,7 @@ export function SettingsView() {
         </SettingRow>
       </section>
 
+      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Animation</h3>
       {/* Animation */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
         <SettingRow label="Title Animation" description="Effect on working session titles" onReset={settings.titleAnimation !== "ripple" ? () => setSettings({ ...settings, titleAnimation: "ripple" }) : undefined}>
@@ -886,6 +889,7 @@ export function SettingsView() {
         </SettingRow>
       </section>
 
+      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Display</h3>
       {/* Display */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
         <SettingRow label="Font Scale" description="Adjust text size across the entire app">
@@ -920,6 +924,7 @@ export function SettingsView() {
       </section>
 
 
+      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Special Effects</h3>
       {/* Special Effects */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
         <SettingRow label="Special Effects" description="Strings on working, sand on idle, flux streamlines on thinking" onReset={settings.signalString ? () => setSettings({ ...settings, signalString: false }) : undefined}>
@@ -1255,6 +1260,7 @@ export function SettingsView() {
       </section>
       )}
 
+      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Connection</h3>
       {/* App Behavior */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
         <SettingRow label="Show in menu bar" description="Display the Cue tray icon in the menu bar" onReset={!(settings.showInMenuBar ?? true) ? () => setSettings({ ...settings, showInMenuBar: true }) : undefined}>
