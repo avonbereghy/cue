@@ -457,12 +457,6 @@ export function TrayPopoverPage() {
 
       <div className="tray-footer">
         <FooterButton
-          label="Dashboard"
-          onClick={() => {
-            invoke("open_dashboard_from_tray").catch(() => {});
-          }}
-        />
-        <FooterButton
           label="Settings"
           onClick={() => {
             invoke("open_settings_from_tray").catch(() => {});
