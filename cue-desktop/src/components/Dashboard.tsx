@@ -236,7 +236,7 @@ export function Dashboard() {
               {menuOpen && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} aria-hidden="true" />
-                  <div role="menu" className="absolute right-0 top-full mt-1 z-50 min-w-44 rounded-lg border border-white/10 bg-(--app-bg) shadow-xl py-1">
+                  <div role="menu" className="absolute right-0 top-full mt-1 z-50 min-w-44 rounded-lg border border-white/10 bg-zinc-900/95 backdrop-blur-xl shadow-xl py-1">
                     <button
                       role="menuitem"
                       onClick={() => { setMenuOpen(false); invoke("open_keyboard").catch(() => {}); }}
