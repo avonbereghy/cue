@@ -204,7 +204,7 @@ export function Dashboard() {
             <button
               onClick={() => setTab(tab === "Settings" ? "Sessions" : "Settings")}
               className={`flex items-center justify-center w-7 h-7 rounded-md transition-colors ${
-                tab === "Settings" ? "text-white" : "text-white/55 hover:text-white hover:bg-white/10"
+                tab === "Settings" ? "text-white" : "text-white/70 bg-white/5 hover:bg-white/15 hover:text-white"
               }`}
               style={tab === "Settings" ? { backgroundColor: "var(--accent-bg)" } : undefined}
               aria-label="Settings"
@@ -221,7 +221,7 @@ export function Dashboard() {
             <div className="relative">
               <button
                 onClick={() => setMenuOpen((o) => !o)}
-                className="flex items-center justify-center w-7 h-7 rounded-md transition-colors text-white/55 hover:text-white hover:bg-white/10"
+                className="flex items-center justify-center w-7 h-7 rounded-md transition-colors text-white/70 bg-white/5 hover:bg-white/15 hover:text-white"
                 aria-haspopup="menu"
                 aria-expanded={menuOpen}
                 aria-label="More"
