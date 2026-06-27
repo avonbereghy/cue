@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import type { PermissionRequest } from "@/lib/types";
+import { announce } from "@/lib/a11y";
 
 interface PermissionPromptProps {
   request: PermissionRequest;
@@ -31,9 +32,13 @@ export function PermissionPrompt({ request, onApprove, onDeny }: PermissionPromp
     return () => clearInterval(id);
   }, [request.receivedAt, expired]);
 
-  // Autofocus Approve so a keyboard user can decide without reaching for the mouse.
+  // Autofocus Approve so a keyboard user can decide without reaching for the
+  // mouse, and announce the request for screen-reader / eyes-away users.
   useEffect(() => {
     approveRef.current?.focus();
+    announce(`Permission needed: ${request.summary}`, "assertive");
+    // Mount-only: announce this request once when it appears.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const onKeyDown = (e: React.KeyboardEvent) => {

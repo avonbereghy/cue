@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSessionMonitor } from "@/hooks/useSessionMonitor";
+import { useSessionAnnouncements } from "@/hooks/useSessionAnnouncements";
 import { SessionsTab } from "./SessionsTab";
 import { SettingsView } from "./SettingsView";
 import type { Settings } from "@/lib/types";
@@ -15,6 +16,7 @@ export function Dashboard() {
   const [slimMode, setSlimMode] = useState(false);
   const [frameless, setFrameless] = useState(false);
   const sessions = useSessionMonitor();
+  useSessionAnnouncements(sessions);
 
   useEffect(() => {
     invoke<Settings>("get_settings").then((s) => {
