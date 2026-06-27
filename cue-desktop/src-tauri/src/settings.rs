@@ -178,4 +178,51 @@ mod tests {
         assert_eq!(s.five_hour_token_limit, 0); // serde default
         assert_eq!(s.plan_preset, ""); // serde default
     }
+
+    #[test]
+    fn test_flux_settings_round_trip() {
+        // Regression for the flux data-loss bug: the 7 flux* fields existed only
+        // on the TS side, so serde silently dropped them on save and the UI
+        // reset them to defaults on every restart. They must now survive a
+        // serialize -> deserialize cycle under their camelCase wire names.
+        let settings = Settings {
+            flux_enabled: false,
+            flux_alpha: 0.33,
+            flux_intensity: 4.2,
+            flux_density: 2.5,
+            flux_speed: 0.7,
+            flux_line_length: 1.8,
+            flux_turbulence: 0.4,
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&settings).unwrap();
+        // Persisted under the camelCase names the TS frontend reads/writes.
+        assert!(json.contains("\"fluxEnabled\""), "json was: {json}");
+        assert!(json.contains("\"fluxAlpha\""), "json was: {json}");
+
+        let loaded: Settings = serde_json::from_str(&json).unwrap();
+        assert!(!loaded.flux_enabled);
+        assert!((loaded.flux_alpha - 0.33).abs() < f64::EPSILON);
+        assert!((loaded.flux_intensity - 4.2).abs() < f64::EPSILON);
+        assert!((loaded.flux_density - 2.5).abs() < f64::EPSILON);
+        assert!((loaded.flux_speed - 0.7).abs() < f64::EPSILON);
+        assert!((loaded.flux_line_length - 1.8).abs() < f64::EPSILON);
+        assert!((loaded.flux_turbulence - 0.4).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_flux_defaults_match_ui_fallbacks() {
+        // The Rust defaults must equal the TS UI's `?? <literal>` fallbacks
+        // (SettingsView.tsx / SessionsTab.tsx) so a fresh install behaves
+        // identically to before flux was persisted — no silent behavior change.
+        let d = Settings::default();
+        assert!(d.flux_enabled);
+        assert!((d.flux_alpha - 0.9).abs() < f64::EPSILON);
+        assert!((d.flux_intensity - 1.5).abs() < f64::EPSILON);
+        assert!((d.flux_density - 1.0).abs() < f64::EPSILON);
+        assert!((d.flux_speed - 1.0).abs() < f64::EPSILON);
+        assert!((d.flux_line_length - 0.55).abs() < f64::EPSILON);
+        assert!((d.flux_turbulence - 1.0).abs() < f64::EPSILON);
+    }
 }
