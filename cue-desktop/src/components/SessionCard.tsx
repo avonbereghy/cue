@@ -1168,7 +1168,6 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 background: `linear-gradient(${badgeHex.bg}, ${badgeHex.bg}), ${isDark ? "#0e0e0e" : "#f5f5f5"}`,
                 color: badgeHex.text,
                 transition: stateTransition,
-                minWidth: "8.5em",
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -1179,7 +1178,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             {(info.state === "working" || info.state === "thinking" || info.state === "subagent") && titleAnimation !== "none" ? (
               <span
                 ref={titleContainerRef}
-                className={`font-semibold anim-${titleAnimation} whitespace-nowrap overflow-hidden shrink-0 leading-none`}
+                className={`font-semibold anim-${titleAnimation} whitespace-nowrap overflow-hidden min-w-0 leading-none`}
                 style={{
                   color: titleHex,
                   transition: stateTransition,
@@ -1212,7 +1211,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
               </span>
             ) : (
               <span
-                className="font-semibold whitespace-nowrap shrink-0 leading-none"
+                className="font-semibold truncate min-w-0 leading-none"
                 style={{
                   color: titleHex,
                   transition: stateTransition,
@@ -1348,10 +1347,15 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 // driving the terminal — in other states the user can shift+tab
                 // to cycle modes silently and the value would lag, so we hide
                 // rather than misreport.
-                const ACTIVE = new Set(["working", "thinking", "subagent", "compacting", "clearing"]);
-                if (!ACTIVE.has(info.state)) return null;
                 const mode = info.permissionMode;
                 if (!mode || mode === "default") return null;
+                // BYPASS is the single highest-stakes fact about a session
+                // (every tool auto-approves), so keep it visible even at rest —
+                // a stale "still bypassing?" warning is far safer than hiding a
+                // live one. The other modes can lag when the user silently
+                // shift-tab cycles them, so those still hide outside active states.
+                const ACTIVE = new Set(["working", "thinking", "subagent", "compacting", "clearing"]);
+                if (mode !== "bypassPermissions" && !ACTIVE.has(info.state)) return null;
                 // Symbols + labels mirror Claude Code's own terminal indicators
                 // (e.g. "▮▮ plan mode on", "▶▶ auto mode on"). Colors trend from
                 // safe → risky: teal (read-only) → amber/yellow (auto-approve
@@ -1367,7 +1371,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 if (!m) return null;
                 return (
                   <span
-                    className={`text-[0.5625rem] font-semibold tracking-wider px-1.5 py-0.5 rounded leading-none inline-flex items-center gap-1 ${m.cls}`}
+                    className={`text-[0.625rem] font-semibold tracking-wider px-1.5 py-0.5 rounded leading-none inline-flex items-center gap-1 ${m.cls}`}
                     title={m.title}
                   >
                     <span aria-hidden className="opacity-90">{m.symbol}</span>
