@@ -171,17 +171,25 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         const dpr = window.devicePixelRatio || 1;
         preCompactSizeRef.current = { width: phys.width / dpr, height: phys.height / dpr };
 
-        // Deterministic sizing: fixed card height * session count + chrome
+        // Deterministic sizing: fixed card height * session count + chrome.
+        // Generous values + a real floor so the window never clips the last
+        // card or collapses to an unusable sliver — the toolbar plus one card
+        // need genuine room (the previous 44/52 constants left zero buffer once
+        // the toolbar grew, and a 60px min height let it shrink to nothing).
         const activeCount = sessions.filter(s => s.info.state !== "ended").length;
-        const CARD_H = 52;     // compact card height (py-1.5 + content + border)
+        const CARD_H = 60;     // compact card height incl. border + breathing room
         const CARD_GAP = 6;    // space-y-1.5 = 6px
-        const TAB_BAR = 44;    // tab bar height
+        const TOOLBAR = 48;    // toolbar row height
         const LIST_PAD = 16;   // p-2 top + bottom
-        const compactWidth = 420;
-        const totalHeight = TAB_BAR + LIST_PAD + activeCount * CARD_H + Math.max(0, activeCount - 1) * CARD_GAP;
+        const BUFFER = 12;     // bottom breathing room so the last card isn't flush
+        const compactWidth = 440;
+        const totalHeight = Math.max(
+          200,
+          TOOLBAR + LIST_PAD + BUFFER + activeCount * CARD_H + Math.max(0, activeCount - 1) * CARD_GAP,
+        );
 
         win.setSize(new LogicalSize(compactWidth, totalHeight));
-        win.setMinSize(new LogicalSize(200, 60));
+        win.setMinSize(new LogicalSize(360, 160));
       });
     }
   }, [compactMode]);
