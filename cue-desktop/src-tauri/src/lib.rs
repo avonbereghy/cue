@@ -225,11 +225,7 @@ fn open_dashboard_from_tray(app: AppHandle) -> Result<(), String> {
     if let Some(popover) = app.get_webview_window("tray-popover") {
         let _ = popover.hide();
     }
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
+    reveal_main(&app);
     Ok(())
 }
 
@@ -238,13 +234,23 @@ fn open_settings_from_tray(app: AppHandle) -> Result<(), String> {
     if let Some(popover) = app.get_webview_window("tray-popover") {
         let _ = popover.hide();
     }
+    reveal_main(&app);
+    let _ = app.emit("navigate-settings", ());
+    Ok(())
+}
+
+/// Canonical "bring the dashboard to the user" path. Every reopen entry point —
+/// the Dock Reopen event, the tray menu, the popover buttons, the global
+/// shortcut — funnels through this so they behave identically: a hidden OR
+/// minimized window is always shown, de-miniaturized, and focused. Omitting
+/// `unminimize()` was why the tray menu "Dashboard..." silently did nothing when
+/// the window had been minimized to the Dock.
+fn reveal_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
-        let _ = app.emit("navigate-settings", ());
     }
-    Ok(())
 }
 
 #[tauri::command]
@@ -1696,11 +1702,7 @@ pub fn run() {
             // doing nothing. `Reopen` fires on dock-icon activation.
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = _event {
-                if let Some(window) = _app_handle.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.unminimize();
-                    let _ = window.set_focus();
-                }
+                reveal_main(_app_handle);
             }
         });
 }
@@ -2193,17 +2195,11 @@ fn setup_tray(
         })
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "dashboard" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                reveal_main(app);
             }
             "settings" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                    let _ = app.emit("navigate-settings", ());
-                }
+                reveal_main(app);
+                let _ = app.emit("navigate-settings", ());
             }
             "show-title-bar" => {
                 if let Some(window) = app.get_webview_window("main") {
