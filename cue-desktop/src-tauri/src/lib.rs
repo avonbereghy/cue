@@ -226,6 +226,10 @@ fn open_dashboard_from_tray(app: AppHandle) -> Result<(), String> {
         let _ = popover.hide();
     }
     reveal_main(&app);
+    // Tell the dashboard it was opened via "expand" so it can play the
+    // bloom-in animation that makes the popover feel like it grew into the
+    // full window.
+    let _ = app.emit("dashboard-expanded", ());
     Ok(())
 }
 
@@ -1682,20 +1686,29 @@ pub fn run() {
                     .paste()
                     .select_all()
                     .build()?;
+                let focus_item = MenuItemBuilder::with_id("toggle-focus-mode", "Focus Mode")
+                    .accelerator("CmdOrCtrl+Shift+F")
+                    .build(app)?;
+                let view_menu = SubmenuBuilder::new(app, "View").item(&focus_item).build()?;
                 let window_menu = SubmenuBuilder::new(app, "Window")
                     .minimize()
                     .separator()
                     .close_window()
                     .build()?;
                 let menu = MenuBuilder::new(app)
-                    .items(&[&app_menu, &edit_menu, &window_menu])
+                    .items(&[&app_menu, &edit_menu, &view_menu, &window_menu])
                     .build()?;
                 app.set_menu(menu)?;
-                app.on_menu_event(|app_handle, event| {
-                    if event.id().as_ref() == "app-settings" {
+                app.on_menu_event(|app_handle, event| match event.id().as_ref() {
+                    "app-settings" => {
                         reveal_main(app_handle);
                         let _ = app_handle.emit("navigate-settings", ());
                     }
+                    // Frontend owns the frameless state, so just ask it to toggle.
+                    "toggle-focus-mode" => {
+                        let _ = app_handle.emit("menu-toggle-focus-mode", ());
+                    }
+                    _ => {}
                 });
             }
 
