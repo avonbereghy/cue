@@ -2888,8 +2888,10 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                   onExpandCycle={compactMode ? getExpandCycle(session.info.id) : undefined}
                 />
 
-                {/* Permission section (when enabled and has activity) */}
-                {!compactMode && permissionsEnabled && hasPermissionActivity && (
+                {/* Permission section. PENDING requests render in every mode —
+                    never hide an actionable decision (compact is the mode power
+                    users run). Only the cold history is gated to non-compact. */}
+                {permissionsEnabled && (pending.length > 0 || (!compactMode && hasPermissionActivity)) && (
                   <div className="ml-3 border-l-2 border-yellow-400/20 pl-3 space-y-2">
                     {pending.length > 0 && (
                       <button
@@ -2913,7 +2915,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                         />
                       ))}
 
-                    {hasPermissionActivity && (
+                    {!compactMode && hasPermissionActivity && (
                       <details
                         className="text-xs"
                         onToggle={(e) => {
