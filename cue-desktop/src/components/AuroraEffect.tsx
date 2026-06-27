@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { usePageVisible } from "@/hooks/usePageVisible";
 import { useOnScreen } from "@/hooks/useOnScreen";
+import { releaseGlContext } from "@/lib/webgl";
 
 interface AuroraEffectProps {
   /** Overall opacity multiplier (0-1). */
@@ -244,6 +245,9 @@ export function AuroraEffect({
       gl.deleteShader(vs);
       gl.deleteShader(fs);
       if (quadBufRef.current) gl.deleteBuffer(quadBufRef.current);
+      // Free the GL context itself (deleting resources doesn't) so long
+      // multi-session uptime can't exhaust the browser's WebGL context cap.
+      releaseGlContext(gl);
       glRef.current = null;
       progRef.current = null;
       quadBufRef.current = null;

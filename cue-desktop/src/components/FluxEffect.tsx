@@ -3,6 +3,7 @@ import { usePageVisible } from "@/hooks/usePageVisible";
 import { useOnScreen } from "@/hooks/useOnScreen";
 import { getFrequencyData } from "@/lib/presetEngine";
 import { getDisturbances } from "@/lib/fluxDisturbance";
+import { releaseGlContext } from "@/lib/webgl";
 
 interface FluxEffectProps {
   /** Theme tint color in hex (e.g. "#22c55e"). Lines blend toward this. */
@@ -473,6 +474,9 @@ export function FluxEffect({
       gl.deleteShader(fs);
       if (quadBufRef.current) gl.deleteBuffer(quadBufRef.current);
       if (instBufRef.current) gl.deleteBuffer(instBufRef.current);
+      // Free the GL context itself (deleting resources doesn't) so long
+      // multi-session uptime can't exhaust the browser's WebGL context cap.
+      releaseGlContext(gl);
       glRef.current = null;
       progRef.current = null;
       quadBufRef.current = null;
