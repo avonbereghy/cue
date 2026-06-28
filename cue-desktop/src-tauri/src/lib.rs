@@ -2547,9 +2547,10 @@ fn resize_tray_popover(app: AppHandle, content_height: f64) -> Result<(), String
 /// before its session list scrolls instead of growing further.
 const MAIN_AUTOFIT_MAX_HEIGHT_FRAC: f64 = 0.85;
 
-/// Floor (logical px) so a single short session still yields a usable window
-/// rather than a sliver.
-const MAIN_AUTOFIT_MIN_HEIGHT: f64 = 280.0;
+/// Floor (logical px) for the auto-fit height. Set generously so a one- or
+/// two-session dashboard opens as a comfortably tall window rather than hugging
+/// a single card; auto-fit grows from here as more sessions arrive.
+const MAIN_AUTOFIT_MIN_HEIGHT: f64 = 560.0;
 
 /// Hard ceiling (logical px) kept below the window's configured maxHeight
 /// (tauri.conf.json: 1100, outer) minus the title bar. If auto-fit asked for a
