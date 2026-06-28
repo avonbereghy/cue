@@ -1787,6 +1787,20 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     const list = listRef.current;
     if (!list || !autoReorder) return;
 
+    // The FLIP choreography below assumes a single vertical column (it animates
+    // translateY only and derives gaps from vertical sibling spacing). In the
+    // multi-column grid a reorder can move a card across columns, which that
+    // can't express — so skip the animation and let cards reposition instantly,
+    // keeping the snapshot current so single-column reorders still animate.
+    if (getComputedStyle(list).gridTemplateColumns.split(" ").filter(Boolean).length > 1) {
+      const snap = new Map<string, DOMRect>();
+      list.querySelectorAll<HTMLElement>("[data-session-id]").forEach((el) => {
+        snap.set(el.dataset.sessionId!, el.getBoundingClientRect());
+      });
+      cardPositions.current = snap;
+      return;
+    }
+
     // Don't start a new animation while one is in flight — the current
     // animation owns cardPositions. Flag the pending re-run so the in-flight
     // run's finally retriggers this effect; without that, a reorder that
@@ -2836,6 +2850,12 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           <span className="text-sm text-white/40">Sessions will appear here when Claude Code is running</span>
         </div>
       ) : (
+        // Responsive grid: cards flow into 1/2/3 columns by width. The 400px min
+        // track is deliberately paired with SessionCard's isNarrow=600 cutoff —
+        // any multi-column track stays < 600px (3 cols engage before a 2-col card
+        // reaches 600), so multi-column cards always tier down to essentials.
+        // If you change this 400, the gap, p-4, or the window maxWidth, re-check
+        // that pairing (SessionCard.tsx `isNarrow`).
         <div
           ref={listRef}
           style={compactMode ? undefined : { gridTemplateColumns: "repeat(auto-fill, minmax(400px, 1fr))" }}
