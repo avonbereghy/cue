@@ -19,6 +19,9 @@ cue-desktop/src-tauri/sidecar/cue-audio-tap
 __pycache__/
 *.pyc
 
+# Local virtualenv for the hook test suite (created by `make test-hooks`)
+.venv/
+
 # Local env / secrets
 .env
 .env.*
@@ -33,3 +36,16 @@ specs/
 # Editor local-history snapshots (VS Code Local History extension). These hold
 # copies of old file versions and must never be committed.
 .history/
+
+# Bear & Eddy maintainer-only local tooling (NEVER committed to this public OSS repo).
+# These files contain absolute machine paths from the maintainer's home directory
+# and internal B&E assumptions that have no place in a public repo and are useless
+# to contributors. (.claude/ is already ignored above — keep it; it shields local
+# settings too.)
+/.mcp.json
+/sentinel.config.json
+/cue-desktop/sentinel.config.json
+/cadence.config.json
+/.sentinel/
+/.codebear/
+/BACKLOG.md

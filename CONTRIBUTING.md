@@ -42,7 +42,9 @@ without any signing certificate.
 ## Checks your PR must pass
 
 CI runs these on every push and pull request (`.github/workflows/ci.yml`).
-Please run them locally first — they're the exact commands CI uses:
+Please run them locally first — they're the exact commands CI uses. The
+simplest way to run all three suites at once is `make test` from the repo
+root, which mirrors `ci.yml`; the individual commands are below.
 
 **Rust** (from `cue-desktop/src-tauri`):
 
@@ -57,6 +59,15 @@ cargo test
 ```bash
 npx tsc --noEmit
 npm run build
+npm test
+```
+
+**Python hook** (from the repo root) — `make test-hooks` runs the suite in an
+isolated `.venv`, since Homebrew/Debian system Python refuses a bare
+`pip install` (PEP 668):
+
+```bash
+make test-hooks
 ```
 
 All new Rust modules should carry unit tests, and file I/O must go through the
