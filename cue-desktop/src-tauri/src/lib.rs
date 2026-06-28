@@ -2532,9 +2532,15 @@ const MAIN_AUTOFIT_MAX_HEIGHT_FRAC: f64 = 0.85;
 /// rather than a sliver.
 const MAIN_AUTOFIT_MIN_HEIGHT: f64 = 280.0;
 
-/// Clamp a desired main-window content height to [floor, 85% of monitor],
-/// returned in logical pixels. Same shape as `clamp_popover_height` but with
-/// the dashboard's own bounds.
+/// Hard ceiling (logical px) kept below the window's configured maxHeight
+/// (tauri.conf.json: 1100, outer) minus the title bar. If auto-fit asked for a
+/// height the OS then clamped to maxHeight, the next fit would see the clamped
+/// size as a "manual" resize and disable itself — so never request past this.
+const MAIN_AUTOFIT_MAX_HEIGHT: f64 = 1050.0;
+
+/// Clamp a desired main-window content height to [floor, min(85% of monitor,
+/// maxHeight)], returned in logical pixels. Same shape as `clamp_popover_height`
+/// but with the dashboard's own bounds.
 fn clamp_main_height(win: &tauri::WebviewWindow, content_h: f64) -> f64 {
     let scale = win.scale_factor().unwrap_or(1.0);
     let monitor_h = win
@@ -2544,7 +2550,11 @@ fn clamp_main_height(win: &tauri::WebviewWindow, content_h: f64) -> f64 {
         .map(|m| m.size().height as f64 / scale)
         .unwrap_or(900.0);
     let max_h = (monitor_h * MAIN_AUTOFIT_MAX_HEIGHT_FRAC).floor();
-    content_h.min(max_h).max(MAIN_AUTOFIT_MIN_HEIGHT)
+    // Effective ceiling is the monitor fraction bounded to [floor, absolute cap]
+    // — the lower bound guards clamp against an inverted range on an implausibly
+    // short monitor.
+    let upper = max_h.clamp(MAIN_AUTOFIT_MIN_HEIGHT, MAIN_AUTOFIT_MAX_HEIGHT);
+    content_h.clamp(MAIN_AUTOFIT_MIN_HEIGHT, upper)
 }
 
 /// Tolerance (logical px) for the manual-resize check below. Generous enough to

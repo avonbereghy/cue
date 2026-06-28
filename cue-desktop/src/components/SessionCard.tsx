@@ -1090,7 +1090,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   const handleCardClick = (e: React.MouseEvent) => {
     if (compactMode && onExpandCycle) { onExpandCycle(); return; }
     // Leave the card's own controls (copy-id, expanders, links, inputs) alone.
-    if ((e.target as HTMLElement).closest('button, a, input, textarea, select, [role="button"], [contenteditable="true"]')) {
+    if ((e.target as HTMLElement).closest('button, a, input, textarea, select, summary, details, [role="button"], [contenteditable="true"]')) {
       return;
     }
     openWorkspace();

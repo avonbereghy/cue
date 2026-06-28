@@ -50,16 +50,17 @@ export function Dashboard() {
   }, []);
 
   // Auto-fit the window height to the session list (the Rust side yields to a
-  // manual resize). We measure the bottom of the last card relative to the
-  // position:relative root — that captures the toolbar + every card, and unlike
-  // the scroll container's scrollHeight it still shrinks when the list
-  // underfills the window. Skipped off the Sessions tab and when empty.
+  // manual resize). We measure the bottom of the scroll list's LAST CHILD —
+  // which covers the active cards and the "Ended Sessions" section — relative to
+  // the position:relative root. Unlike the scroll container's scrollHeight, a
+  // last-child measurement still shrinks when the list underfills the window.
+  // Skipped off the Sessions tab and when the list is empty.
   const measureAndFitMain = useCallback(() => {
     const root = rootRef.current;
     if (!root || tab !== "Sessions") return;
-    const cards = root.querySelectorAll<HTMLElement>("[data-session-id]");
-    if (cards.length === 0) return;
-    const last = cards[cards.length - 1];
+    const scroll = root.querySelector<HTMLElement>(".sessions-scroll");
+    const last = scroll?.lastElementChild as HTMLElement | null;
+    if (!scroll || !last) return;
     const BOTTOM_GAP = 16;
     const total = last.offsetTop + last.offsetHeight + BOTTOM_GAP;
     invoke("resize_main_to_content", { contentHeight: total }).catch(() => {});
@@ -69,13 +70,19 @@ export function Dashboard() {
     if (tab !== "Sessions") return;
     measureAndFitMain();
     const root = rootRef.current;
-    if (!root) return;
-    const cards = Array.from(root.querySelectorAll<HTMLElement>("[data-session-id]"));
-    if (cards.length === 0) return;
-    // Re-fit when any card changes height (todos expand, an agent appears, …).
+    const scroll = root?.querySelector<HTMLElement>(".sessions-scroll");
+    if (!scroll) return;
+    // Re-fit when a child resizes (a card grows, an agent appears, the Ended
+    // Sessions disclosure expands) or when children are added/removed.
     const ro = new ResizeObserver(() => measureAndFitMain());
-    cards.forEach((c) => ro.observe(c));
-    return () => ro.disconnect();
+    const observeChildren = () => {
+      ro.disconnect();
+      Array.from(scroll.children).forEach((c) => ro.observe(c));
+    };
+    observeChildren();
+    const mo = new MutationObserver(() => { observeChildren(); measureAndFitMain(); });
+    mo.observe(scroll, { childList: true });
+    return () => { ro.disconnect(); mo.disconnect(); };
   }, [sessions, tab, frameless, measureAndFitMain]);
 
   // Esc exits Focus Mode and closes the overflow menu. The macOS menu bar's
