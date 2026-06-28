@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useLayoutEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSessionMonitor } from "@/hooks/useSessionMonitor";
@@ -16,6 +16,7 @@ export function Dashboard() {
   const [justExpanded, setJustExpanded] = useState(false);
   const sessions = useSessionMonitor();
   useSessionAnnouncements(sessions);
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
   // Compact and Standard (slim) densities are retired from the dashboard — the
   // menu-bar dots + tray popover own the lean/compact glance, so the dashboard
@@ -47,6 +48,35 @@ export function Dashboard() {
     setFrameless(false);
     invoke("set_frameless", { frameless: false }).catch(() => {});
   }, []);
+
+  // Auto-fit the window height to the session list (the Rust side yields to a
+  // manual resize). We measure the bottom of the last card relative to the
+  // position:relative root — that captures the toolbar + every card, and unlike
+  // the scroll container's scrollHeight it still shrinks when the list
+  // underfills the window. Skipped off the Sessions tab and when empty.
+  const measureAndFitMain = useCallback(() => {
+    const root = rootRef.current;
+    if (!root || tab !== "Sessions") return;
+    const cards = root.querySelectorAll<HTMLElement>("[data-session-id]");
+    if (cards.length === 0) return;
+    const last = cards[cards.length - 1];
+    const BOTTOM_GAP = 16;
+    const total = last.offsetTop + last.offsetHeight + BOTTOM_GAP;
+    invoke("resize_main_to_content", { contentHeight: total }).catch(() => {});
+  }, [tab]);
+
+  useLayoutEffect(() => {
+    if (tab !== "Sessions") return;
+    measureAndFitMain();
+    const root = rootRef.current;
+    if (!root) return;
+    const cards = Array.from(root.querySelectorAll<HTMLElement>("[data-session-id]"));
+    if (cards.length === 0) return;
+    // Re-fit when any card changes height (todos expand, an agent appears, …).
+    const ro = new ResizeObserver(() => measureAndFitMain());
+    cards.forEach((c) => ro.observe(c));
+    return () => ro.disconnect();
+  }, [sessions, tab, frameless, measureAndFitMain]);
 
   // Esc exits Focus Mode and closes the overflow menu. The macOS menu bar's
   // "View > Focus Mode" owns the ⌘⇧F accelerator.
@@ -106,6 +136,7 @@ export function Dashboard() {
 
   return (
     <div
+      ref={rootRef}
       className={`relative flex flex-col h-screen ${frameless ? "rounded-xl overflow-hidden" : ""} ${justExpanded ? "dashboard-expand-in" : ""}`}
       style={{ backgroundColor: "var(--app-bg)" }}
     >

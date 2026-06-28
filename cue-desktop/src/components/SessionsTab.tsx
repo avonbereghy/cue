@@ -2708,7 +2708,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             </div>
           </div>
         ) : (
-          <div ref={listRef} className={`flex-1 w-full max-w-5xl mx-auto ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 pb-12 space-y-3"}`}>
+          <div ref={listRef} className={`flex-1 w-full max-w-5xl mx-auto ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 space-y-3"}`}>
             {sortedSandbox.map((session) => {
               // Apply keyboard state override if active
               const overrideState = stateOverrides[session.info.id];
