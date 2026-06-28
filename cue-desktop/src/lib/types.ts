@@ -245,6 +245,9 @@ export interface Settings {
   timerDisplay: string;
   /** Auto-fit the dashboard window height to the session list. Default: true. */
   autoFitWindow: boolean;
+  /** Dashboard layout: "flow" (responsive grid) or "grouped" (a project's agents
+   *  cluster side-by-side under a project header). Default: "flow". */
+  dashboardLayout: string;
   /** Show the system tray icon in the menu bar. Default: true. */
   showInMenuBar: boolean;
   /** Menu bar icon style: "default" (dot grid) or "clock" (12-wedge clock). */

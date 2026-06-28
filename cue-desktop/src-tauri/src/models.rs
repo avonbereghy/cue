@@ -939,6 +939,10 @@ pub struct Settings {
     /// when off, the window keeps whatever size the user set.
     #[serde(default = "default_true")]
     pub auto_fit_window: bool,
+    /// Dashboard session layout: "flow" (responsive grid) or "grouped" (cluster
+    /// a project's agents side-by-side under a project header). Missing = flow.
+    #[serde(default)]
+    pub dashboard_layout: String,
     /// Show the system tray (menu bar) icon. Defaults to true.
     #[serde(default = "default_true")]
     pub show_in_menu_bar: bool,
@@ -1198,6 +1202,7 @@ impl Default for Settings {
             show_tool_call_comets: false,
             timer_display: "seconds".to_string(),
             auto_fit_window: true,
+            dashboard_layout: "flow".to_string(),
             show_in_menu_bar: true,
             menu_bar_style: "bars".to_string(),
             show_in_dock: true,

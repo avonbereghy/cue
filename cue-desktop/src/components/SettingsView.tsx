@@ -777,6 +777,7 @@ export function SettingsView() {
       showInDock: true,
       startAtLogin: true,
       autoFitWindow: true,
+      dashboardLayout: "flow",
       trayShortcutEnabled: false,
       trayShortcut: "CmdOrCtrl+Shift+C",
       themeCustomizations: settings.themeCustomizations ?? {},
@@ -1299,6 +1300,12 @@ export function SettingsView() {
             onChange={() => setSettings({ ...settings, autoFitWindow: !(settings.autoFitWindow ?? true) })}
             label="Auto-fit window"
           />
+        </SettingRow>
+        <SettingRow label="Dashboard layout" description="Flow packs cards side-by-side; Group by project clusters a project's agents together" onReset={(settings.dashboardLayout ?? "flow") !== "flow" ? () => setSettings({ ...settings, dashboardLayout: "flow" }) : undefined}>
+          <Select value={settings.dashboardLayout ?? "flow"} options={[
+            { id: "flow", label: "Flow" },
+            { id: "grouped", label: "Group by project" },
+          ]} onChange={(v) => setSettings({ ...settings, dashboardLayout: v })} />
         </SettingRow>
         <SettingRow label="Tray toggle shortcut" description="Open or close the tray popover with a global keyboard shortcut" onReset={(settings.trayShortcutEnabled ?? false) ? () => setSettings({ ...settings, trayShortcutEnabled: false }) : undefined}>
           <Toggle

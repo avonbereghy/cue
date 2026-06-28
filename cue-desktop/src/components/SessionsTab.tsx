@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, Fragment } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -125,6 +125,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // Per-session expand level in compact mode: 0=compact, 1=slim, 2=full. Undefined = follow global.
   const [expandOverrides, setExpandOverrides] = useState<Record<string, number>>({});
   const [autoReorder, setAutoReorder] = useState(false);
+  const [dashboardLayout, setDashboardLayout] = useState("flow");
   // Branch view: horizontal tree layout when window is wide (>60% of screen)
   const [branchView, setBranchView] = useState(false);
   useEffect(() => {
@@ -351,6 +352,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setKeyPressSpeed(s.keyPressSpeed ?? 0.35);
     setKeyReleaseSpeed(s.keyReleaseSpeed ?? 0.4);
     setAutoReorder(s.autoReorder ?? false);
+    setDashboardLayout(s.dashboardLayout ?? "flow");
     document.documentElement.style.setProperty("--font-scale", String(s.fontScale ?? 1.0));
     setTestMode(s.testMode ?? false);
     setCompactMode(s.compactMode ?? false);
@@ -2889,6 +2891,23 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             const duplicateTitles = new Set(
               [...titleCounts.entries()].filter(([, count]) => count > 1).map(([title]) => title)
             );
+            // "Group by project": reorder so a workspace's agents are contiguous;
+            // a full-width header before each group breaks the grid to a new row,
+            // so a project's cards flow side-by-side and single-agent projects sit
+            // on their own line.
+            const grouped = dashboardLayout === "grouped" && !compactMode;
+            let displaySessions = sortedWithChildren;
+            const groupCounts = new Map<string, number>();
+            if (grouped) {
+              const byWs = new Map<string, EnrichedSession[]>();
+              for (const s of sortedWithChildren) {
+                const arr = byWs.get(s.info.workspace);
+                if (arr) arr.push(s);
+                else byWs.set(s.info.workspace, [s]);
+              }
+              displaySessions = Array.from(byWs.values()).flat();
+              for (const [ws, arr] of byWs) groupCounts.set(ws, arr.length);
+            }
             // Drop expand-cycle handlers for sessions that no longer exist so
             // the ref'd Map doesn't accumulate one closure per session id ever
             // observed during a long Cue lifetime.
@@ -2900,7 +2919,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
               }
               for (const id of stale) expandCyclersRef.current.delete(id);
             }
-            return sortedWithChildren.map((session, idx) => {
+            return displaySessions.map((session, idx) => {
             const pending = pendingBySession[session.info.id] ?? [];
             const history = permissionHistory[session.info.id] ?? [];
             const hasPermissionActivity = pending.length > 0 || history.length > 0;
@@ -2912,8 +2931,24 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
               ? { ...session, info: { ...session.info, state: overrideState } }
               : session;
 
+            const firstOfGroup =
+              grouped && (idx === 0 || displaySessions[idx - 1].info.workspace !== session.info.workspace);
             return (
-              <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="relative space-y-2" style={{ zIndex: idx + 1 }}>
+              <Fragment key={session.info.id}>
+                {firstOfGroup && (
+                  <div className="col-span-full flex items-center gap-2 pt-2">
+                    <span className="text-xs font-medium text-white/55 truncate" title={session.info.workspace}>
+                      {session.workspaceName}
+                    </span>
+                    {(groupCounts.get(session.info.workspace) ?? 1) > 1 && (
+                      <span className="text-[0.625rem] text-white/35 tabular-nums whitespace-nowrap">
+                        {groupCounts.get(session.info.workspace)} agents
+                      </span>
+                    )}
+                    <div className="flex-1 border-t border-white/10" />
+                  </div>
+                )}
+                <div data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="relative space-y-2" style={{ zIndex: idx + 1 }}>
                 <SessionCard
                   {...cardSettings}
                   session={effectiveSession}
@@ -2969,6 +3004,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                   </div>
                 )}
               </div>
+              </Fragment>
             );
           });
           })()}
