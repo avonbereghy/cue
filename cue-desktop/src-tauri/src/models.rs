@@ -333,6 +333,12 @@ pub struct SessionMetrics {
     /// where the final answer is a better thread cue than the user's last prompt.
     #[serde(default)]
     pub last_assistant_text: Option<String>,
+    /// Human-readable error text from the most recent entry flagged
+    /// `isApiErrorMessage` (e.g. "There's an issue with the selected model …").
+    /// Surfaced on error-state cards so the failure explains itself; the UI only
+    /// shows it while the session is in the error state.
+    #[serde(default)]
+    pub last_error_message: Option<String>,
     /// Session ID extracted from the JSONL file's metadata header.
     /// Used to verify the parsed JSONL actually belongs to this session
     /// (guards against dedup stable-id / cache mismatch returning the wrong file).

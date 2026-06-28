@@ -5,7 +5,27 @@ import {
   formatElapsedCompact,
   formatModelName,
   cleanPromptText,
+  errorReason,
 } from "./format";
+
+describe("errorReason", () => {
+  it("prefers the actual transcript message", () => {
+    expect(errorReason("rate_limit", "Model unavailable: claude-fable-5")).toBe(
+      "Model unavailable: claude-fable-5",
+    );
+  });
+  it("falls back to a friendly label for a known category", () => {
+    expect(errorReason("rate_limit", null)).toBe("Rate limited");
+    expect(errorReason("billing_error")).toBe("Billing problem");
+  });
+  it("humanizes an unknown category", () => {
+    expect(errorReason("some_new_code")).toBe("some new code");
+  });
+  it("returns null when there is nothing to show", () => {
+    expect(errorReason(null, null)).toBeNull();
+    expect(errorReason(undefined, "   ")).toBeNull();
+  });
+});
 
 describe("formatTokens", () => {
   it("renders raw counts below 1000", () => {

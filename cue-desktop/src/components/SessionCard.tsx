@@ -33,7 +33,7 @@ function effortTextClass(level: string): string {
 }
 import type { EnrichedSession } from "@/lib/types";
 import { STATE_HEX, STATE_HEX_LIGHT, STATE_DOT_HEX, STATE_DOT_HEX_LIGHT, STATE_BADGE_HEX, STATE_BADGE_HEX_LIGHT } from "@/lib/types";
-import { formatTokens, formatDuration, formatClockTime, formatElapsedCompact, cleanPromptText } from "@/lib/format";
+import { formatTokens, formatDuration, formatClockTime, formatElapsedCompact, cleanPromptText, errorReason } from "@/lib/format";
 import { SignalString } from "./SignalString";
 import type { StrikePulse, CometPulse } from "./SignalString";
 import { FluxEffect } from "./FluxEffect";
@@ -1414,6 +1414,35 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             )}
           </div>
 
+
+          {/* Error reason — when a session failed, surface *why* (the real
+              message from the transcript's isApiErrorMessage entry, falling back
+              to the error category) so the card explains itself instead of just
+              saying "Error". Two-line clamp with the full text on hover. */}
+          {isError && !effectiveCompact && (() => {
+            const reason = errorReason(info.errorType, metrics.lastErrorMessage);
+            if (!reason) return null;
+            return (
+              <div
+                style={{ position: "relative", paddingLeft: "calc(20px + 0.5rem)", marginTop: "-0.125rem", lineHeight: 1.3 }}
+                title={reason}
+              >
+                <span
+                  style={{
+                    fontSize: "0.7rem",
+                    color: "#f87171",
+                    fontWeight: 500,
+                    display: "-webkit-box",
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: "vertical",
+                    overflow: "hidden",
+                  }}
+                >
+                  {"⚠"} {reason}
+                </span>
+              </div>
+            );
+          })()}
 
           {/* Agent subtitle — team agents (from JSONL or hook), branched sessions,
               or sessions with a custom title. customTitle passes through

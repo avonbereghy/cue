@@ -89,6 +89,34 @@ export function cleanPromptText(text: string | null | undefined): string {
   return text.replace(/<\/?command-(?:message|name|args)>/g, "").replace(/\s+/g, " ").trim();
 }
 
+const ERROR_TYPE_LABELS: Record<string, string> = {
+  rate_limit: "Rate limited",
+  billing_error: "Billing problem",
+  authentication_failed: "Authentication failed",
+  oauth_org_not_allowed: "Org not allowed",
+  server_error: "Server error",
+  model_not_found: "Model unavailable",
+  max_output_tokens: "Hit max output length",
+  invalid_request: "Invalid request",
+  overloaded: "Service overloaded",
+};
+
+/**
+ * Human-readable reason for an error-state session. Prefers the actual error
+ * message captured from the transcript; otherwise falls back to a friendly
+ * label for the error category, then the raw category. Returns null when
+ * there's nothing to show, so callers can decide whether to render anything.
+ */
+export function errorReason(
+  errorType?: string | null,
+  message?: string | null,
+): string | null {
+  const msg = message?.trim();
+  if (msg) return msg;
+  if (errorType) return ERROR_TYPE_LABELS[errorType] ?? errorType.replace(/_/g, " ");
+  return null;
+}
+
 function modelPricing(model: string): { inputPerToken: number; outputPerToken: number } {
   const m = model.toLowerCase();
   if (m.includes("opus")) {

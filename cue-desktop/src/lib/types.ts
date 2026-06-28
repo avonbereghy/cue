@@ -22,6 +22,10 @@ export interface SessionInfo {
   /** Most recent Claude Code permission mode seen by the hook.
    *  "default" | "plan" | "acceptEdits" | "bypassPermissions". */
   permissionMode?: string;
+  /** Error category from the StopFailure hook, set only when state === "error"
+   *  and the failure was API-level (e.g. "rate_limit", "billing_error",
+   *  "authentication_failed"). Distinguishes API failures from tool failures. */
+  errorType?: string;
 }
 
 export interface SubagentMetrics {
@@ -103,6 +107,10 @@ export interface SessionMetrics {
   /** First non-empty text block from the most recent assistant message.
    *  Used as a pill cue on idle/done cards that share a workspace. */
   lastAssistantText?: string | null;
+  /** Human-readable API-error reason for an error-state session, extracted from
+   *  an `isApiErrorMessage` transcript entry (e.g. model unavailable, rate
+   *  limit). The UI shows it only while the session is in the error state. */
+  lastErrorMessage?: string | null;
   /** Team name from JSONL (team agent sessions) */
   teamName?: string | null;
   /** Agent name from JSONL (team agent sessions) */

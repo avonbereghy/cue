@@ -105,6 +105,9 @@ pub struct ParsedEntry {
     /// workspace. Captured regardless of block position so the snippet is
     /// deterministic.
     pub assistant_text: Option<String>,
+    /// Error text from an entry flagged `isApiErrorMessage` — the human-readable
+    /// reason a turn failed (bad/unavailable model, rate limit, billing, …).
+    pub api_error_text: Option<String>,
     /// `id` fields of tool_use blocks in this assistant message whose `name`
     /// is in the user-prompting set (AskUserQuestion, ExitPlanMode). When such
     /// an id has no matching tool_result anywhere in the file, the session is
@@ -356,6 +359,12 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
     // Extract timestamp — try multiple formats
     entry.timestamp = extract_timestamp(obj);
 
+    // Claude Code flags an API-level failure turn (unavailable model, rate
+    // limit, billing, …) with a top-level `isApiErrorMessage: true`; the
+    // human-readable reason is the message's text block. Capture it so error
+    // cards can explain themselves instead of just saying "Error".
+    let is_api_error = obj.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true);
+
     // Extract custom title. Claude Code's branch/fork feature seeds the
     // customTitle with the originating user message's raw text, which can
     // include slash-command XML wrappers (<command-message>.../</command-args>),
@@ -516,6 +525,9 @@ fn parse_line(line: &str) -> Option<ParsedEntry> {
                                         // per cached entry just bloats memory
                                         // over a long-running session.
                                         entry.assistant_text = Some(cap_snippet(trimmed));
+                                    }
+                                    if is_api_error && entry.api_error_text.is_none() {
+                                        entry.api_error_text = Some(cap_snippet(trimmed));
                                     }
                                 }
                             }
@@ -1182,6 +1194,10 @@ fn aggregate_entries(
             // prompt — multi-MB assistant responses are clipped.
             if let Some(ref txt) = entry.assistant_text {
                 m.last_assistant_text = Some(cap_snippet(txt));
+            }
+            // Latest API-error reason wins (most recent failed turn).
+            if let Some(ref err) = entry.api_error_text {
+                m.last_error_message = Some(cap_snippet(err));
             }
 
             for (tool, count) in &entry.tool_counts {
@@ -1871,6 +1887,22 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(entries[0].has_end_turn);
         assert!(!entries[0].has_pending_tool_use);
+    }
+
+    #[test]
+    fn test_parse_entry_captures_api_error_text() {
+        // An isApiErrorMessage entry yields the human-readable failure reason.
+        let line = r#"{"type":"assistant","timestamp":1710000000.0,"isApiErrorMessage":true,"message":{"role":"assistant","stop_reason":"stop_sequence","content":[{"type":"text","text":"There's an issue with the selected model (claude-fable-5)."}]}}"#;
+        let entries = parse_jsonl_content(line);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].api_error_text.as_deref(),
+            Some("There's an issue with the selected model (claude-fable-5).")
+        );
+        // A normal assistant message must NOT populate api_error_text.
+        let normal = r#"{"type":"assistant","timestamp":1.0,"message":{"content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn"}}"#;
+        let n = parse_jsonl_content(normal);
+        assert!(n[0].api_error_text.is_none());
     }
 
     #[test]

@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSessionMonitor } from "@/hooks/useSessionMonitor";
 import type { EnrichedSession } from "@/lib/types";
-import { cleanPromptText } from "@/lib/format";
+import { cleanPromptText, errorReason } from "@/lib/format";
 
 // State color palette mirrors src-tauri/src/tray.rs::color_for_state
 // Returned as { rail, pillBg, pillText } so the row + state pill can use
@@ -95,6 +95,9 @@ function SessionRow({ session, isLight }: { session: EnrichedSession; isLight: b
   const teamBadge = session.info.teamName ?? null;
   const subprocBadge = session.info.subprocess ?? null;
   const promptPreview = cleanPromptText(session.metrics.lastPrompt).trim().split("\n")[0]?.slice(0, 80) ?? "";
+  const errReason = session.info.state === "error"
+    ? errorReason(session.info.errorType, session.metrics.lastErrorMessage)
+    : null;
 
   // Click a row to open its project — in the editor that launched the session
   // (VS Code / Cursor), falling back to the OS file manager. Dismiss the popover
@@ -257,7 +260,22 @@ function SessionRow({ session, isLight }: { session: EnrichedSession; isLight: b
             {session.effortLevel ? ` · ${session.effortLevel}` : ""}
           </span>
         )}
-        {promptPreview && (
+        {errReason ? (
+          <span
+            style={{
+              flex: "1 1 auto",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              color: "var(--tray-danger)",
+              opacity: 0.95,
+              minWidth: 0,
+            }}
+            title={errReason}
+          >
+            ⚠ {errReason}
+          </span>
+        ) : promptPreview ? (
           <span
             style={{
               flex: "1 1 auto",
@@ -271,7 +289,7 @@ function SessionRow({ session, isLight }: { session: EnrichedSession; isLight: b
           >
             › {promptPreview}
           </span>
-        )}
+        ) : null}
       </div>
     </div>
   );
