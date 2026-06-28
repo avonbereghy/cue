@@ -2836,7 +2836,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           <span className="text-sm text-white/40">Sessions will appear here when Claude Code is running</span>
         </div>
       ) : (
-        <div ref={listRef} className={`flex-1 w-full max-w-5xl mx-auto ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 pb-12 space-y-3"}`}>
+        <div ref={listRef} className={`flex-1 w-full max-w-5xl mx-auto ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 space-y-3"}`}>
           {/* Empty active sessions message */}
           {sessions.length === 0 && revivedSessions.length > 0 && (
             <div className="flex flex-col items-center justify-center text-white/60 gap-2 py-12">

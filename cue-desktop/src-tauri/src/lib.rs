@@ -49,12 +49,12 @@ pub struct AppState {
 
 /// Tracks whether the main window still auto-fits its height to the dashboard
 /// content. We disable it the moment the user resizes the window themselves so
-/// auto-fit never fights a manual size. `last_self_resize` timestamps our own
-/// `set_size` calls so the Resized events they generate aren't misread as a
-/// manual resize.
+/// auto-fit never fights a manual size. `last_applied` records the content
+/// height (logical px) we last set; the next auto-fit compares the window's
+/// current height to it and yields if they no longer match.
 pub struct MainAutosize {
     pub enabled: bool,
-    pub last_self_resize: Option<std::time::Instant>,
+    pub last_applied: Option<f64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1660,7 +1660,7 @@ pub fn run() {
             registered_shortcut: Arc::new(Mutex::new(None)),
             main_autosize: Arc::new(Mutex::new(MainAutosize {
                 enabled: true,
-                last_self_resize: None,
+                last_applied: None,
             })),
         })
         .invoke_handler(tauri::generate_handler![
@@ -1728,23 +1728,6 @@ pub fn run() {
                     } else if window.label() == "tray-popover" {
                         // Click anywhere outside the popover dismisses it.
                         let _ = window.hide();
-                    }
-                }
-                // Yield auto-fit to the user the moment they resize the window.
-                tauri::WindowEvent::Resized(_) if window.label() == "main" => {
-                    if let Some(state) = window.try_state::<AppState>() {
-                        let mut a = state.main_autosize.lock_safe();
-                        // The Resized our own auto-fit just produced, vs. the user
-                        // dragging the window.
-                        let is_ours = a
-                            .last_self_resize
-                            .is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(250));
-                        // Disable only once we've started auto-fitting
-                        // (last_self_resize is Some) and this resize wasn't ours —
-                        // startup/restore resizes don't count.
-                        if a.enabled && a.last_self_resize.is_some() && !is_ours {
-                            a.enabled = false;
-                        }
                     }
                 }
                 _ => {}
@@ -2564,42 +2547,55 @@ fn clamp_main_height(win: &tauri::WebviewWindow, content_h: f64) -> f64 {
     content_h.min(max_h).max(MAIN_AUTOFIT_MIN_HEIGHT)
 }
 
+/// Tolerance (logical px) for the manual-resize check below. Generous enough to
+/// absorb the title bar and rounding, small enough that a real drag is caught.
+const MAIN_AUTOFIT_MANUAL_TOLERANCE: f64 = 40.0;
+
 /// Auto-fit the main window's height to the dashboard's content (the session
 /// list), clamped to a floor and 85% of the monitor — past that the inner list
-/// scrolls. No-op once the user has manually resized the window (see
-/// `MainAutosize`). Works in inner (content) sizes so it composes with the
-/// title bar, and pins the top-left so the window grows/shrinks downward rather
-/// than drifting.
+/// scrolls. Works in inner (content) sizes so it composes with the title bar,
+/// and pins the top-left so the window grows/shrinks downward rather than
+/// drifting.
+///
+/// Yields to a manual resize: if the window's current height no longer matches
+/// the height we last applied, the user resized it, so we disable auto-fit for
+/// the rest of the session. Checking at fit time (rather than via Resized
+/// events) avoids races with the window's own show/restore resizes.
 #[tauri::command]
 fn resize_main_to_content(app: AppHandle, content_height: f64) -> Result<(), String> {
     let win = app
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
+    let scale = win.scale_factor().unwrap_or(1.0);
+    let cur = win.inner_size().map_err(|e| e.to_string())?;
 
-    // Respect a manual resize: stop auto-fitting for the rest of the session.
-    if let Some(state) = app.try_state::<AppState>() {
-        if !state.main_autosize.lock_safe().enabled {
+    let Some(state) = app.try_state::<AppState>() else {
+        return Ok(());
+    };
+    let mut a = state.main_autosize.lock_safe();
+    if !a.enabled {
+        return Ok(());
+    }
+    // Detect a manual resize since our last auto-fit and yield to it.
+    let cur_logical = cur.height as f64 / scale;
+    if let Some(last) = a.last_applied {
+        if (cur_logical - last).abs() > MAIN_AUTOFIT_MANUAL_TOLERANCE {
+            a.enabled = false;
             return Ok(());
         }
     }
 
-    let scale = win.scale_factor().unwrap_or(1.0);
     let target_h = clamp_main_height(&win, content_height);
     let target_h_phys = (target_h * scale).round() as u32;
-    let cur = win.inner_size().map_err(|e| e.to_string())?;
     if cur.height != target_h_phys {
         let origin = win.outer_position().ok();
-        // Mark this as our own resize so the Resized event it triggers isn't
-        // mistaken for the user dragging the window.
-        if let Some(state) = app.try_state::<AppState>() {
-            state.main_autosize.lock_safe().last_self_resize = Some(std::time::Instant::now());
-        }
         win.set_size(PhysicalSize::new(cur.width, target_h_phys))
             .map_err(|e| e.to_string())?;
         if let Some(origin) = origin {
             let _ = win.set_position(origin);
         }
     }
+    a.last_applied = Some(target_h);
     Ok(())
 }
 
