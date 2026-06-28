@@ -161,6 +161,11 @@ export function Dashboard() {
   }, [tab]);
 
   const sessionCount = sessions.length;
+  // "Active" = a turn is in flight (matches the tray popover's count), so the
+  // header reads "8 sessions · 3 active" — live vs. parked at a glance.
+  const activeCount = sessions.filter((s) =>
+    ["working", "thinking", "subagent", "compacting", "clearing"].includes(s.info.state),
+  ).length;
 
   const menuItemClass =
     "flex items-center gap-2.5 w-full px-3 py-1.5 text-xs text-white/70 hover:bg-white/10 hover:text-white text-left transition-colors";
@@ -213,7 +218,9 @@ export function Dashboard() {
             </button>
           ) : (
             <span className="text-xs text-white/45 select-none tabular-nums">
-              {sessionCount === 0 ? "No sessions" : `${sessionCount} session${sessionCount === 1 ? "" : "s"}`}
+              {sessionCount === 0
+                ? "No sessions"
+                : `${sessionCount} session${sessionCount === 1 ? "" : "s"}${activeCount > 0 ? ` · ${activeCount} active` : ""}`}
             </span>
           )}
 
