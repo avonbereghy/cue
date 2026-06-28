@@ -1195,9 +1195,14 @@ fn aggregate_entries(
             if let Some(ref txt) = entry.assistant_text {
                 m.last_assistant_text = Some(cap_snippet(txt));
             }
-            // Latest API-error reason wins (most recent failed turn).
+            // The latest assistant turn drives the error reason: an
+            // isApiErrorMessage entry sets it, and any normal assistant turn
+            // after it means the session recovered — clear the stale reason so an
+            // error card only ever shows the current failure.
             if let Some(ref err) = entry.api_error_text {
                 m.last_error_message = Some(cap_snippet(err));
+            } else {
+                m.last_error_message = None;
             }
 
             for (tool, count) in &entry.tool_counts {
@@ -1920,6 +1925,34 @@ mod tests {
         let m = parse_jsonl_to_session_metrics(&path).unwrap();
         assert_eq!(m.last_end_turn_ts, Some(2.5));
         assert!(!m.pending_tool_use);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_metrics_error_message_set_then_cleared_on_recovery() {
+        let user = r#"{"type":"user","timestamp":1.0,"message":{"content":"go"}}"#;
+        let api_err = r#"{"type":"assistant","timestamp":2.0,"isApiErrorMessage":true,"message":{"role":"assistant","stop_reason":"stop_sequence","content":[{"type":"text","text":"Model unavailable: claude-fable-5"}]}}"#;
+        let recovered = r#"{"type":"assistant","timestamp":3.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":5,"output_tokens":2},"content":[{"type":"text","text":"ok now"}],"stop_reason":"end_turn"}}"#;
+
+        let dir = std::env::temp_dir().join("cue_test_err_msg");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Error is the last assistant turn → its reason is surfaced.
+        let p1 = dir.join("a.jsonl");
+        std::fs::write(&p1, format!("{user}\n{api_err}")).unwrap();
+        let m1 = parse_jsonl_to_session_metrics(&p1).unwrap();
+        assert_eq!(
+            m1.last_error_message.as_deref(),
+            Some("Model unavailable: claude-fable-5")
+        );
+
+        // A normal assistant turn after the error → cleared (recovered).
+        let p2 = dir.join("b.jsonl");
+        std::fs::write(&p2, format!("{user}\n{api_err}\n{recovered}")).unwrap();
+        let m2 = parse_jsonl_to_session_metrics(&p2).unwrap();
+        assert_eq!(m2.last_error_message, None);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
