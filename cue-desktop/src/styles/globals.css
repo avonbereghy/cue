@@ -928,6 +928,29 @@ html:not([data-theme="light"]) [class*="text-white/60"] { color: rgba(255,255,25
 html:not([data-theme="light"]) [class*="text-white/70"] { color: rgba(255,255,255,0.88) !important; }
 
 /* ---------------------------------------------------------------------------
+   Light Looks (Almanac / Studio) render on warm paper but keep data-theme="dark"
+   (each look owns its own palette), so the dark-mode white-text boosts above
+   would force muted Tailwind text-white/* utilities to WHITE — unreadable on
+   paper (e.g. the Settings page). Re-darken them to warm ink for the light
+   looks. Equal specificity to the rules above + declared later, so these win.
+   Night is a dark look and is intentionally NOT included.
+   --------------------------------------------------------------------------- */
+html[data-view="almanac"] [class*="text-white/25"], html[data-view="studio"] [class*="text-white/25"] { color: rgba(43,33,24,0.50) !important; }
+html[data-view="almanac"] [class*="text-white/30"], html[data-view="studio"] [class*="text-white/30"] { color: rgba(43,33,24,0.58) !important; }
+html[data-view="almanac"] [class*="text-white/40"], html[data-view="studio"] [class*="text-white/40"] { color: rgba(43,33,24,0.66) !important; }
+html[data-view="almanac"] [class*="text-white/50"], html[data-view="studio"] [class*="text-white/50"] { color: rgba(43,33,24,0.74) !important; }
+html[data-view="almanac"] [class*="text-white/60"], html[data-view="studio"] [class*="text-white/60"] { color: rgba(43,33,24,0.82) !important; }
+html[data-view="almanac"] [class*="text-white/70"], html[data-view="studio"] [class*="text-white/70"] { color: rgba(43,33,24,0.90) !important; }
+
+/* The shared ⋯ overflow menu is hardcoded dark (bg-zinc-900); on a light look
+   its now-darkened items would be dark-on-dark, so give the panel a paper
+   surface too. */
+html[data-view="almanac"] [role="menu"], html[data-view="studio"] [role="menu"] {
+  background: #f3ecde !important;
+  border-color: rgba(120, 90, 50, 0.22) !important;
+}
+
+/* ---------------------------------------------------------------------------
    Glass theme — frosted glass morphism with layered depth
    Activated by data-glass attribute on <html>
    --------------------------------------------------------------------------- */
