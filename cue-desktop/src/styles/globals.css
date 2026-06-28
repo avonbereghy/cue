@@ -123,6 +123,8 @@ body {
 }
 .tray-menu-item:hover { background-color: rgba(128, 128, 128, 0.16); }
 .tray-menu-item-danger { color: var(--tray-danger); }
+/* Danger hover matches the dashboard's Quit (red tint), not the generic gray. */
+.tray-menu-item-danger:hover { background-color: rgba(248, 113, 113, 0.14); color: #fca5a5; }
 
 /* "+N more in the dashboard" row shown when the session count exceeds the cap */
 .tray-overflow-row {

@@ -40,6 +40,17 @@ export function Dashboard() {
     return () => { cancelled = true; unlisten?.(); };
   }, []);
 
+  // The tray popover's "Settings" and the native macOS Settings menu reveal the
+  // dashboard and emit `navigate-settings`; land on the Settings tab so the
+  // action actually does something (without this it just showed Sessions).
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    listen("navigate-settings", () => setTab("Settings"))
+      .then((fn) => { if (cancelled) fn(); else unlisten = fn; });
+    return () => { cancelled = true; unlisten?.(); };
+  }, []);
+
   const enterFocusMode = useCallback(() => {
     setFrameless(true);
     invoke("set_frameless", { frameless: true }).catch(() => {});

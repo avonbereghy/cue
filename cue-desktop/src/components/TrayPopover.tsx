@@ -329,6 +329,7 @@ export function TrayPopoverPage() {
   const sessions = useSessionMonitor();
 
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
   // Resize the popover window to fit its content (header + session list) so the
@@ -337,18 +338,36 @@ export function TrayPopoverPage() {
   // outgrow the screen (the Rust side clamps to a floor and 80% of the monitor).
   // We measure header + the list's unclipped scrollHeight rather than
   // root.scrollHeight because `.tray-list` is overflow:auto, which clips its own
-  // offsetHeight to the available flex space.
+  // offsetHeight to the available flex space. When the "⋯" menu is open it drops
+  // from the header and can be taller than a short (few-session) popover, so we
+  // also grow the window to the menu's bottom edge — otherwise the lower items
+  // (Focus Mode, Quit) get clipped by the window bounds.
   const measureAndResize = useCallback(() => {
     const root = rootRef.current;
     if (!root) return;
     const header = root.querySelector<HTMLElement>(".tray-header");
     const list = root.querySelector<HTMLElement>(".tray-list");
     const SHELL_PADDING_PX = 14; // .tray-popover has padding:6 + 1px borders
-    const total =
-      (header?.offsetHeight ?? 0) +
-      (list?.scrollHeight ?? 0) +
-      SHELL_PADDING_PX;
+    const headerH = header?.offsetHeight ?? 0;
+    let total = headerH + (list?.scrollHeight ?? 0) + SHELL_PADDING_PX;
+    const menu = menuRef.current;
+    if (menu) {
+      // Menu is anchored at top:100% of the header's "⋯" with a 4px gap.
+      total = Math.max(total, headerH + 4 + menu.offsetHeight + SHELL_PADDING_PX);
+    }
     invoke("resize_tray_popover", { contentHeight: total }).catch(() => {});
+  }, []);
+
+  // Re-fit when the "⋯" menu opens/closes so a short popover grows to show every
+  // item, then shrinks back when it closes.
+  useLayoutEffect(() => { measureAndResize(); }, [menuOpen, measureAndResize]);
+
+  // Close the menu when the popover loses focus — the Rust side hides the window
+  // on blur, so the menu should never linger open behind a dismissed popover.
+  useEffect(() => {
+    const onBlur = () => setMenuOpen(false);
+    window.addEventListener("blur", onBlur);
+    return () => window.removeEventListener("blur", onBlur);
   }, []);
 
   // Track current theme so colors recompute when the user switches dark/light.
@@ -478,6 +497,7 @@ export function TrayPopoverPage() {
               <>
                 <div onClick={() => setMenuOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 40 }} aria-hidden="true" />
                 <div
+                  ref={menuRef}
                   role="menu"
                   style={{
                     position: "absolute",
