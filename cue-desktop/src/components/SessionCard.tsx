@@ -1483,14 +1483,14 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 dimmed, dot-separated. Tooltips still carry the exact values. */}
             <div className="flex items-center gap-1.5 flex-wrap text-[0.625rem] font-mono text-white/30 min-w-0">
               <span title={`Input: ${aggregatedInputTokens.toLocaleString()} tokens`}>{formatTokens(aggregatedInputTokens)} in</span>
-              <span aria-hidden className="text-white/15">\u00B7</span>
+              <span aria-hidden className="text-white/15">{"\u00B7"}</span>
               <span title={`Output: ${aggregatedOutputTokens.toLocaleString()} tokens`}>{formatTokens(aggregatedOutputTokens)} out</span>
-              {aggregatedToolUses > 0 && (<><span aria-hidden className="text-white/15">\u00B7</span><span title={`${aggregatedToolUses.toLocaleString()} tool calls`}>{aggregatedToolUses} tools</span></>)}
-              <span aria-hidden className="text-white/15">\u00B7</span>
+              {aggregatedToolUses > 0 && (<><span aria-hidden className="text-white/15">{"\u00B7"}</span><span title={`${aggregatedToolUses.toLocaleString()} tool calls`}>{aggregatedToolUses} tools</span></>)}
+              <span aria-hidden className="text-white/15">{"\u00B7"}</span>
               <span title={`${metrics.userMessageCount} of your messages \u00B7 ${metrics.messageCount} total messages`}>{metrics.userMessageCount}/{metrics.messageCount} msgs</span>
-              {session.totalDurationSecs > 0 && (<><span aria-hidden className="text-white/15">\u00B7</span><span title="Active session time">{formatDuration(session.totalDurationSecs)}</span></>)}
-              {!isNarrow && session.sourceDisplay !== "\u2014" && (<><span aria-hidden className="text-white/15">\u00B7</span><span title={`Launched from ${session.sourceDisplay}`}>{session.sourceDisplay}</span></>)}
-              {truncatedId && (<><span aria-hidden className="text-white/15">\u00B7</span><button onClick={copySessionId} className="font-mono hover:text-white/60 transition-colors cursor-pointer" title={`Session ID \u2014 click to copy: ${info.id}`} aria-label={`Copy session ID ${info.id}`}>{truncatedId}&hellip;{copied && <span>{"\u2713"}</span>}</button></>)}
+              {session.totalDurationSecs > 0 && (<><span aria-hidden className="text-white/15">{"\u00B7"}</span><span title="Active session time">{formatDuration(session.totalDurationSecs)}</span></>)}
+              {!isNarrow && session.sourceDisplay !== "\u2014" && (<><span aria-hidden className="text-white/15">{"\u00B7"}</span><span title={`Launched from ${session.sourceDisplay}`}>{session.sourceDisplay}</span></>)}
+              {truncatedId && (<><span aria-hidden className="text-white/15">{"\u00B7"}</span><button onClick={copySessionId} className="font-mono hover:text-white/60 transition-colors cursor-pointer" title={`Session ID \u2014 click to copy: ${info.id}`} aria-label={`Copy session ID ${info.id}`}>{truncatedId}&hellip;{copied && <span>{"\u2713"}</span>}</button></>)}
             </div>
           </div>
 
