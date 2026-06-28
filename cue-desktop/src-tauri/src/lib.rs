@@ -245,24 +245,6 @@ fn open_dashboard_from_tray(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Enter Focus Mode on the *main* window from the tray popover. Focus Mode is a
-/// state of the dashboard window, so the popover can't toggle it on itself: set
-/// the main window frameless, reveal it, and tell the dashboard to hide its
-/// toolbar. (The `frameless-changed` reset only fires from the "Show Title Bar"
-/// menu, so this won't be clobbered.)
-#[tauri::command]
-fn enter_focus_mode_from_tray(app: AppHandle) -> Result<(), String> {
-    if let Some(popover) = app.get_webview_window("tray-popover") {
-        let _ = popover.hide();
-    }
-    if let Some(win) = app.get_webview_window("main") {
-        let _ = win.set_decorations(false);
-    }
-    reveal_main(&app);
-    let _ = app.emit("frameless-changed", true);
-    Ok(())
-}
-
 #[tauri::command]
 fn open_settings_from_tray(app: AppHandle) -> Result<(), String> {
     if let Some(popover) = app.get_webview_window("tray-popover") {
@@ -337,11 +319,6 @@ fn get_claude_version(state: State<'_, AppState>) -> Option<String> {
         .lock_safe()
         .claude_version
         .clone()
-}
-
-#[tauri::command]
-fn set_frameless(window: tauri::Window, frameless: bool) {
-    let _ = window.set_decorations(!frameless);
 }
 
 #[tauri::command]
@@ -1703,7 +1680,6 @@ pub fn run() {
             open_theme_picker,
             get_system_memory,
             get_claude_version,
-            set_frameless,
             set_vibrancy,
             write_sandbox_sessions,
             clear_sandbox_sessions,
@@ -1717,7 +1693,6 @@ pub fn run() {
             resize_main_to_content,
             open_dashboard_from_tray,
             open_settings_from_tray,
-            enter_focus_mode_from_tray,
             quit_app,
         ])
         .on_window_event(|window, event| {
@@ -1851,29 +1826,20 @@ pub fn run() {
                     .paste()
                     .select_all()
                     .build()?;
-                let focus_item = MenuItemBuilder::with_id("toggle-focus-mode", "Focus Mode")
-                    .accelerator("CmdOrCtrl+Shift+F")
-                    .build(app)?;
-                let view_menu = SubmenuBuilder::new(app, "View").item(&focus_item).build()?;
                 let window_menu = SubmenuBuilder::new(app, "Window")
                     .minimize()
                     .separator()
                     .close_window()
                     .build()?;
                 let menu = MenuBuilder::new(app)
-                    .items(&[&app_menu, &edit_menu, &view_menu, &window_menu])
+                    .items(&[&app_menu, &edit_menu, &window_menu])
                     .build()?;
                 app.set_menu(menu)?;
-                app.on_menu_event(|app_handle, event| match event.id().as_ref() {
-                    "app-settings" => {
+                app.on_menu_event(|app_handle, event| {
+                    if event.id().as_ref() == "app-settings" {
                         reveal_main(app_handle);
                         let _ = app_handle.emit("navigate-settings", ());
                     }
-                    // Frontend owns the frameless state, so just ask it to toggle.
-                    "toggle-focus-mode" => {
-                        let _ = app_handle.emit("menu-toggle-focus-mode", ());
-                    }
-                    _ => {}
                 });
             }
 
@@ -2450,14 +2416,6 @@ fn setup_tray(
                 reveal_main(app);
                 let _ = app.emit("navigate-settings", ());
             }
-            "show-title-bar" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.set_decorations(true);
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                    let _ = app.emit("frameless-changed", false);
-                }
-            }
             "quit" => {
                 app.exit(0);
             }
@@ -2821,7 +2779,6 @@ fn build_tray_menu(
 
     builder = builder.separator();
     builder = builder.text("dashboard", "Dashboard...");
-    builder = builder.text("show-title-bar", "Show Title Bar");
     builder = builder.text("settings", "Settings...");
     builder = builder.separator();
     builder = builder.text("quit", "Quit");

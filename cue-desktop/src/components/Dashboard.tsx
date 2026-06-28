@@ -11,7 +11,6 @@ type Tab = "Sessions" | "Settings";
 
 export function Dashboard() {
   const [tab, setTab] = useState<Tab>("Sessions");
-  const [frameless, setFrameless] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [justExpanded, setJustExpanded] = useState(false);
   const [autoFitWindow, setAutoFitWindow] = useState(true);
@@ -29,16 +28,6 @@ export function Dashboard() {
         invoke("update_settings", { newSettings: { ...s, compactMode: false, slimMode: false } }).catch(() => {});
       }
     }).catch(() => {});
-  }, []);
-
-  // Listen for frameless restore from tray menu
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    listen<boolean>("frameless-changed", (e) => {
-      setFrameless(e.payload);
-    }).then((fn) => { if (cancelled) fn(); else unlisten = fn; });
-    return () => { cancelled = true; unlisten?.(); };
   }, []);
 
   // The tray popover's "Settings" and the native macOS Settings menu reveal the
@@ -62,15 +51,6 @@ export function Dashboard() {
     listen<Settings>("settings-changed", (e) => apply(e.payload))
       .then((fn) => { if (cancelled) fn(); else unlisten = fn; });
     return () => { cancelled = true; unlisten?.(); };
-  }, []);
-
-  const enterFocusMode = useCallback(() => {
-    setFrameless(true);
-    invoke("set_frameless", { frameless: true }).catch(() => {});
-  }, []);
-  const exitFocusMode = useCallback(() => {
-    setFrameless(false);
-    invoke("set_frameless", { frameless: false }).catch(() => {});
   }, []);
 
   // Auto-fit the window height to the session list (the Rust side yields to a
@@ -112,40 +92,16 @@ export function Dashboard() {
     const mo = new MutationObserver(() => { observeChildren(); measureAndFitMain(); });
     mo.observe(scroll, { childList: true });
     return () => { ro.disconnect(); mo.disconnect(); };
-  }, [sessions, tab, frameless, measureAndFitMain]);
+  }, [sessions, tab, measureAndFitMain]);
 
-  // Esc exits Focus Mode and closes the overflow menu. The macOS menu bar's
-  // "View > Focus Mode" owns the ⌘⇧F accelerator.
+  // Esc closes the overflow menu.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setMenuOpen(false);
-        if (frameless) {
-          e.preventDefault();
-          exitFocusMode();
-        }
-      }
+      if (e.key === "Escape") setMenuOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [frameless, exitFocusMode]);
-
-  // Latest frameless value for the once-subscribed event listeners below.
-  const framelessRef = useRef(frameless);
-  useEffect(() => {
-    framelessRef.current = frameless;
-  }, [frameless]);
-
-  // Native "View > Focus Mode" (⌘⇧F) toggles via this event.
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    listen("menu-toggle-focus-mode", () => {
-      if (framelessRef.current) exitFocusMode();
-      else enterFocusMode();
-    }).then((fn) => { if (cancelled) fn(); else unlisten = fn; });
-    return () => { cancelled = true; unlisten?.(); };
-  }, [enterFocusMode, exitFocusMode]);
+  }, []);
 
   // "Expand" from the tray popover: play a brief scale-in so the dashboard
   // reads as the popover blooming into the full view.
@@ -178,37 +134,11 @@ export function Dashboard() {
   return (
     <div
       ref={rootRef}
-      className={`relative flex flex-col h-screen ${frameless ? "rounded-xl overflow-hidden" : ""} ${justExpanded ? "dashboard-expand-in" : ""}`}
+      className={`relative flex flex-col h-screen ${justExpanded ? "dashboard-expand-in" : ""}`}
       style={{ backgroundColor: "var(--app-bg)" }}
     >
-      {/* Focus Mode: a thin draggable strip keeps the window movable when the
-          title bar is hidden, and an always-visible restore chip guarantees an
-          obvious way out (plus Esc / ⌘⇧F). Never a one-way trap. */}
-      {frameless && (
-        <div
-          className="absolute top-0 left-0 right-0 z-50 h-7 flex items-center justify-end px-1.5"
-          style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
-        >
-          <button
-            onClick={exitFocusMode}
-            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-            className="flex items-center justify-center w-6 h-6 rounded-md text-white/40 hover:text-white/90 hover:bg-white/10 transition-colors"
-            aria-label="Exit Focus Mode and show the title bar"
-            title="Exit Focus Mode  ·  ⌘⇧F or Esc"
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <polyline points="15 3 21 3 21 9" />
-              <polyline points="9 21 3 21 3 15" />
-              <line x1="21" y1="3" x2="14" y2="10" />
-              <line x1="3" y1="21" x2="10" y2="14" />
-            </svg>
-          </button>
-        </div>
-      )}
-
-      {/* Toolbar — hidden in Focus Mode */}
-      {!frameless && (
-        <div className="flex items-center gap-2 px-4 pt-2.5 pb-1.5">
+      {/* Toolbar */}
+      <div className="flex items-center gap-2 px-4 pt-2.5 pb-1.5">
           {/* Left: context — session count, or back + title in Settings */}
           {tab === "Settings" ? (
             <button
@@ -286,20 +216,6 @@ export function Dashboard() {
                       </svg>
                       Themes
                     </button>
-                    <button
-                      role="menuitem"
-                      onClick={() => { setMenuOpen(false); enterFocusMode(); }}
-                      className={menuItemClass}
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <polyline points="4 14 10 14 10 20" />
-                        <polyline points="20 10 14 10 14 4" />
-                        <line x1="14" y1="10" x2="21" y2="3" />
-                        <line x1="3" y1="21" x2="10" y2="14" />
-                      </svg>
-                      <span className="flex-1">Focus Mode</span>
-                      <span className="text-[0.5625rem] text-white/30" aria-hidden="true">⌘⇧F</span>
-                    </button>
                     <div className="my-1 border-t border-white/10" aria-hidden="true" />
                     <button
                       role="menuitem"
@@ -318,7 +234,6 @@ export function Dashboard() {
             </div>
           </div>
         </div>
-      )}
 
       {/* Tab content */}
       {tab === "Sessions" && (

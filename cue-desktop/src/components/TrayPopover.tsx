@@ -341,7 +341,7 @@ export function TrayPopoverPage() {
   // offsetHeight to the available flex space. When the "⋯" menu is open it drops
   // from the header and can be taller than a short (few-session) popover, so we
   // also grow the window to the menu's bottom edge — otherwise the lower items
-  // (Focus Mode, Quit) get clipped by the window bounds.
+  // (Themes, Quit) get clipped by the window bounds.
   const measureAndResize = useCallback(() => {
     const root = rootRef.current;
     if (!root) return;
@@ -517,7 +517,6 @@ export function TrayPopoverPage() {
                   <button role="menuitem" className="tray-menu-item" onClick={() => { setMenuOpen(false); invoke("open_settings_from_tray").catch(() => {}); }}>Settings</button>
                   <button role="menuitem" className="tray-menu-item" onClick={() => { setMenuOpen(false); invoke("open_keyboard").catch(() => {}); }}>Effects</button>
                   <button role="menuitem" className="tray-menu-item" onClick={() => { setMenuOpen(false); invoke("open_theme_picker").catch(() => {}); }}>Themes</button>
-                  <button role="menuitem" className="tray-menu-item" onClick={() => { setMenuOpen(false); invoke("enter_focus_mode_from_tray").catch(() => {}); }}>Focus Mode</button>
                   <div aria-hidden="true" style={{ height: 1, margin: "4px 8px", backgroundColor: isLight ? "rgba(0,0,0,0.08)" : "rgba(255,255,255,0.10)" }} />
                   <button role="menuitem" className="tray-menu-item tray-menu-item-danger" onClick={() => { setMenuOpen(false); invoke("quit_app").catch(() => {}); }}>Quit</button>
                 </div>
