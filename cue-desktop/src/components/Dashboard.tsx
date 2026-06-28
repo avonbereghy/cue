@@ -214,7 +214,7 @@ export function Dashboard() {
                         <circle cx="17.5" cy="10.5" r="1.4" fill="currentColor" stroke="none" />
                         <circle cx="6.5" cy="12" r="1.4" fill="currentColor" stroke="none" />
                       </svg>
-                      Themes
+                      Appearance
                     </button>
                     <div className="my-1 border-t border-white/10" aria-hidden="true" />
                     <button

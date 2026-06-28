@@ -11,6 +11,7 @@ pub mod git_status;
 pub mod jsonl_parser;
 pub mod model_context;
 pub mod models;
+pub mod notifier;
 pub mod paths;
 pub mod permission_log;
 pub mod permission_server;
@@ -34,6 +35,10 @@ use tauri::{
 /// Application state managed by Tauri.
 pub struct AppState {
     pub monitor: Arc<SessionMonitorState>,
+    /// Decides which session state transitions deserve a native notification.
+    /// Holds its own previous-state memory + a cached projection of the user's
+    /// notification settings (refreshed by `update_settings`).
+    pub notifier: Arc<notifier::Notifier>,
     pub pending_permissions: Arc<permission_server::PendingRequests>,
     pub permission_metadata: Arc<Mutex<HashMap<String, models::PermissionRequest>>>,
     /// Last-known screen rect of the tray icon, captured on every click. Used
@@ -195,8 +200,8 @@ fn open_theme_picker(app: AppHandle) -> Result<(), String> {
         "theme-picker",
         WebviewUrl::App("index.html#/theme-picker".into()),
     )
-    .title("Themes")
-    .inner_size(240.0, 360.0)
+    .title("Appearance")
+    .inner_size(250.0, 500.0)
     .resizable(false)
     .always_on_top(true)
     .build()
@@ -285,7 +290,11 @@ fn get_settings() -> Settings {
 }
 
 #[tauri::command]
-fn update_settings(app: tauri::AppHandle, new_settings: Settings) -> Result<(), String> {
+fn update_settings(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    new_settings: Settings,
+) -> Result<(), String> {
     // Vibrancy is toggled by the frontend via the set_vibrancy command
     // when the user actively selects a glass theme. We do NOT call
     // toggle_vibrancy here — doing so on every save resets the window
@@ -293,6 +302,11 @@ fn update_settings(app: tauri::AppHandle, new_settings: Settings) -> Result<(), 
     settings::save_settings(&new_settings)?;
     apply_visibility_settings(&app, &new_settings);
     apply_shortcut_settings(&app, &new_settings);
+    // Keep the notifier's cached preferences in lockstep with disk so the
+    // poll loop honors a freshly-toggled notification setting on the next tick.
+    state
+        .notifier
+        .update_settings(notifier::NotificationSettings::from(&new_settings));
     let _ = app.emit("settings-changed", &new_settings);
     Ok(())
 }
@@ -1494,7 +1508,11 @@ fn startup_checks() {
 }
 
 /// Spawn background timers for polling and metrics refresh.
-fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
+fn spawn_timers(
+    app_handle: AppHandle,
+    monitor: Arc<SessionMonitorState>,
+    notifier: Arc<notifier::Notifier>,
+) {
     // Eager prime on app start: run one full pass (metrics + supplemental +
     // poll_status) before the periodic loops settle in. The 1s interval below
     // ticks immediately too, but this gives us belt-and-suspenders coverage so
@@ -1524,6 +1542,7 @@ fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
 
     let monitor_poll = monitor.clone();
     let app_poll = app_handle.clone();
+    let notifier_poll = notifier.clone();
 
     // Poll sessions.json every 1 second.
     //
@@ -1545,6 +1564,22 @@ fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
             .await;
             match result {
                 Ok(sessions) => {
+                    // Decide + fire native notifications for state transitions
+                    // (waiting / error / finished). Runs every tick independent
+                    // of the emit-dedup below: the notifier seeds silently on a
+                    // session's first sight, so the first poll after launch never
+                    // produces a storm. Firing from the backend means the alert
+                    // reaches the user even when no window is open.
+                    for ev in notifier_poll.diff_and_collect(&sessions) {
+                        use tauri_plugin_notification::NotificationExt;
+                        let _ = app_poll
+                            .notification()
+                            .builder()
+                            .title(&ev.title)
+                            .body(&ev.body)
+                            .show();
+                    }
+
                     let payload = match serde_json::to_vec(&sessions) {
                         Ok(b) => b,
                         Err(e) => {
@@ -1621,6 +1656,7 @@ pub fn run() {
     startup_checks();
 
     let monitor = Arc::new(SessionMonitorState::new());
+    let app_notifier = Arc::new(notifier::Notifier::new());
     let pending_permissions = Arc::new(permission_server::PendingRequests::new());
     let permission_metadata: Arc<Mutex<HashMap<String, models::PermissionRequest>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -1649,6 +1685,7 @@ pub fn run() {
         )
         .manage(AppState {
             monitor: monitor.clone(),
+            notifier: app_notifier.clone(),
             pending_permissions,
             permission_metadata,
             last_tray_rect: Arc::new(Mutex::new(None)),
@@ -1856,11 +1893,15 @@ pub fn run() {
             apply_visibility_settings(&handle, &startup_settings);
             apply_shortcut_settings(&handle, &startup_settings);
 
+            // Apply the persisted notification preferences before the poll loop
+            // starts firing (until now the notifier holds all-on defaults).
+            app_notifier.update_settings(notifier::NotificationSettings::from(&startup_settings));
+
             // --- Blink timer (0.5s) ---
             spawn_blink_timer(handle.clone(), monitor_tray.clone());
 
             // --- Data polling timers ---
-            spawn_timers(handle.clone(), monitor);
+            spawn_timers(handle.clone(), monitor, app_notifier.clone());
 
             // --- Permission server (localhost-only HTTP for Claude Code hooks) ---
             // Only start if user has opted in via settings

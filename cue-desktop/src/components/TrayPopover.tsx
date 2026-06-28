@@ -2,8 +2,9 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSessionMonitor } from "@/hooks/useSessionMonitor";
-import type { EnrichedSession } from "@/lib/types";
+import type { EnrichedSession, Settings } from "@/lib/types";
 import { cleanPromptText, errorReason } from "@/lib/format";
+import { normalizeView } from "@/lib/dashboardViews";
 
 // State color palette mirrors src-tauri/src/tray.rs::color_for_state
 // Returned as { rail, pillBg, pillText } so the row + state pill can use
@@ -29,6 +30,20 @@ function stateColors(state: string, isLight: boolean): StateColors {
     pillBg:   `rgba(${rgb}, ${isLight ? 0.14 : 0.18})`,
     pillText: isLight ? `rgb(${light})` : `rgb(${dark})`,
   };
+}
+
+// Per-Look state hues so the tray rows match the active dashboard skin.
+// Instrument keeps its original bright palette (stateColors above).
+const LOOK_STATE: Record<string, Record<string, string>> = {
+  almanac: { working: "#3a5b73", subagent: "#2f6b63", waiting: "#b07a1e", thinking: "#6a4a6e", compacting: "#6a4a6e", clearing: "#6a4a6e", error: "#a23a2e", done: "#4e6b3a", idle: "#8a7758" },
+  night:   { working: "#d8743f", subagent: "#e9c074", waiting: "#f0c067", thinking: "#e8a14a", compacting: "#e8a14a", clearing: "#e8a14a", error: "#c2552e", done: "#9bab74", idle: "#a8967a" },
+  studio:  { working: "#4f7a4a", subagent: "#7a6aa8", waiting: "#c97a16", thinking: "#2f7e86", compacting: "#2f7e86", clearing: "#2f7e86", error: "#a83a32", done: "#7d5a2b", idle: "#9a917f" },
+};
+
+function colorsForRow(view: string, state: string, isLight: boolean): StateColors {
+  if (view === "instrument") return stateColors(state, isLight);
+  const hex = LOOK_STATE[view]?.[state] ?? LOOK_STATE[view]?.done ?? "#8a8070";
+  return { rail: hex, pillBg: `${hex}26`, pillText: hex };
 }
 
 const STATE_LABELS: Record<string, string> = {
@@ -83,8 +98,8 @@ function StateDot({ state, color }: { state: string; color: string }) {
   );
 }
 
-function SessionRow({ session, isLight }: { session: EnrichedSession; isLight: boolean }) {
-  const colors = stateColors(session.info.state, isLight);
+function SessionRow({ session, view, isLight }: { session: EnrichedSession; view: string; isLight: boolean }) {
+  const colors = colorsForRow(view, session.info.state, isLight);
   const label = STATE_LABELS[session.info.state] ?? session.info.state;
   const tokens = currentContextTokens(session);
   // contextUsagePercent is a fraction (0–1); convert to whole percent.
@@ -384,6 +399,21 @@ export function TrayPopoverPage() {
     return () => observer.disconnect();
   }, []);
 
+  // Active dashboard Look — the tray popover mirrors it. Read from settings (the
+  // tray is its own window, so the main window's data-view attribute isn't shared).
+  const [view, setView] = useState("instrument");
+  useEffect(() => {
+    invoke<Settings>("get_settings").then((s) => setView(normalizeView(s.dashboardView))).catch(() => {});
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    listen<Settings>("settings-changed", (e) => setView(normalizeView(e.payload.dashboardView)))
+      .then((fn) => { if (cancelled) fn(); else unlisten = fn; });
+    return () => { cancelled = true; unlisten?.(); };
+  }, []);
+  // Light/dark for chrome not driven by the look's CSS vars (the ⋯ menu, badges):
+  // light looks read light, Night reads dark, Instrument follows the app theme.
+  const effLight = view === "instrument" ? isLight : view !== "night";
+
   // Hide on Escape — the Rust side also hides on blur.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -442,10 +472,10 @@ export function TrayPopoverPage() {
   useLayoutEffect(() => { measureAndResize(); }, [sorted, measureAndResize]);
 
   return (
-    <div ref={rootRef} className="tray-popover" data-tray-light={isLight ? "1" : "0"}>
+    <div ref={rootRef} className="tray-popover" data-view={view} data-tray-light={effLight ? "1" : "0"}>
       <div className="tray-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-          <span style={{
+          <span className="tray-wordmark" style={{
             fontWeight: 700,
             fontSize: 12,
             letterSpacing: "0.06em",
@@ -506,8 +536,8 @@ export function TrayPopoverPage() {
                     marginTop: 4,
                     zIndex: 50,
                     minWidth: 150,
-                    backgroundColor: isLight ? "#ffffff" : "#1e1e20",
-                    border: `1px solid ${isLight ? "rgba(0,0,0,0.10)" : "rgba(255,255,255,0.10)"}`,
+                    backgroundColor: effLight ? "#ffffff" : "#1e1e20",
+                    border: `1px solid ${effLight ? "rgba(0,0,0,0.10)" : "rgba(255,255,255,0.10)"}`,
                     borderRadius: 8,
                     boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
                     padding: "4px 0",
@@ -516,8 +546,8 @@ export function TrayPopoverPage() {
                 >
                   <button role="menuitem" className="tray-menu-item" onClick={() => { setMenuOpen(false); invoke("open_settings_from_tray").catch(() => {}); }}>Settings</button>
                   <button role="menuitem" className="tray-menu-item" onClick={() => { setMenuOpen(false); invoke("open_keyboard").catch(() => {}); }}>Effects</button>
-                  <button role="menuitem" className="tray-menu-item" onClick={() => { setMenuOpen(false); invoke("open_theme_picker").catch(() => {}); }}>Themes</button>
-                  <div aria-hidden="true" style={{ height: 1, margin: "4px 8px", backgroundColor: isLight ? "rgba(0,0,0,0.08)" : "rgba(255,255,255,0.10)" }} />
+                  <button role="menuitem" className="tray-menu-item" onClick={() => { setMenuOpen(false); invoke("open_theme_picker").catch(() => {}); }}>Appearance</button>
+                  <div aria-hidden="true" style={{ height: 1, margin: "4px 8px", backgroundColor: effLight ? "rgba(0,0,0,0.08)" : "rgba(255,255,255,0.10)" }} />
                   <button role="menuitem" className="tray-menu-item tray-menu-item-danger" onClick={() => { setMenuOpen(false); invoke("quit_app").catch(() => {}); }}>Quit</button>
                 </div>
               </>
@@ -540,7 +570,7 @@ export function TrayPopoverPage() {
         ) : (
           <>
             {sorted.slice(0, MAX_ROWS).map((s) => (
-              <SessionRow key={s.info.id} session={s} isLight={isLight} />
+              <SessionRow key={s.info.id} session={s} view={view} isLight={effLight} />
             ))}
             {sorted.length > MAX_ROWS && (
               <button

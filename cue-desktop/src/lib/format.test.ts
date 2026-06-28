@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import {
   formatTokens,
   formatDuration,
@@ -6,6 +6,8 @@ import {
   formatModelName,
   cleanPromptText,
   errorReason,
+  getProjectAccent,
+  __resetProjectAccents,
 } from "./format";
 
 describe("errorReason", () => {
@@ -92,5 +94,48 @@ describe("cleanPromptText", () => {
     const raw =
       "<command-message>deploy</command-message><command-name>/deploy</command-name><command-args>staging now</command-args>";
     expect(cleanPromptText(raw)).toBe("/deploy staging now");
+  });
+});
+
+describe("getProjectAccent", () => {
+  // Hue windows deliberately clear of every status color + the rate-limit bars.
+  const SAFE_WINDOWS: [number, number][] = [
+    [70, 118],
+    [160, 196],
+    [250, 278],
+    [330, 352],
+  ];
+  const hueOf = (color: string): number => {
+    const m = color.match(/^hsl\((\d+),/);
+    if (!m) throw new Error(`not an hsl() color: ${color}`);
+    return Number(m[1]);
+  };
+  const inSafeWindow = (hue: number) => SAFE_WINDOWS.some(([lo, hi]) => hue >= lo && hue <= hi);
+
+  beforeEach(() => __resetProjectAccents());
+
+  it("is stable: the same workspace always gets the same color", () => {
+    const a = getProjectAccent("/Users/me/dev/api", true);
+    const b = getProjectAccent("/Users/me/dev/api", true);
+    expect(a).toBe(b);
+  });
+
+  it("never lands a hue inside a status-color band", () => {
+    for (let i = 0; i < 50; i++) {
+      const hue = hueOf(getProjectAccent(`/Users/me/project-${i}`, true));
+      expect(inSafeWindow(hue)).toBe(true);
+    }
+  });
+
+  it("spreads the first several projects into distinct colors", () => {
+    const colors = ["a", "b", "c", "d", "e"].map((p) => getProjectAccent(`/ws/${p}`, true));
+    expect(new Set(colors).size).toBe(colors.length);
+  });
+
+  it("uses different lightness/saturation for dark vs light", () => {
+    const dark = getProjectAccent("/ws/same", true);
+    const light = getProjectAccent("/ws/same", false);
+    expect(dark).not.toBe(light);
+    expect(hueOf(dark)).toBe(hueOf(light));
   });
 });

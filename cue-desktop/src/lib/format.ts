@@ -117,6 +117,60 @@ export function errorReason(
   return null;
 }
 
+// --- Per-project color accents -------------------------------------------
+// A muted accent color per project (keyed on the workspace path). Same project
+// → same color; different projects spread maximally far apart so they read as
+// distinct at a glance. Hues are confined to windows that can NEVER collide
+// with a status color (working/thinking/waiting/error/subagent/compacting/
+// clearing/done) or the rate-limit bars — so the left-edge accent and the
+// state color stay separate channels. Colors are assigned by order of first
+// appearance and are stable for the lifetime of the session.
+const ACCENT_HUE_WINDOWS: [number, number][] = [
+  [70, 118], // chartreuse → lime (clear of yellow ~50, green ~142)
+  [160, 196], // teal → cyan (clear of green ~142, subagent ~205)
+  [250, 278], // indigo → violet (clear of periwinkle ~228, rate-limit magenta ~292)
+  [330, 352], // rose (clear of clearing ~315, error ~0)
+];
+const ACCENT_SPAN = ACCENT_HUE_WINDOWS.reduce((sum, [lo, hi]) => sum + (hi - lo), 0);
+// Golden-ratio conjugate: an additive recurrence that equidistributes
+// sequential indices, so the Nth project lands as far as possible from the rest.
+const GOLDEN_RATIO_CONJ = 0.618033988749895;
+
+// Map a position in [0, ACCENT_SPAN) into the concatenated safe hue windows.
+function accentSpanToHue(pos: number): number {
+  let p = ((pos % ACCENT_SPAN) + ACCENT_SPAN) % ACCENT_SPAN;
+  for (const [lo, hi] of ACCENT_HUE_WINDOWS) {
+    const width = hi - lo;
+    if (p < width) return lo + p;
+    p -= width;
+  }
+  return ACCENT_HUE_WINDOWS[0][0]; // unreachable: p < ACCENT_SPAN by construction
+}
+
+const accentIndex = new Map<string, number>();
+const accentCache = new Map<string, string>();
+
+export function getProjectAccent(workspace: string, isDark: boolean): string {
+  const key = `${workspace}|${isDark ? "d" : "l"}`;
+  const cached = accentCache.get(key);
+  if (cached) return cached;
+  let idx = accentIndex.get(workspace);
+  if (idx === undefined) {
+    idx = accentIndex.size;
+    accentIndex.set(workspace, idx);
+  }
+  const hue = Math.round(accentSpanToHue(idx * GOLDEN_RATIO_CONJ * ACCENT_SPAN));
+  const color = isDark ? `hsl(${hue}, 38%, 62%)` : `hsl(${hue}, 46%, 42%)`;
+  accentCache.set(key, color);
+  return color;
+}
+
+// Test-only: reset the per-session accent assignment.
+export function __resetProjectAccents(): void {
+  accentIndex.clear();
+  accentCache.clear();
+}
+
 function modelPricing(model: string): { inputPerToken: number; outputPerToken: number } {
   const m = model.toLowerCase();
   if (m.includes("opus")) {

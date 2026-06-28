@@ -1064,6 +1064,60 @@ html[data-glass] .session-card--error {
     0 4px 12px rgba(0, 0, 0, 0.10);
 }
 
+/* Per-Look tray theming — `data-view` is set by TrayPopoverPage so the menu-bar
+   glance matches the active dashboard skin. These override the dark/light
+   --tray-* vars above (same specificity, declared later = wins). */
+.tray-popover[data-view="almanac"] {
+  --tray-shell-bg: #f2e8d2;
+  --tray-shell-border: rgba(120, 90, 50, 0.22);
+  --tray-text: #2b2118;
+  --tray-muted: #8a7758;
+  --tray-border: rgba(120, 90, 50, 0.18);
+  --tray-row-hover: rgba(120, 90, 50, 0.08);
+  --tray-bar-track: rgba(120, 90, 50, 0.16);
+  --tray-divider: rgba(120, 90, 50, 0.16);
+  --tray-danger: #a23a2e;
+  font-family: "Spectral", "Iowan Old Style", Georgia, serif;
+  box-shadow: 0 0 0 0.5px rgba(80, 55, 25, 0.12), 0 12px 40px rgba(80, 55, 25, 0.22), 0 4px 12px rgba(80, 55, 25, 0.12);
+}
+.tray-popover[data-view="almanac"] .tray-wordmark { font-family: "Zilla Slab", "Rockwell", Georgia, serif; }
+
+.tray-popover[data-view="studio"] {
+  --tray-shell-bg: #efe6d6;
+  --tray-shell-border: rgba(96, 72, 42, 0.22);
+  --tray-text: #2b2620;
+  --tray-muted: #8a8070;
+  --tray-border: rgba(96, 72, 42, 0.16);
+  --tray-row-hover: rgba(96, 72, 42, 0.06);
+  --tray-bar-track: #e3d7c2;
+  --tray-divider: rgba(96, 72, 42, 0.14);
+  --tray-danger: #a83a32;
+  font-family: "Spectral", "Iowan Old Style", Georgia, serif;
+  box-shadow: 0 0 0 0.5px rgba(96, 72, 42, 0.12), 0 12px 40px rgba(96, 72, 42, 0.20), 0 4px 12px rgba(96, 72, 42, 0.12);
+}
+.tray-popover[data-view="studio"] .tray-wordmark { font-family: "Fraunces", Georgia, serif; }
+
+.tray-popover[data-view="night"] {
+  --tray-shell-bg: #241c14;
+  --tray-shell-border: rgba(198, 154, 78, 0.20);
+  --tray-text: #f3e7d2;
+  --tray-muted: #a8967a;
+  --tray-border: rgba(198, 154, 78, 0.16);
+  --tray-row-hover: rgba(255, 225, 180, 0.05);
+  --tray-bar-track: rgba(0, 0, 0, 0.4);
+  --tray-divider: rgba(198, 154, 78, 0.12);
+  --tray-danger: #c2552e;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.4), 0 12px 40px rgba(0, 0, 0, 0.5), 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.tray-popover[data-view="night"] .tray-wordmark { font-family: "Fraunces", Georgia, serif; text-transform: none; letter-spacing: 0.01em; }
+
+/* Light-look bodies use a serif — keep figures crisp in IBM Plex Mono. */
+.tray-popover[data-view="almanac"] .mono-nums,
+.tray-popover[data-view="studio"] .mono-nums {
+  font-family: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+
 .tray-popover html, .tray-popover body { background: transparent !important; }
 
 .tray-header {

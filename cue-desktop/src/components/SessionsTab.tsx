@@ -7,6 +7,11 @@ import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, setGate as 
 import { DEFAULT_PRESET } from "@/lib/defaultPreset";
 import { SessionCard } from "./SessionCard";
 import { BranchView } from "./BranchView";
+import { AlmanacView } from "./views/AlmanacView";
+import { NightView } from "./views/NightView";
+import { StudioView } from "./views/StudioView";
+import { useTheme } from "@/hooks/useIsDark";
+import { getProjectAccent } from "@/lib/format";
 import {
   isAnyTransitionInFlight,
   subscribeTransitions,
@@ -126,6 +131,9 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [expandOverrides, setExpandOverrides] = useState<Record<string, number>>({});
   const [autoReorder, setAutoReorder] = useState(false);
   const [dashboardLayout, setDashboardLayout] = useState("flow");
+  const [dashboardView, setDashboardView] = useState("instrument");
+  const [projectAccentsEnabled, setProjectAccentsEnabled] = useState(true);
+  const { isDark } = useTheme();
   // Branch view: horizontal tree layout when window is wide (>60% of screen)
   const [branchView, setBranchView] = useState(false);
   useEffect(() => {
@@ -353,6 +361,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setKeyReleaseSpeed(s.keyReleaseSpeed ?? 0.4);
     setAutoReorder(s.autoReorder ?? false);
     setDashboardLayout(s.dashboardLayout ?? "flow");
+    setDashboardView(s.dashboardView || "instrument");
+    setProjectAccentsEnabled(s.projectAccentsEnabled ?? true);
     document.documentElement.style.setProperty("--font-scale", String(s.fontScale ?? 1.0));
     setTestMode(s.testMode ?? false);
     setCompactMode(s.compactMode ?? false);
@@ -2429,7 +2439,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     cordRetractForce, stringSpread, stringDeployAngle, keyPressSpeed, keyReleaseSpeed,
     compactMode, slimMode, contextThreshold, contextDisplay,
     showToolPills, showCurrentTool, showConfigCounts, showToolCallComets, timerDisplay,
-    lowPower,
+    lowPower, projectAccentsEnabled,
   }), [
     titleAnimation, animationSpeed, randomAnimation,
     signalString, signalFrequency, signalMode, signalAlpha, signalAmplitude, signalEcho,
@@ -2443,7 +2453,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     keyPressSpeed, keyReleaseSpeed,
     compactMode, slimMode, contextThreshold, contextDisplay,
     showToolPills, showCurrentTool, showConfigCounts, showToolCallComets, timerDisplay,
-    lowPower,
+    lowPower, projectAccentsEnabled,
   ]);
 
   // Per-session expand-cycle handlers cached by id so SessionCard's React.memo
@@ -2840,6 +2850,35 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // returned early, throwing "Rendered fewer hooks than expected" (black screen).
 
   // ---------------------------------------------------------------------------
+  // Alternative "Look" skins (Almanac, …). Detailed-only — they replace the
+  // instrument grid entirely but reuse all the prepared session/permission data
+  // and the .sessions-scroll container so window auto-fit keeps working.
+  // ---------------------------------------------------------------------------
+  if (!compactMode && dashboardView !== "instrument") {
+    const skinProps = {
+      sessions: sortedWithChildren,
+      revivedSessions,
+      permissionsEnabled,
+      pendingBySession,
+      approvePermission,
+      denyPermission,
+      timerDisplay,
+      showConfigCounts,
+      grouped: dashboardLayout === "grouped",
+      reviveClicks,
+      reviveClicksRequired: REVIVE_CLICKS_REQUIRED,
+      onReviveClick: handleReviveClick,
+      onDismissRevived: handleDismissRevived,
+      onClearAllRevived: handleClearAllRevived,
+      formatReviveElapsed,
+    };
+    if (dashboardView === "almanac") return <AlmanacView {...skinProps} />;
+    if (dashboardView === "night") return <NightView {...skinProps} />;
+    if (dashboardView === "studio") return <StudioView {...skinProps} />;
+    // Unknown view id falls through to the instrument render below.
+  }
+
+  // ---------------------------------------------------------------------------
   // Normal mode render
   // ---------------------------------------------------------------------------
   return (
@@ -2937,6 +2976,12 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
               <Fragment key={session.info.id}>
                 {firstOfGroup && (
                   <div className="col-span-full flex items-center gap-2 pt-2">
+                    {projectAccentsEnabled && (
+                      <span
+                        aria-hidden
+                        style={{ width: 8, height: 8, borderRadius: 9999, background: getProjectAccent(session.info.workspace, isDark), flex: "0 0 auto" }}
+                      />
+                    )}
                     <span className="text-xs font-medium text-white/55 truncate" title={session.info.workspace}>
                       {session.workspaceName}
                     </span>

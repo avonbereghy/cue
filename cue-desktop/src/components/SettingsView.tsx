@@ -778,8 +778,15 @@ export function SettingsView() {
       startAtLogin: true,
       autoFitWindow: true,
       dashboardLayout: "flow",
+      dashboardView: "instrument",
+      projectAccentsEnabled: true,
       trayShortcutEnabled: false,
       trayShortcut: "CmdOrCtrl+Shift+C",
+      notificationsEnabled: true,
+      notifyWaiting: true,
+      notifyError: true,
+      notifyDone: true,
+      notifyDoneMinSecs: 30,
       themeCustomizations: settings.themeCustomizations ?? {},
     };
     setSettings(defaults);
@@ -1301,11 +1308,26 @@ export function SettingsView() {
             label="Auto-fit window"
           />
         </SettingRow>
+        <SettingRow label="Look" description="The dashboard's visual style. Instrument is the original signal cards; the others are warm, hand-made alternatives — each ships its own palette and type." onReset={(settings.dashboardView || "instrument") !== "instrument" ? () => setSettings({ ...settings, dashboardView: "instrument" }) : undefined}>
+          <Select value={settings.dashboardView || "instrument"} options={[
+            { id: "instrument", label: "Instrument (signal)" },
+            { id: "almanac", label: "Almanac (field log)" },
+            { id: "night", label: "Night Study (dark)" },
+            { id: "studio", label: "Studio Paper (light)" },
+          ]} onChange={(v) => setSettings({ ...settings, dashboardView: v })} />
+        </SettingRow>
         <SettingRow label="Dashboard layout" description="Flow packs cards side-by-side; Group by project clusters a project's agents together" onReset={(settings.dashboardLayout ?? "flow") !== "flow" ? () => setSettings({ ...settings, dashboardLayout: "flow" }) : undefined}>
           <Select value={settings.dashboardLayout ?? "flow"} options={[
             { id: "flow", label: "Flow" },
             { id: "grouped", label: "Group by project" },
           ]} onChange={(v) => setSettings({ ...settings, dashboardLayout: v })} />
+        </SettingRow>
+        <SettingRow label="Project color accents" description="Tint each card's left edge by project so same-project cards are easy to spot" onReset={!(settings.projectAccentsEnabled ?? true) ? () => setSettings({ ...settings, projectAccentsEnabled: true }) : undefined}>
+          <Toggle
+            checked={settings.projectAccentsEnabled ?? true}
+            onChange={() => setSettings({ ...settings, projectAccentsEnabled: !(settings.projectAccentsEnabled ?? true) })}
+            label="Project color accents"
+          />
         </SettingRow>
         <SettingRow label="Tray toggle shortcut" description="Open or close the tray popover with a global keyboard shortcut" onReset={(settings.trayShortcutEnabled ?? false) ? () => setSettings({ ...settings, trayShortcutEnabled: false }) : undefined}>
           <Toggle
@@ -1327,6 +1349,54 @@ export function SettingsView() {
               placeholder="CmdOrCtrl+Shift+C"
             />
           </SettingRow>
+        )}
+      </section>
+
+      {/* Notifications */}
+      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Notifications</h3>
+      <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
+        <SettingRow label="Notifications" description="Send a macOS notification when a session needs you, hits an error, or finishes a long run" onReset={!(settings.notificationsEnabled ?? true) ? () => setSettings({ ...settings, notificationsEnabled: true }) : undefined}>
+          <Toggle
+            checked={settings.notificationsEnabled ?? true}
+            onChange={() => setSettings({ ...settings, notificationsEnabled: !(settings.notificationsEnabled ?? true) })}
+            label="Notifications"
+          />
+        </SettingRow>
+        {(settings.notificationsEnabled ?? true) && (
+          <>
+            <SettingRow label="Needs input" description="When a session blocks on a question, plan approval, or permission" onReset={!(settings.notifyWaiting ?? true) ? () => setSettings({ ...settings, notifyWaiting: true }) : undefined}>
+              <Toggle
+                checked={settings.notifyWaiting ?? true}
+                onChange={() => setSettings({ ...settings, notifyWaiting: !(settings.notifyWaiting ?? true) })}
+                label="Needs input"
+              />
+            </SettingRow>
+            <SettingRow label="Errors" description="When a session hits an error or gets rate limited" onReset={!(settings.notifyError ?? true) ? () => setSettings({ ...settings, notifyError: true }) : undefined}>
+              <Toggle
+                checked={settings.notifyError ?? true}
+                onChange={() => setSettings({ ...settings, notifyError: !(settings.notifyError ?? true) })}
+                label="Errors"
+              />
+            </SettingRow>
+            <SettingRow label="Finished" description="When a session wraps up a turn that ran long enough to be worth a ping" onReset={!(settings.notifyDone ?? true) ? () => setSettings({ ...settings, notifyDone: true }) : undefined}>
+              <Toggle
+                checked={settings.notifyDone ?? true}
+                onChange={() => setSettings({ ...settings, notifyDone: !(settings.notifyDone ?? true) })}
+                label="Finished"
+              />
+            </SettingRow>
+            {(settings.notifyDone ?? true) && (
+              <SettingRow label="Finished threshold" description="Only notify when the finished turn ran at least this long, so quick replies stay quiet" onReset={(settings.notifyDoneMinSecs ?? 30) !== 30 ? () => setSettings({ ...settings, notifyDoneMinSecs: 30 }) : undefined}>
+                <Select value={String(settings.notifyDoneMinSecs ?? 30)} options={[
+                  { id: "15", label: "15 seconds" },
+                  { id: "30", label: "30 seconds" },
+                  { id: "60", label: "1 minute" },
+                  { id: "120", label: "2 minutes" },
+                  { id: "300", label: "5 minutes" },
+                ]} onChange={(v) => setSettings({ ...settings, notifyDoneMinSecs: Number(v) })} />
+              </SettingRow>
+            )}
+          </>
         )}
       </section>
 

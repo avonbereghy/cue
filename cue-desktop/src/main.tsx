@@ -3,9 +3,19 @@ import ReactDOM from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { SIGNAL_THEMES, applyThemeCssVars } from "@/lib/types";
+import { applyDashboardView } from "@/lib/dashboardViews";
 import type { Settings } from "@/lib/types";
 import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+
+// Night Study borrows the active color theme's accent for its lamplight/brass,
+// but keeps its native amber for the neutral "default" theme so it always debuts
+// warm. Setting/clearing --night-accent on <html> retints night.css live.
+function applyNightAccent(view: string | undefined, themeId: string, accent: string) {
+  const el = document.documentElement;
+  if (view === "night" && themeId !== "default") el.style.setProperty("--night-accent", accent);
+  else el.style.removeProperty("--night-accent");
+}
 
 function applyTheme(theme: string) {
   // Glass theme always forces dark mode — check the live data-glass attribute
@@ -18,6 +28,9 @@ function applyTheme(theme: string) {
     document.body.style.color = effectiveTheme === "light" ? "#1a1a1a" : "#fff";
     const signalTheme = SIGNAL_THEMES.find(t => t.id === themeId) ?? SIGNAL_THEMES[0];
     applyThemeCssVars(signalTheme);
+    // Apply the dashboard "Look" AFTER the theme so a skin's shell overrides win.
+    applyDashboardView(s.dashboardView);
+    applyNightAccent(s.dashboardView, themeId, signalTheme.accentColor);
     // Apply low power mode attribute
     if (s.lowPower) document.documentElement.setAttribute("data-low-power", "");
     else document.documentElement.removeAttribute("data-low-power");
@@ -59,6 +72,8 @@ listen<Settings>("settings-changed", (event) => {
   const themeId = s.activeThemeId ?? "default";
   const signalTheme = SIGNAL_THEMES.find(t => t.id === themeId) ?? SIGNAL_THEMES[0];
   applyThemeCssVars(signalTheme);
+  applyDashboardView(s.dashboardView);
+  applyNightAccent(s.dashboardView, themeId, signalTheme.accentColor);
   const isGlass = themeId === "glass";
   if (isGlass) {
     document.documentElement.setAttribute("data-theme", "dark");

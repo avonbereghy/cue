@@ -943,6 +943,16 @@ pub struct Settings {
     /// a project's agents side-by-side under a project header). Missing = flow.
     #[serde(default)]
     pub dashboard_layout: String,
+    /// Dashboard visual "Look": "instrument" (the default signal/waveform skin),
+    /// "almanac", "studio", or "night". Missing/"" = instrument. This is an
+    /// independent axis from `dashboard_layout` (flow/grouped) and the color
+    /// theme — each non-instrument look ships its own palette + typography.
+    #[serde(default)]
+    pub dashboard_view: String,
+    /// Tint each card's left edge by project so same-project cards are easy to
+    /// spot at a glance. Defaults to true.
+    #[serde(default = "default_true")]
+    pub project_accents_enabled: bool,
     /// Show the system tray (menu bar) icon. Defaults to true.
     #[serde(default = "default_true")]
     pub show_in_menu_bar: bool,
@@ -973,6 +983,27 @@ pub struct Settings {
     /// migrations on load when the stored value is below `CURRENT_SETTINGS_VERSION`.
     #[serde(default)]
     pub settings_version: u32,
+    /// Master switch for native notifications. When false, no state-transition
+    /// ping fires regardless of the per-event toggles below. Defaults true.
+    #[serde(default = "default_true")]
+    pub notifications_enabled: bool,
+    /// Fire a notification when a session becomes blocked on your input
+    /// (transition into `waiting` — an AskUserQuestion / ExitPlanMode / gated
+    /// permission). Defaults true.
+    #[serde(default = "default_true")]
+    pub notify_waiting: bool,
+    /// Fire a notification when a session enters the `error` state. Defaults true.
+    #[serde(default = "default_true")]
+    pub notify_error: bool,
+    /// Fire a notification when a session finishes a turn (transition from an
+    /// active state into `done`/`idle`), gated by `notify_done_min_secs` so
+    /// trivial few-second turns stay silent. Defaults true.
+    #[serde(default = "default_true")]
+    pub notify_done: bool,
+    /// Minimum active turn length, in seconds, before a "finished" notification
+    /// fires. Only gates the done ping; waiting/error are immediate. Defaults 30.
+    #[serde(default = "default_notify_done_min_secs")]
+    pub notify_done_min_secs: f64,
 }
 
 /// Appearance fields saved when a user customizes a theme.
@@ -1132,6 +1163,10 @@ fn default_tray_shortcut() -> String {
     "CmdOrCtrl+Shift+C".to_string()
 }
 
+fn default_notify_done_min_secs() -> f64 {
+    30.0
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -1203,6 +1238,8 @@ impl Default for Settings {
             timer_display: "seconds".to_string(),
             auto_fit_window: true,
             dashboard_layout: "flow".to_string(),
+            dashboard_view: "instrument".to_string(),
+            project_accents_enabled: true,
             show_in_menu_bar: true,
             menu_bar_style: "bars".to_string(),
             show_in_dock: true,
@@ -1211,6 +1248,11 @@ impl Default for Settings {
             tray_shortcut: "CmdOrCtrl+Shift+C".to_string(),
             theme_customizations: HashMap::new(),
             settings_version: crate::settings::CURRENT_SETTINGS_VERSION,
+            notifications_enabled: true,
+            notify_waiting: true,
+            notify_error: true,
+            notify_done: true,
+            notify_done_min_secs: 30.0,
         }
     }
 }

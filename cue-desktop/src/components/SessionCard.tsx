@@ -33,7 +33,7 @@ function effortTextClass(level: string): string {
 }
 import type { EnrichedSession } from "@/lib/types";
 import { STATE_HEX, STATE_HEX_LIGHT, STATE_DOT_HEX, STATE_DOT_HEX_LIGHT, STATE_BADGE_HEX, STATE_BADGE_HEX_LIGHT } from "@/lib/types";
-import { formatTokens, formatDuration, formatClockTime, formatElapsedCompact, cleanPromptText, errorReason } from "@/lib/format";
+import { formatTokens, formatDuration, formatClockTime, formatElapsedCompact, cleanPromptText, errorReason, getProjectAccent } from "@/lib/format";
 import { SignalString } from "./SignalString";
 import type { StrikePulse, CometPulse } from "./SignalString";
 import { FluxEffect } from "./FluxEffect";
@@ -137,6 +137,8 @@ export interface SessionCardProps {
   isDuplicate?: boolean;
   /** Low-power mode — skip mounting heavy effects (WebGL aurora, etc.) */
   lowPower?: boolean;
+  /** Tint the card's left edge by project (auto-derived from the workspace). */
+  projectAccentsEnabled?: boolean;
 }
 
 function PromptPopup({ text, onClose, isDark }: {
@@ -213,7 +215,7 @@ function PromptPopup({ text, onClose, isDark }: {
   );
 }
 
-function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", stringsEnabled = false, sandEnabled = true, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, fluxEnabled = true, fluxAlpha = 0.9, fluxIntensity = 1.5, fluxDensity = 1.0, fluxSpeed = 1.0, fluxLineLength = 0.55, fluxTurbulence = 1.0, auroraEnabled = false, auroraAlpha = 0.75, auroraSpeed = 0.55, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, stringSpread = 0.15, stringDeployAngle = -16, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "compact", showToolPills = false, showCurrentTool = false, showConfigCounts = false, showToolCallComets = false, timerDisplay = "seconds", expandOverride, onExpandCycle, isDuplicate = false, lowPower = false }: SessionCardProps) {
+function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", stringsEnabled = false, sandEnabled = true, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, fluxEnabled = true, fluxAlpha = 0.9, fluxIntensity = 1.5, fluxDensity = 1.0, fluxSpeed = 1.0, fluxLineLength = 0.55, fluxTurbulence = 1.0, auroraEnabled = false, auroraAlpha = 0.75, auroraSpeed = 0.55, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, stringSpread = 0.15, stringDeployAngle = -16, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "compact", showToolPills = false, showCurrentTool = false, showConfigCounts = false, showToolCallComets = false, timerDisplay = "seconds", expandOverride, onExpandCycle, isDuplicate = false, lowPower = false, projectAccentsEnabled = true }: SessionCardProps) {
   // Effective display mode: expandOverride takes precedence over global compact/slim
   const effectiveCompact = expandOverride !== undefined ? expandOverride === 0 : compactMode;
   const effectiveSlim = expandOverride !== undefined ? expandOverride <= 1 : slimMode;
@@ -222,6 +224,10 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   const contextMeetsThreshold = contextThreshold !== "after200k" || metrics.lastInputTokens >= contextTokenThreshold;
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  // Optional "show even more" for the wide instrument strip. Deliberately a
+  // SEPARATE per-card boolean from expandOverride — it never touches the global
+  // slim/compact density, so it can't leak across the Cmd+D toggle.
+  const [wideExpanded, setWideExpanded] = useState(false);
   const [promptPopupOpen, setPromptPopupOpen] = useState(false);
   const pageVisible = usePageVisible();
 
@@ -657,6 +663,12 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   const isNarrow = cardWidth < 600;
   const hidePromptPill = cardWidth < 420;
   const hideTimer = cardWidth < 340;
+  // A slim card handed a wide grid track (~520-605px for a 2-up side-by-side):
+  // swap the tall-narrow slim layout for a horizontal "instrument strip" that
+  // fills the width and recovers the data slim normally hides. 520 catches the
+  // 2-up case (a 2-col card caps ~605px before a 3rd column engages); see the
+  // 400/600 grid pairing comment in SessionsTab.
+  const isWideSlim = cardWidth >= 520;
 
   useEffect(() => {
     const el = cardRef.current;
@@ -782,6 +794,17 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   const displayStateName = labelState === "subagent" && activeSubs > 0
     ? `Subagents(${activeSubs})`
     : STATE_DISPLAY_NAME[labelState] ?? session.stateDisplayName;
+
+  // Per-project left-edge accent (auto-derived from the workspace path). A
+  // separate visual channel from state color — see getProjectAccent.
+  const projectAccent = projectAccentsEnabled ? getProjectAccent(info.workspace, isDark) : null;
+
+  // Wide-slim "instrument strip": a slim card that's been handed a wide track
+  // recovers the high-value secondary data (todos, in/out·tools·msgs, branch)
+  // that slim normally hides — and, when the user clicks the hover caret, the
+  // deep telemetry too. Normal/compact modes are unchanged by these.
+  const showStripData = !effectiveCompact && (!effectiveSlim || isWideSlim);
+  const showDeepTelemetry = !effectiveCompact && (!effectiveSlim || (isWideSlim && wideExpanded));
 
   // ─── Subagent string lines — staggered handoff ──────────────────────────
   // Two phases to avoid the base-band retract and subagent-band deploy
@@ -1101,7 +1124,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       {/* Vine border — rendered OUTSIDE the card's overflow-hidden so vines can overflow */}
     <div
       ref={cardRef}
-      className={`overflow-hidden rounded-lg border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 session-card ${
+      className={`overflow-hidden rounded-lg border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 session-card group/card ${
         effectiveCompact ? "session-card--compact" : ""
       } ${
         isWorking ? "session-card--pressed" : "session-card--floating"
@@ -1132,7 +1155,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
         "--anim-speed": `${animationSpeed}s`,
         "--key-press-speed": `${keyPressSpeed}s`,
         "--key-release-speed": `${keyReleaseSpeed}s`,
-        ...(effectiveSlim && !effectiveCompact ? { minHeight: "120px" } : {}),
+        ...(effectiveSlim && !effectiveCompact && !isWideSlim ? { minHeight: "120px" } : {}),
       } as React.CSSProperties}
     >
 
@@ -1177,7 +1200,29 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
         />
       )}
 
-      <div ref={contentRef} className={`${effectiveCompact ? "space-y-0 flex flex-col justify-center min-h-full" : "space-y-2.5"} ${effectiveSlim && !effectiveCompact ? "flex flex-col flex-1" : ""}`} style={{ position: "relative", zIndex: 10 }}>
+      {/* Per-project left-edge accent. An inner absolute span (not border-left,
+          not box-shadow) so the border-box width is unchanged (no grid reflow)
+          and it never collides with the state inset-shadows. zIndex 5 sits above
+          the effect canvases (behind) and below the content (z-10). */}
+      {projectAccent && (
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 3,
+            background: projectAccent,
+            opacity: isDark ? 0.55 : 0.7,
+            borderTopLeftRadius: 8,
+            borderBottomLeftRadius: 8,
+            zIndex: 5,
+            pointerEvents: "none",
+          }}
+        />
+      )}
+      <div ref={contentRef} className={`${effectiveCompact ? "space-y-0 flex flex-col justify-center min-h-full" : "space-y-2.5"} ${effectiveSlim && !effectiveCompact && !isWideSlim ? "flex flex-col flex-1" : ""}`} style={{ position: "relative", zIndex: 10 }}>
           {/* Row 1: Status dot + state badge + title + prompt pill + duration
               Shrink priority: prompt pill first (shrinks → hides), timer second, title last */}
           <div className="relative flex items-center gap-2 min-w-0 overflow-hidden">
@@ -1338,7 +1383,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 {shortPath}
               </span>
             )}
-            {!isNarrow && !effectiveCompact && !effectiveSlim && metrics.gitBranch && (
+            {((!isNarrow && !effectiveCompact && !effectiveSlim) || (isWideSlim && effectiveSlim && !effectiveCompact)) && metrics.gitBranch && (
               <span className="text-[0.625rem] text-white/40 truncate shrink-0 flex items-center gap-1">
                 <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" className="shrink-0 opacity-50"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5z" /></svg>
                 {metrics.gitBranch}
@@ -1502,9 +1547,8 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             );
           })()}
 
-          {/* Rows 2-3 hidden in compact and slim mode */}
-          {!effectiveCompact && !effectiveSlim && (<>
-          {/* Row 2: Metrics */}
+          {/* Row 2: Metrics — recovered in the wide-slim instrument strip */}
+          {showStripData && (
           <div className="relative flex items-center gap-1.5 flex-wrap text-xs text-white/50">
             {/* Act-on metrics first, anchored as pills: progress + liveness. */}
             {session.todoTotal > 0 && (
@@ -1534,7 +1578,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             )}
             {/* Reference metrics: present but visually quiet \u2014 no pill chrome,
                 dimmed, dot-separated. Tooltips still carry the exact values. */}
-            <div className={`flex items-center gap-1.5 flex-wrap text-[0.625rem] font-mono text-white/30 min-w-0 ${isNarrow ? "hidden" : ""}`}>
+            <div className={`flex items-center gap-1.5 flex-wrap text-[0.625rem] font-mono text-white/30 min-w-0 ${isNarrow && !isWideSlim ? "hidden" : ""}`}>
               <span title={`Input: ${aggregatedInputTokens.toLocaleString()} tokens`}>{formatTokens(aggregatedInputTokens)} in</span>
               <span aria-hidden className="text-white/15">{"\u00B7"}</span>
               <span title={`Output: ${aggregatedOutputTokens.toLocaleString()} tokens`}>{formatTokens(aggregatedOutputTokens)} out</span>
@@ -1545,10 +1589,25 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
               {!isNarrow && session.sourceDisplay !== "\u2014" && (<><span aria-hidden className="text-white/15">{"\u00B7"}</span><span title={`Launched from ${session.sourceDisplay}`}>{session.sourceDisplay}</span></>)}
               {truncatedId && (<><span aria-hidden className="text-white/15">{"\u00B7"}</span><button onClick={copySessionId} className="font-mono hover:text-white/60 transition-colors cursor-pointer" title={`Session ID \u2014 click to copy: ${info.id}`} aria-label={`Copy session ID ${info.id}`}>{truncatedId}&hellip;{copied && <span>{"\u2713"}</span>}</button></>)}
             </div>
+            {isWideSlim && effectiveSlim && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setWideExpanded((v) => !v); }}
+                className="ml-auto shrink-0 flex items-center justify-center w-4 h-4 rounded text-white/25 opacity-0 group-hover/card:opacity-100 focus-visible:opacity-100 hover:text-white/70 transition-opacity"
+                aria-label={wideExpanded ? "Hide extra details" : "Show more details"}
+                aria-expanded={wideExpanded}
+                title={wideExpanded ? "Hide extra details" : "Show more details"}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ transform: wideExpanded ? "rotate(180deg)" : "none", transition: "transform 150ms" }}>
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+            )}
           </div>
+          )}
 
-          {/* Row 3: Tool chips (beta) */}
-          {showToolPills && topTools.length > 0 && (
+          {/* Row 3: Tool chips (beta) — deep telemetry (hover-expand in wide-slim) */}
+          {showDeepTelemetry && showToolPills && topTools.length > 0 && (
             <div className="relative flex items-center gap-1.5 flex-wrap">
               {topTools.map(([name, count]) => (
                 <span
@@ -1564,10 +1623,11 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
               <span className="ml-auto" />
             </div>
           )}
-          </>)}
 
-          {/* Spacer pushes context bar to bottom in slim mode */}
-          {effectiveSlim && !effectiveCompact && <div className="flex-1" />}
+          {/* Spacer pushes context bar to bottom in narrow slim mode. In a wide
+              slim card the band fills the width, so the spacer (and the gap it
+              created) is dropped. */}
+          {effectiveSlim && !effectiveCompact && !isWideSlim && <div className="flex-1" />}
 
           {/* Context bar */}
           {!effectiveCompact && (() => {
@@ -1714,7 +1774,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           })()}
 
           {/* Token breakdown — detail mode only, when context >= 85% */}
-          {!effectiveCompact && !effectiveSlim && session.contextUsagePercent >= 0.85 && (
+          {showDeepTelemetry && session.contextUsagePercent >= 0.85 && (
             metrics.cacheReadTokens > 0 || metrics.cacheCreationTokens > 0
           ) && (
             <div className="relative flex items-center gap-1.5 text-[0.625rem] text-white/30 mono-nums">
@@ -1730,7 +1790,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           )}
 
           {/* Rate limits (from statusline bridge) */}
-          {!effectiveCompact && !effectiveSlim && session.rateLimits && (session.rateLimits.fiveHourPercent > 0 || session.rateLimits.sevenDayPercent > 0) && (
+          {showDeepTelemetry && session.rateLimits && (session.rateLimits.fiveHourPercent > 0 || session.rateLimits.sevenDayPercent > 0) && (
             <div className="relative flex items-center gap-2 flex-wrap">
               <span className="text-[0.625rem] text-white/40 shrink-0 w-6">5h</span>
               <div className="flex-1 relative h-1 rounded-full bg-white/8 overflow-hidden min-w-[40px]">
@@ -1761,7 +1821,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           )}
 
           {/* Config counts (beta) */}
-          {showConfigCounts && !effectiveCompact && !effectiveSlim && session.configCounts && (
+          {showConfigCounts && showDeepTelemetry && session.configCounts && (
             (session.configCounts.claudeMdCount + session.configCounts.rulesCount + session.configCounts.mcpServers + session.configCounts.hooksCount) > 0
           ) && (
             <div className="relative flex items-center gap-1.5 text-[0.625rem] text-white/30">
@@ -1773,8 +1833,9 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           )}
       </div>
 
-      {/* Row 5: Expanded agent team */}
-      {!effectiveCompact && !effectiveSlim && expanded && hasSubagents && (() => {
+      {/* Row 5: Expanded agent team — toggled by the "N agents" button in the
+          strip, so it follows the same visibility (showStripData). */}
+      {showStripData && expanded && hasSubagents && (() => {
         const activeAgents = subagents.filter(a => a.isActive);
         const completedAgents = subagents.filter(a => !a.isActive);
 

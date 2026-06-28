@@ -248,6 +248,13 @@ export interface Settings {
   /** Dashboard layout: "flow" (responsive grid) or "grouped" (a project's agents
    *  cluster side-by-side under a project header). Default: "flow". */
   dashboardLayout: string;
+  /** Dashboard visual "Look": "instrument" (default signal/waveform skin),
+   *  "almanac", "studio", or "night". Empty/missing = instrument. Independent of
+   *  dashboardLayout and the color theme — each look ships its own palette/type. */
+  dashboardView: string;
+  /** Tint each card's left edge by project so same-project cards stand out.
+   *  Default: true. */
+  projectAccentsEnabled: boolean;
   /** Show the system tray icon in the menu bar. Default: true. */
   showInMenuBar: boolean;
   /** Menu bar icon style: "default" (dot grid) or "clock" (12-wedge clock). */
@@ -260,6 +267,19 @@ export interface Settings {
   trayShortcutEnabled: boolean;
   /** Tauri-format global shortcut, e.g. "CmdOrCtrl+Shift+C". */
   trayShortcut: string;
+  /** Master switch for native notifications. When false, no state-transition
+   *  ping fires regardless of the per-event toggles. Default: true. */
+  notificationsEnabled: boolean;
+  /** Notify when a session becomes blocked on your input (→ waiting). Default: true. */
+  notifyWaiting: boolean;
+  /** Notify when a session enters the error state. Default: true. */
+  notifyError: boolean;
+  /** Notify when a session finishes a turn (→ done/idle), gated by
+   *  notifyDoneMinSecs. Default: true. */
+  notifyDone: boolean;
+  /** Minimum active turn length (seconds) before a "finished" notification
+   *  fires. Only gates the done ping. Default: 30. */
+  notifyDoneMinSecs: number;
   /** Per-theme appearance customizations saved by the user, keyed by theme ID */
   themeCustomizations: Record<string, ThemeCustomization>;
 }

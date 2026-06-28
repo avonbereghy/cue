@@ -1,4 +1,8 @@
 import "./styles/globals.css";
+import "./styles/skin-fonts.css";
+import "./styles/almanac.css";
+import "./styles/night.css";
+import "./styles/studio.css";
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dashboard } from "./components/Dashboard";
