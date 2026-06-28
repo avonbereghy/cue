@@ -1,8 +1,8 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { createPortal } from "react-dom";
 import { usePageVisible } from "@/hooks/usePageVisible";
 import { useTheme } from "@/hooks/useIsDark";
+import { openSession } from "@/lib/openSession";
 
 /** Deterministic per-character hash for stable animation randomness */
 function charHash(i: number, title: string): number {
@@ -1104,11 +1104,8 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   // Open this session's project in the editor that launched it (falling back to
   // the OS file manager) — same action as a tray-popover row.
   const openWorkspace = useCallback(() => {
-    invoke("open_session_workspace", {
-      workspace: info.workspace,
-      source: info.source ?? null,
-    }).catch((err) => { console.error("open_session_workspace failed", err); });
-  }, [info.workspace, info.source]);
+    openSession(session);
+  }, [session]);
 
   const handleCardClick = (e: React.MouseEvent) => {
     if (compactMode && onExpandCycle) { onExpandCycle(); return; }

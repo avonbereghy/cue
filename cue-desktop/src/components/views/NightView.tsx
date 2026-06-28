@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { openSession } from "@/lib/openSession";
 import type { EnrichedSession, PermissionRequest, SubagentMetrics } from "@/lib/types";
 import {
   isActiveState, contextRampRgb, rgbCss, permissionModeMeta,
@@ -156,8 +156,8 @@ function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pendi
     navigator.clipboard.writeText(info.id).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1400); }).catch(() => {});
   }, [info.id]);
   const openWorkspace = useCallback(() => {
-    invoke("open_session_workspace", { workspace: info.workspace, source: info.source ?? null }).catch(() => {});
-  }, [info.workspace, info.source]);
+    openSession(session);
+  }, [session]);
   const onCardClick = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("button, a, input, [role=button]")) return;
     openWorkspace();

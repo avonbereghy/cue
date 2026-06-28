@@ -1044,6 +1044,96 @@ fn open_session_workspace(workspace: String, source: Option<String>) -> Result<(
     reveal_in_file_manager(path)
 }
 
+/// Try to focus the *exact* terminal tab running a session's Claude process, so
+/// clicking one of several cards for the same project lands on the right one.
+/// Works for native terminals that expose a per-tab tty over AppleScript
+/// (iTerm2, Apple Terminal); editors (VS Code/Cursor) have no such API, so this
+/// returns `false` for them and the caller falls back to opening the project.
+/// Returns `true` only when it actually focused a specific tab.
+#[tauri::command]
+fn focus_session_terminal(source: Option<String>, pid: Option<u32>) -> bool {
+    focus_terminal_tab(source.as_deref(), pid)
+}
+
+#[cfg(target_os = "macos")]
+fn tty_for_pid(pid: u32) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "tty=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // ps prints the device name only ("ttys003"); the terminal apps report the
+    // full "/dev/ttys003". A detached/no-tty process prints "??" / "-".
+    if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some(format!("/dev/{raw}"))
+}
+
+#[cfg(target_os = "macos")]
+fn focus_terminal_tab(source: Option<&str>, pid: Option<u32>) -> bool {
+    let pid = match pid {
+        Some(p) => p,
+        None => return false,
+    };
+    let is_iterm = match source {
+        Some("iterm") => true,
+        Some("terminal") => false,
+        _ => return false, // editors / unknown — caller opens the project instead
+    };
+    let Some(tty) = tty_for_pid(pid) else {
+        return false;
+    };
+    // Defense-in-depth: tty is machine-derived, but never interpolate anything
+    // that isn't a plain /dev/<alnum> device into the AppleScript.
+    match tty.strip_prefix("/dev/") {
+        Some(rest) if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_alphanumeric()) => {}
+        _ => return false,
+    }
+
+    let script = if is_iterm {
+        format!(
+            "tell application \"iTerm2\"\n\
+               repeat with w in windows\n\
+                 repeat with t in tabs of w\n\
+                   repeat with s in sessions of t\n\
+                     if (tty of s) is \"{tty}\" then\n\
+                       select w\n select t\n select s\n activate\n return \"ok\"\n\
+                     end if\n\
+                   end repeat\n\
+                 end repeat\n\
+               end repeat\n\
+             end tell\n\
+             return \"no\""
+        )
+    } else {
+        format!(
+            "tell application \"Terminal\"\n\
+               repeat with w in windows\n\
+                 repeat with t in tabs of w\n\
+                   if (tty of t) is \"{tty}\" then\n\
+                     set selected of t to true\n set frontmost of w to true\n activate\n return \"ok\"\n\
+                   end if\n\
+                 end repeat\n\
+               end repeat\n\
+             end tell\n\
+             return \"no\""
+        )
+    };
+
+    std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "ok")
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn focus_terminal_tab(_source: Option<&str>, _pid: Option<u32>) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod open_workspace_tests {
     use super::known_editor_for_source;
@@ -1707,6 +1797,7 @@ pub fn run() {
             get_permission_history,
             revive_session,
             open_session_workspace,
+            focus_session_terminal,
             save_preset,
             list_presets,
             load_preset,

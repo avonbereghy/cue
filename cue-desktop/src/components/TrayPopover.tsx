@@ -5,6 +5,7 @@ import { useSessionMonitor } from "@/hooks/useSessionMonitor";
 import type { EnrichedSession, Settings } from "@/lib/types";
 import { cleanPromptText, errorReason } from "@/lib/format";
 import { normalizeView } from "@/lib/dashboardViews";
+import { openSession } from "@/lib/openSession";
 
 // State color palette mirrors src-tauri/src/tray.rs::color_for_state
 // Returned as { rail, pillBg, pillText } so the row + state pill can use
@@ -118,12 +119,7 @@ function SessionRow({ session, view, isLight }: { session: EnrichedSession; view
   // (VS Code / Cursor), falling back to the OS file manager. Dismiss the popover
   // since we're handing focus off to that app.
   const openWorkspace = () => {
-    invoke("open_session_workspace", {
-      workspace: session.info.workspace,
-      source: session.info.source ?? null,
-    })
-      .catch((e) => { console.error("open_session_workspace failed", e); })
-      .finally(() => { invoke("hide_tray_popover").catch(() => {}); });
+    openSession(session).finally(() => { invoke("hide_tray_popover").catch(() => {}); });
   };
 
   return (
