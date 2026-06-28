@@ -2236,6 +2236,14 @@ async fn handle_permission_connection(
                 "receivedAt": now,
             });
 
+            // De-dupe with the state-transition notifier: on its next poll it
+            // will see this session flip to "waiting" and would fire a generic
+            // "needs you" ping — tell it to skip that one, since we fire the more
+            // specific "Permission needed" notification right here.
+            if let Some(app_state) = app.try_state::<AppState>() {
+                app_state.notifier.suppress_next_waiting(&session_id);
+            }
+
             // Native notification so a blocked session reaches the user even
             // when the dashboard is hidden in the tray (the whole point of a
             // menu-bar app). Fired from the backend so it works regardless of

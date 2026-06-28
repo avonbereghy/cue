@@ -214,6 +214,10 @@ pub struct Notifier {
     /// Cached projection of user notification settings, refreshed by
     /// `update_settings` whenever the frontend saves.
     settings: Mutex<NotificationSettings>,
+    /// Session ids whose next "→ waiting" ping should be skipped because the
+    /// permission server already fired a specific "Permission needed" notification
+    /// for the same block. One-shot: consumed when that waiting transition lands.
+    waiting_suppress: Mutex<HashSet<String>>,
 }
 
 impl Default for Notifier {
@@ -228,12 +232,22 @@ impl Notifier {
             previous_states: Mutex::new(HashMap::new()),
             active_durations: Mutex::new(HashMap::new()),
             settings: Mutex::new(NotificationSettings::default()),
+            waiting_suppress: Mutex::new(HashSet::new()),
         }
     }
 
     /// Replace the cached notification settings (called on every settings save).
     pub fn update_settings(&self, settings: NotificationSettings) {
         *self.settings.lock_safe() = settings;
+    }
+
+    /// Mark a session so its very next "→ waiting" ping is skipped. Called by the
+    /// permission server right before it fires its own, more specific "Permission
+    /// needed · <tool>" notification, so the user gets one ping, not two.
+    pub fn suppress_next_waiting(&self, session_id: &str) {
+        self.waiting_suppress
+            .lock_safe()
+            .insert(session_id.to_string());
     }
 
     /// Diff the current session list against the previous tick and return the
@@ -244,6 +258,7 @@ impl Notifier {
         let settings = self.settings.lock_safe().clone();
         let mut prev = self.previous_states.lock_safe();
         let mut durations = self.active_durations.lock_safe();
+        let mut suppress = self.waiting_suppress.lock_safe();
         let mut events = Vec::new();
         let mut seen: HashSet<&str> = HashSet::with_capacity(sessions.len());
 
@@ -266,7 +281,12 @@ impl Notifier {
                 turn_dur,
                 &settings,
             ) {
-                events.push(build_event(s, kind));
+                // Skip a "→ waiting" ping the permission server already announced
+                // for this session (one-shot, consumed here).
+                let suppressed = kind == NotificationKind::Waiting && suppress.remove(id);
+                if !suppressed {
+                    events.push(build_event(s, kind));
+                }
             }
 
             // Once a turn has ended, drop its recorded duration so a later
@@ -279,6 +299,7 @@ impl Notifier {
 
         prev.retain(|k, _| seen.contains(k.as_str()));
         durations.retain(|k, _| seen.contains(k.as_str()));
+        suppress.retain(|k| seen.contains(k.as_str()));
         events
     }
 }
@@ -568,5 +589,21 @@ mod tests {
         n.diff_and_collect(&[enriched("s1", "working", 0.0)]); // seed
         let events = n.diff_and_collect(&[enriched("s1", "waiting", 0.0)]);
         assert!(events.is_empty(), "master switch off should silence");
+    }
+
+    #[test]
+    fn permission_server_suppresses_the_generic_waiting_ping() {
+        let n = Notifier::new();
+        n.diff_and_collect(&[enriched("s1", "working", 10.0)]); // seed
+                                                                // Permission server fired its own specific "Permission needed" ping:
+        n.suppress_next_waiting("s1");
+        // The imminent → waiting transition must NOT double-fire.
+        let events = n.diff_and_collect(&[enriched("s1", "waiting", 10.0)]);
+        assert!(events.is_empty(), "suppressed waiting should stay silent");
+        // One-shot: a later, un-suppressed wait fires normally.
+        n.diff_and_collect(&[enriched("s1", "working", 10.0)]);
+        let events = n.diff_and_collect(&[enriched("s1", "waiting", 10.0)]);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, NotificationKind::Waiting);
     }
 }
