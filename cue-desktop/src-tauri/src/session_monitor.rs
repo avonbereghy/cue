@@ -358,6 +358,17 @@ impl SessionMonitorState {
         // event for the old id either never fires or gets clobbered by the
         // new id's events. JSONL deletion is the authoritative deterministic
         // signal that Claude Code dropped that session id; no timer needed.
+        //
+        // Exception: launchers that never write a transcript here. Claude Code
+        // sessions started from the desktop app fire hooks (so they appear in
+        // sessions.json as source="unknown") but write no JSONL under
+        // ~/.claude/projects — the file is absent by design, not because the id
+        // was dropped. Force-demoting those would pin every desktop session on
+        // idle even mid-turn. `launcher_writes_transcript` gates the demote so
+        // only transcript-writing launchers (terminal, VS Code, …) are subject
+        // to it; for the rest, the pid-liveness pass below + the SessionEnd hook
+        // are the authority. Terminal/VS Code keep source="iterm"/"vscode", so
+        // genuine id-rotation is still caught here even on a cold start.
         let active: Vec<_> = {
             let mut active_since = self.active_since.lock_safe();
             let mut identity = self.process_identity.lock_safe();
@@ -367,7 +378,9 @@ impl SessionMonitorState {
                     if !is_liveness_sensitive(&s.state) {
                         return s;
                     }
-                    if !self.jsonl_exists_on_disk(&s.id, &s.workspace, &projects_path) {
+                    if launcher_writes_transcript(s.source.as_deref())
+                        && !self.jsonl_exists_on_disk(&s.id, &s.workspace, &projects_path)
+                    {
                         log::debug!(
                             "session {} demoted: JSONL missing for state={}",
                             s.id,
@@ -1164,6 +1177,16 @@ fn is_liveness_sensitive(state: &str) -> bool {
     )
 }
 
+/// True if the launcher that started this session writes a JSONL transcript
+/// under ~/.claude/projects (terminal, VS Code, Cursor, …). The desktop app
+/// fires hooks but writes no transcript there, so its sessions report
+/// source="unknown" (or None on legacy entries) — for those, a missing
+/// transcript is expected, not a "Claude Code dropped this id" signal, so the
+/// JSONL-presence demotion must not fire. See the call site in `poll_status_with`.
+fn launcher_writes_transcript(source: Option<&str>) -> bool {
+    !matches!(source, None | Some("unknown"))
+}
+
 /// States that deserve to bypass the `launched_at` admission gate.
 /// Liveness-sensitive states have a strong signal (live PID + alive JSONL)
 /// that the later checks in `poll_status` will use to demote stale entries,
@@ -1814,6 +1837,20 @@ mod tests {
         // would be from an external mutator. Don't grant it active-state
         // privileges. See is_liveness_sensitive for the full rationale.
         assert!(!is_liveness_sensitive("clearing"));
+    }
+
+    #[test]
+    fn test_launcher_writes_transcript_predicate() {
+        // Transcript-writing launchers (terminal/IDE) → true: a missing JSONL
+        // for these is a real "id dropped" signal.
+        assert!(launcher_writes_transcript(Some("iterm")));
+        assert!(launcher_writes_transcript(Some("terminal")));
+        assert!(launcher_writes_transcript(Some("vscode")));
+        assert!(launcher_writes_transcript(Some("cursor")));
+        // Desktop app fires hooks but writes no transcript → source="unknown"
+        // (or None on legacy entries). A missing JSONL is expected, not a drop.
+        assert!(!launcher_writes_transcript(Some("unknown")));
+        assert!(!launcher_writes_transcript(None));
     }
 
     #[test]
@@ -3289,6 +3326,87 @@ mod tests {
             assert_eq!(
                 s.info.state, "idle",
                 "must demote to idle once pending_tool_use clears"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_poll_no_jsonl_keeps_working_for_unknown_source() {
+        // Desktop-app sessions fire hooks (so they reach sessions.json as
+        // source="unknown") but write no transcript under ~/.claude/projects.
+        // The JSONL-presence demotion must NOT fire for them — a missing
+        // transcript is expected, not a dropped id. With no pid recorded, the
+        // pid-liveness pass can't act either, so the JSONL skip is exercised in
+        // isolation and the `working` state must survive.
+        let dir = std::env::temp_dir().join("cue_test_poll_unknown_no_jsonl");
+        let _ = std::fs::remove_dir_all(&dir);
+        let projects = dir.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        // Deliberately do NOT create a <id>.jsonl — desktop sessions have none.
+
+        let status_path = dir.join("sessions.json");
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        let ts = now + 5.0;
+        let sessions = format!(
+            r#"{{"sessions":{{"sess-desktop":{{"id":"sess-desktop","workspace":"/Users/dev/App","state":"working","source":"unknown","lastActivity":{},"startedAt":{}}}}}}}"#,
+            ts, ts
+        );
+        std::fs::write(&status_path, sessions).unwrap();
+
+        let m = SessionMonitorState::new();
+        m.poll_status_with(status_path.clone(), projects.clone());
+        {
+            let e = m.enriched_sessions.lock_safe();
+            let s = e
+                .iter()
+                .find(|s| s.info.id == "sess-desktop")
+                .expect("desktop session present");
+            assert_eq!(
+                s.info.state, "working",
+                "transcript-less unknown-source session must not be demoted on missing JSONL"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_poll_no_jsonl_demotes_known_source() {
+        // Regression guard: a transcript-writing launcher (iterm/vscode/…) with
+        // a missing JSONL is a genuine id-rotation/drop signal and must still be
+        // demoted to idle — the source gate only exempts transcript-less ones.
+        let dir = std::env::temp_dir().join("cue_test_poll_iterm_no_jsonl");
+        let _ = std::fs::remove_dir_all(&dir);
+        let projects = dir.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        // No <id>.jsonl on disk → simulates the rotated/dropped transcript.
+
+        let status_path = dir.join("sessions.json");
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        let ts = now + 5.0;
+        let sessions = format!(
+            r#"{{"sessions":{{"sess-iterm":{{"id":"sess-iterm","workspace":"/Users/dev/App","state":"working","source":"iterm","lastActivity":{},"startedAt":{}}}}}}}"#,
+            ts, ts
+        );
+        std::fs::write(&status_path, sessions).unwrap();
+
+        let m = SessionMonitorState::new();
+        m.poll_status_with(status_path.clone(), projects.clone());
+        {
+            let e = m.enriched_sessions.lock_safe();
+            let s = e
+                .iter()
+                .find(|s| s.info.id == "sess-iterm")
+                .expect("iterm session present");
+            assert_eq!(
+                s.info.state, "idle",
+                "transcript-writing source with missing JSONL must demote to idle"
             );
         }
         let _ = std::fs::remove_dir_all(&dir);
