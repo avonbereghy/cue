@@ -98,6 +98,18 @@ Multiple sessions show as a grid of dots — see all your sessions at once. Clic
 
 ### Install
 
+**macOS — Homebrew (recommended):**
+
+```sh
+brew tap avonbereghy/cue
+brew trust avonbereghy/cue   # Homebrew 6.0+ only; older versions can skip this
+brew install --cask cue
+```
+
+Then clear the Gatekeeper quarantine once (Cue is unsigned — see the note below): `xattr -dr com.apple.quarantine /Applications/Cue.app`. Cue keeps itself updated after that. The cask lives in the [avonbereghy/homebrew-cue](https://github.com/avonbereghy/homebrew-cue) tap.
+
+**All platforms — direct download:**
+
 Download the installer for your platform from the [latest release](https://github.com/avonbereghy/cue/releases/latest), or build from source (below). On first launch, the **onboarding wizard** installs the hook for you: it copies the bundled `cue-hook` script to `~/.claude/hooks/cue-hook` and registers it in `~/.claude/settings.json` (your original settings are backed up once to `settings.json.bak`, preserved across reinstalls). No manual editing required — and no dependency on any pre-existing setup.
 
 > **macOS — opening the app the first time.** Cue is a free, personal open-source project and its downloads are **not signed with an Apple Developer ID**, so on first launch macOS Gatekeeper will say Cue is "from an unidentified developer" or "cannot be opened." This is expected and only needs handling once — do any one of:
