@@ -922,6 +922,134 @@ fn spawn_terminal_with_resume(_session_id: &str, _workspace: &str) -> Result<(),
     Err("Revive is not supported on this platform".to_string())
 }
 
+/// Map a session's launcher `source` (as recorded by the hook: "vscode",
+/// "cursor", terminal names, "unknown") to a known editor, as
+/// `(macOS application name, cross-platform CLI)`, or `None` to fall back to the
+/// OS file manager. Pure so the mapping stays unit-testable; each platform reads
+/// only the field it needs.
+fn known_editor_for_source(source: Option<&str>) -> Option<(&'static str, &'static str)> {
+    match source {
+        Some("vscode") => Some(("Visual Studio Code", "code")),
+        Some("cursor") => Some(("Cursor", "cursor")),
+        _ => None,
+    }
+}
+
+/// Try to open `path` in the editor that launched the session. Returns `true`
+/// only if the editor was actually launched.
+///
+/// macOS uses `open -a <App>` rather than the `code`/`cursor` CLIs because a
+/// Finder/Dock-launched `.app` inherits a minimal PATH (/usr/bin:/bin:…) that
+/// does NOT include /usr/local/bin or /opt/homebrew/bin where those CLIs live —
+/// so a bare `Command::new("code")` would always ENOENT and silently degrade to
+/// the file manager. `open` is always at /usr/bin/open, and we check its exit
+/// status because `open -a Missing` runs but exits non-zero.
+#[cfg(target_os = "macos")]
+fn open_in_editor(source: Option<&str>, path: &str) -> bool {
+    let Some((app, _cli)) = known_editor_for_source(source) else {
+        return false;
+    };
+    std::process::Command::new("open")
+        .args(["-a", app, path])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Non-macOS: the `code`/`cursor` CLIs are normally on PATH (apt/snap install to
+/// /usr/bin; the Windows installer adds them), so spawn directly and treat a
+/// failed spawn (missing CLI) as "not opened" so the caller falls back.
+#[cfg(not(target_os = "macos"))]
+fn open_in_editor(source: Option<&str>, path: &str) -> bool {
+    let Some((_app, cli)) = known_editor_for_source(source) else {
+        return false;
+    };
+    std::process::Command::new(cli).arg(path).spawn().is_ok()
+}
+
+#[cfg(target_os = "macos")]
+fn reveal_in_file_manager(path: &str) -> Result<(), String> {
+    // `status()` (not `spawn()`) so the short-lived `open` child is reaped.
+    std::process::Command::new("open")
+        .arg(path)
+        .status()
+        .map(|_| ())
+        .map_err(|e| format!("Failed to open workspace: {}", e))
+}
+
+#[cfg(target_os = "linux")]
+fn reveal_in_file_manager(path: &str) -> Result<(), String> {
+    std::process::Command::new("xdg-open")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Failed to open workspace: {}", e))
+}
+
+#[cfg(target_os = "windows")]
+fn reveal_in_file_manager(path: &str) -> Result<(), String> {
+    std::process::Command::new("explorer")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Failed to open workspace: {}", e))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn reveal_in_file_manager(_path: &str) -> Result<(), String> {
+    Err("Opening the workspace is not supported on this platform".to_string())
+}
+
+/// Open a session's project. Prefer the editor that launched it (VS Code /
+/// Cursor) so the user lands in the same tool they're already working in; fall
+/// back to the OS file manager when the launcher was a terminal/unknown or the
+/// editor isn't installed. The path is canonicalised the same way as
+/// `revive_session`, and we additionally require it be absolute so a stale or
+/// relative value (e.g. one beginning with '-') can never be parsed as a flag by
+/// the spawned program.
+#[tauri::command]
+fn open_session_workspace(workspace: String, source: Option<String>) -> Result<(), String> {
+    let canonical = security::sanitize_workspace_path(&workspace).map_err(|e| e.to_string())?;
+    if !canonical.is_absolute() {
+        return Err("Workspace path is not absolute".to_string());
+    }
+    let path = canonical
+        .to_str()
+        .ok_or_else(|| "Workspace path is not valid UTF-8".to_string())?;
+
+    if open_in_editor(source.as_deref(), path) {
+        return Ok(());
+    }
+    reveal_in_file_manager(path)
+}
+
+#[cfg(test)]
+mod open_workspace_tests {
+    use super::known_editor_for_source;
+
+    #[test]
+    fn maps_known_editors() {
+        assert_eq!(
+            known_editor_for_source(Some("vscode")),
+            Some(("Visual Studio Code", "code"))
+        );
+        assert_eq!(
+            known_editor_for_source(Some("cursor")),
+            Some(("Cursor", "cursor"))
+        );
+    }
+
+    #[test]
+    fn falls_back_for_terminals_and_unknown() {
+        for s in [
+            "iterm", "terminal", "wezterm", "tmux", "ghostty", "unknown", "",
+        ] {
+            assert_eq!(known_editor_for_source(Some(s)), None, "source {s:?}");
+        }
+        assert_eq!(known_editor_for_source(None), None);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Hook Install / Uninstall
 // ---------------------------------------------------------------------------
@@ -1530,6 +1658,7 @@ pub fn run() {
             deny_permission,
             get_permission_history,
             revive_session,
+            open_session_workspace,
             save_preset,
             list_presets,
             load_preset,
