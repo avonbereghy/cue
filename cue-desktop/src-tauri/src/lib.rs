@@ -245,6 +245,24 @@ fn open_dashboard_from_tray(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Enter Focus Mode on the *main* window from the tray popover. Focus Mode is a
+/// state of the dashboard window, so the popover can't toggle it on itself: set
+/// the main window frameless, reveal it, and tell the dashboard to hide its
+/// toolbar. (The `frameless-changed` reset only fires from the "Show Title Bar"
+/// menu, so this won't be clobbered.)
+#[tauri::command]
+fn enter_focus_mode_from_tray(app: AppHandle) -> Result<(), String> {
+    if let Some(popover) = app.get_webview_window("tray-popover") {
+        let _ = popover.hide();
+    }
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.set_decorations(false);
+    }
+    reveal_main(&app);
+    let _ = app.emit("frameless-changed", true);
+    Ok(())
+}
+
 #[tauri::command]
 fn open_settings_from_tray(app: AppHandle) -> Result<(), String> {
     if let Some(popover) = app.get_webview_window("tray-popover") {
@@ -1699,6 +1717,7 @@ pub fn run() {
             resize_main_to_content,
             open_dashboard_from_tray,
             open_settings_from_tray,
+            enter_focus_mode_from_tray,
             quit_app,
         ])
         .on_window_event(|window, event| {
