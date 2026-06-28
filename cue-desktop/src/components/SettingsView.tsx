@@ -776,6 +776,7 @@ export function SettingsView() {
       menuBarStyle: "bars",
       showInDock: true,
       startAtLogin: true,
+      autoFitWindow: true,
       trayShortcutEnabled: false,
       trayShortcut: "CmdOrCtrl+Shift+C",
       themeCustomizations: settings.themeCustomizations ?? {},
@@ -1290,6 +1291,13 @@ export function SettingsView() {
             checked={settings.startAtLogin ?? true}
             onChange={() => setSettings({ ...settings, startAtLogin: !(settings.startAtLogin ?? true) })}
             label="Start at login"
+          />
+        </SettingRow>
+        <SettingRow label="Auto-fit window" description="Size the dashboard window to the number of sessions (you can still resize it yourself)" onReset={!(settings.autoFitWindow ?? true) ? () => setSettings({ ...settings, autoFitWindow: true }) : undefined}>
+          <Toggle
+            checked={settings.autoFitWindow ?? true}
+            onChange={() => setSettings({ ...settings, autoFitWindow: !(settings.autoFitWindow ?? true) })}
+            label="Auto-fit window"
           />
         </SettingRow>
         <SettingRow label="Tray toggle shortcut" description="Open or close the tray popover with a global keyboard shortcut" onReset={(settings.trayShortcutEnabled ?? false) ? () => setSettings({ ...settings, trayShortcutEnabled: false }) : undefined}>

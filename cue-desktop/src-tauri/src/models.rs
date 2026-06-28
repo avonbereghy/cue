@@ -935,6 +935,10 @@ pub struct Settings {
     /// Timer display mode: "minutes" (HH:MM), "seconds" (HH:MM:SS), or "off"
     #[serde(default = "default_timer_display")]
     pub timer_display: String,
+    /// Auto-fit the dashboard window height to the session list. Default true;
+    /// when off, the window keeps whatever size the user set.
+    #[serde(default = "default_true")]
+    pub auto_fit_window: bool,
     /// Show the system tray (menu bar) icon. Defaults to true.
     #[serde(default = "default_true")]
     pub show_in_menu_bar: bool,
@@ -1193,6 +1197,7 @@ impl Default for Settings {
             show_config_counts: false,
             show_tool_call_comets: false,
             timer_display: "seconds".to_string(),
+            auto_fit_window: true,
             show_in_menu_bar: true,
             menu_bar_style: "bars".to_string(),
             show_in_dock: true,

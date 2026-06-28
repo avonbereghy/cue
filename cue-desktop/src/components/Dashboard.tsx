@@ -14,6 +14,7 @@ export function Dashboard() {
   const [frameless, setFrameless] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [justExpanded, setJustExpanded] = useState(false);
+  const [autoFitWindow, setAutoFitWindow] = useState(true);
   const sessions = useSessionMonitor();
   useSessionAnnouncements(sessions);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -51,6 +52,18 @@ export function Dashboard() {
     return () => { cancelled = true; unlisten?.(); };
   }, []);
 
+  // Auto-fit preference — load once and keep it live (Settings emits
+  // settings-changed on save). When off, the window keeps the user's size.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    const apply = (s: Settings) => { if (!cancelled) setAutoFitWindow(s.autoFitWindow ?? true); };
+    invoke<Settings>("get_settings").then(apply).catch(() => {});
+    listen<Settings>("settings-changed", (e) => apply(e.payload))
+      .then((fn) => { if (cancelled) fn(); else unlisten = fn; });
+    return () => { cancelled = true; unlisten?.(); };
+  }, []);
+
   const enterFocusMode = useCallback(() => {
     setFrameless(true);
     invoke("set_frameless", { frameless: true }).catch(() => {});
@@ -68,14 +81,14 @@ export function Dashboard() {
   // Skipped off the Sessions tab and when the list is empty.
   const measureAndFitMain = useCallback(() => {
     const root = rootRef.current;
-    if (!root || tab !== "Sessions") return;
+    if (!root || tab !== "Sessions" || !autoFitWindow) return;
     const scroll = root.querySelector<HTMLElement>(".sessions-scroll");
     const last = scroll?.lastElementChild as HTMLElement | null;
     if (!scroll || !last) return;
     const BOTTOM_GAP = 16;
     const total = last.offsetTop + last.offsetHeight + BOTTOM_GAP;
     invoke("resize_main_to_content", { contentHeight: total }).catch(() => {});
-  }, [tab]);
+  }, [tab, autoFitWindow]);
 
   useLayoutEffect(() => {
     if (tab !== "Sessions") return;

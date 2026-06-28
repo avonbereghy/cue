@@ -243,6 +243,8 @@ export interface Settings {
   showToolCallComets: boolean;
   /** Timer display: "minutes" (HH:MM), "seconds" (HH:MM:SS), or "off" */
   timerDisplay: string;
+  /** Auto-fit the dashboard window height to the session list. Default: true. */
+  autoFitWindow: boolean;
   /** Show the system tray icon in the menu bar. Default: true. */
   showInMenuBar: boolean;
   /** Menu bar icon style: "default" (dot grid) or "clock" (12-wedge clock). */
