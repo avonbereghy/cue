@@ -2307,9 +2307,10 @@ fn setup_tray(
 /// occupy. Past this size the inner list scrolls instead of growing further.
 const TRAY_POPOVER_MAX_HEIGHT_FRAC: f64 = 0.80;
 
-/// Floor for the popover height (logical px) — covers the empty-state and
-/// keeps a 1-session popover from collapsing into something unusably small.
-const TRAY_POPOVER_MIN_HEIGHT: f64 = 200.0;
+/// Floor for the popover height (logical px) — large enough to seat the
+/// empty-state placeholder and a single session row, small enough that one
+/// session reads as a short window rather than a half-empty panel.
+const TRAY_POPOVER_MIN_HEIGHT: f64 = 150.0;
 
 /// Clamp a desired popover content height against the monitor's available
 /// vertical extent. Returned in logical pixels.
@@ -2330,20 +2331,22 @@ fn clamp_popover_height(win: &tauri::WebviewWindow, content_h: f64) -> f64 {
 /// doesn't see the default 460px shell briefly before the frontend's exact
 /// measurement lands.
 fn estimate_popover_content_height(session_count: usize) -> f64 {
-    // Logical-pixel constants tuned to the tray-popover CSS / layout. We err
-    // slightly tall (rather than short) so the frontend's fine-tune resize
-    // shrinks rather than grows the window — growing past the screen is the
-    // visible failure mode.
+    // Logical-pixel constants tuned to the tray-popover CSS / layout. ROW_PX
+    // tracks the real rendered `.tray-row` height — roughly 80px for a typical
+    // row (10+10 padding, the state/name line, context bar, model+prompt line,
+    // and inter-row gap) — with a small margin so we err slightly tall. The
+    // frontend's exact re-measure then shrinks rather than grows the window,
+    // since growing past the screen is the worse failure mode. There is no
+    // footer; the header carries the only chrome (Cue label + Expand / menu).
     const HEADER_PX: f64 = 44.0;
-    const FOOTER_PX: f64 = 60.0;
     const SHELL_PAD_PX: f64 = 14.0;
-    const ROW_PX: f64 = 150.0;
+    const ROW_PX: f64 = 92.0;
     const EMPTY_PLACEHOLDER_PX: f64 = 100.0;
 
     if session_count == 0 {
-        HEADER_PX + EMPTY_PLACEHOLDER_PX + FOOTER_PX + SHELL_PAD_PX
+        HEADER_PX + EMPTY_PLACEHOLDER_PX + SHELL_PAD_PX
     } else {
-        HEADER_PX + (session_count as f64 * ROW_PX) + FOOTER_PX + SHELL_PAD_PX
+        HEADER_PX + (session_count as f64 * ROW_PX) + SHELL_PAD_PX
     }
 }
 
@@ -2361,8 +2364,16 @@ fn resize_tray_popover(app: AppHandle, content_height: f64) -> Result<(), String
     let target_h_phys = (target_h * scale).round() as u32;
     let cur = win.outer_size().map_err(|e| e.to_string())?;
     if cur.height != target_h_phys {
+        // Capture the top-left before resizing. On macOS a raw NSWindow resize
+        // can pivot around the bottom-left origin, which would drift the popover
+        // away from the tray icon as it grows/shrinks; re-asserting the position
+        // pins the top edge so the popover stays anchored under the icon.
+        let origin = win.outer_position().ok();
         win.set_size(PhysicalSize::new(cur.width, target_h_phys))
             .map_err(|e| e.to_string())?;
+        if let Some(origin) = origin {
+            let _ = win.set_position(origin);
+        }
     }
     Ok(())
 }

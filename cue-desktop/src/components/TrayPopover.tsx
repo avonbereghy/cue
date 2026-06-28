@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSessionMonitor } from "@/hooks/useSessionMonitor";
@@ -280,8 +280,35 @@ function Badge({ text, tint, isLight }: { text: string; tint: "violet" | "blue" 
   );
 }
 
+// Cap the rows the glance popover renders; the rest live in the full dashboard.
+// Keep in sync with the `.min(12)` pre-size estimate in src-tauri/src/lib.rs.
+const MAX_ROWS = 12;
+
 export function TrayPopoverPage() {
   const sessions = useSessionMonitor();
+
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  // Resize the popover window to fit its content (header + session list) so the
+  // window is exactly as tall as the number of sessions: one short row yields a
+  // short window, more rows grow it, and the list only scrolls once it would
+  // outgrow the screen (the Rust side clamps to a floor and 80% of the monitor).
+  // We measure header + the list's unclipped scrollHeight rather than
+  // root.scrollHeight because `.tray-list` is overflow:auto, which clips its own
+  // offsetHeight to the available flex space.
+  const measureAndResize = useCallback(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const header = root.querySelector<HTMLElement>(".tray-header");
+    const list = root.querySelector<HTMLElement>(".tray-list");
+    const SHELL_PADDING_PX = 14; // .tray-popover has padding:6 + 1px borders
+    const total =
+      (header?.offsetHeight ?? 0) +
+      (list?.scrollHeight ?? 0) +
+      SHELL_PADDING_PX;
+    invoke("resize_tray_popover", { contentHeight: total }).catch(() => {});
+  }, []);
 
   // Track current theme so colors recompute when the user switches dark/light.
   // The root <html> data-theme attribute is set by main.tsx and updated on
@@ -313,9 +340,13 @@ export function TrayPopoverPage() {
   useEffect(() => {
     const unlisten = listen("tray-popover-shown", () => {
       invoke("get_sessions").catch(() => {});
+      // A re-open with an unchanged session list won't re-fire the [sorted]
+      // effect, so re-measure directly — the height tracks the current content
+      // on every open, not only when the sessions themselves change.
+      requestAnimationFrame(() => measureAndResize());
     });
     return () => { unlisten.then((fn) => fn()); };
-  }, []);
+  }, [measureAndResize]);
 
   // Hide ended sessions from the menu bar — they're revivable in the main
   // app and don't belong as menu-bar dots or popover rows.
@@ -346,27 +377,9 @@ export function TrayPopoverPage() {
     [visibleSessions],
   );
 
-  // Resize the popover window to fit the session list. The Rust side caps at
-  // 80% of the monitor's height, so the inner list only scrolls past that
-  // threshold. We measure header + (unclipped list) + footer rather than
-  // root.scrollHeight because `.tray-list` has overflow:auto, which clips its
-  // own offsetHeight to the available flex space.
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
-  useLayoutEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
-    const header = root.querySelector<HTMLElement>(".tray-header");
-    const list = root.querySelector<HTMLElement>(".tray-list");
-    const footer = root.querySelector<HTMLElement>(".tray-footer");
-    const SHELL_PADDING_PX = 14; // .tray-popover has padding:6 + 1px borders
-    const total =
-      (header?.offsetHeight ?? 0) +
-      (list?.scrollHeight ?? 0) +
-      (footer?.offsetHeight ?? 0) +
-      SHELL_PADDING_PX;
-    invoke("resize_tray_popover", { contentHeight: total }).catch(() => {});
-  }, [sorted]);
+  // Re-fit whenever the visible session list changes (rows added/removed, or a
+  // state/prompt update that changes a row's height).
+  useLayoutEffect(() => { measureAndResize(); }, [sorted, measureAndResize]);
 
   return (
     <div ref={rootRef} className="tray-popover" data-tray-light={isLight ? "1" : "0"}>
@@ -473,9 +486,21 @@ export function TrayPopoverPage() {
             <span style={{ opacity: 0.7 }}>Open a Claude Code session to see it here.</span>
           </div>
         ) : (
-          sorted.slice(0, 12).map((s) => (
-            <SessionRow key={s.info.id} session={s} isLight={isLight} />
-          ))
+          <>
+            {sorted.slice(0, MAX_ROWS).map((s) => (
+              <SessionRow key={s.info.id} session={s} isLight={isLight} />
+            ))}
+            {sorted.length > MAX_ROWS && (
+              <button
+                type="button"
+                className="tray-overflow-row"
+                onClick={() => { invoke("open_dashboard_from_tray").catch(() => {}); }}
+                title="Open the full dashboard to see every session"
+              >
+                +{sorted.length - MAX_ROWS} more in the dashboard
+              </button>
+            )}
+          </>
         )}
       </div>
 

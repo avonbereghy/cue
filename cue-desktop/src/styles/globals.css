@@ -124,6 +124,27 @@ body {
 .tray-menu-item:hover { background-color: rgba(128, 128, 128, 0.16); }
 .tray-menu-item-danger { color: var(--tray-danger); }
 
+/* "+N more in the dashboard" row shown when the session count exceeds the cap */
+.tray-overflow-row {
+  display: block;
+  width: 100%;
+  text-align: center;
+  padding: 9px 12px;
+  margin-top: 2px;
+  font-size: 11.5px;
+  font-weight: 500;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--tray-divider);
+  color: var(--tray-muted);
+  cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+.tray-overflow-row:hover {
+  color: var(--tray-text);
+  background-color: var(--tray-row-hover);
+}
+
 /* Pulsing dot for active session states */
 @keyframes dot-pulse {
   0%, 100% { opacity: 1; }
