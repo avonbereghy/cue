@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { createPortal } from "react-dom";
 import { usePageVisible } from "@/hooks/usePageVisible";
 import { useTheme } from "@/hooks/useIsDark";
@@ -1077,6 +1078,24 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
 
   const ariaLabel = `${displayStateName}: ${session.displayTitle}, running ${formatDuration(session.durationSecs)}`;
 
+  // Open this session's project in the editor that launched it (falling back to
+  // the OS file manager) — same action as a tray-popover row.
+  const openWorkspace = useCallback(() => {
+    invoke("open_session_workspace", {
+      workspace: info.workspace,
+      source: info.source ?? null,
+    }).catch((err) => { console.error("open_session_workspace failed", err); });
+  }, [info.workspace, info.source]);
+
+  const handleCardClick = (e: React.MouseEvent) => {
+    if (compactMode && onExpandCycle) { onExpandCycle(); return; }
+    // Leave the card's own controls (copy-id, expanders, links, inputs) alone.
+    if ((e.target as HTMLElement).closest('button, a, input, textarea, select, [role="button"], [contenteditable="true"]')) {
+      return;
+    }
+    openWorkspace();
+  };
+
   return (
     <div style={{ position: "relative" }}>
       {/* Vine border — rendered OUTSIDE the card's overflow-hidden so vines can overflow */}
@@ -1095,12 +1114,17 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       } ${
         effectiveCompact ? "px-2.5 py-1.5 space-y-0"
         : signalString && (signalMode === "preset" || signalMode === "audio") ? "px-4 pt-3 pb-1 space-y-4" : "px-3 pt-2 pb-0.5 space-y-2"
-      } ${effectiveSlim && !effectiveCompact ? "flex flex-col" : ""} ${
-        compactMode ? "cursor-pointer" : ""
-      }`}
+      } ${effectiveSlim && !effectiveCompact ? "flex flex-col" : ""} cursor-pointer`}
       tabIndex={0}
-      aria-label={ariaLabel}
-      onClick={compactMode && onExpandCycle ? onExpandCycle : undefined}
+      aria-label={`${ariaLabel} — click to open the project`}
+      title={`Open ${session.displayTitle}`}
+      onClick={handleCardClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && e.target === e.currentTarget) {
+          e.preventDefault();
+          openWorkspace();
+        }
+      }}
 
       style={{
         position: "relative",
