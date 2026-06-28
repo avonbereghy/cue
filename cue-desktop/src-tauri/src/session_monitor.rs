@@ -390,12 +390,15 @@ impl SessionMonitorState {
         // session stuck in "working" forever. The hook writes `pid` = parent
         // pid on every event; we verify the process still exists, comparing
         // start_time to the cached value so a recycled PID doesn't look alive.
+        // Active sessions whose process is gone demote to idle; idle/done ones
+        // whose window is actually closed are retired (ended) so the list shows
+        // only chats that are still open.
         let active: Vec<_> = {
             let active_ids: std::collections::HashSet<String> =
                 active.iter().map(|s| s.id.clone()).collect();
             let pids_to_check: Vec<sysinfo::Pid> = active
                 .iter()
-                .filter(|s| is_liveness_sensitive(&s.state))
+                .filter(|s| liveness_checkable(&s.state))
                 .filter_map(|s| s.pid.map(sysinfo::Pid::from_u32))
                 .collect();
             let mut sys = self.sysinfo_system.lock_safe();
@@ -409,7 +412,7 @@ impl SessionMonitorState {
             active
                 .into_iter()
                 .map(|mut s| {
-                    if !is_liveness_sensitive(&s.state) {
+                    if !liveness_checkable(&s.state) {
                         return s;
                     }
                     let Some(pid) = s.pid else {
@@ -428,7 +431,7 @@ impl SessionMonitorState {
                         }
                         LivenessOutcome::Dead => {
                             identity.remove(&s.id);
-                            s.state = "idle".to_string();
+                            s.state = dead_state_for(&s.state).to_string();
                             s.active_subagents = 0;
                         }
                     }
@@ -1164,6 +1167,27 @@ fn is_liveness_sensitive(state: &str) -> bool {
     )
 }
 
+/// Whether the per-poll PID liveness check should run for this state: the active
+/// states above PLUS the quiescent `idle`/`done`. An interactive Claude Code
+/// chat keeps its `claude` process alive the whole time the window is open, so a
+/// dead PID on an idle/done session means the window was actually closed and the
+/// session should be retired rather than linger as a phantom card.
+fn liveness_checkable(state: &str) -> bool {
+    is_liveness_sensitive(state) || matches!(state, "idle" | "done")
+}
+
+/// Where a `liveness_checkable` session goes when its owning process is found
+/// dead. Active states demote to `idle` (a window caught between polls shouldn't
+/// be yanked; the next poll retires it if it's truly closed); `idle`/`done`
+/// whose window is actually gone are retired to `ended`.
+fn dead_state_for(state: &str) -> &'static str {
+    if is_liveness_sensitive(state) {
+        "idle"
+    } else {
+        "ended"
+    }
+}
+
 /// States that deserve to bypass the `launched_at` admission gate.
 /// Liveness-sensitive states have a strong signal (live PID + alive JSONL)
 /// that the later checks in `poll_status` will use to demote stale entries,
@@ -1784,6 +1808,39 @@ mod tests {
             resolve_liveness(1234, None, None, None),
             LivenessOutcome::Dead
         ));
+    }
+
+    #[test]
+    fn test_liveness_checkable_covers_idle_and_done() {
+        for s in [
+            "working",
+            "thinking",
+            "subagent",
+            "compacting",
+            "waiting",
+            "idle",
+            "done",
+        ] {
+            assert!(liveness_checkable(s), "{s} should be liveness-checkable");
+        }
+        // `ended` is already gone; `error` is a needs-me state left for the user
+        // to dismiss — neither is liveness-checked.
+        for s in ["ended", "error"] {
+            assert!(
+                !liveness_checkable(s),
+                "{s} should NOT be liveness-checkable"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dead_state_target() {
+        // Active session whose process died -> idle (not yanked mid-poll).
+        assert_eq!(dead_state_for("working"), "idle");
+        assert_eq!(dead_state_for("waiting"), "idle");
+        // Idle/done whose window is actually closed -> retired (ended).
+        assert_eq!(dead_state_for("idle"), "ended");
+        assert_eq!(dead_state_for("done"), "ended");
     }
 
     #[test]
