@@ -2836,10 +2836,14 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           <span className="text-sm text-white/40">Sessions will appear here when Claude Code is running</span>
         </div>
       ) : (
-        <div ref={listRef} className={`flex-1 w-full max-w-5xl mx-auto ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 space-y-3"}`}>
+        <div
+          ref={listRef}
+          style={compactMode ? undefined : { gridTemplateColumns: "repeat(auto-fill, minmax(400px, 1fr))" }}
+          className={`flex-1 w-full ${compactMode ? "max-w-5xl mx-auto overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 grid gap-3 content-start items-start"}`}
+        >
           {/* Empty active sessions message */}
           {sessions.length === 0 && revivedSessions.length > 0 && (
-            <div className="flex flex-col items-center justify-center text-white/60 gap-2 py-12">
+            <div className="col-span-full flex flex-col items-center justify-center text-white/60 gap-2 py-12">
               <span className="text-4xl">○</span>
               <span className="text-lg font-medium">No Active Sessions</span>
               <span className="text-sm text-white/40">Sessions will appear here when Claude Code is running</span>
@@ -2847,13 +2851,15 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           )}
           {/* Active sessions — branch view or vertical stack */}
           {showBranchView ? (
-            <BranchView
-              sessions={sortedWithChildren}
-              cardSettings={cardSettings}
-              compactMode={compactMode}
-              expandOverrides={expandOverrides}
-              onExpandCycle={cycleExpandById}
-            />
+            <div style={{ gridColumn: "1 / -1" }}>
+              <BranchView
+                sessions={sortedWithChildren}
+                cardSettings={cardSettings}
+                compactMode={compactMode}
+                expandOverrides={expandOverrides}
+                onExpandCycle={cycleExpandById}
+              />
+            </div>
           ) : (() => {
             // Compute which displayTitles appear more than once
             const titleCounts = new Map<string, number>();
@@ -2949,7 +2955,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
           {/* Revived (ended) sessions — collapsible, collapsed by default */}
           {!compactMode && !slimMode && revivedSessions.length > 0 && (
-            <details className="pt-4 group/revive">
+            <details className="col-span-full pt-4 group/revive">
               <summary className="flex items-center gap-3 pb-1 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden rounded-lg px-3 py-2 -mx-3 hover:bg-red-500/8 transition-colors">
                 <div className="flex-1 border-t border-red-500/20" />
                 <span className="text-xs text-red-400/60 group-hover/revive:text-red-400/90 uppercase tracking-wider font-medium flex items-center gap-1.5 transition-colors">

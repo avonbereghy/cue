@@ -83,11 +83,16 @@ export function Dashboard() {
     const root = rootRef.current;
     if (!root || tab !== "Sessions" || !autoFitWindow) return;
     const scroll = root.querySelector<HTMLElement>(".sessions-scroll");
-    const last = scroll?.lastElementChild as HTMLElement | null;
-    if (!scroll || !last) return;
+    if (!scroll || scroll.childElementCount === 0) return;
+    // Lowest child's bottom — robust to a 2-column grid where uneven rows mean
+    // the last DOM node isn't the lowest one on screen.
+    let bottom = 0;
+    for (const child of Array.from(scroll.children)) {
+      const el = child as HTMLElement;
+      bottom = Math.max(bottom, el.offsetTop + el.offsetHeight);
+    }
     const BOTTOM_GAP = 16;
-    const total = last.offsetTop + last.offsetHeight + BOTTOM_GAP;
-    invoke("resize_main_to_content", { contentHeight: total }).catch(() => {});
+    invoke("resize_main_to_content", { contentHeight: bottom + BOTTOM_GAP }).catch(() => {});
   }, [tab, autoFitWindow]);
 
   useLayoutEffect(() => {

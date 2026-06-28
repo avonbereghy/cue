@@ -1534,7 +1534,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             )}
             {/* Reference metrics: present but visually quiet \u2014 no pill chrome,
                 dimmed, dot-separated. Tooltips still carry the exact values. */}
-            <div className="flex items-center gap-1.5 flex-wrap text-[0.625rem] font-mono text-white/30 min-w-0">
+            <div className={`flex items-center gap-1.5 flex-wrap text-[0.625rem] font-mono text-white/30 min-w-0 ${isNarrow ? "hidden" : ""}`}>
               <span title={`Input: ${aggregatedInputTokens.toLocaleString()} tokens`}>{formatTokens(aggregatedInputTokens)} in</span>
               <span aria-hidden className="text-white/15">{"\u00B7"}</span>
               <span title={`Output: ${aggregatedOutputTokens.toLocaleString()} tokens`}>{formatTokens(aggregatedOutputTokens)} out</span>
