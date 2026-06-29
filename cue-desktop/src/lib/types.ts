@@ -166,6 +166,13 @@ export interface EnrichedSession {
   /** Current effort level ("low" | "medium" | "high" | "xhigh" | "max" | "auto" | future values).
    *  Passed through verbatim from Claude Code so new level names surface without a Cue update. */
   effortLevel?: string;
+  /** True when the backend has tucked this session into the recoverable "Resting"
+   *  group — hidden from the main grid and the tray, surfaced in the dashboard's
+   *  Resting disclosure, one click to restore. Computed fresh each poll. */
+  resting?: boolean;
+  /** Why it's resting: "idle" (auto-hidden past the threshold) or "dismissed"
+   *  (manual X). Undefined when not resting. */
+  restingReason?: string;
 }
 
 export interface Settings {
@@ -280,6 +287,16 @@ export interface Settings {
   /** Minimum active turn length (seconds) before a "finished" notification
    *  fires. Only gates the done ping. Default: 30. */
   notifyDoneMinSecs: number;
+  /** Auto-hide a session that has sat idle this many seconds into the recoverable
+   *  "Resting" group. 0 disables (the off switch). Default: 900 (15 min). */
+  autoHideIdleSecs: number;
+  /** Suppress the "finished" ping while the dashboard window is focused — if
+   *  you're already watching Cue, a card flipping to done is visible. Only gates
+   *  the done ping; needs-you/error still fire when focused. Default: true. */
+  suppressDoneWhenFocused: boolean;
+  /** Notify when a usage rate limit that had been reached clears, so you know
+   *  paused sessions can resume. Default: true. */
+  notifyRateLimitReset: boolean;
   /** Per-theme appearance customizations saved by the user, keyed by theme ID */
   themeCustomizations: Record<string, ThemeCustomization>;
 }

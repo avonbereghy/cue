@@ -47,6 +47,14 @@ pub struct NotificationSettings {
     /// Minimum active turn duration (seconds) before a "finished" ping fires.
     /// Only gates the done ping; waiting/error are immediate.
     pub done_min_secs: f64,
+    /// Suppress the "finished" ping while the dashboard window is focused — if
+    /// you're already looking at Cue, a card flipping to done is something you
+    /// can see, so the banner is pure noise. Only gates `done`; a session that
+    /// *needs you* or errors still pings even when the window is up. Defaults true.
+    pub suppress_done_when_focused: bool,
+    /// Fire a ping when a usage rate limit that had been reached clears, so you
+    /// know paused sessions can resume. Defaults true.
+    pub notify_rate_limit_reset: bool,
 }
 
 impl Default for NotificationSettings {
@@ -59,6 +67,8 @@ impl Default for NotificationSettings {
             notify_error: true,
             notify_done: true,
             done_min_secs: 30.0,
+            suppress_done_when_focused: true,
+            notify_rate_limit_reset: true,
         }
     }
 }
@@ -71,6 +81,8 @@ impl From<&Settings> for NotificationSettings {
             notify_error: s.notify_error,
             notify_done: s.notify_done,
             done_min_secs: s.notify_done_min_secs,
+            suppress_done_when_focused: s.suppress_done_when_focused,
+            notify_rate_limit_reset: s.notify_rate_limit_reset,
         }
     }
 }
@@ -82,6 +94,9 @@ pub enum NotificationKind {
     Waiting,
     Error,
     Done,
+    /// A usage rate limit that had been reached has cleared — paused sessions
+    /// can resume. A *global* signal, not tied to one session.
+    RateLimitReset,
 }
 
 /// One notification ready to fire. `session_id` is retained so a future
@@ -190,12 +205,40 @@ fn build_event(s: &EnrichedSession, kind: NotificationKind, now: f64) -> Notific
             };
             (format!("{} — done", label), body)
         }
+        NotificationKind::RateLimitReset => {
+            // Global signal — no per-session detail; `s` is only a representative
+            // for attribution and is otherwise ignored here.
+            (
+                "Rate limit cleared".to_string(),
+                "Your usage limit reset — paused sessions can resume.".to_string(),
+            )
+        }
     };
     NotificationEvent {
         session_id: s.info.id.clone(),
         title,
         body,
         kind,
+    }
+}
+
+/// Collapse several same-tick "finished" events into one summary ping listing
+/// the session labels. The labels are recovered from each event's title, which
+/// `build_event` formats as `"{label} — done"` (the `done_body_*` tests lock
+/// that format, so this stays in sync).
+fn coalesced_done_event(done: &[NotificationEvent]) -> NotificationEvent {
+    use crate::summary_formatter::truncate;
+    let labels: Vec<&str> = done
+        .iter()
+        .map(|e| e.title.strip_suffix(" — done").unwrap_or(e.title.as_str()))
+        .collect();
+    NotificationEvent {
+        // No single session owns this summary; a future click-to-focus has no
+        // one target, so leave it empty rather than pick arbitrarily.
+        session_id: String::new(),
+        title: format!("{} sessions finished", done.len()),
+        body: truncate(&labels.join(", "), 140),
+        kind: NotificationKind::Done,
     }
 }
 
@@ -258,6 +301,26 @@ fn humanize_error(error_type: &str) -> String {
     }
 }
 
+/// macOS's built-in default alert sound. `mac-notification-sys` maps this *exact*
+/// string to the system default; any other string is treated as a custom sound
+/// name (and silently plays nothing if it isn't a real one), so it must be
+/// spelled precisely — `"default"` would NOT work.
+const DEFAULT_ALERT_SOUND: &str = "NSUserNotificationDefaultSoundName";
+
+/// The system sound a notification of `kind` should play, or `None` for silent.
+/// Only the pings that ask you to *act* — a session needs you, or one errored —
+/// make a sound; the informational "finished" stays silent, so an audible cue
+/// reliably means "you're needed," not "something wrapped up." (No priority or
+/// interruption-level control exists on macOS desktop in tauri-plugin-notification
+/// 2.x, so audible-vs-silent is the only register available.)
+pub fn sound_name(kind: NotificationKind) -> Option<&'static str> {
+    match kind {
+        NotificationKind::Waiting | NotificationKind::Error => Some(DEFAULT_ALERT_SOUND),
+        // "Finished" and "rate limit cleared" inform rather than interrupt.
+        NotificationKind::Done | NotificationKind::RateLimitReset => None,
+    }
+}
+
 /// Stateful notification engine. Owns the cross-tick memory needed to detect
 /// transitions and gate the done ping. Cheap to call every poll: a handful of
 /// `HashMap` lookups over the live session list.
@@ -275,6 +338,11 @@ pub struct Notifier {
     /// permission server already fired a specific "Permission needed" notification
     /// for the same block. One-shot: consumed when that waiting transition lands.
     waiting_suppress: Mutex<HashSet<String>>,
+    /// Whether a usage rate limit was reached as of the last tick that carried
+    /// rate-limit data. Global (the signal is not per-session). `None` until
+    /// first observed, so the cleared edge can't fire on startup. Drives the
+    /// "rate limit cleared" ping on a `Some(true) → false` transition.
+    was_rate_limited: Mutex<Option<bool>>,
 }
 
 impl Default for Notifier {
@@ -290,6 +358,7 @@ impl Notifier {
             active_durations: Mutex::new(HashMap::new()),
             settings: Mutex::new(NotificationSettings::default()),
             waiting_suppress: Mutex::new(HashSet::new()),
+            was_rate_limited: Mutex::new(None),
         }
     }
 
@@ -307,14 +376,33 @@ impl Notifier {
             .insert(session_id.to_string());
     }
 
-    /// Diff the current session list against the previous tick and return the
-    /// notifications to fire. Updates all internal memory as a side effect, and
-    /// forgets sessions that have dropped out of the list so the maps can't grow
-    /// unbounded as sessions retire.
+    /// Diff the current session list against the previous tick, assuming the
+    /// dashboard is not focused (so every decided ping fires). Convenience over
+    /// [`Self::diff_and_collect_with_focus`] for callers — and tests — that
+    /// don't track window focus.
+    #[cfg(test)]
     pub fn diff_and_collect(
         &self,
         sessions: &[EnrichedSession],
         now: f64,
+    ) -> Vec<NotificationEvent> {
+        self.diff_and_collect_with_focus(sessions, now, false)
+    }
+
+    /// Diff the current session list against the previous tick and return the
+    /// notifications to fire. Updates all internal memory as a side effect, and
+    /// forgets sessions that have dropped out of the list so the maps can't grow
+    /// unbounded as sessions retire.
+    ///
+    /// `window_focused` is whether the dashboard window is up and frontmost. When
+    /// it is, a "finished" ping is suppressed (you can see the card flip) unless
+    /// the user has turned that off — but "needs you" and "error" still fire,
+    /// since those can warrant attention even while you're looking at Cue.
+    pub fn diff_and_collect_with_focus(
+        &self,
+        sessions: &[EnrichedSession],
+        now: f64,
+        window_focused: bool,
     ) -> Vec<NotificationEvent> {
         let settings = self.settings.lock_safe().clone();
         let mut prev = self.previous_states.lock_safe();
@@ -342,9 +430,15 @@ impl Notifier {
                 turn_dur,
                 &settings,
             ) {
-                // Skip a "→ waiting" ping the permission server already announced
-                // for this session (one-shot, consumed here).
-                let suppressed = kind == NotificationKind::Waiting && suppress.remove(id);
+                let suppressed = match kind {
+                    // Skip a "→ waiting" ping the permission server already
+                    // announced for this session (one-shot, consumed here).
+                    NotificationKind::Waiting => suppress.remove(id),
+                    // You're already looking at Cue — the card flipping to done
+                    // is visible, so the banner is noise.
+                    NotificationKind::Done => window_focused && settings.suppress_done_when_focused,
+                    _ => false,
+                };
                 if !suppressed {
                     events.push(build_event(s, kind, now));
                 }
@@ -361,6 +455,48 @@ impl Notifier {
         prev.retain(|k, _| seen.contains(k.as_str()));
         durations.retain(|k, _| seen.contains(k.as_str()));
         suppress.retain(|k| seen.contains(k.as_str()));
+
+        // Coalesce a burst: several sessions finishing in the same tick (a
+        // fan-out of parallel runs completing together) shouldn't stack up a
+        // column of banners — collapse them into one "N sessions finished"
+        // summary. A single finish is left untouched so it keeps its rich body.
+        if events
+            .iter()
+            .filter(|e| e.kind == NotificationKind::Done)
+            .count()
+            > 1
+        {
+            let done: Vec<NotificationEvent> = events
+                .iter()
+                .filter(|e| e.kind == NotificationKind::Done)
+                .cloned()
+                .collect();
+            events.retain(|e| e.kind != NotificationKind::Done);
+            events.push(coalesced_done_event(&done));
+        }
+
+        // Rate-limit reset is a *global* signal — the same RateLimitInfo is
+        // cloned onto every session — so detect its reached→cleared edge once per
+        // tick, not per session. Only sessions actually carrying rate-limit data
+        // inform it; if none do this tick, leave the memory untouched so a limited
+        // session merely dropping out of the list can't masquerade as a reset.
+        // First observation seeds silently (the `None` start state).
+        let observed = sessions
+            .iter()
+            .filter_map(|s| s.rate_limits.as_ref())
+            .map(|rl| rl.limit_reached)
+            .reduce(|a, b| a || b);
+        if let Some(currently_limited) = observed {
+            let mut was = self.was_rate_limited.lock_safe();
+            let cleared = matches!(*was, Some(true)) && !currently_limited;
+            if cleared && settings.enabled && settings.notify_rate_limit_reset {
+                if let Some(rep) = sessions.iter().find(|s| s.rate_limits.is_some()) {
+                    events.push(build_event(rep, NotificationKind::RateLimitReset, now));
+                }
+            }
+            *was = Some(currently_limited);
+        }
+
         events
     }
 }
@@ -381,6 +517,8 @@ mod tests {
             notify_error: true,
             notify_done: true,
             done_min_secs: 30.0,
+            suppress_done_when_focused: true,
+            notify_rate_limit_reset: true,
         }
     }
 
@@ -642,6 +780,23 @@ mod tests {
         e
     }
 
+    /// A session carrying global rate-limit data with `limit_reached` as given.
+    fn with_rate_limit(id: &str, state: &str, limit_reached: bool) -> EnrichedSession {
+        let mut e = enriched(id, state, 0.0);
+        e.rate_limits = Some(crate::models::RateLimitInfo {
+            five_hour_percent: if limit_reached { 100.0 } else { 10.0 },
+            seven_day_percent: 0.0,
+            five_hour_reset_at: None,
+            seven_day_reset_at: None,
+            limit_reached,
+        });
+        e
+    }
+
+    fn count_kind(events: &[NotificationEvent], kind: NotificationKind) -> usize {
+        events.iter().filter(|e| e.kind == kind).count()
+    }
+
     #[test]
     fn first_poll_seeds_without_firing_then_transition_fires() {
         let n = Notifier::new();
@@ -696,6 +851,58 @@ mod tests {
     }
 
     #[test]
+    fn sound_plays_only_for_the_act_now_pings() {
+        // Needs-you and error interrupt → audible. Finished informs → silent.
+        assert!(sound_name(NotificationKind::Waiting).is_some());
+        assert!(sound_name(NotificationKind::Error).is_some());
+        assert!(sound_name(NotificationKind::Done).is_none());
+    }
+
+    #[test]
+    fn finished_ping_is_suppressed_while_dashboard_is_focused() {
+        let n = Notifier::new();
+        n.diff_and_collect(&[enriched("s1", "working", 5.0)], 0.0); // seed
+        n.diff_and_collect(&[enriched("s1", "working", 50.0)], 0.0); // long enough
+                                                                     // Window is up and frontmost — the done ping is noise; stay silent.
+        let events = n.diff_and_collect_with_focus(&[enriched("s1", "done", 0.0)], 0.0, true);
+        assert!(events.is_empty(), "done while focused should be suppressed");
+        // The transition was still recorded: blurring later must NOT replay it.
+        let events = n.diff_and_collect_with_focus(&[enriched("s1", "done", 0.0)], 0.0, false);
+        assert!(
+            events.is_empty(),
+            "suppressed-while-focused done must not re-fire on blur"
+        );
+    }
+
+    #[test]
+    fn needs_you_still_fires_while_focused() {
+        let n = Notifier::new();
+        n.diff_and_collect(&[enriched("s1", "working", 10.0)], 0.0); // seed
+                                                                     // A blocked session is worth a ping even when you're looking at Cue.
+        let events = n.diff_and_collect_with_focus(&[enriched("s1", "waiting", 10.0)], 0.0, true);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, NotificationKind::Waiting);
+    }
+
+    #[test]
+    fn finished_fires_while_focused_when_suppression_is_off() {
+        let n = Notifier::new();
+        n.update_settings(NotificationSettings {
+            suppress_done_when_focused: false,
+            ..settings_all_on()
+        });
+        n.diff_and_collect(&[enriched("s1", "working", 5.0)], 0.0); // seed
+        n.diff_and_collect(&[enriched("s1", "working", 50.0)], 0.0);
+        let events = n.diff_and_collect_with_focus(&[enriched("s1", "done", 0.0)], 0.0, true);
+        assert_eq!(
+            events.len(),
+            1,
+            "off switch lets finished fire even while focused"
+        );
+        assert_eq!(events[0].kind, NotificationKind::Done);
+    }
+
+    #[test]
     fn update_settings_takes_effect() {
         let n = Notifier::new();
         n.update_settings(NotificationSettings {
@@ -721,5 +928,98 @@ mod tests {
         let events = n.diff_and_collect(&[enriched("s1", "waiting", 10.0)], 0.0);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, NotificationKind::Waiting);
+    }
+
+    // --- rate-limit reset: the global cleared edge ------------------------
+
+    #[test]
+    fn rate_limit_reset_fires_on_the_cleared_edge() {
+        let n = Notifier::new();
+        // First observation is limited — seeds the global flag, fires nothing.
+        let ev = n.diff_and_collect(&[with_rate_limit("s1", "working", true)], 0.0);
+        assert_eq!(count_kind(&ev, NotificationKind::RateLimitReset), 0);
+        // It clears — exactly one reset ping.
+        let ev = n.diff_and_collect(&[with_rate_limit("s1", "working", false)], 0.0);
+        assert_eq!(count_kind(&ev, NotificationKind::RateLimitReset), 1);
+        // It stays clear — no repeat ping.
+        let ev = n.diff_and_collect(&[with_rate_limit("s1", "working", false)], 0.0);
+        assert_eq!(count_kind(&ev, NotificationKind::RateLimitReset), 0);
+    }
+
+    #[test]
+    fn rate_limit_reset_seeds_silently_when_first_seen_clear() {
+        let n = Notifier::new();
+        // No prior "limited" observation ⇒ a clear reading must not fire.
+        let ev = n.diff_and_collect(&[with_rate_limit("s1", "working", false)], 0.0);
+        assert_eq!(count_kind(&ev, NotificationKind::RateLimitReset), 0);
+    }
+
+    #[test]
+    fn rate_limit_reset_respects_its_toggle() {
+        let n = Notifier::new();
+        n.update_settings(NotificationSettings {
+            notify_rate_limit_reset: false,
+            ..settings_all_on()
+        });
+        n.diff_and_collect(&[with_rate_limit("s1", "working", true)], 0.0); // seed
+        let ev = n.diff_and_collect(&[with_rate_limit("s1", "working", false)], 0.0);
+        assert_eq!(count_kind(&ev, NotificationKind::RateLimitReset), 0);
+    }
+
+    #[test]
+    fn a_limited_session_dropping_out_does_not_fake_a_reset() {
+        let n = Notifier::new();
+        n.diff_and_collect(&[with_rate_limit("s1", "working", true)], 0.0); // seed limited
+                                                                            // The limited session vanishes — no rate-limit data this tick.
+        let ev = n.diff_and_collect(&[], 0.0);
+        assert_eq!(
+            count_kind(&ev, NotificationKind::RateLimitReset),
+            0,
+            "a dropout is not a reset"
+        );
+        // A genuine clear reading later still fires (delayed, but correct).
+        let ev = n.diff_and_collect(&[with_rate_limit("s2", "working", false)], 0.0);
+        assert_eq!(count_kind(&ev, NotificationKind::RateLimitReset), 1);
+    }
+
+    // --- coalescing a burst of finishes -----------------------------------
+
+    #[test]
+    fn a_burst_of_finishes_in_one_tick_coalesces_into_one_ping() {
+        let n = Notifier::new();
+        // Three sessions active long enough to earn a done ping.
+        n.diff_and_collect(
+            &[
+                enriched("s1", "working", 50.0),
+                enriched("s2", "working", 50.0),
+                enriched("s3", "working", 50.0),
+            ],
+            0.0,
+        );
+        // …all finish in the same tick.
+        let ev = n.diff_and_collect(
+            &[
+                enriched("s1", "done", 0.0),
+                enriched("s2", "done", 0.0),
+                enriched("s3", "done", 0.0),
+            ],
+            0.0,
+        );
+        let done: Vec<&NotificationEvent> = ev
+            .iter()
+            .filter(|e| e.kind == NotificationKind::Done)
+            .collect();
+        assert_eq!(done.len(), 1, "three finishes collapse to one ping");
+        assert_eq!(done[0].title, "3 sessions finished");
+    }
+
+    #[test]
+    fn a_single_finish_keeps_its_own_ping() {
+        let n = Notifier::new();
+        n.diff_and_collect(&[enriched("s1", "working", 50.0)], 0.0);
+        let ev = n.diff_and_collect(&[enriched("s1", "done", 0.0)], 0.0);
+        assert_eq!(count_kind(&ev, NotificationKind::Done), 1);
+        // Not the summary — the individual, richer "{label} — done".
+        assert_eq!(ev[0].title, "proj — done");
     }
 }

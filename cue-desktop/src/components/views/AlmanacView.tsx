@@ -10,6 +10,8 @@ import { PermissionPrompt } from "../PermissionPrompt";
 import { CardExtras } from "./CardExtras";
 import { PromptPopup } from "./PromptPopup";
 import { orderSessions, duplicateTitleSet, type SkinViewProps } from "./skinView";
+import { DismissButton } from "./DismissButton";
+import { RestingDisclosure } from "./RestingDisclosure";
 
 // ── State vocabulary: register word, ink, and whether it reads as "alive" ──
 interface StateMeta { word: string; ink: string; alive: boolean }
@@ -80,9 +82,11 @@ interface AlmanacCardProps {
   revived?: boolean;
   isDuplicate?: boolean;
   showConfigCounts?: boolean;
+  /** Provided for live cards (renders the dismiss "X"); omitted for revived ones. */
+  onDismiss?: (id: string) => void;
 }
 
-function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pending, onApprove, onDeny, revived, isDuplicate, showConfigCounts }: AlmanacCardProps) {
+function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pending, onApprove, onDeny, revived, isDuplicate, showConfigCounts, onDismiss }: AlmanacCardProps) {
   const { info, metrics } = session;
   const state = info.state;
   const meta = stMeta(state);
@@ -165,6 +169,7 @@ function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pen
       onClick={onCardClick}
       aria-label={`${meta.word}: ${session.displayTitle}`}
     >
+      {onDismiss && <DismissButton sessionId={info.id} title={session.displayTitle} onDismiss={onDismiss} />}
       <span className="entry-no">No. {revived ? "—" : roman(index + 1)}</span>
 
       <div className="entry-head">
@@ -323,7 +328,7 @@ export function AlmanacView(props: SkinViewProps) {
           </header>
 
           <main className="ledger">
-            {total === 0 && revivedSessions.length === 0 && (
+            {total === 0 && revivedSessions.length === 0 && props.restingSessions.length === 0 && (
               <div className="alm-empty">
                 <div className="mark">❧</div>
                 <div className="h">The register is empty</div>
@@ -343,9 +348,12 @@ export function AlmanacView(props: SkinViewProps) {
                 onDeny={denyPermission}
                 isDuplicate={dupSet.has(session.displayTitle)}
                 showConfigCounts={showConfigCounts}
+                onDismiss={props.onDismiss}
               />
             ))}
           </main>
+
+          <RestingDisclosure sessions={props.restingSessions} onRestore={props.onRestore} />
 
           {revivedSessions.length > 0 && (
             <section className="alm-ended">

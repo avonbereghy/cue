@@ -787,6 +787,9 @@ export function SettingsView() {
       notifyError: true,
       notifyDone: true,
       notifyDoneMinSecs: 30,
+      autoHideIdleSecs: 900,
+      suppressDoneWhenFocused: true,
+      notifyRateLimitReset: true,
       themeCustomizations: settings.themeCustomizations ?? {},
     };
     setSettings(defaults);
@@ -1308,6 +1311,15 @@ export function SettingsView() {
             label="Auto-fit window"
           />
         </SettingRow>
+        <SettingRow label="Auto-hide idle sessions" description="Tuck a session into the recoverable Resting group after it sits idle this long, clearing both the dashboard and the menu-bar popover. Off keeps every idle session in view. Restore any in one click — and a session reappears on its own the moment it's active again." onReset={(settings.autoHideIdleSecs ?? 900) !== 900 ? () => setSettings({ ...settings, autoHideIdleSecs: 900 }) : undefined}>
+          <Select value={String(settings.autoHideIdleSecs ?? 900)} options={[
+            { id: "0", label: "Off" },
+            { id: "300", label: "After 5 min" },
+            { id: "900", label: "After 15 min" },
+            { id: "1800", label: "After 30 min" },
+            { id: "3600", label: "After 1 hour" },
+          ]} onChange={(v) => setSettings({ ...settings, autoHideIdleSecs: Number(v) })} />
+        </SettingRow>
         <SettingRow label="Look" description="The dashboard's visual style. Instrument is the original signal cards; the others are warm, hand-made alternatives — each ships its own palette and type." onReset={(settings.dashboardView || "instrument") !== "instrument" ? () => setSettings({ ...settings, dashboardView: "instrument" }) : undefined}>
           <Select value={settings.dashboardView || "instrument"} options={[
             { id: "instrument", label: "Instrument (signal)" },
@@ -1378,6 +1390,13 @@ export function SettingsView() {
                 label="Errors"
               />
             </SettingRow>
+            <SettingRow label="Rate limit cleared" description="When a usage limit you hit resets, so you know paused sessions can resume" onReset={!(settings.notifyRateLimitReset ?? true) ? () => setSettings({ ...settings, notifyRateLimitReset: true }) : undefined}>
+              <Toggle
+                checked={settings.notifyRateLimitReset ?? true}
+                onChange={() => setSettings({ ...settings, notifyRateLimitReset: !(settings.notifyRateLimitReset ?? true) })}
+                label="Rate limit cleared"
+              />
+            </SettingRow>
             <SettingRow label="Finished" description="When a session wraps up a turn that ran long enough to be worth a ping" onReset={!(settings.notifyDone ?? true) ? () => setSettings({ ...settings, notifyDone: true }) : undefined}>
               <Toggle
                 checked={settings.notifyDone ?? true}
@@ -1394,6 +1413,15 @@ export function SettingsView() {
                   { id: "120", label: "2 minutes" },
                   { id: "300", label: "5 minutes" },
                 ]} onChange={(v) => setSettings({ ...settings, notifyDoneMinSecs: Number(v) })} />
+              </SettingRow>
+            )}
+            {(settings.notifyDone ?? true) && (
+              <SettingRow label="Quiet finished while watching" description="Skip the finished ping when Cue is focused — you can already see the card flip. Needs-you and errors still ping." onReset={!(settings.suppressDoneWhenFocused ?? true) ? () => setSettings({ ...settings, suppressDoneWhenFocused: true }) : undefined}>
+                <Toggle
+                  checked={settings.suppressDoneWhenFocused ?? true}
+                  onChange={() => setSettings({ ...settings, suppressDoneWhenFocused: !(settings.suppressDoneWhenFocused ?? true) })}
+                  label="Quiet finished while watching"
+                />
               </SettingRow>
             )}
           </>

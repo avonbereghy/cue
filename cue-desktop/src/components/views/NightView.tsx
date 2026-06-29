@@ -10,6 +10,8 @@ import { PermissionPrompt } from "../PermissionPrompt";
 import { CardExtras } from "./CardExtras";
 import { PromptPopup } from "./PromptPopup";
 import { orderSessions, duplicateTitleSet, type SkinViewProps } from "./skinView";
+import { DismissButton } from "./DismissButton";
+import { RestingDisclosure } from "./RestingDisclosure";
 
 const ALIVE = new Set(["working", "subagent", "thinking", "compacting", "clearing"]);
 const DIM = new Set(["idle", "done", "ended"]);
@@ -112,9 +114,11 @@ interface NightCardProps {
   onDeny: (sessionId: string, requestId: string) => void;
   isDuplicate?: boolean;
   showConfigCounts?: boolean;
+  /** Provided for live cards (renders the dismiss "X"); omitted for revived ones. */
+  onDismiss?: (id: string) => void;
 }
 
-function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pending, onApprove, onDeny, isDuplicate, showConfigCounts }: NightCardProps) {
+function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pending, onApprove, onDeny, isDuplicate, showConfigCounts, onDismiss }: NightCardProps) {
   const { info, metrics } = session;
   const state = info.state;
   const alive = ALIVE.has(state);
@@ -179,6 +183,7 @@ function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pendi
 
   return (
     <article className={`card s-${state} ${alive ? "alive" : ""} ${dim ? "dim" : ""}`} style={{ animationDelay: `${Math.min(index, 12) * 0.07}s` }} onClick={onCardClick} aria-label={`${STATE_WORD[state] ?? state}: ${session.displayTitle}`}>
+      {onDismiss && <DismissButton sessionId={info.id} title={session.displayTitle} onDismiss={onDismiss} />}
       <span className="spine" />
       <div className="chead">
         <StateMark state={state} />
@@ -309,7 +314,7 @@ export function NightView(props: SkinViewProps) {
           </header>
 
           <main className="grid">
-            {total === 0 && revivedSessions.length === 0 && (
+            {total === 0 && revivedSessions.length === 0 && props.restingSessions.length === 0 && (
               <div className="night-empty">
                 <LampMark />
                 <div className="h">The study is quiet</div>
@@ -328,9 +333,12 @@ export function NightView(props: SkinViewProps) {
                 onDeny={denyPermission}
                 isDuplicate={dupSet.has(session.displayTitle)}
                 showConfigCounts={showConfigCounts}
+                onDismiss={props.onDismiss}
               />
             ))}
           </main>
+
+          <RestingDisclosure sessions={props.restingSessions} onRestore={props.onRestore} />
 
           {revivedSessions.length > 0 && (
             <section className="night-ended">

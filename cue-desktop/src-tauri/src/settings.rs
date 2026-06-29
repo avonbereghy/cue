@@ -225,4 +225,50 @@ mod tests {
         assert!((d.flux_line_length - 0.55).abs() < f64::EPSILON);
         assert!((d.flux_turbulence - 1.0).abs() < f64::EPSILON);
     }
+
+    #[test]
+    fn test_notifier_defaults_match_ui_fallbacks() {
+        // Same contract as the flux test, for the notification settings: Rust
+        // `Settings::default()` must equal the TS UI's `?? <literal>` fallbacks
+        // (SettingsView.tsx) so a fresh install and a saved-with-missing-field
+        // file behave identically. No notifier parity test existed before P1.
+        let d = Settings::default();
+        assert!(d.notifications_enabled);
+        assert!(d.notify_waiting);
+        assert!(d.notify_error);
+        assert!(d.notify_done);
+        assert!((d.notify_done_min_secs - 30.0).abs() < f64::EPSILON);
+        assert!(d.suppress_done_when_focused);
+        assert!(d.notify_rate_limit_reset);
+    }
+
+    #[test]
+    fn test_notifier_settings_round_trip() {
+        // Guard against the flux-class data-loss bug for the notifier fields:
+        // they must survive serialize -> deserialize under their camelCase wire
+        // names, or a save silently resets them on the next restart.
+        let settings = Settings {
+            notify_done: false,
+            suppress_done_when_focused: false,
+            notify_rate_limit_reset: false,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(
+            json.contains("\"suppressDoneWhenFocused\""),
+            "json was: {json}"
+        );
+        assert!(
+            json.contains("\"notifyRateLimitReset\""),
+            "json was: {json}"
+        );
+        let loaded: Settings = serde_json::from_str(&json).unwrap();
+        assert!(!loaded.notify_done);
+        assert!(!loaded.suppress_done_when_focused);
+        assert!(!loaded.notify_rate_limit_reset);
+        // A file written before these fields existed still loads, defaulting true.
+        let legacy: Settings = serde_json::from_str(r#"{"notifyDone": true}"#).unwrap();
+        assert!(legacy.suppress_done_when_focused);
+        assert!(legacy.notify_rate_limit_reset);
+    }
 }

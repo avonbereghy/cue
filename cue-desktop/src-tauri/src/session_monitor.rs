@@ -125,6 +125,19 @@ pub struct SessionMonitorState {
     /// Cue's launch timestamp (seconds since UNIX epoch) — only sessions
     /// with activity after this are shown. Starts empty, reads forwards only.
     launched_at: f64,
+    /// User's idle auto-hide threshold in seconds (0 = disabled). Cached here —
+    /// refreshed by `set_auto_hide_idle_secs` from `update_settings` and at
+    /// startup — so the 1 Hz poll never reads settings.json, mirroring how the
+    /// notifier caches its projection. Default 900 (15 min).
+    auto_hide_idle_secs: Mutex<f64>,
+    /// Manual visibility overrides from the card "X" / Resting "restore" — the
+    /// machine must yield to the human. id → (hidden, anchor): `hidden=true`
+    /// keeps a session resting (dismissed); `hidden=false` forces a session that
+    /// the idle rule would hide to stay shown (restored). `anchor` is the action
+    /// timestamp; once the session's transition marker advances past it (the
+    /// session did something), the override is evicted and automatic behavior
+    /// resumes. Re-derived/pruned every poll.
+    manual_visibility: Mutex<HashMap<String, (bool, f64)>>,
 }
 
 impl Default for SessionMonitorState {
@@ -151,6 +164,8 @@ impl Default for SessionMonitorState {
             compacting_floor: Mutex::new(HashMap::new()),
             consecutive_parse_failures: Mutex::new(0),
             launched_at,
+            auto_hide_idle_secs: Mutex::new(900.0),
+            manual_visibility: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -161,6 +176,51 @@ impl SessionMonitorState {
     }
 
     /// Poll sessions.json for current session states (called every ~1s).
+    /// Cache the user's idle auto-hide threshold (seconds; 0 disables). Called
+    /// from `update_settings` and once at startup so the poll loop reads it
+    /// without touching disk.
+    pub fn set_auto_hide_idle_secs(&self, secs: f64) {
+        *self.auto_hide_idle_secs.lock_safe() = secs.max(0.0);
+    }
+
+    /// Manually tuck a session away ("X" on a card). It stays resting — even if
+    /// it isn't idle — until it next transitions (does something), at which point
+    /// the override self-evicts and it reappears. Anchored to the session's
+    /// CURRENT transition marker (its `state_changed_at`), so eviction compares
+    /// two values from the same clock (the hook's) — a wall-clock jump can't wedge
+    /// it the way an action-time anchor could.
+    pub fn dismiss_session(&self, session_id: &str) {
+        let anchor = self.transition_marker_for(session_id);
+        self.manual_visibility
+            .lock_safe()
+            .insert(session_id.to_string(), (true, anchor));
+    }
+
+    /// Manually bring a resting session back ("restore" in the Resting group).
+    /// Records a force-shown override so the idle rule can't immediately re-hide
+    /// it (the machine yields to the human); like dismiss, it self-evicts once
+    /// the session's transition marker next changes.
+    pub fn restore_session(&self, session_id: &str) {
+        let anchor = self.transition_marker_for(session_id);
+        self.manual_visibility
+            .lock_safe()
+            .insert(session_id.to_string(), (false, anchor));
+    }
+
+    /// The session's current transition marker, read from the latest enriched
+    /// snapshot. Locks `enriched_sessions` briefly and releases it before the
+    /// caller takes `manual_visibility`, so the two locks are never nested.
+    /// Falls back to `now` for a session not in the snapshot (it isn't visible,
+    /// so dismissing it is a no-op in practice).
+    fn transition_marker_for(&self, session_id: &str) -> f64 {
+        self.enriched_sessions
+            .lock_safe()
+            .iter()
+            .find(|s| s.info.id == session_id)
+            .map(|s| transition_marker(&s.info))
+            .unwrap_or_else(now_secs)
+    }
+
     pub fn poll_status(&self) {
         self.poll_status_with(paths::sessions_json_path(), paths::claude_projects_path());
     }
@@ -781,6 +841,49 @@ impl SessionMonitorState {
             active_since.clone()
         };
 
+        // Resting resolution: decide which sessions are "resting" — tucked out of
+        // the main view but recoverable. Two inputs, and a manual action always
+        // wins over the automatic rule:
+        //   * a manual override (card "X" → dismissed, Resting "restore" →
+        //     force-shown), sticky until the session's transition marker advances
+        //     past the action (it did something), then self-evicted; or
+        //   * the idle auto-hide rule (idle past the threshold).
+        // Re-derived every poll, so a resting session re-surfaces the instant it
+        // becomes active again. `error`/`waiting`/active states are never
+        // auto-hidden (see `idle_resting`).
+        let resting_snapshot: HashMap<String, &'static str> = {
+            let threshold = *self.auto_hide_idle_secs.lock_safe();
+            let mut overrides = self.manual_visibility.lock_safe();
+            let current_ids: std::collections::HashSet<&str> =
+                active.iter().map(|s| s.id.as_str()).collect();
+            // Drop overrides for sessions that no longer exist so the map can't
+            // grow unbounded (same hygiene as active_since above).
+            overrides.retain(|id, _| current_ids.contains(id.as_str()));
+            let mut out: HashMap<String, &'static str> = HashMap::new();
+            for s in &active {
+                let marker = transition_marker(s);
+                let (new_override, reason) = resolve_resting(
+                    &s.state,
+                    marker,
+                    now_secs,
+                    threshold,
+                    overrides.get(&s.id).copied(),
+                );
+                match new_override {
+                    Some(ov) => {
+                        overrides.insert(s.id.clone(), ov);
+                    }
+                    None => {
+                        overrides.remove(&s.id);
+                    }
+                }
+                if let Some(r) = reason {
+                    out.insert(s.id.clone(), r);
+                }
+            }
+            out
+        };
+
         let enriched: Vec<_> = {
             let cache = self.metrics_cache.lock_safe();
             let supp = self.supplemental.lock_safe().clone();
@@ -795,6 +898,7 @@ impl SessionMonitorState {
                     let (prev_output, prev_ts) =
                         speed_cache.get(&session.id).cloned().unwrap_or((0, 0.0));
                     let active_since_ts = active_since_snapshot.get(&session.id).copied();
+                    let resting_reason = resting_snapshot.get(&session.id).copied();
                     let supplemental = SupplementalData {
                         git_status: git_cache.get(&session.workspace).map(|(s, _)| s.clone()),
                         config_counts: config_cache.get(&session.workspace).map(|(c, _)| c.clone()),
@@ -807,7 +911,11 @@ impl SessionMonitorState {
                         prev_timestamp: prev_ts,
                         active_since: active_since_ts,
                     };
-                    EnrichedSession::from_info_and_metrics(session, metrics, &supplemental)
+                    let mut es =
+                        EnrichedSession::from_info_and_metrics(session, metrics, &supplemental);
+                    es.resting = resting_reason.is_some();
+                    es.resting_reason = resting_reason.map(str::to_string);
+                    es
                 })
                 .collect()
         }; // all locks dropped before acquiring enriched_sessions lock
@@ -1185,6 +1293,63 @@ fn dead_state_for(state: &str) -> &'static str {
         "idle"
     } else {
         "ended"
+    }
+}
+
+/// Seconds since the UNIX epoch as an `f64` — the clock used throughout the
+/// poll for state-age math and the manual-override anchor.
+fn now_secs() -> f64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+}
+
+/// The timestamp we treat as "when this session last transitioned" — the hook's
+/// authoritative `state_changed_at`, falling back to `last_activity` for entries
+/// written by older hooks that don't supply it. Used both to age out idle
+/// sessions and to evict a manual override once the session has done something
+/// since the user acted.
+fn transition_marker(info: &SessionInfo) -> f64 {
+    info.state_changed_at.unwrap_or(info.last_activity)
+}
+
+/// Whether a session should auto-hide ("rest") purely from sitting idle.
+/// Gated on the `idle` state and a positive threshold (`0` disables). `done`,
+/// `error`, and active states are intentionally excluded: `error` is a needs-me
+/// state, and a session blocked on a permission sits in `waiting`, not `idle` —
+/// so "never auto-hide an actionable decision" falls out for free. Manual
+/// overrides are resolved separately (and win) in the poll.
+fn idle_resting(state: &str, marker: f64, now: f64, threshold_secs: f64) -> bool {
+    threshold_secs > 0.0 && state == "idle" && (now - marker) >= threshold_secs
+}
+
+/// Resolve one session's resting status. Pure so the whole policy — manual wins,
+/// self-eviction on the next transition, idle auto-hide — is unit-testable
+/// without the poll loop. Given the current `(hidden, anchor)` override (if any),
+/// returns the override to persist (`None` ⇒ evict it) and the resting reason
+/// (`None` ⇒ shown). A manual action wins until the session's `marker` *changes*
+/// from the `anchor` captured at action time (it transitioned — did something),
+/// at which point the override is dropped and the automatic idle rule takes over
+/// again. Comparing for change (not `>`) keeps both values on the hook's clock,
+/// so a backward wall-clock jump can't wedge an override.
+fn resolve_resting(
+    state: &str,
+    marker: f64,
+    now: f64,
+    threshold_secs: f64,
+    override_: Option<(bool, f64)>,
+) -> (Option<(bool, f64)>, Option<&'static str>) {
+    // The session transitioned since the user acted ⇒ the override is stale.
+    let ov = match override_ {
+        Some((_, anchor)) if marker != anchor => None,
+        other => other,
+    };
+    match ov {
+        Some((true, anchor)) => (Some((true, anchor)), Some("dismissed")),
+        Some((false, anchor)) => (Some((false, anchor)), None), // force-shown
+        None if idle_resting(state, marker, now, threshold_secs) => (None, Some("idle")),
+        None => (None, None),
     }
 }
 
@@ -1841,6 +2006,97 @@ mod tests {
         // Idle/done whose window is actually closed -> retired (ended).
         assert_eq!(dead_state_for("idle"), "ended");
         assert_eq!(dead_state_for("done"), "ended");
+    }
+
+    // --- idle auto-hide ("resting") --------------------------------------
+
+    #[test]
+    fn test_idle_resting_fires_only_past_threshold_and_only_when_idle() {
+        let now = 10_000.0;
+        let thr = 900.0; // 15 min
+                         // Idle long enough -> rest.
+        assert!(idle_resting("idle", now - 901.0, now, thr));
+        // Idle, exactly at the threshold -> rest (>=).
+        assert!(idle_resting("idle", now - 900.0, now, thr));
+        // Idle but still fresh -> stay shown.
+        assert!(!idle_resting("idle", now - 899.0, now, thr));
+        // Non-idle states are never auto-hidden, however stale — `error` is a
+        // needs-me state and a pending permission sits in `waiting`.
+        for state in [
+            "working", "thinking", "waiting", "error", "subagent", "done",
+        ] {
+            assert!(
+                !idle_resting(state, now - 5_000.0, now, thr),
+                "{state} must never auto-hide"
+            );
+        }
+    }
+
+    #[test]
+    fn test_idle_resting_disabled_when_threshold_zero() {
+        let now = 10_000.0;
+        // 0 is the off switch — even an ancient idle session stays shown.
+        assert!(!idle_resting("idle", 0.0, now, 0.0));
+    }
+
+    #[test]
+    fn test_transition_marker_prefers_state_changed_at_falls_back_to_last_activity() {
+        let mut info = make_session("s1", "idle", 100.0, 0.0);
+        info.state_changed_at = Some(500.0);
+        assert_eq!(transition_marker(&info), 500.0);
+        info.state_changed_at = None; // older hook with no stateChangedAt
+        assert_eq!(transition_marker(&info), 100.0);
+    }
+
+    #[test]
+    fn test_resolve_resting_idle_rule_with_no_override() {
+        let now = 10_000.0;
+        // Stale idle -> resting "idle", no override persisted.
+        assert_eq!(
+            resolve_resting("idle", now - 1000.0, now, 900.0, None),
+            (None, Some("idle"))
+        );
+        // Fresh idle -> shown.
+        assert_eq!(
+            resolve_resting("idle", now - 10.0, now, 900.0, None),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn test_resolve_resting_manual_dismiss_sticks_until_next_transition() {
+        let now = 10_000.0;
+        let anchor = 9_000.0; // dismissed at t=9000
+                              // Marker unchanged since dismiss (no transition) -> stays dismissed,
+                              // even though the session is `working` (not idle) — manual wins.
+        assert_eq!(
+            resolve_resting("working", anchor, now, 900.0, Some((true, anchor))),
+            (Some((true, anchor)), Some("dismissed"))
+        );
+        // The session then transitions (marker advances past the anchor) ->
+        // override self-evicts and it reappears.
+        assert_eq!(
+            resolve_resting("working", anchor + 1.0, now, 900.0, Some((true, anchor))),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn test_resolve_resting_manual_show_overrides_idle_timeout() {
+        let now = 10_000.0;
+        let anchor = 9_500.0;
+        // Session is idle well past threshold, but the user restored it: stays
+        // shown (the machine yields to the human) while the marker is unchanged.
+        assert_eq!(
+            resolve_resting("idle", anchor, now, 900.0, Some((false, anchor))),
+            (Some((false, anchor)), None)
+        );
+        // Once it transitions, the force-show override evicts; the idle rule can
+        // apply again on later polls.
+        assert_eq!(
+            resolve_resting("idle", anchor + 1.0, now, 900.0, Some((false, anchor))),
+            (None, None)
+        );
     }
 
     #[test]

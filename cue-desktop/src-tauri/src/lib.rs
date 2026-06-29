@@ -307,6 +307,11 @@ fn update_settings(
     state
         .notifier
         .update_settings(notifier::NotificationSettings::from(&new_settings));
+    // Keep the poll loop's cached idle auto-hide threshold in lockstep with disk
+    // so a freshly-changed value takes effect on the next ~1s tick.
+    state
+        .monitor
+        .set_auto_hide_idle_secs(new_settings.auto_hide_idle_secs);
     let _ = app.emit("settings-changed", &new_settings);
     Ok(())
 }
@@ -804,6 +809,25 @@ fn revive_session(session_id: String, workspace: String) -> Result<(), String> {
         .map(|s| s.to_string())
         .unwrap_or(workspace);
     spawn_terminal_with_resume(&session_id, &canonical_str)
+}
+
+/// Manually tuck a session into the recoverable "Resting" group (the card "X").
+/// Stays hidden until the session next does something, then re-surfaces. Takes
+/// effect on the next ~1s poll.
+#[tauri::command]
+fn dismiss_session(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    validate_alphanumeric_id(&session_id, "session ID")?;
+    state.monitor.dismiss_session(&session_id);
+    Ok(())
+}
+
+/// Bring a resting session back into the main view ("restore" in the Resting
+/// group). Overrides the idle auto-hide rule until the session next transitions.
+#[tauri::command]
+fn restore_session(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    validate_alphanumeric_id(&session_id, "session ID")?;
+    state.monitor.restore_session(&session_id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1664,14 +1688,33 @@ fn spawn_timers(
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_secs_f64())
                         .unwrap_or(0.0);
-                    for ev in notifier_poll.diff_and_collect(&sessions, now_secs) {
+                    // Is the dashboard up and frontmost? If so, a "finished" ping
+                    // is something the user can already see, so it's suppressed
+                    // (tunable). is_focused() is false when the window is hidden
+                    // or closed — so a backgrounded/absent Cue still notifies.
+                    let window_focused = app_poll
+                        .get_webview_window("main")
+                        .and_then(|w| w.is_focused().ok())
+                        .unwrap_or(false);
+                    for ev in notifier_poll.diff_and_collect_with_focus(
+                        &sessions,
+                        now_secs,
+                        window_focused,
+                    ) {
                         use tauri_plugin_notification::NotificationExt;
-                        let _ = app_poll
+                        let builder = app_poll
                             .notification()
                             .builder()
                             .title(&ev.title)
-                            .body(&ev.body)
-                            .show();
+                            .body(&ev.body);
+                        // Sound only on the pings that ask you to act (needs-you /
+                        // error); a "finished" ping stays silent. Builder is moved
+                        // by value, so rebind through the match.
+                        let builder = match notifier::sound_name(ev.kind) {
+                            Some(sound) => builder.sound(sound),
+                            None => builder,
+                        };
+                        let _ = builder.show();
                     }
 
                     let payload = match serde_json::to_vec(&sessions) {
@@ -1800,6 +1843,8 @@ pub fn run() {
             deny_permission,
             get_permission_history,
             revive_session,
+            dismiss_session,
+            restore_session,
             open_session_workspace,
             focus_session_terminal,
             save_preset,
@@ -1991,6 +2036,9 @@ pub fn run() {
             // Apply the persisted notification preferences before the poll loop
             // starts firing (until now the notifier holds all-on defaults).
             app_notifier.update_settings(notifier::NotificationSettings::from(&startup_settings));
+            // Seed the poll loop's idle auto-hide threshold from disk (the state
+            // defaults to 15 min until this runs).
+            monitor.set_auto_hide_idle_secs(startup_settings.auto_hide_idle_secs);
 
             // --- Blink timer (0.5s) ---
             spawn_blink_timer(handle.clone(), monitor_tray.clone());
@@ -2345,12 +2393,18 @@ async fn handle_permission_connection(
             // whether any window is open. Best-effort.
             {
                 use tauri_plugin_notification::NotificationExt;
-                let _ = app
+                let builder = app
                     .notification()
                     .builder()
                     .title(format!("Permission needed · {}", tool_name))
-                    .body(&summary)
-                    .show();
+                    .body(&summary);
+                // A blocked session is a "needs you" alert — give it the same
+                // audible cue as the engine's waiting ping.
+                let builder = match notifier::sound_name(notifier::NotificationKind::Waiting) {
+                    Some(sound) => builder.sound(sound),
+                    None => builder,
+                };
+                let _ = builder.show();
             }
 
             // Emit to React frontend
@@ -2433,12 +2487,15 @@ fn render_tray_icon(
     }
 }
 
-/// Sessions to surface in the tray. Excludes "ended" — those are revivable
-/// in the main app and shouldn't clutter the menu bar dots or popover.
+/// Sessions to surface in the tray. Excludes "ended" (revivable in the main
+/// app) AND "resting" (auto-hidden idles + manual dismissals) — neither should
+/// clutter the menu-bar dots, the tooltip, the native menu, or the popover. This
+/// is the single chokepoint feeding all of those, so filtering here keeps the
+/// menu bar in lockstep with the React popover (which filters resting too).
 fn tray_active_sessions(sessions: &[EnrichedSession]) -> Vec<EnrichedSession> {
     sessions
         .iter()
-        .filter(|s| s.info.state.as_str() != "ended")
+        .filter(|s| s.info.state.as_str() != "ended" && !s.resting)
         .cloned()
         .collect()
 }

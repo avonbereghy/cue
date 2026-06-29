@@ -466,6 +466,18 @@ pub struct EnrichedSession {
     /// Passed through as-is; frontend title-cases for display.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort_level: Option<String>,
+    /// True when this session is "resting" — tucked out of the main view but
+    /// recoverable (the dashboard shows it in a "Resting" disclosure, one click
+    /// to restore; the tray just counts it). Either auto-hidden after sitting
+    /// idle past the user's threshold, or manually dismissed via the card's X.
+    /// Computed fresh every poll, so a resting session re-surfaces the moment it
+    /// does anything (its transition marker advances). Default false.
+    #[serde(default)]
+    pub resting: bool,
+    /// Why the session is resting: "idle" (auto-hidden) or "dismissed" (manual
+    /// X). `None` when not resting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resting_reason: Option<String>,
 }
 
 impl EnrichedSession {
@@ -665,6 +677,11 @@ impl EnrichedSession {
             system_memory: supplemental.system_memory.clone(),
             claude_version: supplemental.claude_version.clone(),
             effort_level,
+            // Resting is decided by the poll loop (it needs the user's threshold
+            // and the manual-override map), then stamped onto the enriched
+            // session after construction. The constructor defaults it to "shown".
+            resting: false,
+            resting_reason: None,
         }
     }
 }
@@ -1004,6 +1021,25 @@ pub struct Settings {
     /// fires. Only gates the done ping; waiting/error are immediate. Defaults 30.
     #[serde(default = "default_notify_done_min_secs")]
     pub notify_done_min_secs: f64,
+    /// Auto-hide a session that has sat `idle` this many seconds — it moves to
+    /// the recoverable "Resting" group (hidden from the dashboard grid and the
+    /// tray, restorable in one click, and re-surfaced automatically the moment
+    /// it becomes active again). `0` disables auto-hide entirely — that's the
+    /// off switch for this automatic behavior. Defaults 900 (15 min). Only the
+    /// `idle` state is auto-hidden; `error` (a needs-me state) and pending
+    /// permissions (which sit in `waiting`) are never touched.
+    #[serde(default = "default_auto_hide_idle_secs")]
+    pub auto_hide_idle_secs: f64,
+    /// Suppress the "finished" notification while the dashboard window is
+    /// focused — if you're already watching Cue, a card flipping to done is
+    /// visible, so the banner is noise. Only affects the done ping; "needs you"
+    /// and "error" still fire when focused. Defaults true.
+    #[serde(default = "default_true")]
+    pub suppress_done_when_focused: bool,
+    /// Fire a notification when a usage rate limit that had been reached clears,
+    /// so you know paused sessions can resume. Defaults true.
+    #[serde(default = "default_true")]
+    pub notify_rate_limit_reset: bool,
 }
 
 /// Appearance fields saved when a user customizes a theme.
@@ -1167,6 +1203,10 @@ fn default_notify_done_min_secs() -> f64 {
     30.0
 }
 
+fn default_auto_hide_idle_secs() -> f64 {
+    900.0 // 15 minutes
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -1253,6 +1293,9 @@ impl Default for Settings {
             notify_error: true,
             notify_done: true,
             notify_done_min_secs: 30.0,
+            auto_hide_idle_secs: 900.0,
+            suppress_done_when_focused: true,
+            notify_rate_limit_reset: true,
         }
     }
 }

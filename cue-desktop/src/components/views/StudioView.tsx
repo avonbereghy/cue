@@ -10,6 +10,8 @@ import { PermissionPrompt } from "../PermissionPrompt";
 import { CardExtras } from "./CardExtras";
 import { PromptPopup } from "./PromptPopup";
 import { orderSessions, duplicateTitleSet, type SkinViewProps } from "./skinView";
+import { DismissButton } from "./DismissButton";
+import { RestingDisclosure } from "./RestingDisclosure";
 
 const ALIVE = new Set(["working", "subagent", "thinking", "compacting", "clearing"]);
 const EFFORT_LABEL: Record<string, string> = { low: "low", medium: "medium", high: "high", xhigh: "x-high", max: "max" };
@@ -67,9 +69,11 @@ interface StudioCardProps {
   onDeny: (sessionId: string, requestId: string) => void;
   isDuplicate?: boolean;
   showConfigCounts?: boolean;
+  /** Provided for live cards (renders the dismiss "X"); omitted for revived ones. */
+  onDismiss?: (id: string) => void;
 }
 
-function StudioCardBase({ session, timerDisplay, permissionsEnabled, pending, onApprove, onDeny, isDuplicate, showConfigCounts }: StudioCardProps) {
+function StudioCardBase({ session, timerDisplay, permissionsEnabled, pending, onApprove, onDeny, isDuplicate, showConfigCounts, onDismiss }: StudioCardProps) {
   const { info, metrics } = session;
   const state = info.state;
   const [copied, setCopied] = useState(false);
@@ -132,6 +136,7 @@ function StudioCardBase({ session, timerDisplay, permissionsEnabled, pending, on
 
   return (
     <article className={`card s-${state}`} style={{ "--rot": rot(info.id) } as React.CSSProperties} onClick={onCardClick} aria-label={`${STATE_LABEL[state] ?? state}: ${session.displayTitle}`}>
+      {onDismiss && <DismissButton sessionId={info.id} title={session.displayTitle} onDismiss={onDismiss} />}
       <span className="spine" />
       {state === "waiting" && <div className="needtab"><span className="ping" />Needs you</div>}
       {state === "done" && <WaxSeal />}
@@ -250,6 +255,7 @@ export function StudioView(props: SkinViewProps) {
     onDeny: denyPermission,
     isDuplicate: withPerms ? dupSet.has(session.displayTitle) : false,
     showConfigCounts,
+    onDismiss: withPerms ? props.onDismiss : undefined,
   });
 
   return (
@@ -268,7 +274,7 @@ export function StudioView(props: SkinViewProps) {
           </header>
 
           <main className="board" aria-label="session board">
-            {total === 0 && revivedSessions.length === 0 && (
+            {total === 0 && revivedSessions.length === 0 && props.restingSessions.length === 0 && (
               <div className="studio-empty">
                 <div className="h">A clear desk</div>
                 <div className="p">Cards are laid out here as Claude Code sessions begin.</div>
@@ -278,6 +284,8 @@ export function StudioView(props: SkinViewProps) {
               <StudioCard key={session.info.id} {...cardProps(session, true)} />
             ))}
           </main>
+
+          <RestingDisclosure sessions={props.restingSessions} onRestore={props.onRestore} />
 
           {revivedSessions.length > 0 && (
             <section className="studio-ended">

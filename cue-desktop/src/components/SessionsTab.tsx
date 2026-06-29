@@ -10,6 +10,7 @@ import { BranchView } from "./BranchView";
 import { AlmanacView } from "./views/AlmanacView";
 import { NightView } from "./views/NightView";
 import { StudioView } from "./views/StudioView";
+import { RestingDisclosure } from "./views/RestingDisclosure";
 import { useTheme } from "@/hooks/useIsDark";
 import { getProjectAccent } from "@/lib/format";
 import {
@@ -298,6 +299,24 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setRevivedSessions([]);
     saveRevivedSessions([]);
   }, [revivedSessions]);
+
+  // Manual "X" on a card → tuck the session into the Resting group. The backend
+  // keeps it resting until it next does something, then it reappears. The card
+  // leaves the grid on the next poll (≤1s); we don't optimistically hide so the
+  // two surfaces (dashboard + tray) stay driven by one source of truth.
+  const handleDismiss = useCallback((sessionId: string) => {
+    invoke("dismiss_session", { sessionId }).catch((err) =>
+      console.error("Failed to dismiss session:", err),
+    );
+  }, []);
+
+  // "Restore" in the Resting disclosure → bring a resting session back. Overrides
+  // the idle auto-hide rule until the session next transitions.
+  const handleRestore = useCallback((sessionId: string) => {
+    invoke("restore_session", { sessionId }).catch((err) =>
+      console.error("Failed to restore session:", err),
+    );
+  }, []);
 
   const {
     pendingBySession,
@@ -1418,11 +1437,21 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     });
   }, [effectiveState]);
 
-  // Build the active (non-ended) session list.
+  // Resting sessions (auto-hidden after sitting idle, or manually dismissed via
+  // the card X) are tucked out of the main grid into the recoverable "Resting"
+  // disclosure below. Excluding them here keeps both the instrument view and the
+  // skins (which derive from `allActiveSessions`/`sortedWithChildren`) free of
+  // resting cards in one place. The backend re-derives `resting` every poll, so
+  // a session reappears here the moment it becomes active again.
+  const restingSessions = sessions.filter((s) => s.resting);
+
+  // Build the active (non-ended, non-resting) session list.
   // Team children (spawned via TeamCreate) are separated so they don't
   // participate in the sort algorithm — they follow their parent's position
   // and are spliced back in after sorting.
-  const allActiveSessions = sessions.filter((s) => s.info.state !== "ended");
+  const allActiveSessions = sessions.filter(
+    (s) => s.info.state !== "ended" && !s.resting,
+  );
   const isTeamChild = useCallback(
     (s: EnrichedSession) => !!(s.info.teamName || s.metrics.teamName),
     [],
@@ -2858,6 +2887,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     const skinProps = {
       sessions: sortedWithChildren,
       revivedSessions,
+      restingSessions,
       permissionsEnabled,
       pendingBySession,
       approvePermission,
@@ -2870,6 +2900,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       onReviveClick: handleReviveClick,
       onDismissRevived: handleDismissRevived,
       onClearAllRevived: handleClearAllRevived,
+      onDismiss: handleDismiss,
+      onRestore: handleRestore,
       formatReviveElapsed,
     };
     if (dashboardView === "almanac") return <AlmanacView {...skinProps} />;
@@ -2919,6 +2951,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                 compactMode={compactMode}
                 expandOverrides={expandOverrides}
                 onExpandCycle={cycleExpandById}
+                onDismiss={handleDismiss}
               />
             </div>
           ) : (() => {
@@ -3000,6 +3033,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                   isDuplicate={duplicateTitles.has(session.displayTitle)}
                   expandOverride={compactMode ? expandOverrides[session.info.id] : undefined}
                   onExpandCycle={compactMode ? getExpandCycle(session.info.id) : undefined}
+                  onDismiss={handleDismiss}
                 />
 
                 {/* Permission section. PENDING requests render in every mode —
@@ -3053,6 +3087,16 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             );
           });
           })()}
+
+          {/* Resting sessions — auto-hidden idles + manual dismissals, one click
+              to restore. Re-surface on their own when active again. Rendered in
+              every mode (incl. compact/slim) since the X and idle auto-hide are
+              reachable there too — recovery must be too. Returns null when empty. */}
+          <RestingDisclosure
+            sessions={restingSessions}
+            onRestore={handleRestore}
+            className="col-span-full"
+          />
 
           {/* Revived (ended) sessions — collapsible, collapsed by default */}
           {!compactMode && !slimMode && revivedSessions.length > 0 && (

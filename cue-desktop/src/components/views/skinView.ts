@@ -13,6 +13,10 @@ export interface SkinViewProps {
   /** Active sessions + team children, already sorted (instrument's order). */
   sessions: EnrichedSession[];
   revivedSessions: RevivedEntry[];
+  /** Sessions tucked into the recoverable "Resting" group — auto-hidden after
+   *  sitting idle, or manually dismissed. Shown in a collapsed disclosure, one
+   *  click to restore. */
+  restingSessions: EnrichedSession[];
   permissionsEnabled: boolean;
   pendingBySession: Record<string, PermissionRequest[]>;
   approvePermission: (sessionId: string, requestId: string) => void;
@@ -27,6 +31,10 @@ export interface SkinViewProps {
   onReviveClick: (s: EnrichedSession) => void;
   onDismissRevived: (id: string) => void;
   onClearAllRevived: () => void;
+  /** Tuck a live session into the Resting group (card "X"). */
+  onDismiss: (id: string) => void;
+  /** Bring a resting session back into the main view ("restore"). */
+  onRestore: (id: string) => void;
   formatReviveElapsed: (revivedAt: number) => string;
 }
 

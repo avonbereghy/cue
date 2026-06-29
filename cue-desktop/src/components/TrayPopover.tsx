@@ -434,10 +434,17 @@ export function TrayPopoverPage() {
     return () => { unlisten.then((fn) => fn()); };
   }, [measureAndResize]);
 
-  // Hide ended sessions from the menu bar — they're revivable in the main
-  // app and don't belong as menu-bar dots or popover rows.
+  // Hide ended AND resting sessions from the menu bar — ended ones are revivable
+  // in the main app; resting ones (auto-hidden idles + manual dismissals) are
+  // recoverable from the dashboard's Resting group. Neither belongs as a
+  // menu-bar dot or popover row; the resting count surfaces in the header below.
   const visibleSessions = useMemo(
-    () => sessions.filter((s) => s.info.state !== "ended"),
+    () => sessions.filter((s) => s.info.state !== "ended" && !s.resting),
+    [sessions],
+  );
+
+  const restingCount = useMemo(
+    () => sessions.filter((s) => s.resting && s.info.state !== "ended").length,
     [sessions],
   );
 
@@ -485,9 +492,9 @@ export function TrayPopoverPage() {
             fontSize: 11,
             color: "var(--tray-muted)",
           }}>
-            {visibleSessions.length === 0
+            {visibleSessions.length === 0 && restingCount === 0
               ? "no sessions"
-              : `${visibleSessions.length} session${visibleSessions.length === 1 ? "" : "s"}${activeCount > 0 ? ` · ${activeCount} active` : ""}`}
+              : `${visibleSessions.length} session${visibleSessions.length === 1 ? "" : "s"}${activeCount > 0 ? ` · ${activeCount} active` : ""}${restingCount > 0 ? ` · ${restingCount} resting` : ""}`}
           </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
