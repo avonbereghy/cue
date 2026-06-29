@@ -5,6 +5,8 @@ import { useSessionMonitor } from "@/hooks/useSessionMonitor";
 import { useSessionAnnouncements } from "@/hooks/useSessionAnnouncements";
 import { SessionsTab } from "./SessionsTab";
 import { SettingsView } from "./SettingsView";
+import { useUpdateCheck } from "@/lib/useUpdateCheck";
+import { updateStatusLabel } from "@/lib/updater";
 import type { Settings } from "@/lib/types";
 
 type Tab = "Sessions" | "Settings";
@@ -12,6 +14,7 @@ type Tab = "Sessions" | "Settings";
 export function Dashboard() {
   const [tab, setTab] = useState<Tab>("Sessions");
   const [menuOpen, setMenuOpen] = useState(false);
+  const updateCheck = useUpdateCheck();
   const [justExpanded, setJustExpanded] = useState(false);
   const [autoFitWindow, setAutoFitWindow] = useState(true);
   const sessions = useSessionMonitor();
@@ -215,6 +218,19 @@ export function Dashboard() {
                         <circle cx="6.5" cy="12" r="1.4" fill="currentColor" stroke="none" />
                       </svg>
                       Appearance
+                    </button>
+                    <button
+                      role="menuitem"
+                      onClick={() => updateCheck.check()}
+                      disabled={updateCheck.status === "checking"}
+                      className={menuItemClass}
+                      title="Check GitHub for a newer Cue and install it"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                        <path d="M21 3v5h-5" />
+                      </svg>
+                      {updateStatusLabel(updateCheck.status)}
                     </button>
                     <div className="my-1 border-t border-white/10" aria-hidden="true" />
                     <button

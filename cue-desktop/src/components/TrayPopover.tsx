@@ -6,6 +6,8 @@ import type { EnrichedSession, Settings } from "@/lib/types";
 import { cleanPromptText, errorReason } from "@/lib/format";
 import { normalizeView } from "@/lib/dashboardViews";
 import { openSession } from "@/lib/openSession";
+import { useUpdateCheck } from "@/lib/useUpdateCheck";
+import { updateStatusLabel } from "@/lib/updater";
 
 // State color palette mirrors src-tauri/src/tray.rs::color_for_state
 // Returned as { rail, pillBg, pillText } so the row + state pill can use
@@ -342,6 +344,7 @@ export function TrayPopoverPage() {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const updateCheck = useUpdateCheck();
 
   // Resize the popover window to fit its content (header + session list) so the
   // window is exactly as tall as the number of sessions: one short row yields a
@@ -550,6 +553,7 @@ export function TrayPopoverPage() {
                   <button role="menuitem" className="tray-menu-item" onClick={() => { setMenuOpen(false); invoke("open_settings_from_tray").catch(() => {}); }}>Settings</button>
                   <button role="menuitem" className="tray-menu-item" onClick={() => { setMenuOpen(false); invoke("open_keyboard").catch(() => {}); }}>Effects</button>
                   <button role="menuitem" className="tray-menu-item" onClick={() => { setMenuOpen(false); invoke("open_theme_picker").catch(() => {}); }}>Appearance</button>
+                  <button role="menuitem" className="tray-menu-item" disabled={updateCheck.status === "checking"} onClick={() => updateCheck.check()}>{updateStatusLabel(updateCheck.status)}</button>
                   <div aria-hidden="true" style={{ height: 1, margin: "4px 8px", backgroundColor: effLight ? "rgba(0,0,0,0.08)" : "rgba(255,255,255,0.10)" }} />
                   <button role="menuitem" className="tray-menu-item tray-menu-item-danger" onClick={() => { setMenuOpen(false); invoke("quit_app").catch(() => {}); }}>Quit</button>
                 </div>
