@@ -1,7 +1,8 @@
 //! Count Claude Code configuration files for a workspace.
 //!
 //! Counts CLAUDE.md files, rules, MCP servers, and hooks from both
-//! user-scope (~/.claude/) and project-scope ({workspace}/.claude/).
+//! user-scope (~/.claude/, or $CLAUDE_CONFIG_DIR if set) and project-scope
+//! ({workspace}/.claude/).
 
 use crate::models::ConfigCounts;
 use std::path::Path;
@@ -19,13 +20,16 @@ pub fn count_config(workspace: &str) -> ConfigCounts {
         Some(h) => h,
         None => return counts,
     };
+    // User-scope Claude config honors CLAUDE_CONFIG_DIR (default ~/.claude);
+    // project-scope reads below stay relative to the workspace.
+    let user_claude = crate::paths::claude_config_dir_for(&home);
 
     // CLAUDE.md files
     // User scope
-    if home.join(".claude/CLAUDE.md").exists() {
+    if user_claude.join("CLAUDE.md").exists() {
         counts.claude_md_count += 1;
     }
-    if home.join(".claude/CLAUDE.local.md").exists() {
+    if user_claude.join("CLAUDE.local.md").exists() {
         counts.claude_md_count += 1;
     }
     // Project scope
@@ -44,11 +48,11 @@ pub fn count_config(workspace: &str) -> ConfigCounts {
     }
 
     // Rules files: count .md files in rules directories
-    counts.rules_count += count_md_files_recursive(&home.join(".claude/rules"));
+    counts.rules_count += count_md_files_recursive(&user_claude.join("rules"));
     counts.rules_count += count_md_files_recursive(&ws.join(".claude/rules"));
 
-    // MCP servers and hooks from ~/.claude/settings.json
-    let settings_path = home.join(".claude/settings.json");
+    // MCP servers and hooks from the user-scope settings.json
+    let settings_path = user_claude.join("settings.json");
     if let Ok(content) =
         crate::security::read_to_string_bounded(&settings_path, SETTINGS_JSON_MAX_BYTES)
     {

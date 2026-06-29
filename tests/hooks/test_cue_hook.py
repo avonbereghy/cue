@@ -1436,3 +1436,50 @@ class TestCorruptFileRecovery:
         hook._quick_state_write("sess1", "/w", "cli", None, None, time.time())
         assert len(self._corrupt_files(hook_env)) == 1
         assert "sess1" in hook_env.read_sessions()
+
+
+# ─────────────────────────────────────────────────────────────────────
+# CLAUDE_CONFIG_DIR support: Cue must monitor the right transcripts even
+# when a user relocates ~/.claude via Claude Code's CLAUDE_CONFIG_DIR env
+# var. `_claude_config_dir()` is the single resolution point and must stay
+# in lockstep with claude_config_dir() in src-tauri/src/paths.rs.
+# ─────────────────────────────────────────────────────────────────────
+
+class TestClaudeConfigDir:
+    @staticmethod
+    def _expected(base):
+        return os.path.realpath(os.path.expanduser(base))
+
+    def test_defaults_to_dot_claude_when_unset(self, hook, monkeypatch):
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+        assert hook._claude_config_dir() == self._expected("~/.claude")
+
+    def test_blank_override_falls_back(self, hook, monkeypatch):
+        for blank in ("", "   "):
+            monkeypatch.setenv("CLAUDE_CONFIG_DIR", blank)
+            assert hook._claude_config_dir() == self._expected("~/.claude")
+
+    def test_honors_absolute_override(self, hook, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/custom/claude-home")
+        assert hook._claude_config_dir() == self._expected("/custom/claude-home")
+
+    def test_expands_leading_tilde(self, hook, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/alt-claude")
+        assert hook._claude_config_dir() == self._expected("~/alt-claude")
+
+    def test_transcript_under_relocated_dir_passes_validation(
+        self, hook, monkeypatch, tmp_path
+    ):
+        # Regression for the hardcoded-~/.claude bug: a transcript living under
+        # a relocated config dir must satisfy the same prefix check main() uses
+        # (`resolved.startswith(claude_home + os.sep)`).
+        cfg = tmp_path / "relocated-claude"
+        proj = cfg / "projects" / "ws"
+        proj.mkdir(parents=True)
+        transcript = proj / "sess.jsonl"
+        transcript.write_text("{}\n")
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+
+        claude_home = hook._claude_config_dir()
+        resolved = os.path.realpath(str(transcript))
+        assert resolved.startswith(claude_home + os.sep)

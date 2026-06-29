@@ -130,6 +130,12 @@ pub struct SessionMonitorState {
     /// startup — so the 1 Hz poll never reads settings.json, mirroring how the
     /// notifier caches its projection. Default 900 (15 min).
     auto_hide_idle_secs: Mutex<f64>,
+    /// User's Claude config-dir override (the persisted `claudeConfigDir`
+    /// setting); `None` = auto-detect. Cached here — refreshed by
+    /// `set_claude_projects_override` from `update_settings` and at startup — so
+    /// the 1 Hz poll resolves the projects dir without reading settings.json,
+    /// mirroring `auto_hide_idle_secs`.
+    claude_projects_override: Mutex<Option<String>>,
     /// Manual visibility overrides from the card "X" / Resting "restore" — the
     /// machine must yield to the human. id → (hidden, anchor): `hidden=true`
     /// keeps a session resting (dismissed); `hidden=false` forces a session that
@@ -165,6 +171,7 @@ impl Default for SessionMonitorState {
             consecutive_parse_failures: Mutex::new(0),
             launched_at,
             auto_hide_idle_secs: Mutex::new(900.0),
+            claude_projects_override: Mutex::new(None),
             manual_visibility: Mutex::new(HashMap::new()),
         }
     }
@@ -181,6 +188,26 @@ impl SessionMonitorState {
     /// without touching disk.
     pub fn set_auto_hide_idle_secs(&self, secs: f64) {
         *self.auto_hide_idle_secs.lock_safe() = secs.max(0.0);
+    }
+
+    /// Cache the user's Claude config-dir override (the `claudeConfigDir`
+    /// setting). An empty/whitespace value normalizes to `None` (auto-detect),
+    /// so `effective_projects_path` never feeds a blank to
+    /// `paths::claude_projects_path_from_override`. Called from `update_settings`
+    /// and once at startup so the poll loop never touches settings.json.
+    pub fn set_claude_projects_override(&self, dir: Option<String>) {
+        let normalized = dir.map(|d| d.trim().to_string()).filter(|d| !d.is_empty());
+        *self.claude_projects_override.lock_safe() = normalized;
+    }
+
+    /// The projects directory the poll loop should read. Applies the persisted
+    /// override (highest precedence) over the env/default resolution in
+    /// `paths::claude_projects_path`.
+    fn effective_projects_path(&self) -> std::path::PathBuf {
+        match &*self.claude_projects_override.lock_safe() {
+            Some(dir) => paths::claude_projects_path_from_override(dir),
+            None => paths::claude_projects_path(),
+        }
     }
 
     /// Manually tuck a session away ("X" on a card). It stays resting — even if
@@ -222,7 +249,7 @@ impl SessionMonitorState {
     }
 
     pub fn poll_status(&self) {
-        self.poll_status_with(paths::sessions_json_path(), paths::claude_projects_path());
+        self.poll_status_with(paths::sessions_json_path(), self.effective_projects_path());
     }
 
     /// Path-injected core of `poll_status`. Extracted so tests can drive the
@@ -942,7 +969,7 @@ impl SessionMonitorState {
                 })
                 .collect()
         };
-        let projects_path = paths::claude_projects_path();
+        let projects_path = self.effective_projects_path();
 
         for (id, workspace, state) in &session_keys {
             let path = self.jsonl_path(id, workspace, &projects_path);
@@ -1871,6 +1898,24 @@ mod tests {
     #[test]
     fn test_encode_workspace_path_unix() {
         assert_eq!(encode_workspace_path("/Users/dev/App"), "-Users-dev-App");
+    }
+
+    #[test]
+    fn effective_projects_path_applies_and_normalizes_override() {
+        let m = SessionMonitorState::new();
+        // Default: auto-detect, identical to the env/default resolution.
+        assert_eq!(m.effective_projects_path(), paths::claude_projects_path());
+        // A set override wins over auto-detect.
+        m.set_claude_projects_override(Some("/tmp/x/claude".to_string()));
+        assert_eq!(
+            m.effective_projects_path(),
+            paths::claude_projects_path_from_override("/tmp/x/claude")
+        );
+        // Whitespace-only and None both normalize back to auto-detect.
+        m.set_claude_projects_override(Some("   ".to_string()));
+        assert_eq!(m.effective_projects_path(), paths::claude_projects_path());
+        m.set_claude_projects_override(None);
+        assert_eq!(m.effective_projects_path(), paths::claude_projects_path());
     }
 
     #[test]

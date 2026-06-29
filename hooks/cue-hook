@@ -118,6 +118,26 @@ def get_status_dir():
     return os.path.join(xdg, "cue")
 
 
+def _claude_config_dir():
+    """Resolve Claude Code's config directory, honoring the CLAUDE_CONFIG_DIR
+    environment variable (Claude Code's own mechanism for relocating ~/.claude)
+    and falling back to ~/.claude.
+
+    Mirrors `claude_config_dir()` in the Rust backend
+    (cue-desktop/src-tauri/src/paths.rs) so the hook and the desktop app agree
+    on where JSONL transcripts live — if they diverge, the hook validates
+    transcripts against a directory the app never reads from. Unlike the GUI
+    app, the hook is spawned by Claude Code itself and always inherits its
+    environment, so the env var is authoritative here.
+
+    An unset, empty, or whitespace-only override falls back to ~/.claude.
+    Returns a realpath (symlinks resolved) for stable prefix comparisons.
+    """
+    override = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    base = override if override else "~/.claude"
+    return os.path.realpath(os.path.expanduser(base))
+
+
 # --- Task 8: Use get_status_dir() instead of hardcoded path ---
 STATUS_DIR = get_status_dir()
 STATUS_FILE = os.path.join(STATUS_DIR, "sessions.json")
@@ -833,7 +853,7 @@ def main():
     if transcript_path:
         try:
             resolved = os.path.realpath(transcript_path)
-            claude_home = os.path.realpath(os.path.expanduser("~/.claude"))
+            claude_home = _claude_config_dir()
             if not resolved.startswith(claude_home + os.sep):
                 transcript_path = ""
         except Exception:

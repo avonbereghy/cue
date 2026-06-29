@@ -1,5 +1,14 @@
 // TypeScript interfaces mirroring Rust models (camelCase via serde)
 
+declare global {
+  interface Window {
+    /** Imperative theme applier installed by main.tsx — applies a theme preset
+     *  ("auto" | "light" | "dark") without a settings round-trip. Used by the
+     *  Settings theme control and its reset. */
+    __applyTheme?: (preset: string) => void;
+  }
+}
+
 export interface SessionInfo {
   id: string;
   workspace: string;
@@ -290,6 +299,12 @@ export interface Settings {
   /** Auto-hide a session that has sat idle this many seconds into the recoverable
    *  "Resting" group. 0 disables (the off switch). Default: 900 (15 min). */
   autoHideIdleSecs: number;
+  /** Override for Claude Code's config directory (the `.claude` equivalent that
+   *  holds `projects/`). Empty = auto-detect ($CLAUDE_CONFIG_DIR, else ~/.claude).
+   *  Set this if Cue shows no sessions while Claude Code is running — e.g. you
+   *  relocated ~/.claude and launch Cue from the Dock (which can't see the env
+   *  var). A leading ~ is expanded. Default: "" (auto-detect). */
+  claudeConfigDir: string;
   /** Suppress the "finished" ping while the dashboard window is focused — if
    *  you're already watching Cue, a card flipping to done is visible. Only gates
    *  the done ping; needs-you/error still fire when focused. Default: true. */

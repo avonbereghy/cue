@@ -1030,6 +1030,15 @@ pub struct Settings {
     /// permissions (which sit in `waiting`) are never touched.
     #[serde(default = "default_auto_hide_idle_secs")]
     pub auto_hide_idle_secs: f64,
+    /// User override for Claude Code's config directory — the `.claude`
+    /// equivalent that holds `projects/` (the JSONL transcripts Cue reads).
+    /// Empty = auto-detect (`$CLAUDE_CONFIG_DIR`, else `~/.claude`). This is the
+    /// escape hatch for a Dock/Finder launch, which doesn't inherit the shell
+    /// environment and so can't see a `CLAUDE_CONFIG_DIR` exported in a shell
+    /// rc; when set it beats both the env var and the default. A leading `~` is
+    /// expanded. See `paths::claude_projects_path_from_override`.
+    #[serde(default)]
+    pub claude_config_dir: String,
     /// Suppress the "finished" notification while the dashboard window is
     /// focused — if you're already watching Cue, a card flipping to done is
     /// visible, so the banner is noise. Only affects the done ping; "needs you"
@@ -1294,6 +1303,7 @@ impl Default for Settings {
             notify_done: true,
             notify_done_min_secs: 30.0,
             auto_hide_idle_secs: 900.0,
+            claude_config_dir: String::new(),
             suppress_done_when_focused: true,
             notify_rate_limit_reset: true,
         }

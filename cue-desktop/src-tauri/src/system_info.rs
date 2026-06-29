@@ -55,7 +55,8 @@ pub fn get_claude_default_effort() -> (Option<String>, Option<f64>) {
     let Some(home) = dirs::home_dir() else {
         return (None, None);
     };
-    let path = home.join(".claude/settings.json");
+    // Honors CLAUDE_CONFIG_DIR (default ~/.claude/settings.json).
+    let path = crate::paths::claude_config_dir_for(&home).join("settings.json");
     let mtime = std::fs::metadata(&path)
         .ok()
         .and_then(|m| m.modified().ok())

@@ -300,6 +300,69 @@ function BandWaveform({ presetId, signalBass, signalMids, signalTreble, signalGa
   );
 }
 
+interface ClaudeDirProbe {
+  projectsPath: string;
+  exists: boolean;
+  sessionCount: number;
+  capped: boolean;
+  autoDetected: string;
+}
+
+/** Override for Claude Code's config directory, with live validation. Lets a
+ *  user point Cue at a relocated ~/.claude — the escape hatch for a Dock launch
+ *  that can't see a shell-exported $CLAUDE_CONFIG_DIR. */
+function ClaudeDirSetting({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [probe, setProbe] = useState<ClaudeDirProbe | null>(null);
+
+  // Probe on mount and whenever the typed value settles (debounced 300ms) so we
+  // don't walk the directory on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      invoke<ClaudeDirProbe>("probe_claude_dir", { dir: value })
+        .then(setProbe)
+        .catch((err) => console.error("probe_claude_dir failed:", err));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [value]);
+
+  const found = probe !== null && probe.exists && probe.sessionCount > 0;
+  const countLabel = probe ? `${probe.sessionCount}${probe.capped ? "+" : ""}` : "";
+
+  return (
+    <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1">
+      <SettingRow
+        label="Sessions Directory"
+        description="Where Claude Code stores transcripts. Leave blank to auto-detect ($CLAUDE_CONFIG_DIR, else ~/.claude). Set this if Cue shows no sessions while Claude Code is running."
+        onReset={value !== "" ? () => onChange("") : undefined}
+      >
+        <input
+          type="text"
+          value={value}
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          aria-label="Claude sessions directory"
+          placeholder={probe?.autoDetected ?? "~/.claude"}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-56 px-2 py-1 rounded text-[0.6875rem] bg-black/30 border border-white/10 text-white/80 placeholder:text-white/25 focus:outline-none focus:border-white/25"
+        />
+      </SettingRow>
+      {probe && (
+        <div className="flex items-center gap-2 pb-1.5">
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${found ? "bg-green-400/80" : "bg-amber-400/80"}`} />
+          <span className={`text-[0.625rem] truncate ${found ? "text-white/40" : "text-amber-400/70"}`}>
+            {found
+              ? `Found ${countLabel} session${probe.sessionCount === 1 ? "" : "s"} in ${probe.projectsPath}`
+              : probe.exists
+                ? `No sessions found in ${probe.projectsPath}`
+                : `Not found: ${probe.projectsPath}`}
+          </span>
+        </div>
+      )}
+    </section>
+  );
+}
+
 interface HookStatusCheck {
   label: string;
   ok: boolean;
@@ -788,16 +851,14 @@ export function SettingsView() {
       notifyDone: true,
       notifyDoneMinSecs: 30,
       autoHideIdleSecs: 900,
+      claudeConfigDir: "",
       suppressDoneWhenFocused: true,
       notifyRateLimitReset: true,
       themeCustomizations: settings.themeCustomizations ?? {},
     };
     setSettings(defaults);
     // Apply theme immediately
-    const win = window as unknown as Record<string, unknown>;
-    if (typeof win.__applyTheme === "function") {
-      (win.__applyTheme as (p: string) => void)("auto");
-    }
+    window.__applyTheme?.("auto");
   };
 
   if (!settings) {
@@ -828,17 +889,14 @@ export function SettingsView() {
       <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Appearance</h3>
       {/* Theme */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1">
-        <SettingRow label="Theme" description="Light, Dark, or follow system" onReset={(settings.theme ?? "auto") !== "auto" ? () => { setSettings({ ...settings, theme: "auto" }); const win = window as unknown as Record<string, unknown>; if (typeof win.__applyTheme === "function") (win.__applyTheme as (p: string) => void)("auto"); } : undefined}>
+        <SettingRow label="Theme" description="Light, Dark, or follow system" onReset={(settings.theme ?? "auto") !== "auto" ? () => { setSettings({ ...settings, theme: "auto" }); window.__applyTheme?.("auto"); } : undefined}>
           <Select
             value={settings.theme ?? "auto"}
             options={[{ id: "auto", label: "Auto" }, { id: "light", label: "Light" }, { id: "dark", label: "Dark" }]}
             onChange={(v) => {
               setSettings({ ...settings, theme: v });
               // Apply immediately without needing save
-              const win = window as unknown as Record<string, unknown>;
-              if (typeof win.__applyTheme === "function") {
-                (win.__applyTheme as (p: string) => void)(v);
-              }
+              window.__applyTheme?.(v);
             }}
           />
         </SettingRow>
@@ -1481,6 +1539,12 @@ export function SettingsView() {
           />
         </SettingRow>
       </section>
+
+      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Claude Code</h3>
+      <ClaudeDirSetting
+        value={settings.claudeConfigDir ?? ""}
+        onChange={(v) => setSettings({ ...settings, claudeConfigDir: v })}
+      />
 
       {/* Hook Status */}
       <HookStatus />

@@ -312,8 +312,81 @@ fn update_settings(
     state
         .monitor
         .set_auto_hide_idle_secs(new_settings.auto_hide_idle_secs);
+    // Keep the poll loop's cached Claude projects-dir override in lockstep with
+    // disk so a freshly-set path takes effect on the next ~1s tick (empty value
+    // normalizes to "auto-detect" inside the setter).
+    state
+        .monitor
+        .set_claude_projects_override(Some(new_settings.claude_config_dir.clone()));
     let _ = app.emit("settings-changed", &new_settings);
     Ok(())
+}
+
+/// Result of probing a candidate Claude config directory for the Settings UI.
+/// Lets the frontend show "✓ found N sessions" / "⚠ nothing here" feedback as
+/// the user edits the override, and surface the auto-detected default as a hint.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeDirProbe {
+    /// The projects directory that WOULD be monitored for the given input
+    /// (`<dir>/projects`, or the auto-detected path when `dir` is blank).
+    projects_path: String,
+    /// Whether that directory currently exists on disk.
+    exists: bool,
+    /// Count of session transcripts (`*.jsonl`) one level deep, capped.
+    session_count: usize,
+    /// True when the count hit the cap, so the UI can render "N+".
+    capped: bool,
+    /// The auto-detected projects dir (`$CLAUDE_CONFIG_DIR` or `~/.claude`),
+    /// shown as the placeholder / "currently using" hint when no override is set.
+    auto_detected: String,
+}
+
+/// Probe a candidate Claude config directory (the value typed into the Settings
+/// override field). Runs only on user edit — never on the poll path — so the
+/// bounded directory walk can't stall the UI. The path is the user's own input
+/// for their own machine; we list directories and check extensions only (no
+/// file-content reads), so no workspace sanitization is required.
+#[tauri::command]
+fn probe_claude_dir(dir: String) -> ClaudeDirProbe {
+    const PROBE_CAP: usize = 200;
+    let trimmed = dir.trim();
+    let projects = if trimmed.is_empty() {
+        paths::claude_projects_path()
+    } else {
+        paths::claude_projects_path_from_override(trimmed)
+    };
+
+    // Sessions live at <projects>/<encoded-workspace>/<id>.jsonl — count
+    // transcripts one level deep, bounded so a huge tree can't freeze the UI.
+    let mut session_count = 0usize;
+    let mut capped = false;
+    if let Ok(workspaces) = std::fs::read_dir(&projects) {
+        'outer: for ws in workspaces.flatten() {
+            if !ws.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            if let Ok(entries) = std::fs::read_dir(ws.path()) {
+                for e in entries.flatten() {
+                    if e.path().extension().and_then(|x| x.to_str()) == Some("jsonl") {
+                        session_count += 1;
+                        if session_count >= PROBE_CAP {
+                            capped = true;
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    ClaudeDirProbe {
+        exists: projects.exists(),
+        session_count,
+        capped,
+        projects_path: projects.to_string_lossy().into_owned(),
+        auto_detected: paths::claude_projects_path().to_string_lossy().into_owned(),
+    }
 }
 
 #[tauri::command]
@@ -1836,6 +1909,7 @@ pub fn run() {
             get_sessions,
             get_settings,
             update_settings,
+            probe_claude_dir,
             get_theme,
             detect_environment,
             configure_hooks,
@@ -2039,6 +2113,9 @@ pub fn run() {
             // Seed the poll loop's idle auto-hide threshold from disk (the state
             // defaults to 15 min until this runs).
             monitor.set_auto_hide_idle_secs(startup_settings.auto_hide_idle_secs);
+            // Seed the poll loop's Claude projects-dir override from disk (the
+            // state defaults to auto-detect until this runs).
+            monitor.set_claude_projects_override(Some(startup_settings.claude_config_dir.clone()));
 
             // --- Blink timer (0.5s) ---
             spawn_blink_timer(handle.clone(), monitor_tray.clone());

@@ -243,6 +243,27 @@ mod tests {
     }
 
     #[test]
+    fn test_claude_config_dir_round_trip_and_default() {
+        // Defaults to empty (auto-detect) and survives a camelCase round-trip,
+        // guarding the flux-class silent-drop bug for the new override field.
+        let d = Settings::default();
+        assert_eq!(d.claude_config_dir, "");
+
+        let settings = Settings {
+            claude_config_dir: "~/alt-claude".to_string(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(json.contains("\"claudeConfigDir\""), "json was: {json}");
+        let loaded: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.claude_config_dir, "~/alt-claude");
+
+        // A file written before the field existed still loads, defaulting empty.
+        let legacy: Settings = serde_json::from_str(r#"{"notifyDone": true}"#).unwrap();
+        assert_eq!(legacy.claude_config_dir, "");
+    }
+
+    #[test]
     fn test_notifier_settings_round_trip() {
         // Guard against the flux-class data-loss bug for the notifier fields:
         // they must survive serialize -> deserialize under their camelCase wire
