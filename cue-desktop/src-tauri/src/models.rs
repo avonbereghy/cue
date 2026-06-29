@@ -163,7 +163,8 @@ pub struct SupplementalData {
     /// Used as a fallback when the session's JSONL has no `/effort` command.
     pub claude_default_effort: Option<String>,
     /// Unix timestamp when `~/.claude/settings.json` was last modified.
-    /// Compared against per-session `/effort` timestamps so the fresher source wins.
+    /// Vestigial: effort resolution no longer compares timestamps (the mtime
+    /// bumps on every unrelated settings write). Retained for compatibility.
     pub claude_default_effort_ts: Option<f64>,
     /// Previous output_tokens for this session (for speed calculation)
     pub prev_output_tokens: i64,
@@ -348,9 +349,9 @@ pub struct SessionMetrics {
     /// Stored as-is so new level names added by Anthropic propagate without a code change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort_level: Option<String>,
-    /// Timestamp of the latest `/effort` command. Compared against
-    /// settings.json mtime so the fresher source wins (handles the case where
-    /// another session's `/effort high` updates the global default).
+    /// Timestamp of the latest `/effort` command. Vestigial: effort resolution
+    /// now prefers the per-session value outright rather than comparing
+    /// timestamps. Retained for compatibility.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort_level_ts: Option<f64>,
     /// Parent session ID when this session was forked via Claude Code's
@@ -460,6 +461,16 @@ pub struct EnrichedSession {
     /// Passed through as-is; frontend title-cases for display.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort_level: Option<String>,
+}
+
+/// Resolve the effort level shown for a session.
+///
+/// A session's own `/effort` command is authoritative; the global default
+/// (`~/.claude/settings.json`) only fills in when the session never ran
+/// `/effort`; `"auto"` when neither is set. No timestamp comparison — see
+/// `from_info_and_metrics` for why the global mtime can't be trusted.
+fn resolve_effort_level(session: Option<String>, global: Option<String>) -> String {
+    session.or(global).unwrap_or_else(|| "auto".to_string())
 }
 
 impl EnrichedSession {
@@ -601,35 +612,24 @@ impl EnrichedSession {
             .find(|t| t.status == "in_progress" || t.status == "running")
             .map(|t| truncate_string(&t.content, 60));
 
-        // Effective effort: fresher of (last session `/effort` command, global
-        // ~/.claude/settings.json mtime) wins. Falls back to "auto" — Claude Code's
-        // implicit default when no effortLevel is set anywhere. This correctly handles:
-        //   (a) session-only levels like `max`/`auto` that don't persist globally,
-        //   (b) another session changing the global default while this session has
-        //       a stale `/effort` entry in its JSONL,
-        //   (c) brand-new sessions with no effort history on a system that never ran `/effort`.
-        let effort_level = {
-            let session_eff = metrics.effort_level.clone();
-            let session_ts = metrics.effort_level_ts.unwrap_or(0.0);
-            let global_eff = supplemental.claude_default_effort.clone();
-            let global_ts = supplemental.claude_default_effort_ts.unwrap_or(0.0);
-            let resolved = match (session_eff, global_eff) {
-                (Some(s), Some(g)) => Some(if session_ts >= global_ts { s } else { g }),
-                (Some(s), None) => {
-                    // Session /effort exists but global is cleared — session wins
-                    // only if it's newer than the global-clear event, otherwise
-                    // the clear implies "revert to auto".
-                    if session_ts >= global_ts {
-                        Some(s)
-                    } else {
-                        None
-                    }
-                }
-                (None, Some(g)) => Some(g),
-                (None, None) => None,
-            };
-            Some(resolved.unwrap_or_else(|| "auto".to_string()))
-        };
+        // Effective effort: a session's own `/effort` command is authoritative —
+        // an explicit per-session choice always wins. The global default from
+        // ~/.claude/settings.json only fills in for sessions that never ran
+        // `/effort`; falls back to "auto" (Claude Code's implicit default) when
+        // no effort is set anywhere.
+        //
+        // We deliberately do NOT compare timestamps against the global default.
+        // Its "timestamp" is the ~/.claude/settings.json *mtime*, which bumps on
+        // every unrelated write (model switches, any setting change). Claude Code
+        // rewrites that file constantly, so the global mtime was virtually always
+        // "fresher" than a session's real `/effort` entry — which made the global
+        // level clobber every card (e.g. a session that ran `/effort xhigh`
+        // showing the global "high"). Preferring the per-session value fixes that;
+        // the `*_ts` fields are retained for now but no longer drive resolution.
+        let effort_level = Some(resolve_effort_level(
+            metrics.effort_level.clone(),
+            supplemental.claude_default_effort.clone(),
+        ));
 
         Self {
             info,
@@ -1276,6 +1276,22 @@ mod tests {
         assert_eq!(format_model_name("claude-opus-4-6"), "Opus 4.6");
         assert_eq!(format_model_name("unknown"), "\u{2014}");
         assert_eq!(format_model_name(""), "\u{2014}");
+    }
+
+    #[test]
+    fn test_resolve_effort_prefers_session_over_global() {
+        // The regression: the global default (from settings.json mtime) clobbered
+        // a session's real /effort. A per-session choice must win.
+        assert_eq!(
+            resolve_effort_level(Some("xhigh".into()), Some("high".into())),
+            "xhigh"
+        );
+        // No per-session /effort → fall back to the global default.
+        assert_eq!(resolve_effort_level(None, Some("high".into())), "high");
+        // Session /effort with no global → the session value.
+        assert_eq!(resolve_effort_level(Some("max".into()), None), "max");
+        // Nothing set anywhere → auto.
+        assert_eq!(resolve_effort_level(None, None), "auto");
     }
 
     #[test]
