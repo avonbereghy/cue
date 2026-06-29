@@ -533,14 +533,28 @@ def _detect_source():
 def _should_ignore_session(hook_data):
     """Return True for sessions that should not appear in Cue.
 
-    CUE_SKIP=1 is the explicit opt-out for any caller. Note: there is no
-    payload field distinguishing `claude -p` / headless runs (a former
-    `session_type` check here was dead code — verified against live hook
-    payloads and current docs), so print-mode sessions ARE tracked; the
-    sessions.json GC absorbs their `ended` tombstones.
+    Two opt-outs:
+
+    1. CUE_SKIP=1 — explicit opt-out for any caller.
+
+    2. SDK / headless runs — Claude Code sets CLAUDE_CODE_ENTRYPOINT to the
+       launch surface: "cli" for an interactive terminal session, and an
+       "sdk-*" value (sdk-cli / sdk-py / sdk-ts) for a programmatic run spawned
+       via the Agent SDK or `claude -p`. These background jobs — e.g. retenir's
+       post-session consolidation, which fires on SessionEnd and runs a single
+       headless prompt in the project dir — otherwise flicker a contentless
+       "thinking" card in and out of the dashboard as they spawn and exit. They
+       are never something the user is interactively driving, so we don't
+       surface them. (Supersedes an earlier note that print-mode runs were
+       untrackable: the entrypoint env var distinguishes them reliably —
+       verified cli vs sdk-cli against live transcripts.)
     """
     _ = hook_data  # kept for signature stability / future payload fields
-    return os.environ.get("CUE_SKIP") == "1"
+    if os.environ.get("CUE_SKIP") == "1":
+        return True
+    if os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
+        return True
+    return False
 
 
 # A wrapping tool (e.g. an orchestrator that runs `claude` as a subprocess) can
