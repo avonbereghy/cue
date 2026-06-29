@@ -133,31 +133,62 @@ fn decide(
 /// Render the user-facing title/body for a decided event from the session's
 /// data. Kept separate from `decide` so the (stateless) copy can evolve without
 /// touching the transition truth table.
-fn build_event(s: &EnrichedSession, kind: NotificationKind) -> NotificationEvent {
+fn build_event(s: &EnrichedSession, kind: NotificationKind, now: f64) -> NotificationEvent {
+    use crate::summary_formatter::{last_line, last_question, strip_markdown, truncate};
     let label = session_label(s);
+    let assistant = s.metrics.last_assistant_text.as_deref().unwrap_or("");
+
     let (title, body) = match kind {
         NotificationKind::Waiting => {
-            let body = first_nonempty([s.metrics.last_assistant_text.as_deref()])
-                .map(|t| crate::summary_formatter::truncate(t, 140))
+            // The point of "needs you" is the *ask* — the assistant's last
+            // question (fall back to its last line), not the opening narration.
+            let ask = last_question(assistant)
+                .or_else(|| last_line(assistant))
+                .map(|q| strip_markdown(&q))
+                .filter(|q| !q.is_empty())
+                .map(|q| truncate(&q, 120))
                 .unwrap_or_else(|| "Waiting for your response".to_string());
-            (format!("{} needs you", label), body)
+            (format!("{} needs you", label), ask)
         }
         NotificationKind::Error => {
-            let title = match s.info.error_type.as_deref() {
-                Some("rate_limit") => format!("{} · rate limited", label),
-                _ => format!("{} · error", label),
+            let is_rate = s.info.error_type.as_deref() == Some("rate_limit");
+            let title = if is_rate {
+                format!("{} · rate limited", label)
+            } else {
+                format!("{} · error", label)
             };
-            let body = first_nonempty([s.metrics.last_error_message.as_deref()])
-                .map(|m| crate::summary_formatter::truncate(m, 140))
-                .or_else(|| s.info.error_type.as_deref().map(humanize_error))
-                .unwrap_or_else(|| "Session hit an error".to_string());
+            let body = if is_rate {
+                // Prefer "when does it resume" over a bare "rate limited".
+                rate_reset_hint(s, now).unwrap_or_else(|| "Rate limit reached".to_string())
+            } else {
+                first_nonempty([s.metrics.last_error_message.as_deref()])
+                    .map(|m| truncate(&strip_markdown(m), 140))
+                    .or_else(|| s.info.error_type.as_deref().map(humanize_error))
+                    .unwrap_or_else(|| "Session hit an error".to_string())
+            };
             (title, body)
         }
         NotificationKind::Done => {
-            let body = first_nonempty([s.metrics.last_assistant_text.as_deref()])
-                .map(|t| crate::summary_formatter::truncate(t, 140))
-                .unwrap_or_else(|| "Finished".to_string());
-            (format!("{} finished", label), body)
+            // The *result*, not the preamble: duration · todos · the conclusion.
+            let mut bits: Vec<String> = Vec::new();
+            if s.total_duration_secs >= 60.0 {
+                bits.push(human_duration(s.total_duration_secs));
+            }
+            if s.todo_total > 0 {
+                bits.push(format!("{}/{} todos", s.todo_completed, s.todo_total));
+            }
+            if let Some(outcome) = last_line(assistant)
+                .map(|l| strip_markdown(&l))
+                .filter(|l| !l.is_empty())
+            {
+                bits.push(truncate(&outcome, 100));
+            }
+            let body = if bits.is_empty() {
+                "Finished".to_string()
+            } else {
+                bits.join(" · ")
+            };
+            (format!("{} — done", label), body)
         }
     };
     NotificationEvent {
@@ -165,6 +196,32 @@ fn build_event(s: &EnrichedSession, kind: NotificationKind) -> NotificationEvent
         title,
         body,
         kind,
+    }
+}
+
+/// Compact human duration for a notification body ("45s", "21m", "1h 5m").
+fn human_duration(secs: f64) -> String {
+    let s = secs.max(0.0) as i64;
+    if s < 60 {
+        format!("{s}s")
+    } else if s < 3600 {
+        format!("{}m", s / 60)
+    } else {
+        format!("{}h {}m", s / 3600, (s % 3600) / 60)
+    }
+}
+
+/// "Resumes in ~12m" from a rate-limit reset timestamp, or `None` if unknown.
+fn rate_reset_hint(s: &EnrichedSession, now: f64) -> Option<String> {
+    let rl = s.rate_limits.as_ref()?;
+    let reset = rl.five_hour_reset_at.or(rl.seven_day_reset_at)?;
+    let mins = ((reset - now) / 60.0).ceil() as i64;
+    if mins <= 0 {
+        Some("Resuming…".to_string())
+    } else if mins < 60 {
+        Some(format!("Resumes in ~{mins}m"))
+    } else {
+        Some(format!("Resumes in ~{}h {}m", mins / 60, mins % 60))
     }
 }
 
@@ -254,7 +311,11 @@ impl Notifier {
     /// notifications to fire. Updates all internal memory as a side effect, and
     /// forgets sessions that have dropped out of the list so the maps can't grow
     /// unbounded as sessions retire.
-    pub fn diff_and_collect(&self, sessions: &[EnrichedSession]) -> Vec<NotificationEvent> {
+    pub fn diff_and_collect(
+        &self,
+        sessions: &[EnrichedSession],
+        now: f64,
+    ) -> Vec<NotificationEvent> {
         let settings = self.settings.lock_safe().clone();
         let mut prev = self.previous_states.lock_safe();
         let mut durations = self.active_durations.lock_safe();
@@ -285,7 +346,7 @@ impl Notifier {
                 // for this session (one-shot, consumed here).
                 let suppressed = kind == NotificationKind::Waiting && suppress.remove(id);
                 if !suppressed {
-                    events.push(build_event(s, kind));
+                    events.push(build_event(s, kind, now));
                 }
             }
 
@@ -461,7 +522,7 @@ mod tests {
             last_assistant_text: Some("Which migration approach should I take?".to_string()),
             ..Default::default()
         };
-        let ev = build_event(&enrich(info, metrics), NotificationKind::Waiting);
+        let ev = build_event(&enrich(info, metrics), NotificationKind::Waiting, 0.0);
         assert_eq!(ev.title, "my-proj needs you");
         assert!(ev.body.contains("migration approach"), "body: {}", ev.body);
         assert_eq!(ev.session_id, "s1");
@@ -473,6 +534,7 @@ mod tests {
         let ev = build_event(
             &enrich(info, SessionMetrics::default()),
             NotificationKind::Waiting,
+            0.0,
         );
         assert_eq!(ev.body, "Waiting for your response");
     }
@@ -484,6 +546,7 @@ mod tests {
         let ev = build_event(
             &enrich(info, SessionMetrics::default()),
             NotificationKind::Error,
+            0.0,
         );
         assert_eq!(ev.title, "my-proj · rate limited");
         // No explicit message ⇒ humanized error_type.
@@ -498,7 +561,7 @@ mod tests {
             last_error_message: Some("Your credit balance is too low".to_string()),
             ..Default::default()
         };
-        let ev = build_event(&enrich(info, metrics), NotificationKind::Error);
+        let ev = build_event(&enrich(info, metrics), NotificationKind::Error, 0.0);
         assert_eq!(ev.title, "my-proj · error");
         assert!(ev.body.contains("credit balance"), "body: {}", ev.body);
     }
@@ -510,9 +573,62 @@ mod tests {
             last_assistant_text: Some("All tests pass; pushed the fix.".to_string()),
             ..Default::default()
         };
-        let ev = build_event(&enrich(info, metrics), NotificationKind::Done);
-        assert_eq!(ev.title, "my-proj finished");
+        let ev = build_event(&enrich(info, metrics), NotificationKind::Done, 0.0);
+        assert_eq!(ev.title, "my-proj — done");
         assert!(ev.body.contains("tests pass"), "body: {}", ev.body);
+    }
+
+    #[test]
+    fn waiting_body_extracts_the_last_question() {
+        // The ask is the point — not the opening narration, and no markdown.
+        let info = test_session("s1", "/Users/x/proj", "waiting");
+        let metrics = SessionMetrics {
+            last_assistant_text: Some(
+                "I mapped the schema. There are two options. **Which** migration approach should I take?"
+                    .to_string(),
+            ),
+            ..Default::default()
+        };
+        let ev = build_event(&enrich(info, metrics), NotificationKind::Waiting, 0.0);
+        assert_eq!(ev.body, "Which migration approach should I take?");
+    }
+
+    #[test]
+    fn done_body_leads_with_duration_todos_and_outcome() {
+        let info = test_session("s1", "/Users/x/proj", "done");
+        let metrics = SessionMetrics {
+            last_assistant_text: Some(
+                "Wired it up.\nAll 214 tests green, ready for review.".to_string(),
+            ),
+            ..Default::default()
+        };
+        let mut e = enrich(info, metrics);
+        e.total_duration_secs = 1260.0; // 21m
+        e.todo_total = 8;
+        e.todo_completed = 8;
+        let ev = build_event(&e, NotificationKind::Done, 0.0);
+        assert_eq!(ev.title, "proj — done");
+        assert_eq!(
+            ev.body,
+            "21m · 8/8 todos · All 214 tests green, ready for review."
+        );
+    }
+
+    #[test]
+    fn rate_limited_body_shows_resume_time() {
+        let mut info = test_session("s1", "/Users/x/proj", "error");
+        info.error_type = Some("rate_limit".to_string());
+        let mut e = enrich(info, SessionMetrics::default());
+        e.rate_limits = Some(crate::models::RateLimitInfo {
+            five_hour_percent: 100.0,
+            seven_day_percent: 0.0,
+            five_hour_reset_at: Some(720.0), // 12 min after now = 0
+            seven_day_reset_at: None,
+            limit_reached: true,
+        });
+        let ev = build_event(&e, NotificationKind::Error, 0.0);
+        assert_eq!(ev.title, "proj · rate limited");
+        assert_eq!(ev.body, "Resumes in ~12m");
     }
 
     // --- Notifier: stateful diffing ---------------------------------------
@@ -530,13 +646,13 @@ mod tests {
     fn first_poll_seeds_without_firing_then_transition_fires() {
         let n = Notifier::new();
         // Cue launches with a session already working ⇒ no storm.
-        let events = n.diff_and_collect(&[enriched("s1", "working", 10.0)]);
+        let events = n.diff_and_collect(&[enriched("s1", "working", 10.0)], 0.0);
         assert!(events.is_empty());
         // It keeps working (duration grows past the threshold) ⇒ still silent.
-        let events = n.diff_and_collect(&[enriched("s1", "working", 40.0)]);
+        let events = n.diff_and_collect(&[enriched("s1", "working", 40.0)], 0.0);
         assert!(events.is_empty());
         // Then it asks a question ⇒ one waiting ping.
-        let events = n.diff_and_collect(&[enriched("s1", "waiting", 40.0)]);
+        let events = n.diff_and_collect(&[enriched("s1", "waiting", 40.0)], 0.0);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, NotificationKind::Waiting);
     }
@@ -544,38 +660,38 @@ mod tests {
     #[test]
     fn done_ping_reads_last_active_duration_after_reset() {
         let n = Notifier::new();
-        n.diff_and_collect(&[enriched("s1", "working", 5.0)]); // seed
-                                                               // Active long enough — duration captured on the working tick.
-        n.diff_and_collect(&[enriched("s1", "working", 50.0)]);
+        n.diff_and_collect(&[enriched("s1", "working", 5.0)], 0.0); // seed
+                                                                    // Active long enough — duration captured on the working tick.
+        n.diff_and_collect(&[enriched("s1", "working", 50.0)], 0.0);
         // Terminal tick: duration_secs has been reset to 0 by the monitor, but
         // the captured 50s should still gate the ping open.
-        let events = n.diff_and_collect(&[enriched("s1", "done", 0.0)]);
+        let events = n.diff_and_collect(&[enriched("s1", "done", 0.0)], 0.0);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, NotificationKind::Done);
         // A subsequent done→idle demote must not fire a second time.
-        let events = n.diff_and_collect(&[enriched("s1", "idle", 0.0)]);
+        let events = n.diff_and_collect(&[enriched("s1", "idle", 0.0)], 0.0);
         assert!(events.is_empty());
     }
 
     #[test]
     fn short_turn_does_not_fire_done() {
         let n = Notifier::new();
-        n.diff_and_collect(&[enriched("s1", "working", 3.0)]); // seed
-        n.diff_and_collect(&[enriched("s1", "working", 8.0)]); // still short
-        let events = n.diff_and_collect(&[enriched("s1", "done", 0.0)]);
+        n.diff_and_collect(&[enriched("s1", "working", 3.0)], 0.0); // seed
+        n.diff_and_collect(&[enriched("s1", "working", 8.0)], 0.0); // still short
+        let events = n.diff_and_collect(&[enriched("s1", "done", 0.0)], 0.0);
         assert!(events.is_empty());
     }
 
     #[test]
     fn retired_session_is_forgotten() {
         let n = Notifier::new();
-        n.diff_and_collect(&[enriched("s1", "working", 40.0)]);
+        n.diff_and_collect(&[enriched("s1", "working", 40.0)], 0.0);
         // s1 drops out of the list…
-        n.diff_and_collect(&[]);
+        n.diff_and_collect(&[], 0.0);
         assert!(n.previous_states.lock_safe().is_empty());
         assert!(n.active_durations.lock_safe().is_empty());
         // …and a brand-new session reusing the id is treated as first sight.
-        let events = n.diff_and_collect(&[enriched("s1", "waiting", 0.0)]);
+        let events = n.diff_and_collect(&[enriched("s1", "waiting", 0.0)], 0.0);
         assert!(events.is_empty());
     }
 
@@ -586,23 +702,23 @@ mod tests {
             enabled: false,
             ..settings_all_on()
         });
-        n.diff_and_collect(&[enriched("s1", "working", 0.0)]); // seed
-        let events = n.diff_and_collect(&[enriched("s1", "waiting", 0.0)]);
+        n.diff_and_collect(&[enriched("s1", "working", 0.0)], 0.0); // seed
+        let events = n.diff_and_collect(&[enriched("s1", "waiting", 0.0)], 0.0);
         assert!(events.is_empty(), "master switch off should silence");
     }
 
     #[test]
     fn permission_server_suppresses_the_generic_waiting_ping() {
         let n = Notifier::new();
-        n.diff_and_collect(&[enriched("s1", "working", 10.0)]); // seed
-                                                                // Permission server fired its own specific "Permission needed" ping:
+        n.diff_and_collect(&[enriched("s1", "working", 10.0)], 0.0); // seed
+                                                                     // Permission server fired its own specific "Permission needed" ping:
         n.suppress_next_waiting("s1");
         // The imminent → waiting transition must NOT double-fire.
-        let events = n.diff_and_collect(&[enriched("s1", "waiting", 10.0)]);
+        let events = n.diff_and_collect(&[enriched("s1", "waiting", 10.0)], 0.0);
         assert!(events.is_empty(), "suppressed waiting should stay silent");
         // One-shot: a later, un-suppressed wait fires normally.
-        n.diff_and_collect(&[enriched("s1", "working", 10.0)]);
-        let events = n.diff_and_collect(&[enriched("s1", "waiting", 10.0)]);
+        n.diff_and_collect(&[enriched("s1", "working", 10.0)], 0.0);
+        let events = n.diff_and_collect(&[enriched("s1", "waiting", 10.0)], 0.0);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, NotificationKind::Waiting);
     }

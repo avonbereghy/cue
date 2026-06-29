@@ -1660,7 +1660,11 @@ fn spawn_timers(
                     // session's first sight, so the first poll after launch never
                     // produces a storm. Firing from the backend means the alert
                     // reaches the user even when no window is open.
-                    for ev in notifier_poll.diff_and_collect(&sessions) {
+                    let now_secs = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs_f64())
+                        .unwrap_or(0.0);
+                    for ev in notifier_poll.diff_and_collect(&sessions, now_secs) {
                         use tauri_plugin_notification::NotificationExt;
                         let _ = app_poll
                             .notification()
