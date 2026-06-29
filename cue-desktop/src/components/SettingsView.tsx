@@ -5,6 +5,7 @@ import type { PresetSummary, SignalPreset } from "@/lib/types";
 import { extractPreset } from "@/lib/audioExtractor";
 import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, getCurrentTime as getPresetTime, seek as presetSeek, setGate as setGateEngine } from "@/lib/presetEngine";
 import { DEFAULT_PRESET } from "@/lib/defaultPreset";
+import { debounce } from "@/lib/debounce";
 
 function Toggle({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) {
   return (
@@ -604,7 +605,16 @@ export function SettingsView() {
     loadPresets();
   }, [loadSettings, loadPresets]);
 
-  // Auto-save: persist every settings change immediately
+  // Auto-save: persist settings changes, debounced so dragging a slider
+  // collapses into a single IPC + disk write once movement settles (was one
+  // write per change/frame). The debounced saver is stable across renders.
+  const debouncedSaveRef = useRef(
+    debounce((s: Settings) => {
+      invoke("update_settings", { newSettings: s }).catch((err) =>
+        console.error("Failed to save settings:", err),
+      );
+    }, 250),
+  );
   useEffect(() => {
     if (!settings) return;
     // Skip the initial load — don't re-save what we just loaded
@@ -612,10 +622,13 @@ export function SettingsView() {
       initialLoadRef.current = false;
       return;
     }
-    invoke("update_settings", { newSettings: settings }).catch((err) =>
-      console.error("Failed to save settings:", err),
-    );
+    debouncedSaveRef.current(settings);
   }, [settings]);
+  // Flush a pending save on unmount so the last change isn't lost.
+  useEffect(() => {
+    const saver = debouncedSaveRef.current;
+    return () => saver.flush();
+  }, []);
 
   const handleUploadAndExtract = async (file: File) => {
     if (!settings) return;

@@ -328,6 +328,32 @@ def _gc_sessions(sessions, now, keep_id=None):
             del sessions[sid]
 
 
+def _read_status_or_recover():
+    """Read sessions.json, recovering from corruption without data loss.
+
+    A present-but-malformed file (partial write, disk corruption) is renamed
+    aside to STATUS_FILE.corrupt-<ts> before returning an empty set, so a
+    single bad file can't silently erase every other tracked session's entry.
+    Missing or otherwise-unreadable files reset cleanly. The caller still runs
+    the result through _validate_sessions. Shared by the fast write-path and
+    the main read-modify-write so their recovery behaviour can't drift.
+    """
+    try:
+        with open(STATUS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"sessions": {}}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        try:
+            corrupt_path = f"{STATUS_FILE}.corrupt-{int(time.time())}"
+            os.replace(STATUS_FILE, corrupt_path)
+        except OSError:
+            pass
+        return {"sessions": {}}
+    except Exception:
+        return {"sessions": {}}
+
+
 def _quick_state_write(session_id, workspace, source, subprocess_label,
                        last_tokens, hook_start_time,
                        team_name=None, agent_name=None,
@@ -348,11 +374,10 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
             lock.seek(0)
             _lock(lock)
             try:
-                try:
-                    with open(STATUS_FILE, "r", encoding="utf-8") as f:
-                        status = json.load(f)
-                except Exception:
-                    status = {"sessions": {}}
+                # Recover (not silently wipe) a corrupt sessions.json. This path
+                # used to reset to {} here with no forensic copy, erasing every
+                # other tracked session — now it mirrors the main path.
+                status = _read_status_or_recover()
 
                 status = _validate_sessions(status)
 
@@ -967,24 +992,10 @@ def main():
         except Exception:
             return
         try:
-            # Read existing sessions. If the file is present but malformed
-            # (partial write, disk corruption), rename it aside instead of
-            # silently resetting — that's data loss affecting every tracked
-            # session on next hook.
-            try:
-                with open(STATUS_FILE, "r", encoding="utf-8") as f:
-                    status = json.load(f)
-            except FileNotFoundError:
-                status = {"sessions": {}}
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                try:
-                    corrupt_path = f"{STATUS_FILE}.corrupt-{int(time.time())}"
-                    os.replace(STATUS_FILE, corrupt_path)
-                except OSError:
-                    pass
-                status = {"sessions": {}}
-            except Exception:
-                status = {"sessions": {}}
+            # Read existing sessions. A present-but-malformed file is renamed
+            # aside (not silently reset) so corruption never erases every
+            # tracked session — see _read_status_or_recover.
+            status = _read_status_or_recover()
 
             # Task 4: Schema validation
             status = _validate_sessions(status)
@@ -1241,5 +1252,36 @@ def main():
             _unlock(lock)
 
 
+def run_safe():
+    """Entry-point backstop: a monitoring hook must NEVER surface a traceback
+    into the user's Claude Code session. A few operations in main() run before
+    or outside the inner try/except guards — `_ensure_status_dir`'s makedirs,
+    opening the lock file, and writing the permission decision to stdout — so
+    any of them could otherwise escape. On error we fail safe and silent: the
+    hook exits 0 and writes nothing, so Claude Code simply proceeds (and for
+    PermissionRequest falls back to its own prompt).
+
+    Set CUE_HOOK_DEBUG=1 to print the traceback to stderr for diagnosis.
+    """
+    try:
+        main()
+    except BrokenPipeError:
+        # Claude Code closed our stdout (e.g. it reaped the hook after its
+        # timeout while the permission forward was still blocking). Redirect
+        # stdout to devnull so the interpreter's shutdown flush doesn't raise
+        # a second BrokenPipeError onto stderr.
+        try:
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+        except Exception:
+            pass
+    except Exception:
+        if os.environ.get("CUE_HOOK_DEBUG"):
+            import traceback
+            traceback.print_exc()
+        # Otherwise: fail safe and silent. A monitor must never break the
+        # session it is observing.
+
+
 if __name__ == "__main__":
-    main()
+    run_safe()
