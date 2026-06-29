@@ -96,9 +96,31 @@ function SessionRow({ session, isLight }: { session: EnrichedSession; isLight: b
   const subprocBadge = session.info.subprocess ?? null;
   const promptPreview = cleanPromptText(session.metrics.lastPrompt).trim().split("\n")[0]?.slice(0, 80) ?? "";
 
+  // Click a row to open its project — in the editor that launched the session
+  // (VS Code / Cursor), falling back to the OS file manager. Dismiss the popover
+  // since we're handing focus off to that app.
+  const openWorkspace = () => {
+    invoke("open_session_workspace", {
+      workspace: session.info.workspace,
+      source: session.info.source ?? null,
+    })
+      .catch((e) => { console.error("open_session_workspace failed", e); })
+      .finally(() => { invoke("hide_tray_popover").catch(() => {}); });
+  };
+
   return (
     <div
       className="tray-row"
+      role="button"
+      tabIndex={0}
+      onClick={openWorkspace}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openWorkspace();
+        }
+      }}
+      title={`Open ${session.workspaceName}`}
       style={{
         position: "relative",
         display: "flex",
@@ -106,6 +128,7 @@ function SessionRow({ session, isLight }: { session: EnrichedSession; isLight: b
         gap: 6,
         padding: "10px 12px 10px 16px",
         borderRadius: 8,
+        cursor: "pointer",
       }}
     >
       {/* State-tinted left rail */}
