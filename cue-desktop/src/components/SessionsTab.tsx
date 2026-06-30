@@ -2,6 +2,7 @@ import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } fr
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { useSnapAlignment } from "@/hooks/useSnapAlignment";
 import type { EnrichedSession, Settings, SignalPreset } from "@/lib/types";
 import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, setGate as setGateEngine } from "@/lib/presetEngine";
 import { DEFAULT_PRESET } from "@/lib/defaultPreset";
@@ -138,6 +139,11 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   sessionsRef.current = sessions;
   const cardPositions = useRef<Map<string, DOMRect>>(new Map());
   const listRef = useRef<HTMLDivElement>(null);
+  // Card column hugs whichever screen half the window is snapped to (right
+  // half → right-align, left half → left-align). No-op below the column's
+  // max-width, where the column is already full-width.
+  const snapAlignment = useSnapAlignment();
+  const listAlignClass = snapAlignment === "right" ? "ml-auto" : "mr-auto";
   const [collapsedSessions, setCollapsedSessions] = useState<Set<string>>(
     new Set(),
   );
@@ -2700,7 +2706,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             </div>
           </div>
         ) : (
-          <div ref={listRef} className={`flex-1 w-full max-w-5xl mx-auto ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 pb-12 space-y-3"}`}>
+          <div ref={listRef} className={`flex-1 w-full max-w-5xl ${listAlignClass} ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 pb-12 space-y-3"}`}>
             {sortedSandbox.map((session) => {
               // Apply keyboard state override if active
               const overrideState = stateOverrides[session.info.id];
@@ -2828,7 +2834,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           <span className="text-sm text-white/40">Sessions will appear here when Claude Code is running</span>
         </div>
       ) : (
-        <div ref={listRef} className={`flex-1 w-full max-w-5xl mx-auto ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 pb-12 space-y-3"}`}>
+        <div ref={listRef} className={`flex-1 w-full max-w-5xl ${listAlignClass} ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 pb-12 space-y-3"}`}>
           {/* Empty active sessions message */}
           {sessions.length === 0 && revivedSessions.length > 0 && (
             <div className="flex flex-col items-center justify-center text-white/60 gap-2 py-12">
