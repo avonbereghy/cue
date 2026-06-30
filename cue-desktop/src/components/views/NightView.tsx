@@ -6,7 +6,7 @@ import {
   aggregateMetrics, branchStatus, contextDisplay, shortPath, splitSubagents,
 } from "@/lib/sessionCardModel";
 import { formatTokens, formatDuration, cleanPromptText, errorReason } from "@/lib/format";
-import { PermissionPrompt } from "../PermissionPrompt";
+import { DecisionBar } from "./DecisionBar";
 import { CardExtras } from "./CardExtras";
 import { PromptPopup } from "./PromptPopup";
 import { orderSessions, duplicateTitleSet, type SkinViewProps } from "./skinView";
@@ -195,6 +195,8 @@ function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pendi
         {timer && <div className="timer"><span className="lab">elapsed</span>{timer}</div>}
       </div>
 
+      <DecisionBar session={session} pending={permissionsEnabled ? pending : []} onApprove={onApprove} onDeny={onDeny} />
+
       <div className="projline">
         <span className="proj">{session.workspaceName}</span>
         {branch && (
@@ -238,14 +240,6 @@ function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pendi
               {subDone.map((a, i) => renderSub(a, i))}
             </details>
           )}
-        </div>
-      )}
-
-      {permissionsEnabled && pending.length > 0 && (
-        <div className="night-perms">
-          {pending.map((req) => (
-            <PermissionPrompt key={req.requestId} request={req} onApprove={() => onApprove(info.id, req.requestId)} onDeny={() => onDeny(info.id, req.requestId)} />
-          ))}
         </div>
       )}
 

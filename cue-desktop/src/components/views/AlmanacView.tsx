@@ -6,7 +6,7 @@ import {
   permissionModeMeta, aggregateMetrics, branchStatus, contextDisplay, splitSubagents,
 } from "@/lib/sessionCardModel";
 import { formatTokens, formatDuration, cleanPromptText, errorReason } from "@/lib/format";
-import { PermissionPrompt } from "../PermissionPrompt";
+import { DecisionBar } from "./DecisionBar";
 import { CardExtras } from "./CardExtras";
 import { PromptPopup } from "./PromptPopup";
 import { orderSessions, duplicateTitleSet, type SkinViewProps } from "./skinView";
@@ -189,6 +189,8 @@ function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pen
         <span className="state-stamp" style={{ color: meta.ink }}>{meta.word}</span>
       </div>
 
+      <DecisionBar session={session} pending={permissionsEnabled ? pending : []} onApprove={onApprove} onDeny={onDeny} />
+
       {subtitle && <div className="entry-sub">{subtitle}</div>}
 
       {showDup && dupText && (
@@ -264,14 +266,6 @@ function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pen
         <div className="stat"><span className="k">Messages</span><span className="v">{metrics.userMessageCount}<small> / {metrics.messageCount}</small></span></div>
         <div className="stat" style={{ gridColumn: "span 2" }}><span className="k">Output drafted</span><span className="v">{formatTokens(agg.outputTokens)}<small> tokens written</small></span></div>
       </div>
-
-      {permissionsEnabled && pending.length > 0 && (
-        <div className="alm-perms">
-          {pending.map((req) => (
-            <PermissionPrompt key={req.requestId} request={req} onApprove={() => onApprove(info.id, req.requestId)} onDeny={() => onDeny(info.id, req.requestId)} />
-          ))}
-        </div>
-      )}
 
       <CardExtras session={session} showConfigCounts={!!showConfigCounts} mono="var(--mono)" muted="var(--ink-soft)" faint="var(--ink-faint)" rule="var(--rule)" />
 

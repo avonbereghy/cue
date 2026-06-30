@@ -6,7 +6,7 @@ import {
   aggregateMetrics, branchStatus, contextDisplay, splitSubagents,
 } from "@/lib/sessionCardModel";
 import { formatTokens, formatDuration, cleanPromptText, errorReason } from "@/lib/format";
-import { PermissionPrompt } from "../PermissionPrompt";
+import { DecisionBar } from "./DecisionBar";
 import { CardExtras } from "./CardExtras";
 import { PromptPopup } from "./PromptPopup";
 import { orderSessions, duplicateTitleSet, type SkinViewProps } from "./skinView";
@@ -146,6 +146,8 @@ function StudioCardBase({ session, timerDisplay, permissionsEnabled, pending, on
         {timer && <div className="timer">{timer}<small>elapsed</small></div>}
       </div>
 
+      <DecisionBar session={session} pending={permissionsEnabled ? pending : []} onApprove={onApprove} onDeny={onDeny} />
+
       <h2 className="title">{session.displayTitle}</h2>
       {subtitle && <div className="csub">{subtitle}</div>}
 
@@ -193,14 +195,6 @@ function StudioCardBase({ session, timerDisplay, permissionsEnabled, pending, on
             <span className="num">{session.todoCompleted} / {session.todoTotal} tasks</span>
             <span className="cur">{session.todoCurrent || (session.todoCompleted === session.todoTotal ? "all complete" : "")}</span>
           </div>
-        </div>
-      )}
-
-      {permissionsEnabled && pending.length > 0 && (
-        <div className="studio-perms">
-          {pending.map((req) => (
-            <PermissionPrompt key={req.requestId} request={req} onApprove={() => onApprove(info.id, req.requestId)} onDeny={() => onDeny(info.id, req.requestId)} />
-          ))}
         </div>
       )}
 

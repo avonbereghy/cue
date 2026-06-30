@@ -132,7 +132,6 @@
 .night-view .sub-meta { font-variant-numeric: tabular-nums; font-size: 10.5px; color: var(--ink-faint); margin-top: 2px; display: flex; gap: 10px; flex-wrap: wrap; }
 .night-view .subs-more { font-size: 10.5px; color: var(--ink-faint); font-style: italic; }
 
-.night-view .night-perms { display: flex; flex-direction: column; gap: 8px; }
 
 .night-view .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 14px; padding-top: 12px; border-top: 1px solid rgba(198,154,78,.10); margin-top: auto; }
 .night-view .metric { display: flex; flex-direction: column; gap: 1px; }

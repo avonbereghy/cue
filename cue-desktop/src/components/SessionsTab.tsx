@@ -18,8 +18,8 @@ import {
   subscribeTransitions,
 } from "@/lib/transitionRegistry";
 import type { CardSettings } from "./BranchView";
-import { PermissionPrompt } from "./PermissionPrompt";
 import { PermissionHistory } from "./PermissionHistory";
+import { DecisionBar } from "./views/DecisionBar";
 import { usePermissions } from "@/hooks/usePermissions";
 
 const REVIVED_STORAGE_KEY = "cue-revived-sessions";
@@ -148,9 +148,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   sessionsRef.current = sessions;
   const cardPositions = useRef<Map<string, DOMRect>>(new Map());
   const listRef = useRef<HTMLDivElement>(null);
-  const [collapsedSessions, setCollapsedSessions] = useState<Set<string>>(
-    new Set(),
-  );
   const [revivedSessions, setRevivedSessions] = useState<RevivedSession[]>(loadRevivedSessions);
   const [reviveClicks, setReviveClicks] = useState<Record<string, number>>({});
   const prevSessionIdsRef = useRef<Set<string>>(new Set());
@@ -476,18 +473,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       .then((preset) => loadPresetEngine(preset))
       .catch(() => loadPresetEngine(DEFAULT_PRESET));
   }, [signalMode, activePresetId, presetBootAttempted]);
-
-  const toggleSessionCollapse = (sessionId: string) => {
-    setCollapsedSessions((prev) => {
-      const next = new Set(prev);
-      if (next.has(sessionId)) {
-        next.delete(sessionId);
-      } else {
-        next.add(sessionId);
-      }
-      return next;
-    });
-  };
 
   // ---------------------------------------------------------------------------
   // Sandbox mode — full keyboard-driven session designer for screenshots
@@ -2994,8 +2979,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             return displaySessions.map((session, idx) => {
             const pending = pendingBySession[session.info.id] ?? [];
             const history = permissionHistory[session.info.id] ?? [];
-            const hasPermissionActivity = pending.length > 0 || history.length > 0;
-            const isCollapsed = collapsedSessions.has(session.info.id);
 
             // Apply keyboard state override if active
             const overrideState = stateOverrides[session.info.id];
@@ -3027,6 +3010,16 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                   </div>
                 )}
                 <div data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="relative space-y-2" style={{ zIndex: idx + 1 }}>
+                {/* The action this session is blocked on, pinned ABOVE the card so
+                    long context/todos/subagents can't push it out of reach.
+                    Approve/Deny for a pending permission; "answer in your editor"
+                    for a question/plan Cue can't answer. */}
+                <DecisionBar
+                  session={effectiveSession}
+                  pending={permissionsEnabled ? pending : []}
+                  onApprove={approvePermission}
+                  onDeny={denyPermission}
+                />
                 <SessionCard
                   {...cardSettings}
                   session={effectiveSession}
@@ -3036,51 +3029,25 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                   onDismiss={handleDismiss}
                 />
 
-                {/* Permission section. PENDING requests render in every mode —
-                    never hide an actionable decision (compact is the mode power
-                    users run). Only the cold history is gated to non-compact. */}
-                {permissionsEnabled && (pending.length > 0 || (!compactMode && hasPermissionActivity)) && (
-                  <div className="ml-3 border-l-2 border-yellow-400/20 pl-3 space-y-2">
-                    {pending.length > 0 && (
-                      <button
-                        onClick={() => toggleSessionCollapse(session.info.id)}
-                        className="flex items-center gap-1.5 text-xs text-yellow-400/60 hover:text-yellow-400 transition-colors select-none"
-                      >
-                        <span>{isCollapsed ? "▸" : "▾"}</span>
-                        <span>
-                          {pending.length} pending permission{pending.length !== 1 ? "s" : ""}
-                        </span>
-                      </button>
-                    )}
-
-                    {!isCollapsed &&
-                      pending.map((req) => (
-                        <PermissionPrompt
-                          key={req.requestId}
-                          request={req}
-                          onApprove={() => approvePermission(session.info.id, req.requestId)}
-                          onDeny={() => denyPermission(session.info.id, req.requestId)}
-                        />
-                      ))}
-
-                    {!compactMode && hasPermissionActivity && (
-                      <details
-                        className="text-xs"
-                        onToggle={(e) => {
-                          if ((e.target as HTMLDetailsElement).open) {
-                            refreshHistory(session.info.id);
-                          }
-                        }}
-                      >
-                        <summary className="cursor-pointer text-white/30 hover:text-white/50 transition-colors py-1 select-none">
-                          Permission history
-                        </summary>
-                        <div className="mt-1 pl-2 border-l border-white/10">
-                          <PermissionHistory entries={history} />
-                        </div>
-                      </details>
-                    )}
-                  </div>
+                {/* Cold permission history (non-actionable) stays below the card,
+                    non-compact only. The actionable pending prompt is in the
+                    DecisionBar above. */}
+                {permissionsEnabled && !compactMode && history.length > 0 && (
+                  <details
+                    className="text-xs ml-3 border-l-2 border-yellow-400/10 pl-3"
+                    onToggle={(e) => {
+                      if ((e.target as HTMLDetailsElement).open) {
+                        refreshHistory(session.info.id);
+                      }
+                    }}
+                  >
+                    <summary className="cursor-pointer text-white/30 hover:text-white/50 transition-colors py-1 select-none">
+                      Permission history
+                    </summary>
+                    <div className="mt-1 pl-2 border-l border-white/10">
+                      <PermissionHistory entries={history} />
+                    </div>
+                  </details>
                 )}
               </div>
               </Fragment>

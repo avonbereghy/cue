@@ -182,8 +182,6 @@
 .almanac-view .entry[data-state="idle"] .entry-title { color: var(--ink-soft); }
 .almanac-view .entry.alive .glyph svg .pulse { animation: alm-gpulse 3s ease-in-out infinite; transform-origin: center; }
 
-/* ── Live approve/deny prompts (reuses <PermissionPrompt>) ── */
-.almanac-view .alm-perms { margin: 8px 0 2px; display: flex; flex-direction: column; gap: 8px; }
 
 /* ── Empty state ── */
 .almanac-view .alm-empty { grid-column: 1 / -1; text-align: center; padding: 56px 16px; color: var(--ink-faint); }

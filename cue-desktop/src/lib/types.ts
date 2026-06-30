@@ -127,6 +127,11 @@ export interface SessionMetrics {
   /** Parent session ID when this session was forked via Claude Code's branch/fork feature.
    *  When set, UI renders "Branch from <id>" as the subtitle. */
   branchedFromSessionId?: string | null;
+  /** True when the session is blocked on an AskUserQuestion / ExitPlanMode — a
+   *  decision Cue can see but can't answer (those flow through a channel with no
+   *  response path). Distinguishes a question/plan wait from a tool-permission
+   *  wait, so the UI routes to the editor only for the former. */
+  awaitingUserPrompt?: boolean;
 }
 
 /** Pre-computed by Rust backend (EnrichedSession includes derived fields) */
