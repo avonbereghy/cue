@@ -147,6 +147,11 @@ function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pendi
     : null;
   const dupText = cleanPromptText(dupRaw);
   const showDup = !!dupText && !restSnippet && !waitSnippet && !error;
+  // The conversation/message detail — one source, shown as a one-line preview at
+  // the FOOT of the card (tap to read in full), so a long prompt never pushes the
+  // vitals out of view. cleanPromptText keeps the full text (it's also the popup
+  // body); the preview is truncated with CSS.
+  const convoText = waitSnippet ?? restSnippet ?? (showDup ? dupText : null);
 
   const allSubs = metrics.subagents ?? [];
   const { active: subActive, completed: subDone } = splitSubagents(allSubs);
@@ -209,16 +214,7 @@ function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pendi
         <span className="path">{shortPath(info.workspace)}</span>
       </div>
 
-      {showDup && dupText && (
-        <button className="quote" onClick={(e) => { e.stopPropagation(); setPromptOpen(true); }} title="Last prompt"
-          style={{ display: "block", textAlign: "left", background: "none", border: 0, borderLeft: "2px solid var(--brass)", padding: "2px 0 2px 12px", margin: 0, cursor: "pointer", width: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          » {dupText}
-        </button>
-      )}
-
       {error && <p className="quote err"><span className="err-head">it stopped here</span>{error}</p>}
-      {waitSnippet && <p className="quote cta">▸ {waitSnippet}{info.permissionMode && info.permissionMode !== "default" && <span className="perm">{info.permissionMode}</span>}</p>}
-      {restSnippet && <p className="quote">{restSnippet}</p>}
 
       {session.todoTotal > 0 && (
         <div className="todos">
@@ -276,8 +272,14 @@ function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pendi
         <div className="metric"><span className="v">{metrics.messageCount}</span><span className="k">turns</span></div>
       </div>
 
-      {promptOpen && dupText && (
-        <PromptPopup text={dupText} onClose={() => setPromptOpen(false)} bg="#2c2218" border="rgba(198,154,78,0.3)" ink="#f3e7d2" muted="#a8967a" fontBody='"Fraunces", Georgia, serif' italic />
+      {convoText && (
+        <button className="convo" onClick={(e) => { e.stopPropagation(); setPromptOpen(true); }} title="Read the full message">
+          <span className="convo-mark">“</span><span className="convo-text">{convoText}</span>
+        </button>
+      )}
+
+      {promptOpen && convoText && (
+        <PromptPopup text={convoText} onClose={() => setPromptOpen(false)} bg="#2c2218" border="rgba(198,154,78,0.3)" ink="#f3e7d2" muted="#a8967a" fontBody='"Fraunces", Georgia, serif' italic />
       )}
     </article>
   );

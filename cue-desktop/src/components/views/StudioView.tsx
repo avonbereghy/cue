@@ -107,6 +107,10 @@ function StudioCardBase({ session, timerDisplay, permissionsEnabled, pending, on
     : null;
   const dupText = cleanPromptText(dupRaw);
   const showDup = !!dupText && !restSnippet && !waitSnippet && !error;
+  // The conversation/message detail — one source, shown as a one-line preview at
+  // the FOOT of the card (tap to read in full) so a long prompt never buries the
+  // vitals above it.
+  const convoText = waitSnippet ?? restSnippet ?? (showDup ? dupText : null);
 
   const copyId = useCallback(() => {
     if (!info.id || !navigator.clipboard) return;
@@ -161,19 +165,7 @@ function StudioCardBase({ session, timerDisplay, permissionsEnabled, pending, on
           </span></>}
       </div>
 
-      {waitSnippet && <div className="cta"><span className="lbl">Needs your approval{info.permissionMode && info.permissionMode !== "default" ? ` · ${info.permissionMode}` : ""}</span>{waitSnippet}</div>}
       {error && <div className="errnote"><span className="lbl">Reason</span>{error}</div>}
-      {restSnippet && <div className="snippet">{restSnippet}</div>}
-
-      {showDup && dupText && (
-        <button
-          onClick={(e) => { e.stopPropagation(); setPromptOpen(true); }}
-          title="Last prompt"
-          style={{ display: "block", textAlign: "left", background: "none", border: 0, borderLeft: "2px solid var(--paper-edge)", padding: "1px 0 1px 13px", margin: "0 0 14px", cursor: "pointer", fontFamily: "var(--serif)", fontStyle: "italic", fontSize: 13.5, color: "var(--ink-soft)", width: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-        >
-          » {dupText}
-        </button>
-      )}
 
       {allSubs.length > 0 && (
         <div className="subs">
@@ -225,8 +217,14 @@ function StudioCardBase({ session, timerDisplay, permissionsEnabled, pending, on
         {info.id && <button className="sid" onClick={copyId} title={`Session id — click to copy: ${info.id}`}>{info.id.slice(0, 8)}{copied && " ✓"}</button>}
       </div>
 
-      {promptOpen && dupText && (
-        <PromptPopup text={dupText} onClose={() => setPromptOpen(false)} bg="#f7f0e4" border="rgba(96,72,42,0.28)" ink="#2b2620" muted="#8a8070" fontBody='"Spectral", Georgia, serif' italic />
+      {convoText && (
+        <button className="convo" onClick={(e) => { e.stopPropagation(); setPromptOpen(true); }} title="Read the full message">
+          <span className="convo-mark">“</span><span className="convo-text">{convoText}</span>
+        </button>
+      )}
+
+      {promptOpen && convoText && (
+        <PromptPopup text={convoText} onClose={() => setPromptOpen(false)} bg="#f7f0e4" border="rgba(96,72,42,0.28)" ink="#2b2620" muted="#8a8070" fontBody='"Spectral", Georgia, serif' italic />
       )}
     </article>
   );

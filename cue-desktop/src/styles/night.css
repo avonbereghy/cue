@@ -98,10 +98,8 @@
 .night-view .path { color: var(--ink-faint); font-size: 11px; margin-left: auto; }
 
 .night-view .quote { font-family: var(--serif); font-style: italic; font-weight: 400; font-size: 14px; line-height: 1.4; color: var(--ink-soft); border-left: 2px solid var(--brass); padding: 2px 0 2px 12px; margin: 0; }
-.night-view .quote.cta { color: var(--honey); border-left-color: var(--amber); background: linear-gradient(90deg, rgba(232,161,74,.08), transparent 80%); border-radius: 0 4px 4px 0; padding: 8px 10px 8px 12px; font-style: normal; font-family: var(--mono); font-size: 12.5px; }
 .night-view .quote.err { color: #f0bca2; border-left-color: var(--rust); font-style: normal; font-family: var(--mono); font-size: 12px; line-height: 1.45; background: linear-gradient(90deg, rgba(194,85,46,.10), transparent 85%); border-radius: 0 4px 4px 0; padding: 8px 10px 8px 12px; }
 .night-view .err-head { display: block; font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--rust); margin-bottom: 3px; }
-.night-view .cta .perm { font-size: 10px; background: rgba(232,161,74,.18); padding: 1px 6px; border-radius: 3px; margin-left: 6px; letter-spacing: .04em; }
 
 .night-view .todos { display: flex; flex-direction: column; gap: 7px; }
 .night-view .todorow { display: flex; align-items: center; gap: 9px; }

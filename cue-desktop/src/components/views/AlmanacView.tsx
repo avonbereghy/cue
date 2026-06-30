@@ -132,6 +132,10 @@ function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pen
     : null;
   const dupText = cleanPromptText(dupRaw);
   const showDup = !!dupText && !restSnippet && !waitSnippet && !error;
+  // The conversation/message detail — one source, shown as a one-line preview at
+  // the FOOT of the card (tap to read in full) so a long prompt never buries the
+  // vitals above it.
+  const convoText = waitSnippet ?? restSnippet ?? (showDup ? dupText : null);
 
   const todoTotal = session.todoTotal;
   const todoDone = session.todoCompleted;
@@ -193,17 +197,6 @@ function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pen
 
       {subtitle && <div className="entry-sub">{subtitle}</div>}
 
-      {showDup && dupText && (
-        <button
-          className="entry-dup"
-          onClick={(e) => { e.stopPropagation(); setPromptOpen(true); }}
-          title="Last prompt"
-          style={{ position: "relative", zIndex: 1, display: "block", textAlign: "left", background: "none", border: 0, padding: 0, margin: "0 0 2px", cursor: "pointer", fontFamily: "var(--serif)", fontStyle: "italic", fontSize: 12, color: "var(--ink-faint)", maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-        >
-          » {dupText}
-        </button>
-      )}
-
       <div className="meta-row">
         {session.modelDisplayName !== "—" && (
           <span><span className="lab">model</span> {session.modelDisplayName}{session.provider && <span className="lab"> ({session.provider})</span>}</span>
@@ -223,13 +216,6 @@ function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pen
         <div className="callout callout--error"><span className="ttl">⚑ Snag in the field</span>{error}</div>
       )}
 
-      {waitSnippet && (
-        <div className="callout callout--wait wait-glow">
-          <span className="ttl">✋ Awaiting your word{info.permissionMode && info.permissionMode !== "default" && <span className="perm">{info.permissionMode}</span>}</span>
-          {waitSnippet}
-        </div>
-      )}
-
       {subs.length > 0 && (
         <div className="subs">
           <div className="subs-h">⌥ Dispatched parties · {subs.length}</div>
@@ -241,10 +227,6 @@ function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pen
             </details>
           )}
         </div>
-      )}
-
-      {restSnippet && (
-        <div className="note"><span className="quill">“</span>{restSnippet}<span className="quill">”</span></div>
       )}
 
       <div className="ctx">
@@ -284,8 +266,14 @@ function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pen
         )}
       </div>
 
-      {promptOpen && dupText && (
-        <PromptPopup text={dupText} onClose={() => setPromptOpen(false)} bg="#efe6cf" border="rgba(120,90,50,0.3)" ink="#2b2118" muted="#8a7758" fontBody='"Spectral", Georgia, serif' italic />
+      {convoText && (
+        <button className="convo" onClick={(e) => { e.stopPropagation(); setPromptOpen(true); }} title="Read the full message">
+          <span className="convo-mark">“</span><span className="convo-text">{convoText}</span>
+        </button>
+      )}
+
+      {promptOpen && convoText && (
+        <PromptPopup text={convoText} onClose={() => setPromptOpen(false)} bg="#efe6cf" border="rgba(120,90,50,0.3)" ink="#2b2118" muted="#8a7758" fontBody='"Spectral", Georgia, serif' italic />
       )}
     </article>
   );

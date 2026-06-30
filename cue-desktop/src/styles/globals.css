@@ -1331,3 +1331,31 @@ html.tray-popover-root body {
   .decision-answer { transition: none; }
   .decision-answer__ping { animation: none; }
 }
+
+/* --- Foot conversation: the prompt / Claude-message detail, pinned to the
+   BOTTOM of every Look's card as a single quiet line (tap to read in full via
+   PromptPopup) so a long message never pushes the vitals out of view. Shared,
+   currentColor-based so it inherits each Look's ink + serif — one rule, parity. */
+.convo {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  width: 100%;
+  margin-top: 0.6rem;
+  padding-top: 0.55rem;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: currentColor;
+  font-style: italic;
+  opacity: 0.6;
+  overflow: hidden;
+  transition: opacity 150ms;
+}
+.convo:hover { opacity: 0.95; }
+.convo:focus-visible { outline: 2px solid color-mix(in srgb, currentColor 45%, transparent); outline-offset: 2px; }
+.convo .convo-mark { flex: 0 0 auto; font-size: 1.1rem; line-height: 0; opacity: 0.7; transform: translateY(0.18em); }
+.convo .convo-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8125rem; }
+@media (prefers-reduced-motion: reduce) { .convo { transition: none; } }

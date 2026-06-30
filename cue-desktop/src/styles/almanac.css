@@ -120,17 +120,11 @@
 .almanac-view .perm-pill.danger { color: var(--ink-red); background: rgba(162, 58, 46, .08); }
 .almanac-view .perm-pill.locked { color: var(--ink-faint); }
 
-/* ── Callouts ── */
-.almanac-view .note { position: relative; z-index: 1; margin: 10px 0 2px; font-family: var(--serif); font-style: italic; font-size: 14px; color: var(--ink-soft); padding-left: 14px; border-left: 2px solid var(--rule); line-height: 1.4; }
-.almanac-view .note .quill { color: var(--ink-ghost); font-style: normal; }
+/* ── Callouts (error only; the wait/note conversation moved to the foot .convo) ── */
 .almanac-view .callout { position: relative; z-index: 1; margin: 10px 0 4px; padding: 9px 11px; border-radius: 3px; font-size: 13px; line-height: 1.36; }
 .almanac-view .callout .ttl { font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: .2em; text-transform: uppercase; display: block; margin-bottom: 3px; }
 .almanac-view .callout--error { background: rgba(162, 58, 46, .08); border: 1px solid rgba(162, 58, 46, .32); color: var(--ink-red); font-family: var(--mono); font-size: 11.5px; line-height: 1.4; }
 .almanac-view .callout--error .ttl { color: var(--ink-red); }
-.almanac-view .callout--wait { background: rgba(176, 122, 30, .10); border: 1px dashed rgba(176, 122, 30, .55); color: #7d5510; font-family: var(--serif); font-style: italic; font-size: 14px; }
-.almanac-view .callout--wait .ttl { color: var(--ink-amber); font-style: normal; }
-.almanac-view .callout--wait .perm { font-family: var(--mono); font-style: normal; font-size: 10px; background: rgba(176, 122, 30, .18); padding: 1px 5px; border-radius: 3px; color: #7d5510; margin-left: 6px; letter-spacing: .04em; }
-.almanac-view .wait-glow { animation: alm-waitpulse 2.4s ease-in-out infinite; }
 
 /* ── Subagents ── */
 .almanac-view .subs { position: relative; z-index: 1; margin: 10px 0 2px; }
@@ -211,13 +205,11 @@
 @keyframes alm-settle { to { opacity: 1; transform: translateY(0) rotate(var(--tilt, 0deg)); } }
 @keyframes alm-beat { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
 @keyframes alm-gpulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
-@keyframes alm-waitpulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(176, 122, 30, 0); } 50% { box-shadow: 0 0 0 3px rgba(176, 122, 30, .16); } }
 
 @media (prefers-reduced-motion: reduce) {
   .almanac-view .entry { animation: none; opacity: 1; transform: none; }
   .almanac-view .ctx-fill { transition: none; }
   .almanac-view .tally .live-dot,
   .almanac-view .sub .livedot,
-  .almanac-view .entry.alive .glyph svg .pulse,
-  .almanac-view .wait-glow { animation: none; }
+  .almanac-view .entry.alive .glyph svg .pulse { animation: none; }
 }
