@@ -1041,10 +1041,11 @@ fn spawn_terminal_with_resume(_session_id: &str, _workspace: &str) -> Result<(),
 }
 
 /// Map a session's launcher `source` (as recorded by the hook: "vscode",
-/// "cursor", terminal names, "unknown") to a known editor, as
+/// "cursor", terminal names, "claude-desktop", "unknown") to a known editor, as
 /// `(macOS application name, cross-platform CLI)`, or `None` to fall back to the
-/// OS file manager. Pure so the mapping stays unit-testable; each platform reads
-/// only the field it needs.
+/// OS file manager. The Claude desktop app has no "open this folder" entry point,
+/// so "claude-desktop" intentionally falls through to the file manager. Pure so
+/// the mapping stays unit-testable; each platform reads only the field it needs.
 fn known_editor_for_source(source: Option<&str>) -> Option<(&'static str, &'static str)> {
     match source {
         Some("vscode") => Some(("Visual Studio Code", "code")),
@@ -1250,7 +1251,14 @@ mod open_workspace_tests {
     #[test]
     fn falls_back_for_terminals_and_unknown() {
         for s in [
-            "iterm", "terminal", "wezterm", "tmux", "ghostty", "unknown", "",
+            "iterm",
+            "terminal",
+            "wezterm",
+            "tmux",
+            "ghostty",
+            "claude-desktop",
+            "unknown",
+            "",
         ] {
             assert_eq!(known_editor_for_source(Some(s)), None, "source {s:?}");
         }

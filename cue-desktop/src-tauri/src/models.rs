@@ -737,6 +737,10 @@ fn format_source_name(source: Option<&str>) -> String {
         Some("tmux") => "tmux".to_string(),
         Some("screen") => "screen".to_string(),
         Some("hyper") => "Hyper".to_string(),
+        // Claude Code launched from the Claude desktop app: the hook detects the
+        // app via process ancestry and tags it "claude-desktop". Shown as
+        // "Claude" so the card reads "Launched from Claude" (cf. VSCode/iTerm).
+        Some("claude-desktop") => "Claude".to_string(),
         Some("unknown") | None => "\u{2014}".to_string(), // em dash
         Some(other) => {
             // Capitalize first letter for unknown sources
@@ -1387,6 +1391,19 @@ mod tests {
         assert_eq!(format_model_name("claude-opus-4-6"), "Opus 4.6");
         assert_eq!(format_model_name("unknown"), "\u{2014}");
         assert_eq!(format_model_name(""), "\u{2014}");
+    }
+
+    #[test]
+    fn test_format_source_name() {
+        // Editors / terminals keep their proper-cased labels.
+        assert_eq!(format_source_name(Some("vscode")), "VSCode");
+        assert_eq!(format_source_name(Some("iterm")), "iTerm");
+        // The Claude desktop app reads as "Claude" (→ "Launched from Claude").
+        assert_eq!(format_source_name(Some("claude-desktop")), "Claude");
+        // Unidentified / legacy launchers render as an em dash, which every
+        // skin treats as "hide the source chip" — so it must stay the em dash.
+        assert_eq!(format_source_name(Some("unknown")), "\u{2014}");
+        assert_eq!(format_source_name(None), "\u{2014}");
     }
 
     #[test]

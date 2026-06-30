@@ -10,6 +10,7 @@ import sys
 import os
 import time
 import tempfile
+import subprocess
 
 # --- Platform-conditional file locking (Task 5) ---
 if sys.platform == "win32":
@@ -434,7 +435,7 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
                     "lastActivity": now,
                     "stateChangedAt": state_changed_at,
                     "startedAt": existing.get("startedAt", now),
-                    "source": existing.get("source", source),
+                    "source": _resolve_source(existing.get("source"), source),
                     "activeSubagents": existing.get("activeSubagents", 0),
                     "pid": os.getppid(),
                 }
@@ -545,8 +546,108 @@ def _forward_permission_request(hook_data, session_id):
         return None
 
 
+# The Claude desktop app bundle ("/Applications/Claude.app/...") as it appears
+# in a process's executable path. Matched as a lower-cased path component so it
+# can't be confused with the VS Code extension's CLI
+# (".../anthropic.claude-code-.../native-binary/claude" — note: no ".app").
+_CLAUDE_APP_MARKER = "/claude.app/"
+
+
+def _proc_chain_has_claude_app(ps_output, start_pid):
+    """True if `start_pid` or any of its ancestors is the Claude desktop app.
+
+    `ps_output` is the text of `ps -A -o pid=,ppid=,comm=`: one process per
+    line as `<pid> <ppid> <comm…>`, where `comm` is the executable path (may
+    contain spaces, e.g. "Claude Helper (Renderer)") and is therefore the
+    last, space-preserving field. Pure and deterministic so it can be unit
+    tested against captured real-world tables without spawning processes.
+    """
+    chain = {}
+    for line in ps_output.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            pid = int(parts[0])
+            ppid = int(parts[1])
+        except ValueError:
+            continue
+        chain[pid] = (ppid, parts[2])
+
+    pid = start_pid
+    seen = set()
+    # Bound the walk: a malformed or cyclic table must never spin forever.
+    for _ in range(64):
+        if pid in seen:
+            break
+        seen.add(pid)
+        node = chain.get(pid)
+        if node is None:
+            break
+        ppid, comm = node
+        if _CLAUDE_APP_MARKER in comm.lower():
+            return True
+        # ppid 0/1 is the kernel/launchd root; self-parent guards a bad table.
+        if ppid == pid or ppid <= 1:
+            break
+        pid = ppid
+    return False
+
+
+def _is_claude_desktop():
+    """True if this hook is a descendant of the Claude desktop app.
+
+    The desktop app launches Claude Code with no TERM_PROGRAM, so it can't be
+    told apart from a headless/cron launcher by env vars alone (it sets no
+    documented marker). Process ancestry is the reliable positive signal: the
+    spawned `claude` — and therefore this hook — descend from
+    `/Applications/Claude.app/...`. Best-effort: any failure (no `ps`, a
+    sandbox that blocks process enumeration, a timeout) returns False so the
+    caller falls back to "unknown" rather than mislabelling. macOS `comm`
+    reports the full executable path; Linux reports only the short name (and has
+    no desktop app), so this simply yields False there.
+    """
+    try:
+        out = subprocess.run(
+            ["ps", "-A", "-o", "pid=,ppid=,comm="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if out.returncode != 0:
+        return False
+    return _proc_chain_has_claude_app(out.stdout, os.getpid())
+
+
+def _resolve_source(stored_source, detected_source):
+    """Final launcher source for a session entry.
+
+    `stored_source` is the value already on disk for this session (None / absent
+    on its first event); `detected_source` is `_detect_source()`'s cheap env
+    verdict (None when TERM_PROGRAM was empty, where only process ancestry can
+    decide). A stored value always wins — a session's launcher can't change
+    mid-flight — so the expensive desktop-ancestry walk runs at most once per
+    session (on the event that first creates its entry), never on the
+    steady-state stream of PreToolUse/PostToolUse/Stop/… events that all carry
+    the same already-known source.
+    """
+    if stored_source:
+        return stored_source
+    if detected_source is not None:
+        return detected_source
+    return "claude-desktop" if _is_claude_desktop() else "unknown"
+
+
 def _detect_source():
-    """Detect which client launched Claude Code from environment variables."""
+    """Cheap env-only launcher detection.
+
+    Returns a concrete source for VS Code / Cursor / terminals, or None when
+    TERM_PROGRAM is empty — the "undetermined" case that only `_resolve_source`
+    settles (via process ancestry) when a fresh entry is actually written, so a
+    long-lived transcript-less session doesn't spawn `ps` on every event.
+    """
     term = os.environ.get("TERM_PROGRAM", "")
 
     # VSCode and forks (Cursor, Windsurf, etc.)
@@ -571,8 +672,10 @@ def _detect_source():
         }
         return _TERMINALS.get(term, term.lower())
 
-    # No TERM_PROGRAM — could be Claude Desktop or other launcher
-    return "unknown"
+    # No TERM_PROGRAM — undetermined from env alone (the Claude desktop app, or
+    # cron / an orchestrator / `claude -p`). Defer to `_resolve_source`, which
+    # runs the process-ancestry walk only when a fresh entry is written.
+    return None
 
 
 def _should_ignore_session(hook_data):
@@ -1189,7 +1292,7 @@ def main():
                     "lastActivity": now,
                     "stateChangedAt": state_changed_at,
                     "startedAt": now if is_clear else existing.get("startedAt", now),
-                    "source": existing.get("source", source),
+                    "source": _resolve_source(existing.get("source"), source),
                     "activeSubagents": active_subs,
                     "pid": os.getppid(),
                 }

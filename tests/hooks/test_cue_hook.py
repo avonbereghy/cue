@@ -1483,3 +1483,244 @@ class TestClaudeConfigDir:
         claude_home = hook._claude_config_dir()
         resolved = os.path.realpath(str(transcript))
         assert resolved.startswith(claude_home + os.sep)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Launcher-source detection (VS Code / terminals / Claude desktop app)
+# ─────────────────────────────────────────────────────────────────────
+
+# A real-world macOS `ps -A -o pid=,ppid=,comm=` excerpt: a hook (5000)
+# descends from `claude` (4000) → a Claude desktop helper (77131) → the
+# Claude.app main process (77120) → launchd (1). `comm` is the full exec
+# path and helper names carry spaces ("Claude Helper (Renderer)").
+_PS_CLAUDE_DESKTOP = (
+    "    1     0 /sbin/launchd\n"
+    "77120     1 /Applications/Claude.app/Contents/MacOS/Claude\n"
+    "77131 77120 /Applications/Claude.app/Contents/Frameworks/"
+    "Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)\n"
+    " 4000 77131 /opt/homebrew/bin/node\n"
+    " 5000  4000 /usr/bin/python3\n"
+)
+
+# The VS Code extension's bundled CLI lives at
+# ".../anthropic.claude-code-<ver>/.../native-binary/claude" — its path
+# contains "claude" but never "Claude.app", so it must NOT be matched.
+_PS_VSCODE_CLAUDE_CLI = (
+    "    1     0 /sbin/launchd\n"
+    " 7924     1 /Applications/Visual Studio Code.app/Contents/MacOS/Electron\n"
+    " 9745  7924 /Users/x/.vscode/extensions/anthropic.claude-code-2.1.195-"
+    "darwin-arm64/resources/native-binary/claude\n"
+    "10069  9745 node\n"
+    " 5000 10069 /usr/bin/python3\n"
+)
+
+_PS_TERMINAL = (
+    "    1     0 /sbin/launchd\n"
+    " 3000     1 /Applications/iTerm.app/Contents/MacOS/iTerm2\n"
+    " 4000  3000 -zsh\n"
+    " 5000  4000 /usr/bin/python3\n"
+)
+
+
+class TestProcChainHasClaudeApp:
+    """Pure ancestry parser — no subprocess, exercised against captured tables."""
+
+    def test_detects_claude_desktop_ancestor(self, hook):
+        assert hook._proc_chain_has_claude_app(_PS_CLAUDE_DESKTOP, 5000)
+
+    def test_matches_through_helper_with_spaces_in_path(self, hook):
+        # Starting at the helper itself (77131) — its path has spaces and the
+        # ".app" component must still be found after split(None, 2).
+        assert hook._proc_chain_has_claude_app(_PS_CLAUDE_DESKTOP, 77131)
+
+    def test_vscode_extension_cli_is_not_claude_desktop(self, hook):
+        # The critical false-positive guard: "anthropic.claude-code/.../claude"
+        # and "Visual Studio Code.app" must not be read as the Claude desktop app.
+        assert not hook._proc_chain_has_claude_app(_PS_VSCODE_CLAUDE_CLI, 5000)
+
+    def test_plain_terminal_is_not_claude_desktop(self, hook):
+        assert not hook._proc_chain_has_claude_app(_PS_TERMINAL, 5000)
+
+    def test_start_pid_absent_from_table(self, hook):
+        assert not hook._proc_chain_has_claude_app(_PS_CLAUDE_DESKTOP, 99999)
+
+    def test_cyclic_table_terminates(self, hook):
+        # A→B→A must break on the visited-set, not spin forever.
+        cyclic = " 100  200 /a\n 200  100 /b\n"
+        assert not hook._proc_chain_has_claude_app(cyclic, 100)
+
+    def test_self_parent_terminates(self, hook):
+        assert not hook._proc_chain_has_claude_app(" 100  100 /a\n", 100)
+
+    def test_malformed_lines_are_skipped_but_match_still_found(self, hook):
+        malformed = (
+            "garbage with no numbers\n"
+            "abc def /not-a-pid\n"
+            " 100\n"  # too few fields
+            " 5000  100 /usr/bin/python3\n"
+            " 100     1 /Applications/Claude.app/Contents/MacOS/Claude\n"
+        )
+        assert hook._proc_chain_has_claude_app(malformed, 5000)
+
+    def test_empty_output(self, hook):
+        assert not hook._proc_chain_has_claude_app("", 5000)
+
+
+class TestDetectSource:
+    """`_detect_source` is the cheap env-only verdict; empty TERM_PROGRAM → None.
+
+    It must NEVER spawn the ancestry walk — that is deferred to
+    `_resolve_source` so a long-lived transcript-less session doesn't run `ps`
+    on every event. Every case here installs a fail-loud `_is_claude_desktop`.
+    """
+
+    def _clear_term(self, monkeypatch):
+        # The suite may itself run inside VS Code/iTerm; strip the signals so
+        # each case starts from a known-empty launcher environment.
+        monkeypatch.delenv("TERM_PROGRAM", raising=False)
+        monkeypatch.delenv("VSCODE_PID", raising=False)
+
+    def _no_walk(self, hook, monkeypatch):
+        monkeypatch.setattr(
+            hook, "_is_claude_desktop",
+            lambda: pytest.fail("_detect_source must not walk process ancestry"),
+        )
+
+    def test_vscode_via_term_program(self, hook, monkeypatch):
+        self._clear_term(monkeypatch)
+        self._no_walk(hook, monkeypatch)
+        monkeypatch.setenv("TERM_PROGRAM", "vscode")
+        assert hook._detect_source() == "vscode"
+
+    def test_vscode_via_vscode_pid(self, hook, monkeypatch):
+        self._clear_term(monkeypatch)
+        self._no_walk(hook, monkeypatch)
+        monkeypatch.setenv("VSCODE_PID", "12345")
+        assert hook._detect_source() == "vscode"
+
+    def test_iterm(self, hook, monkeypatch):
+        self._clear_term(monkeypatch)
+        self._no_walk(hook, monkeypatch)
+        monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
+        assert hook._detect_source() == "iterm"
+
+    def test_apple_terminal(self, hook, monkeypatch):
+        self._clear_term(monkeypatch)
+        self._no_walk(hook, monkeypatch)
+        monkeypatch.setenv("TERM_PROGRAM", "Apple_Terminal")
+        assert hook._detect_source() == "terminal"
+
+    def test_no_term_program_returns_none_without_walking(self, hook, monkeypatch):
+        # Empty TERM_PROGRAM is "undetermined": return None and do NOT spawn ps.
+        self._clear_term(monkeypatch)
+        self._no_walk(hook, monkeypatch)
+        assert hook._detect_source() is None
+
+
+class TestResolveSource:
+    """`_resolve_source` settles the source and gates the one-time ancestry walk."""
+
+    def test_stored_value_wins_without_walking(self, hook, monkeypatch):
+        # A session already carrying a source must never re-walk ancestry — this
+        # is what makes the walk at-most-once-per-session.
+        monkeypatch.setattr(
+            hook, "_is_claude_desktop",
+            lambda: pytest.fail("walked despite a stored source"),
+        )
+        assert hook._resolve_source("claude-desktop", None) == "claude-desktop"
+        assert hook._resolve_source("vscode", None) == "vscode"
+        assert hook._resolve_source("iterm", "iterm") == "iterm"
+
+    def test_env_verdict_wins_when_unstored(self, hook, monkeypatch):
+        monkeypatch.setattr(
+            hook, "_is_claude_desktop",
+            lambda: pytest.fail("walked despite an env verdict"),
+        )
+        assert hook._resolve_source(None, "vscode") == "vscode"
+
+    def test_walks_only_when_undetermined_and_unstored(self, hook, monkeypatch):
+        monkeypatch.setattr(hook, "_is_claude_desktop", lambda: True)
+        assert hook._resolve_source(None, None) == "claude-desktop"
+
+    def test_unknown_when_undetermined_and_not_desktop(self, hook, monkeypatch):
+        monkeypatch.setattr(hook, "_is_claude_desktop", lambda: False)
+        assert hook._resolve_source(None, None) == "unknown"
+
+
+class TestSourceWriteThrough:
+    """End-to-end: main()'s write path resolves + persists the launcher source."""
+
+    def _clear_term(self, monkeypatch):
+        monkeypatch.delenv("TERM_PROGRAM", raising=False)
+        monkeypatch.delenv("VSCODE_PID", raising=False)
+
+    def test_fresh_vscode_session_persists_vscode(self, hook, hook_env, invoke_hook, monkeypatch):
+        self._clear_term(monkeypatch)
+        monkeypatch.setenv("TERM_PROGRAM", "vscode")
+        monkeypatch.setattr(
+            hook, "_is_claude_desktop",
+            lambda: pytest.fail("walked ancestry for a TERM_PROGRAM=vscode session"),
+        )
+        invoke_hook("working", make_payload(session_id="s-vscode"))
+        assert hook_env.read_sessions()["s-vscode"]["source"] == "vscode"
+
+    def test_fresh_desktop_session_persists_claude_desktop(self, hook, hook_env, invoke_hook, monkeypatch):
+        self._clear_term(monkeypatch)
+        monkeypatch.setattr(hook, "_is_claude_desktop", lambda: True)
+        invoke_hook("working", make_payload(session_id="s-desk"))
+        assert hook_env.read_sessions()["s-desk"]["source"] == "claude-desktop"
+
+    def test_stored_source_preserved_without_rewalking(self, hook, hook_env, invoke_hook, monkeypatch):
+        # The optimization, end to end: a session already carrying a source must
+        # keep it on later events AND must not pay the `ps` walk again.
+        now = time.time()
+        hook_env.write_sessions({
+            "s-keep": {"id": "s-keep", "workspace": "/Users/x/proj",
+                       "state": "working", "source": "claude-desktop",
+                       "lastActivity": now, "startedAt": now, "activeSubagents": 0},
+        })
+        self._clear_term(monkeypatch)
+        monkeypatch.setattr(
+            hook, "_is_claude_desktop",
+            lambda: pytest.fail("re-walked ancestry for a session with a stored source"),
+        )
+        invoke_hook("working", make_payload(session_id="s-keep"))
+        assert hook_env.read_sessions()["s-keep"]["source"] == "claude-desktop"
+
+
+class TestIsClaudeDesktopWrapper:
+    """The subprocess wrapper degrades to False on any failure."""
+
+    def test_returns_false_when_ps_missing(self, hook, monkeypatch):
+        def _boom(*a, **k):
+            raise FileNotFoundError("ps")
+
+        monkeypatch.setattr(hook.subprocess, "run", _boom)
+        assert hook._is_claude_desktop() is False
+
+    def test_returns_false_on_timeout(self, hook, monkeypatch):
+        def _timeout(*a, **k):
+            raise hook.subprocess.TimeoutExpired(cmd="ps", timeout=2)
+
+        monkeypatch.setattr(hook.subprocess, "run", _timeout)
+        assert hook._is_claude_desktop() is False
+
+    def test_returns_false_on_nonzero_exit(self, hook, monkeypatch):
+        class _R:
+            returncode = 1
+            stdout = ""
+
+        monkeypatch.setattr(hook.subprocess, "run", lambda *a, **k: _R())
+        assert hook._is_claude_desktop() is False
+
+    def test_parses_stdout_on_success(self, hook, monkeypatch):
+        class _R:
+            returncode = 0
+            # Make the hook's own pid an ancestor-of-Claude.app so the parse
+            # path returns True deterministically regardless of the real tree.
+            stdout = " {pid}     1 /Applications/Claude.app/Contents/MacOS/Claude\n".format(
+                pid=os.getpid()
+            )
+
+        monkeypatch.setattr(hook.subprocess, "run", lambda *a, **k: _R())
+        assert hook._is_claude_desktop() is True
