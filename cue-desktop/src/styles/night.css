@@ -133,6 +133,10 @@
 
 .night-view .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 14px; padding-top: 12px; border-top: 1px solid rgba(198,154,78,.10); margin-top: auto; }
 .night-view .metric { display: flex; flex-direction: column; gap: 1px; }
+/* The card is a flex column with its own 13px gap, so the shared .convo's
+   margin-top + border-top would double the separator below the metrics. Drop
+   both here; the gap + the metrics' own rule already set the foot apart. */
+.night-view .convo { margin-top: 0; border-top: 0; padding-top: 0; }
 .night-view .metric .v { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--ink-soft); }
 .night-view .metric .k { font-size: 8.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-faint); }
 .night-view .metric.tps .v { color: var(--honey); }

@@ -224,7 +224,7 @@ function StudioCardBase({ session, timerDisplay, permissionsEnabled, pending, on
       )}
 
       {promptOpen && convoText && (
-        <PromptPopup text={convoText} onClose={() => setPromptOpen(false)} bg="#f7f0e4" border="rgba(96,72,42,0.28)" ink="#2b2620" muted="#8a8070" fontBody='"Spectral", Georgia, serif' italic />
+        <PromptPopup text={convoText} label={waitSnippet ? "Last prompt" : "Latest message"} onClose={() => setPromptOpen(false)} bg="#f7f0e4" border="rgba(96,72,42,0.28)" ink="#2b2620" muted="#8a8070" fontBody='"Spectral", Georgia, serif' italic />
       )}
     </article>
   );

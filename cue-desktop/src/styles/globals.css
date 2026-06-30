@@ -1359,3 +1359,11 @@ html.tray-popover-root body {
 .convo .convo-mark { flex: 0 0 auto; font-size: 1.1rem; line-height: 0; opacity: 0.7; transform: translateY(0.18em); }
 .convo .convo-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8125rem; }
 @media (prefers-reduced-motion: reduce) { .convo { transition: none; } }
+/* The foot .convo is a single nowrap line. Each Look's card is a 1fr grid/flex
+   item with the default min-width:auto, so without this it would expand to the
+   message's full intrinsic width instead of truncating — making the card balloon
+   sideways. min-width:0 lets the card shrink to its track so .convo-text (and the
+   title/metrics) ellipsize within it instead. */
+.studio-view .card,
+.night-view .card,
+.almanac-view .entry { min-width: 0; }

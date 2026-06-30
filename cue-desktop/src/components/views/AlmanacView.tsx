@@ -273,7 +273,7 @@ function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pen
       )}
 
       {promptOpen && convoText && (
-        <PromptPopup text={convoText} onClose={() => setPromptOpen(false)} bg="#efe6cf" border="rgba(120,90,50,0.3)" ink="#2b2118" muted="#8a7758" fontBody='"Spectral", Georgia, serif' italic />
+        <PromptPopup text={convoText} label={waitSnippet ? "Last prompt" : "Latest message"} onClose={() => setPromptOpen(false)} bg="#efe6cf" border="rgba(120,90,50,0.3)" ink="#2b2118" muted="#8a7758" fontBody='"Spectral", Georgia, serif' italic />
       )}
     </article>
   );

@@ -279,7 +279,7 @@ function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pendi
       )}
 
       {promptOpen && convoText && (
-        <PromptPopup text={convoText} onClose={() => setPromptOpen(false)} bg="#2c2218" border="rgba(198,154,78,0.3)" ink="#f3e7d2" muted="#a8967a" fontBody='"Fraunces", Georgia, serif' italic />
+        <PromptPopup text={convoText} label={waitSnippet ? "Last prompt" : "Latest message"} onClose={() => setPromptOpen(false)} bg="#2c2218" border="rgba(198,154,78,0.3)" ink="#f3e7d2" muted="#a8967a" fontBody='"Fraunces", Georgia, serif' italic />
       )}
     </article>
   );
