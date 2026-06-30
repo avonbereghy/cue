@@ -252,7 +252,8 @@ export function SignalSettingsPage() {
     if (editingPreset) return; // no playback engine for live previews
     dragging.current = true;
     if (presetRef.current) {
-      const canvas = canvasRef.current!;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
       const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
       presetSeek(ratio * presetRef.current.durationSecs);

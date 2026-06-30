@@ -87,7 +87,7 @@ listen<Settings>("settings-changed", (event) => {
 });
 
 // Expose for SettingsView to call when theme changes
-(window as unknown as Record<string, unknown>).__applyTheme = (pref: string) => {
+window.__applyTheme = (pref: string) => {
   resolveTheme(pref).then(applyTheme).catch(() => applyTheme("dark"));
 };
 

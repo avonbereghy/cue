@@ -613,7 +613,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           if (!sandboxActiveStartRef.current.has(s.info.id)) {
             sandboxActiveStartRef.current.set(s.info.id, now);
           }
-          const startMs = sandboxActiveStartRef.current.get(s.info.id)!;
+          const startMs = sandboxActiveStartRef.current.get(s.info.id) ?? now;
           const elapsedSec = (now - startMs) / 1000;
           const dt = TICK_MS / 1000;
 
@@ -1843,7 +1843,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       const cards = list.querySelectorAll<HTMLElement>("[data-session-id]");
       const positions = new Map<string, DOMRect>();
       cards.forEach((el) => {
-        const id = el.dataset.sessionId!;
+        const id = el.dataset.sessionId;
+        if (!id) return;
         positions.set(id, el.getBoundingClientRect());
       });
       cardPositions.current = positions;
@@ -1865,7 +1866,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     const newCards: { el: HTMLElement; height: number }[] = [];
 
     cards.forEach((el, idx) => {
-      const id = el.dataset.sessionId!;
+      const id = el.dataset.sessionId;
+      if (!id) return;
       const oldRect = prev.get(id);
       const newRect = el.getBoundingClientRect();
       if (!oldRect) {
@@ -1904,7 +1906,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       const allCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
       const positions = new Map<string, DOMRect>();
       allCards.forEach((el) => {
-        const id = el.dataset.sessionId!;
+        const id = el.dataset.sessionId;
+        if (!id) return;
         positions.set(id, el.getBoundingClientRect());
       });
       cardPositions.current = positions;
@@ -1938,7 +1941,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     const nextRectById = new Map<string, DOMRect>();
     const nextOrderAll: string[] = [];
     cards.forEach((el) => {
-      const id = el.dataset.sessionId!;
+      const id = el.dataset.sessionId;
+      if (!id) return;
       elById.set(id, el);
       nextRectById.set(id, el.getBoundingClientRect());
       nextOrderAll.push(id);
@@ -1983,9 +1987,11 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     // the two cards pass through each other symmetrically.
     let gap = 0;
     if (nextOrderAll.length >= 2) {
-      const r0 = nextRectById.get(nextOrderAll[0])!;
-      const r1 = nextRectById.get(nextOrderAll[1])!;
-      gap = Math.max(0, r1.top - (r0.top + r0.height));
+      const r0 = nextRectById.get(nextOrderAll[0]);
+      const r1 = nextRectById.get(nextOrderAll[1]);
+      if (r0 && r1) {
+        gap = Math.max(0, r1.top - (r0.top + r0.height));
+      }
     }
 
     // Pre-paint: hold every existing card at its prev visual position via
@@ -1993,7 +1999,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     // there would be one paint at the final slots before swaps begin. Pure
     // transform, compositor-only — child canvases keep rendering.
     for (const id of prevOrder) {
-      const el = elById.get(id)!;
+      const el = elById.get(id);
+      if (!el) continue;
       el.style.willChange = "transform";
       el.style.transform = `translateY(${dyById.get(id) ?? 0}px)`;
     }
@@ -2252,7 +2259,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         const positions = new Map<string, DOMRect>();
         const ids: string[] = [];
         allCards.forEach((c) => {
-          const cid = c.dataset.sessionId!;
+          const cid = c.dataset.sessionId;
+          if (!cid) return;
           positions.set(cid, c.getBoundingClientRect());
           ids.push(cid);
         });
