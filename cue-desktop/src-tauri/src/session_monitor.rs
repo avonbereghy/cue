@@ -579,7 +579,6 @@ impl SessionMonitorState {
                         && metrics_caught_up(
                             metrics.and_then(|m| m.last_entry_ts),
                             s.state_changed_at,
-                            metrics.and_then(|m| m.parsed_file_mtime),
                         )
                     {
                         s.state = "idle".to_string();
@@ -1338,22 +1337,25 @@ fn should_resolve_waiting(awaiting: bool, pending: bool) -> bool {
 /// edge cases. The liveness / JSONL-deletion / turn-ended passes remain the
 /// backstops for an abandoned prompt, so holding here never pins forever.
 ///
-/// `parsed_file_mtime` is a second catch-up proof (audit F4): when `waiting`
-/// is seeded at the very END of a turn (Stop's ask-question path), no newer
-/// *timestamped* entry will ever arrive — the trailing `last-prompt` /
-/// `ai-title` / `mode` rows carry no timestamps — so the entry-ts gate alone
-/// would hold a phantom waiting card forever. The transcript file mtime
-/// advancing past the transition proves the parse reflects the
-/// post-transition file even when content timestamps can't show it.
-fn metrics_caught_up(
-    last_entry_ts: Option<f64>,
-    state_changed_at: Option<f64>,
-    parsed_file_mtime: Option<f64>,
-) -> bool {
+/// A bare transcript file-mtime advance is deliberately NOT accepted as proof
+/// here (it was, via audit F4 — reverted after a confirmed regression). Claude
+/// Code writes timestampless metadata rows (`file-history-snapshot`,
+/// `ai-title`, `mode`, `queue-operation`, …) constantly while a dialog is open,
+/// so the file mtime races past `stateChangedAt` within ~1s. An open
+/// `AskUserQuestion` is invisible in the transcript — its tool_use isn't
+/// flushed while waiting — so neither `awaiting` nor `pending` protects the
+/// card, and the mtime fallback would demote a genuinely-open question to idle
+/// (confirmed live: the gate opened on mtime while BOTH entry-ts branches
+/// stayed below the seed). The entry-ts gate is the only safe proof. This
+/// matches `should_demote_turn_ended`'s F-correctness-001 rule that an mtime
+/// advance is not proof a `waiting`/`error` condition cleared. The
+/// phantom-waiting-at-turn-end case F4 targeted is covered by the turn-ended
+/// pass (a clean `end_turn`/interrupt newer than the seed) and liveness, and a
+/// real answer rewrites `sessions.json` off `waiting` via the next turn's hook
+/// — so dropping the mtime path never pins a card forever.
+fn metrics_caught_up(last_entry_ts: Option<f64>, state_changed_at: Option<f64>) -> bool {
     match (last_entry_ts, state_changed_at) {
-        (Some(last), Some(changed)) => {
-            last >= changed || parsed_file_mtime.is_some_and(|m| m >= changed)
-        }
+        (Some(last), Some(changed)) => last >= changed,
         _ => true,
     }
 }
@@ -3151,28 +3153,32 @@ mod tests {
     // waiting verdict) is locked, not just the pure predicates.
 
     #[test]
-    fn test_metrics_caught_up_via_file_mtime() {
-        // End-of-turn seeded waiting: entries stop advancing (trailing
-        // metadata rows are timestampless) but the file mtime moved past the
-        // transition — the parse provably reflects the post-transition file,
-        // so the demote must be allowed (audit F4: phantom waiting pin).
-        assert!(metrics_caught_up(Some(100.0), Some(200.0), Some(200.0)));
-        assert!(metrics_caught_up(Some(100.0), Some(200.0), Some(250.0)));
-        // mtime older than the transition proves nothing — keep holding.
-        assert!(!metrics_caught_up(Some(100.0), Some(200.0), Some(150.0)));
-        assert!(!metrics_caught_up(Some(100.0), Some(200.0), None));
+    fn test_metrics_caught_up_ignores_file_mtime() {
+        // Regression (confirmed live, problem 01KWCR91…): a bare transcript
+        // file-mtime advance must NOT count as catch-up. Claude Code bumps the
+        // file mtime with timestampless metadata rows (file-history-snapshot,
+        // ai-title, mode, queue-operation) within ~1s of a dialog opening, so
+        // the old F4 mtime fallback flipped a genuinely-open AskUserQuestion
+        // card to idle while both entry-ts branches still predated the seed.
+        // Now only a real entry timestamp at/after the seed proves catch-up —
+        // so with last_entry_ts BELOW the seed the card HOLDS waiting no matter
+        // how far the file mtime advanced.
+        assert!(!metrics_caught_up(Some(100.0), Some(200.0)));
+        // Entry ts at/after the seed → genuine catch-up → allow demote.
+        assert!(metrics_caught_up(Some(200.0), Some(200.0)));
+        assert!(metrics_caught_up(Some(250.0), Some(200.0)));
     }
 
     #[test]
     fn test_metrics_caught_up_gate() {
         // Stale parse (predates the seed) → hold (don't allow demote).
-        assert!(!metrics_caught_up(Some(100.0), Some(200.0), None));
+        assert!(!metrics_caught_up(Some(100.0), Some(200.0)));
         // Caught-up parse → allow demote.
-        assert!(metrics_caught_up(Some(200.0), Some(200.0), None));
-        assert!(metrics_caught_up(Some(250.0), Some(200.0), None));
+        assert!(metrics_caught_up(Some(200.0), Some(200.0)));
+        assert!(metrics_caught_up(Some(250.0), Some(200.0)));
         // Unknown freshness → preserve prior behavior (allow).
-        assert!(metrics_caught_up(None, Some(200.0), None));
-        assert!(metrics_caught_up(Some(100.0), None, None));
+        assert!(metrics_caught_up(None, Some(200.0)));
+        assert!(metrics_caught_up(Some(100.0), None));
     }
 
     #[test]
@@ -3241,6 +3247,63 @@ mod tests {
             assert_eq!(
                 s.info.state, "idle",
                 "must demote once metrics catch up and show resolution"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_poll_holds_open_question_when_only_file_mtime_advances() {
+        // Confirmed-live regression (problem 01KWCR91…): an OPEN AskUserQuestion
+        // leaves no trace in the transcript (its tool_use isn't flushed while
+        // waiting), so awaiting=false AND pending=false. The card's only proof
+        // of liveness is the freshness gate. Claude Code then bumps the
+        // transcript file mtime with timestampless metadata rows
+        // (file-history-snapshot, ai-title, mode) within ~1s — but NO new
+        // timestamped entry arrives, so last_entry_ts stays BELOW the seed.
+        // The card must HOLD `waiting`: a bare mtime advance is not proof the
+        // question was answered. (Before the fix, the F4 mtime fallback opened
+        // the gate here and flipped the still-open question to idle.)
+        let dir = std::env::temp_dir().join("cue_test_poll_open_q_mtime");
+        let _ = std::fs::remove_dir_all(&dir);
+        let projects = dir.join("projects");
+        let ws_dir = projects.join("-Users-dev-App");
+        std::fs::create_dir_all(&ws_dir).unwrap();
+        std::fs::write(ws_dir.join("sess-oq.jsonl"), "{}").unwrap();
+
+        let status_path = dir.join("sessions.json");
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        let changed = now + 5.0; // hook seeded waiting "now"
+        let sessions = format!(
+            r#"{{"sessions":{{"sess-oq":{{"id":"sess-oq","workspace":"/Users/dev/App","state":"waiting","lastActivity":{},"startedAt":{},"stateChangedAt":{}}}}}}}"#,
+            changed, changed, changed
+        );
+        std::fs::write(&status_path, sessions).unwrap();
+
+        let m = SessionMonitorState::new();
+        // Open-question metrics: no detectable prompt (awaiting/pending false),
+        // last_entry_ts predates the seed (no real entry since the dialog
+        // opened), but file mtime has raced PAST the seed on metadata writes.
+        m.metrics_cache.lock_safe().insert(
+            "sess-oq".to_string(),
+            crate::models::SessionMetrics {
+                awaiting_user_prompt: false,
+                pending_tool_use: false,
+                last_entry_ts: Some(changed - 50.0),
+                parsed_file_mtime: Some(changed + 30.0),
+                ..Default::default()
+            },
+        );
+        m.poll_status_with(status_path.clone(), projects.clone());
+        {
+            let e = m.enriched_sessions.lock_safe();
+            let s = e.iter().find(|s| s.info.id == "sess-oq").expect("present");
+            assert_eq!(
+                s.info.state, "waiting",
+                "must HOLD waiting: a bare file-mtime advance is not proof the question was answered"
             );
         }
         let _ = std::fs::remove_dir_all(&dir);
