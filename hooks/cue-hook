@@ -526,6 +526,23 @@ def _read_permission_token():
         return None
 
 
+def _read_permission_proof():
+    """Read the SECOND per-launch secret (permission-proof, 0600).
+
+    The Cue server returns this value in the `X-Cue-Proof` response header to
+    prove it is the real server. Unlike the token, the hook only READS this and
+    compares — it is never transmitted — so a different-uid process that wins
+    the loopback port never learns it and can't forge an approval the hook will
+    honor (F-security-001). Returns None if absent/unreadable."""
+    proof_path = os.path.join(STATUS_DIR, "permission-proof")
+    try:
+        with open(proof_path, "r", encoding="utf-8") as f:
+            value = f.read(256).strip()
+        return value if value else None
+    except (OSError, IOError):
+        return None
+
+
 def _forward_permission_request(hook_data, session_id):
     """Forward a permission request to the Cue dashboard via localhost HTTP.
 
@@ -534,6 +551,7 @@ def _forward_permission_request(hook_data, session_id):
     """
     import urllib.request
     import urllib.error
+    import hmac
 
     # Refuse to forward without the per-launch shared secret. If the token
     # file is missing, Cue isn't running (or has permissions disabled), and
@@ -542,6 +560,15 @@ def _forward_permission_request(hook_data, session_id):
     # token closes.
     token = _read_permission_token()
     if not token:
+        return None
+
+    # Also require the proof secret up front. Without it we can't authenticate
+    # the server's response, so we won't honor any decision it returns — fail
+    # closed to Claude Code's native prompt (F-security-001). This also covers
+    # the version-skew case of a new hook against an old server that never
+    # wrote permission-proof.
+    proof = _read_permission_proof()
+    if not proof:
         return None
 
     payload = json.dumps({
@@ -563,9 +590,22 @@ def _forward_permission_request(hook_data, session_id):
 
     try:
         with urllib.request.urlopen(req, timeout=300) as resp:
+            server_proof = resp.headers.get("X-Cue-Proof", "")
             body = resp.read().decode("utf-8")
-            return json.loads(body)
     except (urllib.error.URLError, OSError, json.JSONDecodeError, TimeoutError):
+        return None
+
+    # Authenticate the responder BEFORE trusting its decision. A rogue server
+    # that won the loopback port received our token but never has the proof
+    # secret (it can't read the 0600 file and we never send it), so a missing
+    # or mismatched X-Cue-Proof means "not the real Cue" → ignore the decision
+    # and let Claude Code fall back to its native prompt.
+    if not server_proof or not hmac.compare_digest(server_proof, proof):
+        return None
+
+    try:
+        return json.loads(body)
+    except (json.JSONDecodeError, ValueError):
         return None
 
 

@@ -91,28 +91,78 @@ pub const DENY_RESPONSE: &str = r#"{"hookSpecificOutput":{"hookEventName":"Permi
 /// Matched case-insensitively against incoming request headers.
 pub const TOKEN_HEADER: &str = "x-cue-token";
 
-/// Generate a fresh 128-bit per-launch shared secret, atomically write it to
-/// `permission_token_path()` at 0600, and return the token string.
-///
-/// Why a per-launch token: the permission server binds to `127.0.0.1:3002`
-/// without any kernel-level access control, so any local process that wins
-/// the port race could otherwise forge `{"behavior":"allow"}` responses to
-/// Claude Code hook prompts. Co-locating a fresh secret under the user's
-/// 0700 status dir (and writing it 0600) means only same-uid processes can
-/// read it, and the secret is invalidated every launch. The legitimate
-/// Python hook reads the same file before POSTing and presents the value
-/// in `X-Cue-Token`; the server compares in constant time and 403s anything
-/// else. Mitigates the prior unauthenticated-server finding.
-pub fn provision_token() -> std::io::Result<String> {
-    // 16 bytes of OS CSPRNG output via getrandom (which is what uuid::Uuid::new_v4
-    // already pulls from). Hex-encoded — 32 ASCII chars — so it survives an HTTP
-    // header round-trip without escaping concerns.
-    let id = uuid::Uuid::new_v4();
-    let token = id.simple().to_string();
+/// HTTP header name the server returns to authenticate ITSELF to the hook
+/// (F-security-001). Carries `resp_token`, which the hook never transmits.
+pub const PROOF_HEADER: &str = "X-Cue-Proof";
 
-    let path = paths::permission_token_path();
-    security::atomic_write(&path, token.as_bytes())?;
-    Ok(token)
+/// The two per-launch secrets that authenticate the hook↔server channel in
+/// BOTH directions.
+///
+/// - `req_token` — the hook sends it in `X-Cue-Token`; the server verifies it
+///   so a rogue *client* can't POST forged prompts (inbound auth, pre-existing).
+/// - `resp_token` — the server returns it in `X-Cue-Proof`; the hook verifies
+///   it so a rogue *server* that won the loopback port can't forge an "allow"
+///   (outbound auth, the F-security-001 fix). Because the hook only ever READS
+///   `resp_token` from its 0600 file and never sends it, a different-uid
+///   attacker never learns it — even though the hook does hand `req_token` to
+///   whatever process answers on 3002.
+pub struct ServerSecrets {
+    pub req_token: String,
+    pub resp_token: String,
+}
+
+/// Generate two fresh 128-bit per-launch secrets, atomically write each to its
+/// own 0600 file (`permission-token`, `permission-proof`) under the user's
+/// 0700 status dir, and return them.
+///
+/// MUST be called only AFTER the server has successfully bound `127.0.0.1:3002`
+/// (F-security-001): provisioning before the bind, or leaving the files behind
+/// when Cue isn't the process on 3002, lets the hook forward `req_token` to a
+/// rogue server. Pair with `remove_secrets()` on bind failure, when permissions
+/// are disabled, and on shutdown so "secret files exist ⟺ Cue is serving"
+/// holds outside a hard crash — and `resp_token` closes even the crash window.
+pub fn provision_secrets() -> std::io::Result<ServerSecrets> {
+    provision_secrets_at(
+        &paths::permission_token_path(),
+        &paths::permission_proof_path(),
+    )
+}
+
+/// Path-injectable core of `provision_secrets` (for tests — the public wrapper
+/// targets the real status dir).
+fn provision_secrets_at(token_path: &Path, proof_path: &Path) -> std::io::Result<ServerSecrets> {
+    // 16 bytes of OS CSPRNG output via getrandom (same source uuid::new_v4
+    // pulls from), hex-encoded to 32 ASCII chars so each survives an HTTP
+    // header round-trip without escaping concerns.
+    let req_token = uuid::Uuid::new_v4().simple().to_string();
+    let resp_token = uuid::Uuid::new_v4().simple().to_string();
+
+    security::atomic_write(token_path, req_token.as_bytes())?;
+    // If the proof write fails, don't leave a lone token file behind (it would
+    // authenticate a rogue server to an old hook); clean up and propagate.
+    if let Err(e) = security::atomic_write(proof_path, resp_token.as_bytes()) {
+        remove_secrets_at(token_path, proof_path);
+        return Err(e);
+    }
+    Ok(ServerSecrets {
+        req_token,
+        resp_token,
+    })
+}
+
+/// Best-effort deletion of both secret files. Called when Cue is NOT serving
+/// on 3002 (bind failure, permissions disabled, shutdown) so a stale, still
+/// valid `req_token` can't drive the hook to forward to an impostor.
+pub fn remove_secrets() {
+    remove_secrets_at(
+        &paths::permission_token_path(),
+        &paths::permission_proof_path(),
+    );
+}
+
+fn remove_secrets_at(token_path: &Path, proof_path: &Path) {
+    let _ = std::fs::remove_file(token_path);
+    let _ = std::fs::remove_file(proof_path);
 }
 
 /// Read a previously-provisioned token from `path`. Used only by the test
@@ -361,6 +411,51 @@ mod tests {
         crate::security::atomic_write(&path, original.as_bytes()).unwrap();
         let read_back = read_token(&path).unwrap();
         assert_eq!(read_back, original);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_provision_secrets_writes_two_distinct_secrets() {
+        // F-security-001: provisioning must write BOTH the req token and the
+        // never-transmitted resp token, each 32 hex chars, and they must differ
+        // (else echoing the request token back would authenticate a rogue).
+        let dir = std::env::temp_dir().join(format!("cue_test_secrets_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let token_path = dir.join("permission-token");
+        let proof_path = dir.join("permission-proof");
+
+        let s = provision_secrets_at(&token_path, &proof_path).unwrap();
+        assert_eq!(s.req_token.len(), 32);
+        assert_eq!(s.resp_token.len(), 32);
+        assert_ne!(s.req_token, s.resp_token, "the two secrets must be independent");
+        assert_eq!(read_token(&token_path).unwrap(), s.req_token);
+        assert_eq!(read_token(&proof_path).unwrap(), s.resp_token);
+
+        // remove_secrets_at deletes both and is safe to call twice.
+        remove_secrets_at(&token_path, &proof_path);
+        assert!(!token_path.exists());
+        assert!(!proof_path.exists());
+        remove_secrets_at(&token_path, &proof_path); // idempotent, no panic
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_proof_header_authenticates_server() {
+        // The proof secret the hook compares against is the resp_token the
+        // server returns in X-Cue-Proof. A value that doesn't match it (what a
+        // rogue server — which only ever saw req_token — could at best echo)
+        // must fail the constant-time check, so the hook rejects the decision.
+        let dir = std::env::temp_dir().join(format!("cue_test_proof_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let s = provision_secrets_at(&dir.join("permission-token"), &dir.join("permission-proof"))
+            .unwrap();
+
+        // Real server proof matches; the request token (all a rogue holds) does not.
+        assert!(constant_time_eq(s.resp_token.as_bytes(), s.resp_token.as_bytes()));
+        assert!(!constant_time_eq(s.req_token.as_bytes(), s.resp_token.as_bytes()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -1436,3 +1436,87 @@ class TestCorruptFileRecovery:
         hook._quick_state_write("sess1", "/w", "cli", None, None, time.time())
         assert len(self._corrupt_files(hook_env)) == 1
         assert "sess1" in hook_env.read_sessions()
+
+
+class _FakeResp:
+    """Minimal stand-in for the urllib response context manager."""
+
+    def __init__(self, body, headers):
+        self._body = body
+        self._headers = headers
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return self._body
+
+    @property
+    def headers(self):
+        d = self._headers
+
+        class _H:
+            def get(self, key, default=None):
+                for k, v in d.items():
+                    if k.lower() == key.lower():
+                        return v
+                return default
+
+        return _H()
+
+
+class TestPermissionForwardServerAuth:
+    """F-security-001: the hook must authenticate the permission server via the
+    X-Cue-Proof response header (resp_token, which the hook reads from
+    permission-proof but never transmits). A rogue server that won port 3002
+    receives only req_token, so it cannot produce a valid proof — the hook must
+    reject its forged 'allow' and fall back to Claude Code's native prompt."""
+
+    _ALLOW = b'{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}'
+
+    def _write_secrets(self, hook_env, req="req0123456789abcdef0123456789abcd",
+                       proof="proof3456789abcdef0123456789abcde"):
+        from pathlib import Path
+        Path(hook_env.dir, "permission-token").write_text(req)
+        if proof is not None:
+            Path(hook_env.dir, "permission-proof").write_text(proof)
+
+    def _patch_urlopen(self, monkeypatch, body, headers, counter=None):
+        import urllib.request
+
+        def fake_urlopen(req, timeout=None):
+            if counter is not None:
+                counter["n"] += 1
+            return _FakeResp(body, headers)
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    def test_honors_decision_with_valid_proof(self, hook, hook_env, monkeypatch):
+        self._write_secrets(hook_env, proof="goodproof")
+        self._patch_urlopen(monkeypatch, self._ALLOW, {"X-Cue-Proof": "goodproof"})
+        result = hook._forward_permission_request({"tool_name": "Bash"}, "sess1")
+        assert result is not None
+        assert result["hookSpecificOutput"]["decision"]["behavior"] == "allow"
+
+    def test_rejects_forged_allow_with_wrong_proof(self, hook, hook_env, monkeypatch):
+        # A rogue server can at best echo the request token it received.
+        self._write_secrets(hook_env, req="thereqtoken", proof="thesecretproof")
+        self._patch_urlopen(monkeypatch, self._ALLOW, {"X-Cue-Proof": "thereqtoken"})
+        assert hook._forward_permission_request({"tool_name": "Bash"}, "sess1") is None
+
+    def test_rejects_allow_with_missing_proof_header(self, hook, hook_env, monkeypatch):
+        self._write_secrets(hook_env)
+        self._patch_urlopen(monkeypatch, self._ALLOW, {})
+        assert hook._forward_permission_request({"tool_name": "Bash"}, "sess1") is None
+
+    def test_does_not_forward_without_proof_secret(self, hook, hook_env, monkeypatch):
+        # Token present but no permission-proof file (old server / not provisioned)
+        # → fail closed and never even POST.
+        self._write_secrets(hook_env, proof=None)
+        counter = {"n": 0}
+        self._patch_urlopen(monkeypatch, self._ALLOW, {"X-Cue-Proof": "x"}, counter)
+        assert hook._forward_permission_request({"tool_name": "Bash"}, "sess1") is None
+        assert counter["n"] == 0, "must not POST req_token without the proof secret"

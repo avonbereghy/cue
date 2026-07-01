@@ -37,6 +37,18 @@ pub fn permission_token_path() -> PathBuf {
     sessions_json_path().with_file_name("permission-token")
 }
 
+/// Path to permission-proof — the SECOND per-launch secret (F-security-001).
+/// The server returns this value in the `X-Cue-Proof` response header to
+/// authenticate ITSELF to the hook. Unlike `permission-token` (which the hook
+/// sends on the wire), the hook only ever READS this file and compares — it is
+/// never transmitted by the hook, so a different-uid process that wins the
+/// loopback port never learns it (and can't read the 0600 file), and therefore
+/// cannot forge an "allow" the hook will honor. Co-located and 0600 like the
+/// token.
+pub fn permission_proof_path() -> PathBuf {
+    sessions_json_path().with_file_name("permission-proof")
+}
+
 /// Path to settings.json — app preferences.
 pub fn settings_path() -> PathBuf {
     if cfg!(target_os = "macos") {
