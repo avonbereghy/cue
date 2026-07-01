@@ -349,6 +349,26 @@ impl SessionMonitorState {
                 .collect()
         };
 
+        // Snapshot the session ids admitted from source THIS poll (post
+        // dedup/team-promote, pre-demotion). The per-session data caches are
+        // pruned against this set below — NOT the post-demotion *display* set —
+        // so a session that gets demoted and then filtered out by the
+        // launched_at sweep keeps its cached metrics.
+        //
+        // Pruning on the display set instead created a visible flip-flop for
+        // ESC-interrupted sessions: hitting escape mid-turn fires NO hook, so
+        // sessions.json stays frozen on "working". Each poll the turn-ended pass
+        // demotes it to idle off the transcript's interrupt marker, the sweep
+        // then filters that idle out (pre-launch timestamps), and the prune
+        // evicted its metrics — so the NEXT poll re-read "working" from the
+        // unchanged source with no metrics, whiffed the interrupt demote
+        // (metrics == None → no-op), and showed "working" again. The card
+        // strobed working → gone → working every few seconds. Retaining metrics
+        // for still-in-source ids keeps the demote deterministic across polls,
+        // so the card settles instead of flickering.
+        let admitted_ids: std::collections::HashSet<String> =
+            active.iter().map(|s| s.id.clone()).collect();
+
         // JSONL-presence check: demote liveness-sensitive sessions whose
         // ~/.claude/projects/<encoded-ws>/<id>.jsonl file no longer exists.
         // This catches the case where Claude Code rotates its session id
@@ -742,33 +762,42 @@ impl SessionMonitorState {
             };
             let current_ids: std::collections::HashSet<&str> =
                 active.iter().map(|s| s.id.as_str()).collect();
-            // Prune sessions that no longer exist
+            // Prune the active-duration timer to what's actually displayed —
+            // it's a per-card render timer, not demote evidence, so a
+            // filtered-out session shouldn't keep one.
             active_since.retain(|id, _| current_ids.contains(id.as_str()));
-            // Prune the five other per-session caches that previously
+            // Prune the five per-session DATA caches that previously
             // accumulated forever — metrics_cache, jsonl_entry_cache,
             // file_mod_dates, resolved_paths, output_speed_cache. Without
             // this, a long-running tray app grew linearly in memory per
-            // session-id ever observed. Lock-ordering: we already hold
-            // `active_since`; these caches are acquired AFTER it in the
-            // documented order, so the chained locks below are safe.
+            // session-id ever observed. Retain against `admitted_ids` (present
+            // in source this poll) rather than `current_ids` (survived to the
+            // display list): a session demoted-then-filtered by the launched_at
+            // sweep is still in source and MUST keep its metrics, or the next
+            // poll loses the demote signal and flip-flops it back to its stale
+            // active state (the ESC-interrupt strobe — see `admitted_ids`).
+            // Still bounded: `admitted_ids ⊆ sessions.json`, which the hook
+            // prunes. Lock-ordering: we already hold `active_since`; these
+            // caches are acquired AFTER it in the documented order, so the
+            // chained locks below are safe.
             self.metrics_cache
                 .lock_safe()
-                .retain(|id, _| current_ids.contains(id.as_str()));
+                .retain(|id, _| admitted_ids.contains(id.as_str()));
             self.jsonl_entry_cache
                 .lock_safe()
-                .retain(|id, _| current_ids.contains(id.as_str()));
+                .retain(|id, _| admitted_ids.contains(id.as_str()));
             // `file_mod_dates` also stores subagent-dir entries keyed as
             // `<sid>-subagents`, so prefix-match the live ids.
             self.file_mod_dates.lock_safe().retain(|key, _| {
                 let stripped = key.strip_suffix("-subagents").unwrap_or(key);
-                current_ids.contains(stripped)
+                admitted_ids.contains(stripped)
             });
             self.resolved_paths
                 .lock_safe()
-                .retain(|id, _| current_ids.contains(id.as_str()));
+                .retain(|id, _| admitted_ids.contains(id.as_str()));
             self.output_speed_cache
                 .lock_safe()
-                .retain(|id, _| current_ids.contains(id.as_str()));
+                .retain(|id, _| admitted_ids.contains(id.as_str()));
             for s in &active {
                 if is_active_state(&s.state) {
                     // Prefer the hook-supplied stateChangedAt — it captures
@@ -3413,6 +3442,80 @@ mod tests {
                 "must HOLD waiting: a bare file-mtime advance is not proof the question was answered"
             );
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_poll_esc_interrupt_does_not_strobe_working() {
+        // Regression: hitting ESC mid-turn interrupts Claude Code but fires NO
+        // hook, so sessions.json stays frozen on "working". For a session that
+        // was already running when Cue launched (pre-launch timestamps), the
+        // turn-ended pass demotes it to idle off the transcript interrupt
+        // marker, then the launched_at sweep filters that idle out — and the
+        // per-session cache prune MUST retain its metrics. If the prune keys on
+        // the *display* set it drops them, so the next poll re-reads "working"
+        // from the unchanged source with no metrics, whiffs the interrupt
+        // demote, and re-shows "working": the card strobes working → gone →
+        // working every few seconds. This locks the metrics retention that
+        // keeps the demote deterministic across polls.
+        let dir = std::env::temp_dir().join("cue_test_poll_esc_strobe");
+        let _ = std::fs::remove_dir_all(&dir);
+        let projects = dir.join("projects");
+        let ws_dir = projects.join("-Users-dev-App");
+        std::fs::create_dir_all(&ws_dir).unwrap();
+        std::fs::write(ws_dir.join("sess-esc.jsonl"), "{}").unwrap();
+
+        let m = SessionMonitorState::new();
+        // Pre-launch timestamps: the session was mid-generation when Cue
+        // started, so its last hook event predates launch. "working" bypasses
+        // the launch gate on admission, but once demoted to idle it fails the
+        // sweep — exactly the population the user hit ESC on.
+        let started = m.launched_at - 1000.0;
+        let sessions = format!(
+            r#"{{"sessions":{{"sess-esc":{{"id":"sess-esc","workspace":"/Users/dev/App","state":"working","lastActivity":{},"startedAt":{},"stateChangedAt":{}}}}}}}"#,
+            started, started, started
+        );
+        let status_path = dir.join("sessions.json");
+        std::fs::write(&status_path, &sessions).unwrap();
+
+        // Metrics as refresh_metrics would produce them after ESC: a
+        // "[Request interrupted by user]" marker newer than stateChangedAt.
+        m.metrics_cache.lock_safe().insert(
+            "sess-esc".to_string(),
+            crate::models::SessionMetrics {
+                last_interrupt_ts: Some(started + 100.0),
+                ..Default::default()
+            },
+        );
+
+        // Poll 1: interrupt demotes working → idle, the sweep filters it out.
+        m.poll_status_with(status_path.clone(), projects.clone());
+        assert!(
+            m.enriched_sessions
+                .lock_safe()
+                .iter()
+                .all(|s| s.info.id != "sess-esc"),
+            "interrupted pre-launch session should be filtered out, not shown"
+        );
+        // ...and its metrics MUST survive the prune (the fix). Before the fix
+        // this key was evicted because the session left the display set.
+        assert!(
+            m.metrics_cache.lock_safe().contains_key("sess-esc"),
+            "metrics for a still-in-source session must survive the prune"
+        );
+
+        // Poll 2 with metrics UNCHANGED (refresh_metrics has not run again).
+        // The retained interrupt keeps the demote firing, so the card stays
+        // gone — it must NOT reappear as "working".
+        m.poll_status_with(status_path.clone(), projects.clone());
+        assert!(
+            m.enriched_sessions
+                .lock_safe()
+                .iter()
+                .all(|s| s.info.state != "working"),
+            "ESC-interrupted session must not strobe back to working next poll"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
