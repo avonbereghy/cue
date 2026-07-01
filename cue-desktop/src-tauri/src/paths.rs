@@ -76,6 +76,25 @@ pub fn rate_limits_path() -> PathBuf {
     }
 }
 
+/// Path to the app log file (F-observability-001). A Finder/Dock-launched
+/// `.app` discards stderr, so logs must land in a durable, user-reachable
+/// file. Uses the conventional OS log location.
+pub fn log_file_path() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        home_dir().join("Library/Logs/Cue/cue.log")
+    } else if cfg!(target_os = "windows") {
+        appdata_local().join("Cue").join("logs").join("cue.log")
+    } else {
+        xdg_data_home().join("cue").join("logs").join("cue.log")
+    }
+}
+
+/// Marker file a user can create (next to sessions.json) to raise the log level
+/// to debug without a terminal — the packaged app can't read `RUST_LOG`.
+pub fn debug_marker_path() -> PathBuf {
+    sessions_json_path().with_file_name("CUE_DEBUG")
+}
+
 /// Ensure all required directories exist.
 pub fn ensure_dirs() -> std::io::Result<()> {
     if let Some(parent) = sessions_json_path().parent() {

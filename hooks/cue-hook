@@ -135,6 +135,48 @@ def _ensure_status_dir():
         pass
 
 
+# Size cap for the failure log; the file is truncate-rotated when exceeded.
+_HOOK_LOG_CAP = 256 * 1024  # bytes
+
+
+def _log_hook_error(context, exc):
+    """Durable, size-capped trace for a swallowed hook failure
+    (F-observability-003).
+
+    The hook is the sole writer of session state and every failure path fails
+    safe/silent toward Claude Code (whose hook stderr is hidden), so a dropped
+    write — a prime suspect for "idle-while-working" / "waiting never appeared"
+    — was previously undiagnosable: no line in sessions.json, no visible stderr,
+    no log. Append the timestamp, a context label, and the exception CLASS +
+    errno ONLY (never payload contents, per the privacy posture) to a small
+    side-channel file in STATUS_DIR. Reads STATUS_DIR at call time so test
+    monkeypatches redirect it. Must itself never raise — it runs from except
+    arms whose whole purpose is to not break the observed session."""
+    try:
+        log_path = os.path.join(STATUS_DIR, "cue-hook.log")
+        errno_part = getattr(exc, "errno", "")
+        line = "%s\t%s\t%s\terrno=%s\n" % (
+            time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            context,
+            type(exc).__name__,
+            errno_part if errno_part is not None else "",
+        )
+        try:
+            truncate = os.path.getsize(log_path) > _HOOK_LOG_CAP
+        except OSError:
+            truncate = False
+        os.makedirs(STATUS_DIR, mode=0o700, exist_ok=True)
+        flags = os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if truncate else os.O_APPEND)
+        fd = os.open(log_path, flags, 0o600)
+        try:
+            os.write(fd, line.encode("utf-8", "replace"))
+        finally:
+            os.close(fd)
+    except Exception:
+        # Logging must never break the hook.
+        pass
+
+
 # Required keys and their expected types for session validation (Task 4)
 _SESSION_SCHEMA = {
     "id": str,
@@ -456,8 +498,10 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
                         pass
             finally:
                 _unlock(lock)
-    except Exception:
-        pass
+    except Exception as exc:
+        # A lock timeout or write error here silently loses the `waiting` seed
+        # (the "waiting never appeared" class) — record it before failing safe.
+        _log_hook_error("quick_state_write", exc)
 
 
 def _read_permission_token():
@@ -989,7 +1033,11 @@ def main():
         # mirroring `_quick_state_write`, which already wraps its locked write.
         try:
             _lock(lock)
-        except Exception:
+        except Exception as exc:
+            # Under contention `_lock` raises after its 2s deadline; the state
+            # update is dropped and the card freezes on its previous state.
+            # Record the drop before degrading to a no-op.
+            _log_hook_error("main_write_lock_timeout", exc)
             return
         try:
             # Read existing sessions. A present-but-malformed file is renamed
@@ -1275,7 +1323,11 @@ def run_safe():
             os.dup2(devnull, sys.stdout.fileno())
         except Exception:
             pass
-    except Exception:
+    except Exception as exc:
+        # Backstop for anything that escaped the inner guards (e.g. an atomic
+        # write disk-full/permission error that re-raised). Record a durable
+        # trace so a hook crash no longer vanishes completely.
+        _log_hook_error("run_safe", exc)
         if os.environ.get("CUE_HOOK_DEBUG"):
             import traceback
             traceback.print_exc()

@@ -9,6 +9,7 @@ pub mod config_counter;
 pub mod env_detect;
 pub mod git_status;
 pub mod jsonl_parser;
+pub mod logging;
 pub mod model_context;
 pub mod models;
 pub mod paths;
@@ -1600,7 +1601,11 @@ pub fn run() {
         );
     }));
 
-    env_logger::init();
+    // Durable, size-bounded, user-reachable log sink (F-observability-001).
+    // Replaces the bare `env_logger::init()`, whose stderr output is discarded
+    // for a Finder-launched .app — so state traces and anomalies were unlogged
+    // in production.
+    logging::init();
     startup_checks();
 
     let monitor = Arc::new(SessionMonitorState::new());

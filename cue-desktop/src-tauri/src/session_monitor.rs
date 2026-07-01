@@ -341,6 +341,7 @@ impl SessionMonitorState {
                         let is_teammate =
                             s.team_name.is_some() || metrics.is_some_and(|m| m.team_name.is_some());
                         if is_teammate && (now_secs - s.last_activity) > 30.0 {
+                            log::debug!(target: "cue::state", "id={} idle->done pass=team_done idle_secs={:.0}", s.id, now_secs - s.last_activity);
                             s.state = "done".to_string();
                         }
                     }
@@ -402,7 +403,8 @@ impl SessionMonitorState {
                         && !self.jsonl_exists_on_disk(&s.id, &s.workspace, &projects_path)
                     {
                         log::debug!(
-                            "session {} demoted: JSONL missing for state={}",
+                            target: "cue::state",
+                            "id={} {}->idle pass=jsonl_missing",
                             s.id,
                             s.state
                         );
@@ -474,6 +476,7 @@ impl SessionMonitorState {
                         }
                         LivenessOutcome::Dead => {
                             identity.remove(&s.id);
+                            log::debug!(target: "cue::state", "id={} {}->idle pass=liveness_dead pid={}", s.id, s.state, pid);
                             s.state = "idle".to_string();
                             s.active_subagents = 0;
                         }
@@ -496,6 +499,13 @@ impl SessionMonitorState {
                 .map(|mut s| {
                     let metrics = cache.get(&s.id);
                     if should_demote_turn_ended(&s.state, s.state_changed_at, metrics) {
+                        log::debug!(
+                            target: "cue::state",
+                            "id={} {}->idle pass=turn_ended end_turn_ts={:?} state_changed_at={:?}",
+                            s.id, s.state,
+                            metrics.and_then(|m| m.last_end_turn_ts),
+                            s.state_changed_at
+                        );
                         s.state = "idle".to_string();
                     }
                     s
@@ -513,6 +523,7 @@ impl SessionMonitorState {
             .into_iter()
             .map(|mut s| {
                 if should_demote_stuck_active(&s.state, s.state_changed_at, now_secs) {
+                    log::debug!(target: "cue::state", "id={} {}->idle pass=stuck_active_cap", s.id, s.state);
                     s.state = "idle".to_string();
                 }
                 s
@@ -534,7 +545,7 @@ impl SessionMonitorState {
                 .map(|mut s| {
                     let metrics = cache.get(&s.id);
                     if should_demote_stalled_turn(&s.state, metrics, now_secs) {
-                        log::debug!("stalled-turn-demote id={} state={} → idle", s.id, s.state,);
+                        log::debug!(target: "cue::state", "id={} {}->idle pass=stalled_turn_cap", s.id, s.state);
                         s.state = "idle".to_string();
                     }
                     s
@@ -558,8 +569,10 @@ impl SessionMonitorState {
                     if should_demote_stale_subagent(&s.state, s.state_changed_at, metrics, now_secs)
                     {
                         log::debug!(
-                            "stale-subagent-demote id={} active_subagents={} → idle",
+                            target: "cue::state",
+                            "id={} {}->idle pass=stale_subagent active_subagents={}",
                             s.id,
+                            s.state,
                             s.active_subagents,
                         );
                         s.state = "idle".to_string();
@@ -606,6 +619,7 @@ impl SessionMonitorState {
                     let awaiting = metrics.map(|m| m.awaiting_user_prompt).unwrap_or(false);
                     let pending = metrics.map(|m| m.pending_tool_use).unwrap_or(false);
                     if awaiting && is_promotable_to_waiting(&s.state) {
+                        log::debug!(target: "cue::state", "id={} {}->waiting pass=waiting_promote src=awaiting_prompt", s.id, s.state);
                         s.state = "waiting".to_string();
                     } else if s.state == "waiting"
                         && should_resolve_waiting(awaiting, pending)
@@ -614,6 +628,7 @@ impl SessionMonitorState {
                             s.state_changed_at,
                         )
                     {
+                        log::debug!(target: "cue::state", "id={} waiting->idle pass=waiting_resolve awaiting={} pending={}", s.id, awaiting, pending);
                         s.state = "idle".to_string();
                     }
                     s
