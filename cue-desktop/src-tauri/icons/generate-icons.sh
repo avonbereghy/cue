@@ -51,6 +51,12 @@ if have magick; then
   magick "$ICO_TMPDIR"/icon-{16,32,48,256}.png "$SCRIPT_DIR/icon.ico"
 elif have convert; then
   convert "$ICO_TMPDIR"/icon-{16,32,48,256}.png "$SCRIPT_DIR/icon.ico"
+else
+  # ICO assembly needs ImageMagick even when rsvg-convert rendered the PNGs.
+  # Without this warning the script prints "Done." and leaves a stale/missing
+  # icon.ico, and Windows builds ship the wrong icon with no signal.
+  echo "WARNING: ImageMagick (magick/convert) not found — icon.ico was NOT regenerated." >&2
+  echo "         Windows builds will use the existing icon.ico. Install ImageMagick to update it." >&2
 fi
 rm -rf "$ICO_TMPDIR"
 

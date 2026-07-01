@@ -53,7 +53,8 @@ gh api -X POST "repos/$REPO/rulesets" --input - >/dev/null <<'JSON' && echo "   
         "strict_required_status_checks_policy": false,
         "required_status_checks": [
           { "context": "rust" },
-          { "context": "frontend" }
+          { "context": "frontend" },
+          { "context": "hooks" }
         ]
       }
     }
