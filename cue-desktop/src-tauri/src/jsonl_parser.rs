@@ -215,6 +215,16 @@ pub struct JsonlEntryCache {
     pub file_size: u64,
     pub file_mtime: Option<SystemTime>,
     pub entries: Vec<ParsedEntry>,
+    /// Last aggregated metrics, kept so a poll that finds no new transcript
+    /// bytes AND no subagent-dir change can skip the O(N-entries) re-aggregation
+    /// entirely (F-performance-001). Cleared implicitly whenever we re-aggregate.
+    pub last_metrics: Option<crate::models::SessionMetrics>,
+    /// Cheap signature of the `<stem>/subagents/` directory (file count, latest
+    /// mtime nanos, total size) captured at the last aggregation. Subagent state
+    /// is derived INSIDE `aggregate_entries` from separate files, so the skip
+    /// gate must also detect subagent-only changes — a mismatch forces a full
+    /// re-aggregation even when the parent transcript is quiet.
+    pub subagents_sig: Option<(u64, u128, u64)>,
 }
 
 /// Open a JSONL file for reading, refusing to follow symlinks on Unix. Mirrors
@@ -234,7 +244,12 @@ fn open_jsonl_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
 /// Append newly-written lines from `path` into `cache.entries`. On truncation
 /// or a backwards-moving mtime (file replaced/forked) the cache is reset and
 /// the file is fully re-read.
-fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) {
+///
+/// Returns `true` if `cache.entries` was modified this call (cleared, or new
+/// entries appended). A `false` return means the aggregated metrics can only
+/// have changed via subagent files — the caller pairs it with the subagent
+/// signature to decide whether re-aggregation can be skipped (F-performance-001).
+fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) -> bool {
     let metadata = match std::fs::metadata(path) {
         Ok(m) => m,
         Err(e) => {
@@ -242,11 +257,13 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) {
             // cached entries so a later poll doesn't keep yielding metrics
             // synthesized from a transcript that no longer exists.
             if e.kind() == std::io::ErrorKind::NotFound {
+                let had = !cache.entries.is_empty();
                 cache.file_size = 0;
                 cache.entries.clear();
+                return had;
             }
             log::debug!("Failed to stat JSONL file {:?}: {}", path, e);
-            return;
+            return false;
         }
     };
     let size = metadata.len();
@@ -254,36 +271,40 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) {
 
     if size > MAX_FILE_SIZE {
         log::warn!("Skipping oversized JSONL file: {:?} ({} bytes)", path, size);
+        let had = !cache.entries.is_empty();
         cache.file_size = 0;
         cache.file_mtime = mtime;
         cache.entries.clear();
-        return;
+        return had;
     }
 
+    let mut changed = false;
     let mtime_regressed = matches!(
         (cache.file_mtime, mtime),
         (Some(prev), Some(now)) if now < prev
     );
     if size < cache.file_size || mtime_regressed {
+        changed = !cache.entries.is_empty();
         cache.file_size = 0;
         cache.entries.clear();
     }
 
     if size == cache.file_size {
         cache.file_mtime = mtime;
-        return;
+        return changed;
     }
 
     let mut file = match open_jsonl_no_follow(path) {
         Ok(f) => f,
         Err(e) => {
             log::debug!("Failed to open JSONL file {:?}: {}", path, e);
-            return;
+            return changed;
         }
     };
     if cache.file_size > 0 {
         if let Err(e) = file.seek(SeekFrom::Start(cache.file_size)) {
             log::debug!("Seek failed on {:?}: {}", path, e);
+            changed = changed || !cache.entries.is_empty();
             cache.file_size = 0;
             cache.entries.clear();
             // Fall through and re-open at offset 0.
@@ -291,7 +312,7 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) {
                 Ok(f) => f,
                 Err(e2) => {
                     log::debug!("Re-open failed on {:?}: {}", path, e2);
-                    return;
+                    return changed;
                 }
             };
         }
@@ -300,7 +321,7 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) {
     let mut buf = String::new();
     if let Err(e) = file.read_to_string(&mut buf) {
         log::debug!("Read failed on {:?}: {}", path, e);
-        return;
+        return changed;
     }
 
     // Only consume up to the last complete line so we never parse a half-
@@ -314,7 +335,7 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) {
                 // No newline at all — the trailing partial line spans the
                 // entire delta; don't advance.
                 cache.file_mtime = mtime;
-                return;
+                return changed;
             }
         }
     };
@@ -325,10 +346,45 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) {
         }
         if let Some(entry) = parse_line(line) {
             cache.entries.push(entry);
+            changed = true;
         }
     }
     cache.file_size += consumed as u64;
     cache.file_mtime = mtime;
+    changed
+}
+
+/// Cheap change-signature for a session's `<stem>/subagents/` directory:
+/// (file count, latest mtime in nanos, total size). Recomputed each tick and
+/// compared to the cached value so a subagent-only change (a new agent file, or
+/// an append to an existing one) still forces re-aggregation even when the
+/// parent transcript is quiet. A `read_dir` + `stat` per file is far cheaper
+/// than `parse_subagent_jsonl`'s full read+parse of every file (F-perf-001/002).
+fn subagents_signature(path: &Path) -> Option<(u64, u128, u64)> {
+    let parent_dir = path.parent()?;
+    let session_stem = path.file_stem().and_then(|s| s.to_str())?;
+    let subagents_dir = parent_dir.join(session_stem).join("subagents");
+    let read = std::fs::read_dir(&subagents_dir).ok()?;
+    let mut count: u64 = 0;
+    let mut latest_nanos: u128 = 0;
+    let mut total_size: u64 = 0;
+    for dir_entry in read.flatten() {
+        let p = dir_entry.path();
+        if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Ok(meta) = dir_entry.metadata() else {
+            continue;
+        };
+        count += 1;
+        total_size = total_size.saturating_add(meta.len());
+        if let Ok(m) = meta.modified() {
+            if let Ok(d) = m.duration_since(std::time::UNIX_EPOCH) {
+                latest_nanos = latest_nanos.max(d.as_nanos());
+            }
+        }
+    }
+    Some((count, latest_nanos, total_size))
 }
 
 /// Parse JSONL content string into entries (MAIN-transcript semantics: drops
@@ -1079,17 +1135,49 @@ pub fn parse_jsonl_to_session_metrics_cached(
     path: &Path,
     cache: &mut JsonlEntryCache,
 ) -> Option<crate::models::SessionMetrics> {
-    refresh_entry_cache(path, cache);
-    let mut m = aggregate_entries(&cache.entries, path)?;
-    // Stamp the transcript file mtime this parse reflects so the turn-ended
-    // demote can tell a genuinely-idle session (file unchanged since the last
-    // end_turn) from a resumed/stale-bumped one where stateChangedAt jumped
-    // ahead of the end_turn without a new turn.
-    m.parsed_file_mtime = cache
+    let entries_changed = refresh_entry_cache(path, cache);
+    let sub_sig = subagents_signature(path);
+
+    // Skip the O(N-entries) re-aggregation when nothing that feeds it moved this
+    // tick: no new parent-transcript entries AND the same subagents-dir
+    // signature (F-performance-001). This is the common case for an active
+    // session parked on a long tool call — the transcript is silent for minutes,
+    // yet the old code re-folded every prior entry every 5s. The cached metrics
+    // are byte-identical to a fresh aggregation over the unchanged inputs; only
+    // `parsed_file_mtime` is re-stamped (it may advance on a partial-line write).
+    let mtime_secs = cache
         .file_mtime
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs_f64());
-    Some(m)
+
+    if !entries_changed && cache.subagents_sig == sub_sig {
+        if let Some(cached) = &cache.last_metrics {
+            let mut m = cached.clone();
+            m.parsed_file_mtime = mtime_secs;
+            return Some(m);
+        }
+    }
+
+    match aggregate_entries(&cache.entries, path) {
+        Some(mut m) => {
+            // Stamp the transcript file mtime this parse reflects so the
+            // turn-ended demote can tell a genuinely-idle session (file
+            // unchanged since the last end_turn) from a resumed/stale-bumped
+            // one where stateChangedAt jumped ahead of the end_turn without a
+            // new turn.
+            m.parsed_file_mtime = mtime_secs;
+            cache.subagents_sig = sub_sig;
+            cache.last_metrics = Some(m.clone());
+            Some(m)
+        }
+        None => {
+            // Empty or deleted transcript — drop any stale cached metrics so a
+            // later no-change tick can't serve them back.
+            cache.last_metrics = None;
+            cache.subagents_sig = sub_sig;
+            None
+        }
+    }
 }
 
 fn aggregate_entries(
@@ -2483,6 +2571,56 @@ mod tests {
             m.pending_agent_tool_count, 0,
             "agents launched before an interrupt marker must not stay counted"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_cached_metrics_skip_is_equivalent_and_picks_up_changes() {
+        // F-performance-001/002: a no-change tick must skip re-aggregation yet
+        // return metrics identical to a full parse, and a subagent-only OR
+        // parent change must still be reflected.
+        use std::io::Write as _;
+        let dir = std::env::temp_dir().join(format!("cue_test_cached_skip_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sess.jsonl");
+        let asst = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"m","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}}"#;
+        std::fs::write(&path, format!("{}\n", asst)).unwrap();
+
+        let mut cache = JsonlEntryCache::default();
+        let m1 = parse_jsonl_to_session_metrics_cached(&path, &mut cache).unwrap();
+        // Second call, nothing changed → served from last_metrics (skip path).
+        let m2 = parse_jsonl_to_session_metrics_cached(&path, &mut cache).unwrap();
+        assert_eq!(m1.input_tokens, m2.input_tokens);
+        assert_eq!(m1.message_count, m2.message_count);
+        // Equivalent to a fresh uncached full parse.
+        let fresh = parse_jsonl_to_session_metrics(&path).unwrap();
+        assert_eq!(m2.input_tokens, fresh.input_tokens);
+        assert_eq!(m2.message_count, fresh.message_count);
+        assert_eq!(m2.subagents.len(), fresh.subagents.len());
+
+        // Subagent-only change (parent quiet) must still be picked up.
+        let sub_dir = dir.join("sess").join("subagents");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+        std::fs::write(
+            sub_dir.join("agent-1.jsonl"),
+            format!("{}\n", r#"{"type":"assistant","timestamp":2.0,"agentId":"a1","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}],"stop_reason":"tool_use"}}"#),
+        )
+        .unwrap();
+        let m3 = parse_jsonl_to_session_metrics_cached(&path, &mut cache).unwrap();
+        assert_eq!(
+            m3.subagents.len(),
+            1,
+            "subagent-only change must re-aggregate despite quiet parent"
+        );
+
+        // Parent append must be reflected.
+        let user = r#"{"type":"user","timestamp":3.0,"message":{"role":"user","content":[{"type":"text","text":"more"}]}}"#;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(f, "{}", user).unwrap();
+        let m4 = parse_jsonl_to_session_metrics_cached(&path, &mut cache).unwrap();
+        assert_eq!(m4.user_message_count, 1, "parent append must be reflected");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
