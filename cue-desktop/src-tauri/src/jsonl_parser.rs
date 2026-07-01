@@ -161,6 +161,20 @@ pub const AGENT_TOOL_NAMES: &[&str] = &["Agent", "Task"];
 /// into the frontend. Mirrors the hardening already applied to the
 /// incremental cache path in `refresh_entry_cache`.
 pub fn parse_jsonl_file(path: &Path) -> Vec<ParsedEntry> {
+    parse_jsonl_file_opts(path, true)
+}
+
+/// Like `parse_jsonl_file` but KEEPS `isSidechain: true` rows. Used only for
+/// `subagents/*.jsonl`: those dedicated transcripts are written entirely as
+/// sidechain rows, so the default sidechain-drop (correct for the MAIN
+/// transcript) would discard every line and the agent would vanish from
+/// `m.subagents` — leaving the parent card stuck on `idle` while a background
+/// `Agent` batch is in flight. See `parse_line_opts`.
+pub fn parse_jsonl_file_keep_sidechain(path: &Path) -> Vec<ParsedEntry> {
+    parse_jsonl_file_opts(path, false)
+}
+
+fn parse_jsonl_file_opts(path: &Path, drop_sidechain: bool) -> Vec<ParsedEntry> {
     // Check file size
     if let Ok(metadata) = std::fs::metadata(path) {
         if metadata.len() > MAX_FILE_SIZE {
@@ -187,7 +201,7 @@ pub fn parse_jsonl_file(path: &Path) -> Vec<ParsedEntry> {
         return Vec::new();
     }
 
-    parse_jsonl_content(&content)
+    parse_jsonl_content_opts(&content, drop_sidechain)
 }
 
 /// Cached parse state for a single JSONL file.
@@ -317,33 +331,51 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) {
     cache.file_mtime = mtime;
 }
 
-/// Parse JSONL content string into entries.
+/// Parse JSONL content string into entries (MAIN-transcript semantics: drops
+/// `isSidechain` rows). For subagent files use `parse_jsonl_file_keep_sidechain`.
 pub fn parse_jsonl_content(content: &str) -> Vec<ParsedEntry> {
+    parse_jsonl_content_opts(content, true)
+}
+
+fn parse_jsonl_content_opts(content: &str, drop_sidechain: bool) -> Vec<ParsedEntry> {
     content
         .lines()
         .filter(|line| !line.is_empty())
-        .filter_map(parse_line)
+        .filter_map(|line| parse_line_opts(line, drop_sidechain))
         .collect()
 }
 
-/// Parse a single JSONL line.
+/// Parse a single JSONL line (MAIN-transcript semantics: drops `isSidechain`).
 fn parse_line(line: &str) -> Option<ParsedEntry> {
+    parse_line_opts(line, true)
+}
+
+/// Parse a single JSONL line. When `drop_sidechain` is true (the MAIN
+/// transcript), rows flagged `isSidechain: true` are discarded so a subagent's
+/// interleaved turn can't drive the orchestrator card's state. Subagent
+/// transcript files (`subagents/*.jsonl`) are written ENTIRELY as sidechain
+/// rows, so they MUST be parsed with `drop_sidechain = false` — otherwise every
+/// line is dropped, `parse_subagent_jsonl` returns `None`, the agent never
+/// lands in `m.subagents`, and a background `Agent` batch shows the parent as
+/// idle for its whole run (no hook counter, no unmatched parent tool_use to
+/// fall back on).
+fn parse_line_opts(line: &str, drop_sidechain: bool) -> Option<ParsedEntry> {
     let json: Value = serde_json::from_str(line).ok()?;
     let obj = json.as_object()?;
 
-    // Drop sidechain entries: these belong to a Task subagent's conversation,
-    // not the orchestrator's turn. Today Claude Code writes subagent turns to
-    // separate `subagents/*.jsonl` files (parsed independently by
-    // `parse_subagent_jsonl`), so this is currently a no-op on real data — but
-    // some versions / entrypoints interleave them into the MAIN transcript
-    // flagged `isSidechain: true`. If that happens, counting them here would
-    // let a subagent's pending tool_use, end_turn, or AskUserQuestion drive the
-    // main card's state (false "working"/"waiting"/idle verdicts). Filtering at
-    // the source keeps every downstream signal — pending_tool_use,
+    // Drop sidechain entries on the MAIN parse: these belong to a Task subagent's
+    // conversation, not the orchestrator's turn. Claude Code writes subagent
+    // turns to separate `subagents/*.jsonl` files (parsed independently by
+    // `parse_subagent_jsonl`, which passes `drop_sidechain = false`) AND, for
+    // some versions / entrypoints, interleaves them into the MAIN transcript
+    // flagged `isSidechain: true`. On the main parse, counting them would let a
+    // subagent's pending tool_use, end_turn, or AskUserQuestion drive the main
+    // card's state (false "working"/"waiting"/idle verdicts). Filtering at the
+    // source keeps every downstream signal — pending_tool_use,
     // awaiting_user_prompt, last_end_turn_ts, running tool, assistant text,
     // token totals — scoped to the main conversation. Covers both the full
     // parse and the incremental cache, which share this function.
-    if obj.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+    if drop_sidechain && obj.get("isSidechain").and_then(Value::as_bool) == Some(true) {
         return None;
     }
 
@@ -923,7 +955,10 @@ const SUBAGENT_BACKSTOP_SECS: u64 = 600;
 
 /// Parse a subagent JSONL file and its companion .meta.json into SubagentMetrics.
 pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::SubagentMetrics> {
-    let entries = parse_jsonl_file(jsonl_path);
+    // KEEP sidechain rows: a subagent transcript is written entirely as
+    // `isSidechain: true` rows. The default (main-transcript) parse drops them,
+    // which would empty `entries` here and make the agent invisible.
+    let entries = parse_jsonl_file_keep_sidechain(jsonl_path);
     if entries.is_empty() {
         return None;
     }
@@ -2409,6 +2444,66 @@ mod tests {
         let m_run = super::parse_subagent_jsonl(&running).unwrap();
         assert!(m_run.is_active, "tail tool_use ⇒ still running");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_subagent_jsonl_parsed_when_all_rows_sidechain() {
+        // Real background-`Agent` transcripts (subagents/agent-*.jsonl) write
+        // EVERY row as `isSidechain: true`. The main-transcript parse drops
+        // those rows; if parse_subagent_jsonl reused that filter the file would
+        // parse to zero entries → None → the agent never reaches m.subagents →
+        // the parent card shows idle for the whole background batch. Keeping
+        // sidechain rows here is the fix.
+        let dir = std::env::temp_dir().join("cue_test_subagent_sidechain");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let running = dir.join("agent-sidechain-running.jsonl");
+        std::fs::write(&running, concat!(
+            r#"{"type":"user","isSidechain":true,"timestamp":1.0,"agentId":"a-sc","message":{"role":"user","content":[{"type":"text","text":"audit this"}]}}"#, "\n",
+            r#"{"type":"assistant","isSidechain":true,"timestamp":2.0,"agentId":"a-sc","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"sc1","name":"Read","input":{}}],"stop_reason":"tool_use"}}"#, "\n",
+        )).unwrap();
+        let m_run = super::parse_subagent_jsonl(&running)
+            .expect("all-sidechain agent file must still parse (was None before fix)");
+        assert!(m_run.is_active, "tail tool_use ⇒ still running");
+        assert_eq!(m_run.agent_id, "a-sc");
+
+        let finished = dir.join("agent-sidechain-finished.jsonl");
+        std::fs::write(&finished, concat!(
+            r#"{"type":"user","isSidechain":true,"timestamp":1.0,"agentId":"a-sc2","message":{"role":"user","content":[{"type":"text","text":"audit this"}]}}"#, "\n",
+            r#"{"type":"assistant","isSidechain":true,"timestamp":2.0,"agentId":"a-sc2","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}}"#, "\n",
+        )).unwrap();
+        let m_fin = super::parse_subagent_jsonl(&finished)
+            .expect("all-sidechain agent file must still parse");
+        assert!(!m_fin.is_active, "tail end_turn ⇒ finished");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_main_parse_still_drops_sidechain_rows() {
+        // The fix must NOT relax sidechain filtering on the MAIN transcript:
+        // an interleaved subagent end_turn must not be counted as the parent's.
+        let dir = std::env::temp_dir().join("cue_test_main_drops_sidechain");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("main.jsonl");
+        std::fs::write(&path, concat!(
+            r#"{"type":"user","timestamp":1.0,"message":{"role":"user","content":[{"type":"text","text":"go"}]}}"#, "\n",
+            r#"{"type":"assistant","isSidechain":true,"timestamp":2.0,"message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"subagent reply"}],"stop_reason":"end_turn"}}"#, "\n",
+            r#"{"type":"assistant","timestamp":3.0,"message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"m1","name":"Bash","input":{}}],"stop_reason":"tool_use"}}"#, "\n",
+        )).unwrap();
+        let m = super::parse_jsonl_to_session_metrics(&path).unwrap();
+        // The sidechain end_turn must be invisible to the main parse.
+        assert_eq!(
+            m.last_end_turn_ts, None,
+            "sidechain end_turn must not register on the main transcript"
+        );
+        assert!(
+            m.pending_tool_use,
+            "main turn's own tool_use should remain pending"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

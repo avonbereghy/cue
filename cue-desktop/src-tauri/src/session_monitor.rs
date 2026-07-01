@@ -876,11 +876,20 @@ impl SessionMonitorState {
                                     .parent()
                                     .map(|p| p.join(session_stem).join("subagents"));
 
+                                // Newest mtime across the agent-*.jsonl files, NOT
+                                // the directory's own mtime. A background `Agent`
+                                // batch appends to existing files without creating
+                                // new ones, and a directory's mtime only advances
+                                // on create/delete/rename — so a dir-mtime check
+                                // froze subagent liveness for an idle parent: the
+                                // card could stick on `subagent` after the batch
+                                // finished (or lag mid-run) until an unrelated
+                                // mtime bumped. Scanning file mtimes catches every
+                                // append so the state tracks reality and demotes on
+                                // schedule. Falls back to the dir mtime when empty.
                                 let sub_changed = subagents_dir
-                                    .as_ref()
-                                    .filter(|d| d.is_dir())
-                                    .and_then(|d| std::fs::metadata(d).ok())
-                                    .and_then(|m| m.modified().ok())
+                                    .as_deref()
+                                    .and_then(subagents_latest_mtime)
                                     .map(|sub_mod| {
                                         let sub_key = format!("{}-subagents", id);
                                         let changed = mod_dates
@@ -1590,6 +1599,40 @@ fn subagent_rescue_count(
     let live_jsonls = m.subagents.iter().filter(|a| a.is_active).count() as i64;
     let live = m.pending_agent_tool_count.max(live_jsonls);
     (live > 0).then_some(live)
+}
+
+/// Newest mtime across a session's `subagents/*.jsonl` transcripts, folded
+/// together with the directory's own mtime. Returns `None` when the path isn't
+/// a directory (session has never spawned an agent).
+///
+/// The directory mtime alone is insufficient for the idle-session reparse gate:
+/// it only advances on create/delete/rename, so a background `Agent` batch that
+/// keeps *appending* to already-created files never bumps it. Folding in each
+/// file's mtime makes the gate see those appends — including the final
+/// `end_turn` that ends an agent — so `refresh_metrics` reparses and subagent
+/// liveness demotes on schedule instead of freezing. `DirEntry::metadata` is
+/// an lstat on Unix (no symlink traversal), matching the read-path hardening.
+fn subagents_latest_mtime(subagents_dir: &Path) -> Option<SystemTime> {
+    if !subagents_dir.is_dir() {
+        return None;
+    }
+    let mut latest = std::fs::metadata(subagents_dir)
+        .and_then(|m| m.modified())
+        .ok();
+    if let Ok(entries) = std::fs::read_dir(subagents_dir) {
+        for entry in entries.flatten() {
+            if entry.path().extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            if let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) {
+                latest = Some(match latest {
+                    Some(cur) if cur >= mtime => cur,
+                    _ => mtime,
+                });
+            }
+        }
+    }
+    latest
 }
 
 /// Outcome of the per-poll thinking→working latch decision. Pure so tests
@@ -2652,6 +2695,70 @@ mod tests {
         assert_eq!(subagent_rescue_count("idle", 0, None), None);
         let m = metrics_with_subagents(vec![]);
         assert_eq!(subagent_rescue_count("idle", 0, Some(&m)), None);
+    }
+
+    #[test]
+    fn test_subagents_latest_mtime_tracks_file_appends() {
+        use std::fs::File;
+        use std::time::{Duration, UNIX_EPOCH};
+
+        // Non-directory → None (session never spawned an agent).
+        let missing = std::env::temp_dir().join("cue_sub_mtime_missing_dir");
+        let _ = std::fs::remove_dir_all(&missing);
+        assert_eq!(subagents_latest_mtime(&missing), None);
+
+        let dir = std::env::temp_dir().join(format!("cue_sub_mtime_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Synthetic mtimes far in the future so the real directory mtime (~now)
+        // never dominates the max, keeping the assertions deterministic.
+        let t_a = UNIX_EPOCH + Duration::from_secs(4_000_000_000);
+        let t_b = UNIX_EPOCH + Duration::from_secs(4_000_001_000);
+        let t_bump = UNIX_EPOCH + Duration::from_secs(4_000_002_000);
+
+        let a = dir.join("agent-a.jsonl");
+        let b = dir.join("agent-b.jsonl");
+        std::fs::write(&a, "{}\n").unwrap();
+        std::fs::write(&b, "{}\n").unwrap();
+        File::options()
+            .write(true)
+            .open(&a)
+            .unwrap()
+            .set_modified(t_a)
+            .unwrap();
+        File::options()
+            .write(true)
+            .open(&b)
+            .unwrap()
+            .set_modified(t_b)
+            .unwrap();
+
+        // A non-jsonl sibling must be ignored.
+        let meta = dir.join("agent-a.meta.json");
+        std::fs::write(&meta, "{}").unwrap();
+        File::options()
+            .write(true)
+            .open(&meta)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(4_000_009_000))
+            .unwrap();
+
+        // Newest of the two jsonl files wins.
+        assert_eq!(subagents_latest_mtime(&dir), Some(t_b));
+
+        // Simulate an append to the older file (a background agent writing
+        // without creating a new file). The dir mtime does NOT change, but the
+        // scan must still see the advance — this is the freeze the fix closes.
+        File::options()
+            .write(true)
+            .open(&a)
+            .unwrap()
+            .set_modified(t_bump)
+            .unwrap();
+        assert_eq!(subagents_latest_mtime(&dir), Some(t_bump));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
