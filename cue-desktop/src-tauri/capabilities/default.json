@@ -15,6 +15,7 @@
     "updater:default",
     "process:default",
     "global-shortcut:default",
-    "notification:default"
+    "notification:default",
+    "dialog:default"
   ]
 }

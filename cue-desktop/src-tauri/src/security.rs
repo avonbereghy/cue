@@ -1,7 +1,7 @@
 //! Security utilities: atomic writes, file permissions, path sanitization.
 
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
@@ -145,25 +145,60 @@ where
 /// reported length, which is fine for files we wrote ourselves but unsafe
 /// for any path another process could race-write. A 1+ GiB sessions.json or
 /// permission-log.jsonl would OOM the backend before we even get to parse.
-/// This helper stats first, returns an early `FileTooLarge` if the size
-/// exceeds the cap, then reads. Used for every untrusted boundary read in
+///
+/// The cap is enforced against a SINGLE open handle, not a separate
+/// `fs::metadata` pre-check: a stat-then-read pair leaves a TOCTOU window where
+/// a racing writer could swap a small file for a huge one (or a symlink)
+/// between the size check and the read. Here we open once (with `O_NOFOLLOW`
+/// on Unix so a symlink at `path` fails the open instead of redirecting the
+/// read), fast-reject on the handle's own `fstat`, then read at most
+/// `max_bytes + 1` from that same handle — the extra byte proves the file grew
+/// past the bound (or reports a bogus length, e.g. a pipe/procfs node) so we
+/// reject rather than allocate more. Used for every untrusted boundary read in
 /// the backend so the policy lives in one place.
 ///
-/// Returns `io::ErrorKind::InvalidData` if the file isn't valid UTF-8.
+/// Returns `io::ErrorKind::FileTooLarge` if the file exceeds `max_bytes`, and
+/// `io::ErrorKind::InvalidData` if the bytes read aren't valid UTF-8.
 pub fn read_to_string_bounded(path: &Path, max_bytes: u64) -> io::Result<String> {
-    let metadata = fs::metadata(path)?;
-    if metadata.len() > max_bytes {
+    let mut opts = fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = opts.open(path)?;
+
+    // Cheap fast path: reject on the handle's fstat before allocating. This is
+    // the same handle we read below, so it's not a TOCTOU-able separate stat.
+    if let Ok(metadata) = file.metadata() {
+        if metadata.len() > max_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::FileTooLarge,
+                format!(
+                    "file at {:?} exceeds bound: {} > {}",
+                    path,
+                    metadata.len(),
+                    max_bytes
+                ),
+            ));
+        }
+    }
+
+    // Authoritative cap on the same handle: reading max_bytes + 1 means any
+    // file that grew past the bound after the fstat (or lied about its length)
+    // surfaces the extra byte and is rejected without a large allocation.
+    let mut buf = Vec::new();
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut buf)?;
+    if buf.len() as u64 > max_bytes {
         return Err(io::Error::new(
             io::ErrorKind::FileTooLarge,
-            format!(
-                "file at {:?} exceeds bound: {} > {}",
-                path,
-                metadata.len(),
-                max_bytes
-            ),
+            format!("file at {:?} exceeds bound: > {}", path, max_bytes),
         ));
     }
-    fs::read_to_string(path)
+
+    String::from_utf8(buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
 /// Set file permissions to owner-only (0600 on Unix).

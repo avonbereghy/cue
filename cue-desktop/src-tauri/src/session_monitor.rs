@@ -299,36 +299,58 @@ impl SessionMonitorState {
                         );
                         return;
                     }
-                    // Persistent corruption — rename the file aside and seed
-                    // a clean empty container. The next hook write will
-                    // repopulate it. Best-effort; if the rename itself fails
-                    // we just keep returning prior state.
+                    // Persistent corruption — rename the file aside and seed a
+                    // clean empty container. The next hook write repopulates it.
+                    //
+                    // The rename + seed race the Python hook's own
+                    // read-modify-rename of sessions.json, so do the whole repair
+                    // inside the SAME cross-process advisory lock the hook takes
+                    // (security::with_sessions_lock). Bare std::fs calls outside
+                    // it could clobber a hook write that lands between our rename
+                    // and our seed (or resurrect the corrupt file). We also
+                    // re-check under the lock: if a hook already replaced the
+                    // file with a valid one while we waited to acquire the lock,
+                    // we must NOT rename that good file aside. Best-effort — a
+                    // contended lock or a failing fs step just keeps prior state
+                    // and retries next poll.
                     let timestamp = SystemTime::now()
                         .duration_since(SystemTime::UNIX_EPOCH)
                         .map(|d| d.as_secs())
                         .unwrap_or(0);
                     let corrupt_path = format!("{}.corrupt-{}", status_path.display(), timestamp);
-                    if let Err(rename_err) = std::fs::rename(&status_path, &corrupt_path) {
-                        log::warn!(
-                            "sessions.json self-repair: rename aside failed: {}",
-                            rename_err
-                        );
-                        return;
+                    let lock_path = status_path.with_file_name("sessions.lock");
+                    let repair = security::with_sessions_lock(&lock_path, || {
+                        // Re-validate under the lock so a concurrent hook fix
+                        // isn't clobbered: only rename aside + seed if the file
+                        // is STILL unparseable.
+                        if let Ok(content) =
+                            security::read_to_string_bounded(&status_path, SESSIONS_JSON_MAX_BYTES)
+                        {
+                            if serde_json::from_str::<StatusData>(&content).is_ok() {
+                                return Ok(false); // already recovered — nothing to do
+                            }
+                        }
+                        std::fs::rename(&status_path, &corrupt_path)?;
+                        security::atomic_write(&status_path, b"{\"sessions\":{}}")?;
+                        Ok(true)
+                    });
+                    match repair {
+                        Ok(true) => log::warn!(
+                            "sessions.json self-repaired after {} parse failures (corrupt copy at {})",
+                            *failures,
+                            corrupt_path
+                        ),
+                        Ok(false) => log::info!(
+                            "sessions.json self-repair: file already recovered under lock; skipping"
+                        ),
+                        Err(repair_err) => {
+                            log::warn!(
+                                "sessions.json self-repair failed (rename/seed under lock): {}",
+                                repair_err
+                            );
+                            return;
+                        }
                     }
-                    if let Err(write_err) =
-                        security::atomic_write(&status_path, b"{\"sessions\":{}}")
-                    {
-                        log::warn!(
-                            "sessions.json self-repair: seed write failed: {}",
-                            write_err
-                        );
-                        return;
-                    }
-                    log::warn!(
-                        "sessions.json self-repaired after {} parse failures (corrupt copy at {})",
-                        *failures,
-                        corrupt_path
-                    );
                     *failures = 0;
                     return;
                 }
@@ -389,7 +411,13 @@ impl SessionMonitorState {
         let active = sort_sessions(status.sessions.into_values().filter(|s| {
             security::validate_session_id(&s.id).is_ok()
                 && security::sanitize_workspace_path(&s.workspace).is_ok()
-                && admit_session(&s.state, s.started_at, s.last_activity, launched_at)
+                && admit_session(
+                    &s.state,
+                    s.started_at,
+                    s.last_activity,
+                    launched_at,
+                    s.pid.is_some(),
+                )
         }));
 
         // Deduplicate sessions sharing the same workspace that started within
@@ -686,7 +714,15 @@ impl SessionMonitorState {
         // turn-ended) would surface as a stale idle entry from a prior run.
         let active: Vec<SessionInfo> = active
             .into_iter()
-            .filter(|s| admit_session(&s.state, s.started_at, s.last_activity, launched_at))
+            .filter(|s| {
+                admit_session(
+                    &s.state,
+                    s.started_at,
+                    s.last_activity,
+                    launched_at,
+                    s.pid.is_some(),
+                )
+            })
             .collect();
 
         // Latched promotions/rescues/floors. Each transform reads + writes
@@ -1413,16 +1449,32 @@ fn resolve_resting(
 /// states should never be hidden — the user has to respond. Terminal states
 /// (`idle`, `done`, `error`, `ended`) keep the launched_at gate to avoid
 /// resurfacing ghosts from prior Cue runs.
-fn bypasses_launch_gate(state: &str) -> bool {
-    is_liveness_sensitive(state) || state == "waiting"
+///
+/// `has_pid` gates the bypass: the whole justification for skipping the
+/// launched_at filter is that the PID/JSONL liveness pass will demote the entry
+/// if its process is gone — but those checks key on the recorded pid, so a
+/// pidless "active" entry is undemotable and would pin a phantom card forever.
+/// Deny the bypass when pid is absent; the entry then falls through to the
+/// launched_at gate and is retired like any other prior-run ghost. The real
+/// hook writes `pid` on every event, so this only affects legacy/corrupt
+/// entries — legitimate launcher-gated sessions always carry a pid.
+fn bypasses_launch_gate(state: &str, has_pid: bool) -> bool {
+    has_pid && (is_liveness_sensitive(state) || state == "waiting")
 }
 
 /// Decide whether a session should be admitted to the active list.
-/// Active/waiting states bypass the launched_at gate; quiescent states
-/// keep it so prior-run entries don't pile up. Used both at entry and
-/// after demotions to clean up sessions that fell out of bypass states.
-fn admit_session(state: &str, started_at: f64, last_activity: f64, launched_at: f64) -> bool {
-    if bypasses_launch_gate(state) {
+/// Active/waiting states with a live pid bypass the launched_at gate; quiescent
+/// or pidless states keep it so prior-run entries (and undemotable phantoms)
+/// don't pile up. Used both at entry and after demotions to clean up sessions
+/// that fell out of bypass states.
+fn admit_session(
+    state: &str,
+    started_at: f64,
+    last_activity: f64,
+    launched_at: f64,
+    has_pid: bool,
+) -> bool {
+    if bypasses_launch_gate(state, has_pid) {
         return true;
     }
     last_activity >= launched_at || started_at >= launched_at
@@ -2229,51 +2281,85 @@ mod tests {
 
     #[test]
     fn test_bypasses_launch_gate_active_states() {
+        // With a live pid, active/waiting states bypass the launch gate.
         for s in ["working", "thinking", "subagent", "compacting", "waiting"] {
-            assert!(bypasses_launch_gate(s), "state {} should bypass", s);
+            assert!(bypasses_launch_gate(s, true), "state {} should bypass", s);
         }
     }
 
     #[test]
     fn test_bypasses_launch_gate_terminal_states() {
         for s in ["idle", "done", "error", "ended"] {
-            assert!(!bypasses_launch_gate(s), "state {} should not bypass", s);
+            assert!(
+                !bypasses_launch_gate(s, true),
+                "state {} should not bypass",
+                s
+            );
+        }
+    }
+
+    #[test]
+    fn test_bypasses_launch_gate_denied_without_pid() {
+        // No pid → nothing for the liveness pass to demote → the bypass is
+        // denied so the entry falls through to the launched_at gate instead of
+        // pinning a phantom card forever (FIX #7 / undemotable-active).
+        for s in ["working", "thinking", "subagent", "compacting", "waiting"] {
+            assert!(
+                !bypasses_launch_gate(s, false),
+                "state {} must NOT bypass without a pid",
+                s
+            );
         }
     }
 
     #[test]
     fn test_admit_active_session_with_old_timestamps() {
         // Working session that started before Cue launched and hasn't fired
-        // a hook event since (mid-generation) must still be admitted.
+        // a hook event since (mid-generation) must still be admitted — it has
+        // a live pid, so the liveness pass can demote it if the process dies.
         let launched = 1000.0;
-        assert!(admit_session("working", 500.0, 600.0, launched));
-        assert!(admit_session("thinking", 500.0, 600.0, launched));
-        assert!(admit_session("subagent", 0.0, 0.0, launched));
+        assert!(admit_session("working", 500.0, 600.0, launched, true));
+        assert!(admit_session("thinking", 500.0, 600.0, launched, true));
+        assert!(admit_session("subagent", 0.0, 0.0, launched, true));
+    }
+
+    #[test]
+    fn test_reject_pidless_active_ghost_before_launch() {
+        // Active state, stale pre-launch timestamps, and NO pid: undemotable,
+        // so it must be filtered at admission rather than pinned forever.
+        let launched = 1000.0;
+        assert!(!admit_session("working", 500.0, 600.0, launched, false));
+        assert!(!admit_session("subagent", 500.0, 600.0, launched, false));
+        assert!(!admit_session("waiting", 500.0, 600.0, launched, false));
     }
 
     #[test]
     fn test_admit_waiting_session_with_old_timestamps() {
-        // User-attention state — must surface regardless of launch time.
-        assert!(admit_session("waiting", 100.0, 100.0, 9999.0));
+        // User-attention state — must surface regardless of launch time, given
+        // a live pid backing it.
+        assert!(admit_session("waiting", 100.0, 100.0, 9999.0, true));
     }
 
     #[test]
     fn test_filter_terminal_session_before_launch() {
         // Stale idle/done/error from a prior run must stay hidden.
         let launched = 1000.0;
-        assert!(!admit_session("idle", 500.0, 600.0, launched));
-        assert!(!admit_session("done", 500.0, 600.0, launched));
-        assert!(!admit_session("error", 500.0, 600.0, launched));
-        assert!(!admit_session("ended", 500.0, 600.0, launched));
+        assert!(!admit_session("idle", 500.0, 600.0, launched, true));
+        assert!(!admit_session("done", 500.0, 600.0, launched, true));
+        assert!(!admit_session("error", 500.0, 600.0, launched, true));
+        assert!(!admit_session("ended", 500.0, 600.0, launched, true));
     }
 
     #[test]
     fn test_admit_terminal_session_with_recent_activity() {
         // Idle/done sessions whose last hook event is post-launch should
-        // surface — their activity proves they're still relevant.
+        // surface — their activity proves they're still relevant. (A pidless
+        // entry with post-launch activity is still admitted via the timestamp
+        // gate; the point of the pid check is only to deny the active-state
+        // BYPASS, not to hide fresh work.)
         let launched = 1000.0;
-        assert!(admit_session("idle", 500.0, 1500.0, launched));
-        assert!(admit_session("done", 1100.0, 1100.0, launched));
+        assert!(admit_session("idle", 500.0, 1500.0, launched, true));
+        assert!(admit_session("done", 1100.0, 1100.0, launched, true));
     }
 
     // ── promote_decision: thinking→working latch ────────────────────────

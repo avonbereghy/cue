@@ -10,7 +10,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Resolve the path to the permission log file.
-fn log_path() -> Result<PathBuf, String> {
+///
+/// Exposed so `startup_checks` can verify the audit log's owner-only (0600)
+/// permissions on launch alongside sessions.json and settings.json.
+pub fn log_path() -> Result<PathBuf, String> {
     let status_dir = paths::sessions_json_path()
         .parent()
         .map(|p| p.to_path_buf())
@@ -20,7 +23,9 @@ fn log_path() -> Result<PathBuf, String> {
 
 /// Append a permission entry to `path`. Creates the file at 0600 on unix so
 /// the audit log is never briefly world-readable before a subsequent
-/// set_permissions call (the previous race window).
+/// set_permissions call (the previous race window). Opens with `O_NOFOLLOW` so
+/// a symlink dropped at the log path can't redirect audit appends at another
+/// file (e.g. `~/.bash_profile`).
 fn append_entry(path: &Path, entry: &PermissionLogEntry) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -36,6 +41,10 @@ fn append_entry(path: &Path, entry: &PermissionLogEntry) -> Result<(), String> {
     {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
+        // Reject a symlink at the path (ELOOP) instead of following it — mirrors
+        // the write guard in security::atomic_write and the reader's no-follow
+        // open. A regular file (existing or freshly created) opens normally.
+        opts.custom_flags(libc::O_NOFOLLOW);
     }
     let mut file = opts
         .open(path)
@@ -46,7 +55,70 @@ fn append_entry(path: &Path, entry: &PermissionLogEntry) -> Result<(), String> {
     file.sync_all()
         .map_err(|e| format!("Failed to fsync permission log: {}", e))?;
 
+    // Keep the log bounded so it never grows without limit and never crosses the
+    // reader's 16 MiB cap (which would make history silently read back empty).
+    rotate_if_needed(path);
+
     Ok(())
+}
+
+/// When the log crosses `PERMISSION_LOG_ROTATE_BYTES` we rewrite it down to its
+/// most recent `PERMISSION_LOG_KEEP_BYTES` of complete lines. Rotating this way
+/// (rather than spilling to a `.1`) keeps the audit log a single readable JSONL
+/// and holds it well under the reader's cap, so `read_permission_log_from`
+/// never fails closed to `[]` from hitting that bound.
+const PERMISSION_LOG_ROTATE_BYTES: u64 = 8 * 1024 * 1024;
+const PERMISSION_LOG_KEEP_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Trim `path` to its most recent complete lines if it has grown past the
+/// rotation threshold. Best-effort: the append already succeeded, so any error
+/// here just skips the trim this round and leaves the (intact) log to be
+/// retried on the next append. Uses `security::atomic_write` for the rewrite so
+/// the trimmed log keeps 0600 + O_NOFOLLOW + atomic-rename semantics.
+fn rotate_if_needed(path: &Path) {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let len = match std::fs::metadata(path) {
+        Ok(m) => m.len(),
+        Err(_) => return,
+    };
+    if len <= PERMISSION_LOG_ROTATE_BYTES {
+        return;
+    }
+
+    // Read only the tail we intend to keep (bounded allocation), no-follow.
+    let start = len.saturating_sub(PERMISSION_LOG_KEEP_BYTES);
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = match opts.open(path) {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return;
+    }
+    let mut buf = Vec::new();
+    if file
+        .take(PERMISSION_LOG_KEEP_BYTES)
+        .read_to_end(&mut buf)
+        .is_err()
+    {
+        return;
+    }
+
+    // Drop the partial first line so the rewritten log starts on a clean JSONL
+    // boundary (unless we happened to seek to byte 0).
+    let tail: &[u8] = match buf.iter().position(|&b| b == b'\n') {
+        Some(idx) if start > 0 => &buf[idx + 1..],
+        _ => &buf[..],
+    };
+
+    let _ = crate::security::atomic_write(path, tail);
 }
 
 /// Append a permission decision to the audit log.
@@ -219,6 +291,40 @@ mod tests {
 
         let entries = read_permission_log_from(&path, "sess-1");
         assert_eq!(entries.len(), 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_rotation_trims_oversized_log() {
+        // A log that has grown past the rotation threshold is trimmed to its
+        // most recent lines on the next append, so it never grows unbounded and
+        // never crosses the reader's 16 MiB cap (which would read back empty).
+        let dir = std::env::temp_dir().join("cue_test_perm_log_rotate");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("permission-log.jsonl");
+
+        // Seed just over the rotation threshold with valid JSONL lines.
+        let line = serde_json::to_string(&make_entry("old", "Bash", "Allow")).unwrap();
+        let mut content = String::new();
+        while (content.len() as u64) <= PERMISSION_LOG_ROTATE_BYTES {
+            content.push_str(&line);
+            content.push('\n');
+        }
+        std::fs::write(&path, &content).unwrap();
+        assert!(std::fs::metadata(&path).unwrap().len() > PERMISSION_LOG_ROTATE_BYTES);
+
+        // One append trips rotation.
+        append_permission_log_to(&path, &make_entry("fresh", "Edit", "Deny")).unwrap();
+
+        let after = std::fs::metadata(&path).unwrap().len();
+        assert!(
+            after <= PERMISSION_LOG_KEEP_BYTES + 4096,
+            "log should be trimmed to ~KEEP_BYTES, got {after}"
+        );
+        // The newest entry survives and is still readable after the trim.
+        assert_eq!(read_permission_log_from(&path, "fresh").len(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

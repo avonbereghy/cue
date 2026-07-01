@@ -67,9 +67,24 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Option<Vec<u8>> {
 }
 
 /// Run `git <args>` in `workspace` with the module timeout, returning stdout on success.
+///
+/// Every invocation is hardened against a hostile checkout turning a read-only
+/// `git` call into arbitrary code execution: `core.fsmonitor` and hook paths in
+/// a repo-local `.git/config` are programs git will spawn during `status`/
+/// `rev-list`. We pin `core.fsmonitor=false` and `core.hooksPath=/dev/null` via
+/// leading `-c` flags (repo config can't override flags given on the command
+/// line) so no repo-controlled program runs, and set `GIT_OPTIONAL_LOCKS=0` so
+/// a status read never takes a lock / mutates the repo. The `-c` flags MUST
+/// precede the subcommand, hence the prepend.
 fn run_git(workspace: &str, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new("git");
-    cmd.args(args).current_dir(workspace);
+    cmd.arg("-c")
+        .arg("core.fsmonitor=false")
+        .arg("-c")
+        .arg("core.hooksPath=/dev/null")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .args(args)
+        .current_dir(workspace);
     run_with_timeout(cmd, GIT_TIMEOUT).map(|b| String::from_utf8_lossy(&b).into_owned())
 }
 

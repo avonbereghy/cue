@@ -6,7 +6,7 @@
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 /// Maximum file size we'll parse (500 MB).
@@ -158,39 +158,26 @@ pub const AGENT_TOOL_NAMES: &[&str] = &["Agent", "Task"];
 /// Parse a JSONL file into a list of entries.
 /// Returns an empty Vec if the file is too large, unreadable, or empty.
 ///
-/// Uses `open_jsonl_no_follow` so a symlink dropped at
-/// `~/.claude/projects/<encoded-ws>/<sid>.jsonl` can't redirect this read
-/// at e.g. `~/.ssh/id_rsa` and surface its contents through SessionMetrics
-/// into the frontend. Mirrors the hardening already applied to the
-/// incremental cache path in `refresh_entry_cache`.
+/// Reads through `security::read_to_string_bounded`, which opens the file
+/// once (with `O_NOFOLLOW` on Unix so a symlink dropped at
+/// `~/.claude/projects/<encoded-ws>/<sid>.jsonl` can't redirect this read at
+/// e.g. `~/.ssh/id_rsa` and surface its contents through SessionMetrics),
+/// enforces the `MAX_FILE_SIZE` cap on that same handle's `fstat`, and bounds
+/// the read with `take(max + 1)`. The single-handle policy closes the
+/// stat-then-read TOCTOU window a racing writer could otherwise use to swap a
+/// small file for a huge one between the size check and the read.
 pub fn parse_jsonl_file(path: &Path) -> Vec<ParsedEntry> {
-    // Check file size
-    if let Ok(metadata) = std::fs::metadata(path) {
-        if metadata.len() > MAX_FILE_SIZE {
-            log::warn!(
-                "Skipping oversized JSONL file: {:?} ({} bytes)",
-                path,
-                metadata.len()
-            );
-            return Vec::new();
-        }
-    }
-
-    let mut file = match open_jsonl_no_follow(path) {
-        Ok(f) => f,
+    match crate::security::read_to_string_bounded(path, MAX_FILE_SIZE) {
+        Ok(content) => parse_jsonl_content(&content),
         Err(e) => {
-            log::debug!("Failed to open JSONL file {:?}: {}", path, e);
-            return Vec::new();
+            if e.kind() == std::io::ErrorKind::FileTooLarge {
+                log::warn!("Skipping oversized JSONL file: {:?}", path);
+            } else {
+                log::debug!("Failed to read JSONL file {:?}: {}", path, e);
+            }
+            Vec::new()
         }
-    };
-
-    let mut content = String::new();
-    if let Err(e) = file.read_to_string(&mut content) {
-        log::debug!("Failed to read JSONL file {:?}: {}", path, e);
-        return Vec::new();
     }
-
-    parse_jsonl_content(&content)
 }
 
 /// Cached parse state for a single JSONL file.
@@ -204,6 +191,15 @@ pub struct JsonlEntryCache {
     pub file_size: u64,
     pub file_mtime: Option<SystemTime>,
     pub entries: Vec<ParsedEntry>,
+    /// Per-subagent-transcript incremental caches, keyed by the subagent JSONL
+    /// path. Only populated on the cached parse path
+    /// (`parse_jsonl_to_session_metrics_cached`); the one-shot
+    /// `parse_jsonl_to_session_metrics` path leaves this empty and re-reads
+    /// each subagent in full. Each nested cache obeys the same tail-read /
+    /// truncation / mtime-regression rules as the main transcript. Entries for
+    /// subagent files that no longer exist are pruned every refresh so the map
+    /// can't grow unbounded across a long-lived session.
+    pub subagent_caches: HashMap<PathBuf, JsonlEntryCache>,
 }
 
 /// Open a JSONL file for reading, refusing to follow symlinks on Unix. Mirrors
@@ -270,6 +266,26 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) {
             return;
         }
     };
+
+    // TOCTOU guard: the `fs::metadata` above is only for change detection
+    // (unchanged→skip, truncation, mtime). Re-check the size on the handle we
+    // are about to read so a racing writer that swapped in (or grew) a huge
+    // file after that stat can't drive an unbounded read. Mirrors the
+    // single-handle policy in `security::read_to_string_bounded`.
+    if let Ok(handle_md) = file.metadata() {
+        if handle_md.len() > MAX_FILE_SIZE {
+            log::warn!(
+                "Skipping oversized JSONL file: {:?} ({} bytes)",
+                path,
+                handle_md.len()
+            );
+            cache.file_size = 0;
+            cache.file_mtime = mtime;
+            cache.entries.clear();
+            return;
+        }
+    }
+
     if cache.file_size > 0 {
         if let Err(e) = file.seek(SeekFrom::Start(cache.file_size)) {
             log::debug!("Seek failed on {:?}: {}", path, e);
@@ -286,9 +302,28 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) {
         }
     }
 
+    // Bounded tail read on the same handle: capping at MAX_FILE_SIZE + 1 means
+    // a file that grew past the cap after the fstat surfaces the extra byte and
+    // is rejected without a large allocation. For a well-formed file the tail
+    // from `cache.file_size` to EOF is <= MAX_FILE_SIZE, so this reads through
+    // verbatim — behavior identical to the previous unbounded `read_to_string`.
     let mut buf = String::new();
-    if let Err(e) = file.read_to_string(&mut buf) {
+    if let Err(e) = file
+        .take(MAX_FILE_SIZE.saturating_add(1))
+        .read_to_string(&mut buf)
+    {
         log::debug!("Read failed on {:?}: {}", path, e);
+        return;
+    }
+    if buf.len() as u64 > MAX_FILE_SIZE {
+        log::warn!(
+            "Skipping JSONL file that grew past the {} byte cap mid-read: {:?}",
+            MAX_FILE_SIZE,
+            path
+        );
+        cache.file_size = 0;
+        cache.file_mtime = mtime;
+        cache.entries.clear();
         return;
     }
 
@@ -934,8 +969,48 @@ fn strip_bracket_markers(s: &str) -> String {
 const SUBAGENT_BACKSTOP_SECS: u64 = 600;
 
 /// Parse a subagent JSONL file and its companion .meta.json into SubagentMetrics.
+///
+/// One-shot path: reads the whole transcript every call. The incremental
+/// counterpart used by the 5s metrics tick is `parse_subagent_jsonl_cached`.
 pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::SubagentMetrics> {
     let entries = parse_jsonl_file(jsonl_path);
+    if entries.is_empty() {
+        return None;
+    }
+    let mtime = std::fs::metadata(jsonl_path)
+        .and_then(|meta| meta.modified())
+        .ok();
+    subagent_metrics_from_entries(&entries, mtime, jsonl_path)
+}
+
+/// Incremental variant of [`parse_subagent_jsonl`]: tails only newly-appended
+/// lines via `cache` so an unchanged subagent transcript is neither re-read nor
+/// re-parsed on each poll. The cache carries the same correctness guarantees as
+/// the main transcript — a truncated or replaced (mtime-regressed) subagent
+/// file invalidates the cache and forces a full re-read rather than serving
+/// stale entries (see `refresh_entry_cache`). The `mtime` used for the crash
+/// backstop is the one the refresh reflects (`cache.file_mtime`), so a stale
+/// stat can't extend an agent's liveness.
+fn parse_subagent_jsonl_cached(
+    jsonl_path: &Path,
+    cache: &mut JsonlEntryCache,
+) -> Option<crate::models::SubagentMetrics> {
+    refresh_entry_cache(jsonl_path, cache);
+    if cache.entries.is_empty() {
+        return None;
+    }
+    subagent_metrics_from_entries(&cache.entries, cache.file_mtime, jsonl_path)
+}
+
+/// Aggregate a subagent's parsed entries (+ its file mtime for the liveness
+/// backstop) into `SubagentMetrics`, then enrich with the companion .meta.json.
+/// Shared by the one-shot and cached subagent parse paths so both compute
+/// liveness and metrics identically.
+fn subagent_metrics_from_entries(
+    entries: &[ParsedEntry],
+    mtime: Option<SystemTime>,
+    jsonl_path: &Path,
+) -> Option<crate::models::SubagentMetrics> {
     if entries.is_empty() {
         return None;
     }
@@ -952,14 +1027,9 @@ pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::Subagent
         .rev()
         .find(|e| e.is_assistant_message)
         .is_some_and(|e| e.has_end_turn);
-    let within_backstop = std::fs::metadata(jsonl_path)
-        .and_then(|meta| meta.modified())
-        .map(|mod_time| {
-            mod_time
-                .elapsed()
-                .map(|elapsed| elapsed.as_secs() < SUBAGENT_BACKSTOP_SECS)
-                .unwrap_or(false)
-        })
+    let within_backstop = mtime
+        .and_then(|mod_time| mod_time.elapsed().ok())
+        .map(|elapsed| elapsed.as_secs() < SUBAGENT_BACKSTOP_SECS)
         .unwrap_or(false);
     let is_active = !tail_finished && within_backstop;
 
@@ -969,7 +1039,7 @@ pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::Subagent
     };
 
     // Extract agentId and slug from first entry that has them
-    for entry in &entries {
+    for entry in entries {
         if m.agent_id.is_empty() {
             if let Some(ref id) = entry.agent_id {
                 m.agent_id = id.clone();
@@ -986,7 +1056,7 @@ pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::Subagent
     }
 
     // Aggregate metrics
-    for entry in &entries {
+    for entry in entries {
         // Track earliest and latest entry timestamps for start/end display.
         if let Some(ts) = entry.timestamp {
             m.started_at = Some(m.started_at.map_or(ts, |s| s.min(ts)));
@@ -1022,18 +1092,18 @@ pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::Subagent
         if let Some(parent) = jsonl_path.parent() {
             let meta_path = parent.join(meta_filename);
             const META_MAX_BYTES: u64 = 256 * 1024;
-            let oversized = std::fs::metadata(&meta_path)
-                .map(|md| md.len() > META_MAX_BYTES)
-                .unwrap_or(false);
-            if !oversized {
-                if let Ok(mut file) = open_jsonl_no_follow(&meta_path) {
-                    let mut content = String::new();
-                    if file.read_to_string(&mut content).is_ok() {
-                        if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&content) {
-                            if let Some(desc) = meta.get("description").and_then(|v| v.as_str()) {
-                                m.description = desc.to_string();
-                            }
-                        }
+            // Single-handle bounded read (O_NOFOLLOW + fstat + take): a
+            // stat-then-read pair leaves a TOCTOU window where a racing writer
+            // could swap a small meta file for a huge one — or a symlink —
+            // between the size check and the read. `read_to_string_bounded`
+            // opens once and enforces the cap on that same handle. Any error
+            // (missing/oversized/non-UTF-8) leaves the default empty
+            // description, exactly as before.
+            if let Ok(content) = crate::security::read_to_string_bounded(&meta_path, META_MAX_BYTES)
+            {
+                if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(desc) = meta.get("description").and_then(|v| v.as_str()) {
+                        m.description = desc.to_string();
                     }
                 }
             }
@@ -1046,7 +1116,8 @@ pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::Subagent
 /// Parse a JSONL file and extract aggregated SessionMetrics (for session_monitor).
 pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::SessionMetrics> {
     let entries = parse_jsonl_file(path);
-    aggregate_entries(&entries, path)
+    // No cache on the one-shot path: subagents are re-read in full.
+    aggregate_entries(&entries, path, None)
 }
 
 /// Same as `parse_jsonl_to_session_metrics`, but tails new lines incrementally
@@ -1057,7 +1128,11 @@ pub fn parse_jsonl_to_session_metrics_cached(
     cache: &mut JsonlEntryCache,
 ) -> Option<crate::models::SessionMetrics> {
     refresh_entry_cache(path, cache);
-    let mut m = aggregate_entries(&cache.entries, path)?;
+    // Borrow the main entries immutably and the per-subagent caches mutably —
+    // disjoint fields of `cache`, so the split borrow is sound. The subagent
+    // discovery inside `aggregate_entries` tails each subagent transcript
+    // through its own nested cache instead of re-reading it every tick.
+    let mut m = aggregate_entries(&cache.entries, path, Some(&mut cache.subagent_caches))?;
     // Stamp the transcript file mtime this parse reflects so the turn-ended
     // demote can tell a genuinely-idle session (file unchanged since the last
     // end_turn) from a resumed/stale-bumped one where stateChangedAt jumped
@@ -1072,6 +1147,11 @@ pub fn parse_jsonl_to_session_metrics_cached(
 fn aggregate_entries(
     entries: &[ParsedEntry],
     path: &Path,
+    // Per-subagent incremental caches, threaded from the caller's
+    // `JsonlEntryCache`. `Some` on the cached poll path (subagents are tailed
+    // incrementally and pruned when their files vanish); `None` on the one-shot
+    // path (each subagent re-read in full).
+    mut subagent_caches: Option<&mut HashMap<PathBuf, JsonlEntryCache>>,
 ) -> Option<crate::models::SessionMetrics> {
     if entries.is_empty() {
         return None;
@@ -1346,12 +1426,28 @@ fn aggregate_entries(
     if let Some(parent_dir) = path.parent() {
         if let Some(session_stem) = path.file_stem().and_then(|s| s.to_str()) {
             let subagents_dir = parent_dir.join(session_stem).join("subagents");
+            // Track which subagent files we saw this pass so stale cache
+            // entries (deleted agents) can be pruned. `listed` gates the prune:
+            // a transient `read_dir` error must NOT wipe live caches, but an
+            // absent directory (`is_dir` false) is authoritative — every
+            // subagent is gone, so those caches should clear.
+            let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+            let mut listed = false;
             if subagents_dir.is_dir() {
                 if let Ok(dir_entries) = std::fs::read_dir(&subagents_dir) {
+                    listed = true;
                     for dir_entry in dir_entries.flatten() {
                         let file_path = dir_entry.path();
                         if file_path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-                            if let Some(sub_metrics) = parse_subagent_jsonl(&file_path) {
+                            let sub_metrics = match subagent_caches {
+                                Some(ref mut caches) => {
+                                    seen.insert(file_path.clone());
+                                    let sub_cache = caches.entry(file_path.clone()).or_default();
+                                    parse_subagent_jsonl_cached(&file_path, sub_cache)
+                                }
+                                None => parse_subagent_jsonl(&file_path),
+                            };
+                            if let Some(sub_metrics) = sub_metrics {
                                 m.subagents.push(sub_metrics);
                             }
                         }
@@ -1360,6 +1456,17 @@ fn aggregate_entries(
                 // Sort by description for stable display order
                 m.subagents
                     .sort_by(|a, b| a.description.cmp(&b.description));
+            } else {
+                // No subagents directory: authoritative "none present".
+                listed = true;
+            }
+
+            // Evict caches for subagent files that are no longer present so the
+            // map is bounded by the live agent count, not the session's history.
+            if listed {
+                if let Some(ref mut caches) = subagent_caches {
+                    caches.retain(|k, _| seen.contains(k));
+                }
             }
         }
     }
@@ -2215,6 +2322,215 @@ mod tests {
 
         let _ = std::fs::remove_file(&link);
         let _ = std::fs::remove_file(&real);
+    }
+
+    // ── Subagent incremental cache (F-perf: don't re-read every tick) ──
+    // The main transcript already tailed incrementally; subagents did not, so
+    // every active session re-read + re-parsed every agent JSONL in full each
+    // 5s tick. These cover the cache's correctness guarantees: hit on an
+    // unchanged file, re-parse on growth, invalidation on truncation and
+    // mtime-regression, and eviction of caches for deleted agents.
+
+    /// Minimal finished-agent transcript line (tail end_turn ⇒ inactive).
+    fn agent_line(id: &str, in_tok: i64, out_tok: i64) -> String {
+        format!(
+            r#"{{"type":"assistant","timestamp":1.0,"agentId":"{id}","message":{{"model":"m","usage":{{"input_tokens":{in_tok},"output_tokens":{out_tok}}},"content":[{{"type":"text","text":"done"}}],"stop_reason":"end_turn"}}}}"#
+        )
+    }
+
+    #[test]
+    fn subagent_cache_hits_on_unchanged_file() {
+        let dir = std::env::temp_dir().join(format!("cue-sub-hit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.jsonl");
+        std::fs::write(&path, format!("{}\n", agent_line("a1", 10, 5))).unwrap();
+
+        let mut cache = super::JsonlEntryCache::default();
+        let m1 = super::parse_subagent_jsonl_cached(&path, &mut cache).unwrap();
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(m1.input_tokens, 10);
+        assert_eq!(m1.output_tokens, 5);
+        let size_after_first = cache.file_size;
+        assert!(size_after_first > 0);
+
+        // Unchanged file: the second parse must reuse the cached entries — the
+        // offset doesn't advance and the metrics are identical.
+        let m2 = super::parse_subagent_jsonl_cached(&path, &mut cache).unwrap();
+        assert_eq!(
+            cache.file_size, size_after_first,
+            "unchanged file must not re-read"
+        );
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(m2.input_tokens, m1.input_tokens);
+        assert_eq!(m2.output_tokens, m1.output_tokens);
+        assert_eq!(m2.message_count, m1.message_count);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn subagent_cache_reparses_on_grow() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("cue-sub-grow-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.jsonl");
+        std::fs::write(&path, format!("{}\n", agent_line("a1", 10, 5))).unwrap();
+
+        let mut cache = super::JsonlEntryCache::default();
+        let m1 = super::parse_subagent_jsonl_cached(&path, &mut cache).unwrap();
+        assert_eq!(m1.message_count, 1);
+        let size_after_first = cache.file_size;
+
+        // Append a second assistant turn — only the new line should be parsed,
+        // and its tokens must roll into the aggregate.
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(f, "{}", agent_line("a1", 100, 50)).unwrap();
+        drop(f);
+
+        let m2 = super::parse_subagent_jsonl_cached(&path, &mut cache).unwrap();
+        assert_eq!(cache.entries.len(), 2);
+        assert!(cache.file_size > size_after_first);
+        assert_eq!(m2.message_count, 2);
+        assert_eq!(m2.input_tokens, 110);
+        assert_eq!(m2.output_tokens, 55);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn subagent_cache_invalidates_on_truncation() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("cue-sub-trunc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.jsonl");
+        std::fs::write(
+            &path,
+            format!("{}\n{}\n", agent_line("a1", 10, 5), agent_line("a1", 20, 7)),
+        )
+        .unwrap();
+
+        let mut cache = super::JsonlEntryCache::default();
+        let m1 = super::parse_subagent_jsonl_cached(&path, &mut cache).unwrap();
+        assert_eq!(cache.entries.len(), 2);
+        assert_eq!(m1.input_tokens, 30);
+
+        // Rewrite shorter (file shrank) — the cache must reset and re-read
+        // rather than serve the stale two-entry aggregate.
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        writeln!(f, "{}", agent_line("a1", 3, 1)).unwrap();
+        drop(f);
+
+        let m2 = super::parse_subagent_jsonl_cached(&path, &mut cache).unwrap();
+        assert_eq!(
+            cache.entries.len(),
+            1,
+            "truncation must invalidate the cache"
+        );
+        assert_eq!(m2.input_tokens, 3);
+        assert_eq!(m2.output_tokens, 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn subagent_cache_invalidates_on_mtime_regression() {
+        // A replaced/forked subagent file can keep the same byte length while
+        // its mtime moves backwards. The cache stamps `file_mtime` from the
+        // stat it reflects; a stored mtime NEWER than the file on disk means
+        // the file was swapped underneath us, so the cache must drop its
+        // entries and re-read rather than trust the stale accumulation.
+        let dir = std::env::temp_dir().join(format!("cue-sub-mtime-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.jsonl");
+        std::fs::write(&path, format!("{}\n", agent_line("a1", 10, 5))).unwrap();
+
+        let mut cache = super::JsonlEntryCache::default();
+        super::parse_subagent_jsonl_cached(&path, &mut cache).unwrap();
+        assert_eq!(cache.entries.len(), 1);
+
+        // Poison the cache: pretend it reflects a FUTURE mtime and holds a
+        // sentinel entry the real file never had. A correct invalidation drops
+        // both when it sees the on-disk mtime is older.
+        cache.file_mtime =
+            Some(std::time::SystemTime::now() + std::time::Duration::from_secs(3600));
+        cache.entries.push(super::ParsedEntry {
+            entry_type: "SENTINEL".to_string(),
+            ..Default::default()
+        });
+
+        super::parse_subagent_jsonl_cached(&path, &mut cache).unwrap();
+        assert_eq!(
+            cache.entries.len(),
+            1,
+            "mtime regression must reset the cache and re-read from scratch"
+        );
+        assert!(
+            !cache.entries.iter().any(|e| e.entry_type == "SENTINEL"),
+            "stale sentinel entry must not survive an mtime-regression reset"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn subagent_caches_evict_deleted_agents() {
+        // The cached session parse holds a nested cache per subagent file. When
+        // an agent's transcript is removed, its cache entry must be pruned so
+        // the map is bounded by the live agent count, not the session history.
+        let dir = std::env::temp_dir().join(format!("cue-sub-evict-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Main transcript: <dir>/<sid>.jsonl ; subagents: <dir>/<sid>/subagents/
+        let sid = "11111111-1111-1111-1111-111111111111";
+        let main_path = dir.join(format!("{sid}.jsonl"));
+        std::fs::write(
+            &main_path,
+            concat!(
+                r#"{"type":"user","timestamp":1.0,"message":{"role":"user","content":"go"}}"#,
+                "\n",
+                r#"{"type":"assistant","timestamp":2.0,"message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let subagents_dir = dir.join(sid).join("subagents");
+        std::fs::create_dir_all(&subagents_dir).unwrap();
+        let agent_a = subagents_dir.join("agent-a.jsonl");
+        let agent_b = subagents_dir.join("agent-b.jsonl");
+        std::fs::write(&agent_a, format!("{}\n", agent_line("a", 10, 5))).unwrap();
+        std::fs::write(&agent_b, format!("{}\n", agent_line("b", 20, 7))).unwrap();
+
+        let mut cache = super::JsonlEntryCache::default();
+        let m1 = super::parse_jsonl_to_session_metrics_cached(&main_path, &mut cache).unwrap();
+        assert_eq!(m1.subagents.len(), 2);
+        assert_eq!(cache.subagent_caches.len(), 2, "both agents cached");
+
+        // Delete one agent transcript, re-parse: its cache entry is evicted.
+        std::fs::remove_file(&agent_b).unwrap();
+        let m2 = super::parse_jsonl_to_session_metrics_cached(&main_path, &mut cache).unwrap();
+        assert_eq!(m2.subagents.len(), 1);
+        assert_eq!(
+            cache.subagent_caches.len(),
+            1,
+            "deleted agent's cache entry must be pruned"
+        );
+        assert!(cache.subagent_caches.contains_key(&agent_a));
+        assert!(!cache.subagent_caches.contains_key(&agent_b));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ── Hostile-input hardening (F-tests-009) ──────────────────────────

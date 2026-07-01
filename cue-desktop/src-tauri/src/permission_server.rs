@@ -7,10 +7,14 @@
 use crate::models::PermissionDecision;
 use crate::session_monitor::LockSafe;
 use crate::{paths, security};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 use tokio::sync::oneshot;
+
+type HmacSha256 = Hmac<Sha256>;
 
 /// Pending permission requests awaiting user decision.
 pub struct PendingRequests {
@@ -79,6 +83,17 @@ impl PendingRequests {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Snapshot the request IDs currently awaiting a decision.
+    ///
+    /// Used by the `get_pending_permissions` command so the frontend can
+    /// re-sync its pending map against server-side ground truth after a
+    /// possibly-stale `sessions-updated` snapshot would otherwise wipe a
+    /// just-arrived prompt. Clones the keys under the lock and returns —
+    /// no lock is held across the caller's subsequent metadata read.
+    pub fn pending_ids(&self) -> Vec<String> {
+        self.requests.lock_safe().keys().cloned().collect()
+    }
 }
 
 /// HTTP JSON response body for an Allow decision.
@@ -87,9 +102,22 @@ pub const ALLOW_RESPONSE: &str = r#"{"hookSpecificOutput":{"hookEventName":"Perm
 /// HTTP JSON response body for a Deny decision.
 pub const DENY_RESPONSE: &str = r#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#;
 
-/// HTTP header name the Python hook sends to authenticate to this server.
-/// Matched case-insensitively against incoming request headers.
-pub const TOKEN_HEADER: &str = "x-cue-token";
+/// HTTP header names for the mutual-HMAC handshake. Matched case-insensitively.
+///
+/// The raw per-launch token is NEVER placed on the wire. Instead the hook sends
+/// a random nonce plus `hex(HMAC-SHA256(token, "req:"+nonce))`; the server
+/// replies with `hex(HMAC-SHA256(token, "resp:"+nonce))` so each side proves it
+/// holds the shared secret without disclosing it. A local process that wins the
+/// `127.0.0.1:3002` bind race but can't read the 0600 token file therefore can
+/// neither authenticate a forged request nor forge a response the hook trusts.
+pub const NONCE_HEADER: &str = "x-cue-nonce";
+pub const AUTH_HEADER: &str = "x-cue-auth";
+pub const PROOF_HEADER: &str = "x-cue-proof";
+
+/// Domain-separation prefixes so a request MAC can never be replayed as a
+/// response proof (or vice versa) for the same nonce.
+pub const REQ_DOMAIN: &str = "req:";
+pub const RESP_DOMAIN: &str = "resp:";
 
 /// Generate a fresh 128-bit per-launch shared secret, atomically write it to
 /// `permission_token_path()` at 0600, and return the token string.
@@ -100,9 +128,11 @@ pub const TOKEN_HEADER: &str = "x-cue-token";
 /// Claude Code hook prompts. Co-locating a fresh secret under the user's
 /// 0700 status dir (and writing it 0600) means only same-uid processes can
 /// read it, and the secret is invalidated every launch. The legitimate
-/// Python hook reads the same file before POSTing and presents the value
-/// in `X-Cue-Token`; the server compares in constant time and 403s anything
-/// else. Mitigates the prior unauthenticated-server finding.
+/// Python hook reads the same file before POSTing and uses it as the HMAC
+/// key over a per-request nonce (see the handshake header docs above); the
+/// server verifies that MAC in constant time and 401s anything else, then
+/// returns its own MAC so the hook can authenticate the response before
+/// acting on it. Mitigates the prior unauthenticated-server finding.
 pub fn provision_token() -> std::io::Result<String> {
     // 16 bytes of OS CSPRNG output via getrandom (which is what uuid::Uuid::new_v4
     // already pulls from). Hex-encoded — 32 ASCII chars — so it survives an HTTP
@@ -163,21 +193,35 @@ pub fn request_method_and_path(header_str: &str) -> (&str, &str) {
     (method, path)
 }
 
-/// True if the request carries a `Host:` header naming the loopback interface
-/// (`127.0.0.1` or `localhost`). DNS-rebinding defense: browsers always send the
+/// True if the request carries a `Host:` header whose authority is *exactly*
+/// the loopback interface (`127.0.0.1`, `localhost`, or bracketed IPv6 `[::1]`),
+/// with an optional `:port`. DNS-rebinding defense: browsers always send the
 /// original hostname in `Host:`, so a rebinding page is rejected here.
 ///
-/// NOTE: this is a prefix match, so `Host: localhost.evil.com` currently passes.
-/// P2-4 tightens this to an exact `host[:port]` match.
+/// P2-4: this is an exact host match, not a prefix match — `localhost.evil.com`
+/// and `127.0.0.1.evil.com` are rejected. Matching on `starts_with` would let a
+/// rebinding host that merely begins with the loopback literal slip through.
 pub fn host_header_ok(header_str: &str) -> bool {
     header_str.lines().any(|line| {
         let lower = line.to_lowercase();
-        if !lower.starts_with("host:") {
+        let Some(val) = lower.strip_prefix("host:") else {
             return false;
-        }
-        let val = lower.split(':').skip(1).collect::<Vec<_>>().join(":");
+        };
         let val = val.trim();
-        val.starts_with("127.0.0.1") || val.starts_with("localhost")
+        // Strip an optional `:port`, bracket-aware for IPv6 (`[::1]:3002`).
+        let host = if let Some(rest) = val.strip_prefix('[') {
+            match rest.split_once(']') {
+                // `[host]` or `[host]:port` — reject anything after `]` that
+                // isn't a port delimiter.
+                Some((h, tail)) if tail.is_empty() || tail.starts_with(':') => h,
+                _ => return false,
+            }
+        } else {
+            // `host` or `host:port` — the authority host is everything up to
+            // the first colon.
+            val.split(':').next().unwrap_or("")
+        };
+        matches!(host, "127.0.0.1" | "localhost" | "::1")
     })
 }
 
@@ -190,19 +234,63 @@ pub fn has_origin_header(header_str: &str) -> bool {
         .any(|line| line.to_lowercase().starts_with("origin:"))
 }
 
-/// True if the request presents an `X-Cue-Token` header whose value matches
-/// `expected_token` in constant time. Header name compared case-insensitively
-/// per RFC 7230 §3.2; value is trimmed of surrounding whitespace.
-pub fn token_header_matches(header_str: &str, expected_token: &str) -> bool {
-    header_str.lines().any(|line| {
-        let Some((name, value)) = line.split_once(':') else {
-            return false;
-        };
-        if !name.eq_ignore_ascii_case(TOKEN_HEADER) {
-            return false;
-        }
-        constant_time_eq(value.trim().as_bytes(), expected_token.as_bytes())
+/// Lowercase-hex encode a byte slice (SHA-256 output is 32 bytes → 64 chars).
+fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(s, "{:02x}", b);
+    }
+    s
+}
+
+/// Compute `hex(HMAC-SHA256(key=token_bytes, msg=domain || nonce))`.
+///
+/// `HmacSha256::new_from_slice` accepts a key of any length, so the `expect`
+/// never fires — the error type is `InvalidLength`, which HMAC (unlike a raw
+/// block cipher) does not return for keys.
+pub fn compute_mac(token: &str, domain: &str, nonce: &str) -> String {
+    let mut mac =
+        HmacSha256::new_from_slice(token.as_bytes()).expect("HMAC accepts any key length");
+    mac.update(domain.as_bytes());
+    mac.update(nonce.as_bytes());
+    hex_encode(&mac.finalize().into_bytes())
+}
+
+/// Extract a header value by (case-insensitive) name from the raw header block.
+/// Returns the trimmed value, or `None` if the header is absent.
+pub fn header_value<'a>(header_str: &'a str, name: &str) -> Option<&'a str> {
+    header_str.lines().find_map(|line| {
+        let (n, v) = line.split_once(':')?;
+        n.eq_ignore_ascii_case(name).then(|| v.trim())
     })
+}
+
+/// Verify the request-authentication MAC and, on success, return the nonce so
+/// the caller can compute the matching response proof.
+///
+/// The hook sends `X-Cue-Nonce` (random hex) and `X-Cue-Auth =
+/// hex(HMAC-SHA256(token, "req:"+nonce))`. We recompute the MAC with the
+/// on-disk token and constant-time-compare. Any missing header, a malformed
+/// nonce, or a mismatch returns `None` — the caller must then respond 401 and
+/// MUST NOT surface a prompt (an attacker who can't read the 0600 token file
+/// must not be able to force a dialog). The nonce is bounded to hex digits and
+/// 128 chars so a hostile caller can't push an unbounded MAC input.
+pub fn verify_request_auth<'a>(header_str: &'a str, expected_token: &str) -> Option<&'a str> {
+    let nonce = header_value(header_str, NONCE_HEADER)?;
+    let auth = header_value(header_str, AUTH_HEADER)?;
+    if nonce.is_empty() || nonce.len() > 128 || !nonce.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let expected = compute_mac(expected_token, REQ_DOMAIN, nonce);
+    constant_time_eq(auth.as_bytes(), expected.as_bytes()).then_some(nonce)
+}
+
+/// Compute the response proof the server returns in `X-Cue-Proof` so the hook
+/// can authenticate the decision before acting on it:
+/// `hex(HMAC-SHA256(token, "resp:"+nonce))`.
+pub fn response_proof(expected_token: &str, nonce: &str) -> String {
+    compute_mac(expected_token, RESP_DOMAIN, nonce)
 }
 
 /// Parse the `Content-Length` header value, or `0` if absent or unparseable.
@@ -307,6 +395,22 @@ mod tests {
         assert!(pending.is_pending("a"));
         assert!(!pending.is_pending("b"));
         assert!(pending.is_pending("c"));
+    }
+
+    #[test]
+    fn test_pending_ids_snapshots_current_keys() {
+        let pending = PendingRequests::new();
+        assert!(pending.pending_ids().is_empty());
+
+        let _a = pending.insert("a").unwrap();
+        let _b = pending.insert("b").unwrap();
+        let mut ids = pending.pending_ids();
+        ids.sort();
+        assert_eq!(ids, vec!["a".to_string(), "b".to_string()]);
+
+        // Resolving/removing drops the id from the snapshot.
+        pending.remove("a");
+        assert_eq!(pending.pending_ids(), vec!["b".to_string()]);
     }
 
     #[test]
@@ -429,8 +533,8 @@ mod tests {
     #[test]
     fn test_read_token_roundtrip() {
         // Write a token to a temp file, read it back, confirm match. Mirrors
-        // what the Python hook will do: read the on-disk file, send the
-        // string verbatim in the X-Cue-Token header.
+        // what the Python hook will do: read the on-disk file, then use the
+        // value as the HMAC key for the request/response handshake.
         let dir = std::env::temp_dir().join("cue_test_token_roundtrip");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -463,6 +567,10 @@ mod tests {
         assert!(host_header_ok("GET / HTTP/1.1\r\nHost: 127.0.0.1:3002\r\n"));
         assert!(host_header_ok("GET / HTTP/1.1\r\nHost: localhost\r\n"));
         assert!(host_header_ok("GET / HTTP/1.1\r\nHost: localhost:3002\r\n"));
+        assert!(host_header_ok("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n"));
+        // Bracketed IPv6 loopback, bare and with a port.
+        assert!(host_header_ok("GET / HTTP/1.1\r\nHost: [::1]\r\n"));
+        assert!(host_header_ok("GET / HTTP/1.1\r\nHost: [::1]:3002\r\n"));
         // Header name is matched case-insensitively.
         assert!(host_header_ok("GET / HTTP/1.1\r\nhOsT: 127.0.0.1\r\n"));
     }
@@ -475,16 +583,23 @@ mod tests {
     }
 
     #[test]
-    fn test_host_header_ok_known_prefix_looseness() {
-        // KNOWN looseness: the current prefix match accepts any hostname that
-        // merely *starts with* localhost / 127.0.0.1. P2-4 tightens this to an
-        // exact host[:port] match — flip these assertions when that lands.
-        assert!(host_header_ok(
+    fn test_host_header_ok_exact_match_rejects_lookalikes() {
+        // P2-4: the Host check is now an exact host[:port] match, not a prefix
+        // match. A rebinding page served from a domain that merely *starts
+        // with* the loopback literal must be rejected — the browser sends the
+        // original hostname in `Host:`, so these never name true loopback.
+        assert!(!host_header_ok(
             "GET / HTTP/1.1\r\nHost: localhost.evil.com\r\n"
         ));
-        assert!(host_header_ok(
+        assert!(!host_header_ok(
             "GET / HTTP/1.1\r\nHost: 127.0.0.1.evil.com\r\n"
         ));
+        assert!(!host_header_ok("GET / HTTP/1.1\r\nHost: localhostx\r\n"));
+        assert!(!host_header_ok(
+            "GET / HTTP/1.1\r\nHost: 127.0.0.1x:3002\r\n"
+        ));
+        // A bracketed non-loopback IPv6 address is also rejected.
+        assert!(!host_header_ok("GET / HTTP/1.1\r\nHost: [::2]\r\n"));
     }
 
     #[test]
@@ -496,33 +611,131 @@ mod tests {
         assert!(!has_origin_header("GET / HTTP/1.1\r\nHost: localhost\r\n"));
     }
 
+    // ── Mutual-HMAC handshake ───────────────────────────────────────────
+
     #[test]
-    fn test_token_header_matches() {
+    fn test_compute_mac_is_deterministic_and_hex() {
         let tok = "deadbeefcafef00d0011223344556677";
-        assert!(token_header_matches(
-            &format!("POST /x HTTP/1.1\r\nX-Cue-Token: {tok}\r\n"),
-            tok
-        ));
-        // Header name compared case-insensitively.
-        assert!(token_header_matches(
-            &format!("POST /x HTTP/1.1\r\nx-cue-token: {tok}\r\n"),
-            tok
-        ));
-        // Value is trimmed of surrounding whitespace.
-        assert!(token_header_matches(
-            &format!("POST /x HTTP/1.1\r\nX-Cue-Token:   {tok}  \r\n"),
-            tok
-        ));
-        // Wrong token is rejected.
-        assert!(!token_header_matches(
-            &format!("POST /x HTTP/1.1\r\nX-Cue-Token: {tok}\r\n"),
-            "wrongtoken"
-        ));
-        // Missing token header is rejected.
-        assert!(!token_header_matches(
-            "POST /x HTTP/1.1\r\nHost: localhost\r\n",
-            tok
-        ));
+        let a = compute_mac(tok, REQ_DOMAIN, "abc123");
+        let b = compute_mac(tok, REQ_DOMAIN, "abc123");
+        assert_eq!(a, b, "same inputs -> same MAC");
+        // SHA-256 output is 32 bytes -> 64 lowercase-hex chars.
+        assert_eq!(a.len(), 64);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_compute_mac_domain_separation() {
+        // The request MAC and the response proof over the SAME nonce must
+        // differ, so a request MAC can't be replayed as a response proof.
+        let tok = "deadbeefcafef00d0011223344556677";
+        let nonce = "0011223344556677";
+        assert_ne!(
+            compute_mac(tok, REQ_DOMAIN, nonce),
+            compute_mac(tok, RESP_DOMAIN, nonce),
+        );
+    }
+
+    #[test]
+    fn test_compute_mac_depends_on_key() {
+        let nonce = "abc123";
+        assert_ne!(
+            compute_mac("token-one", REQ_DOMAIN, nonce),
+            compute_mac("token-two", REQ_DOMAIN, nonce),
+        );
+    }
+
+    #[test]
+    fn test_header_value_case_insensitive_and_trimmed() {
+        let h = "POST /x HTTP/1.1\r\nX-Cue-Nonce:   abc123  \r\nHost: localhost\r\n";
+        assert_eq!(header_value(h, NONCE_HEADER), Some("abc123"));
+        assert_eq!(header_value(h, "host"), Some("localhost"));
+        assert_eq!(header_value(h, "x-cue-auth"), None);
+    }
+
+    #[test]
+    fn test_verify_request_auth_accepts_valid_mac() {
+        let tok = "deadbeefcafef00d0011223344556677";
+        let nonce = "0a1b2c3d4e5f6071";
+        let auth = compute_mac(tok, REQ_DOMAIN, nonce);
+        let header = format!(
+            "POST /permission-request HTTP/1.1\r\nX-Cue-Nonce: {nonce}\r\nX-Cue-Auth: {auth}\r\n"
+        );
+        assert_eq!(verify_request_auth(&header, tok), Some(nonce));
+        // Header names are compared case-insensitively.
+        let header_lc = format!(
+            "POST /permission-request HTTP/1.1\r\nx-cue-nonce: {nonce}\r\nx-cue-auth: {auth}\r\n"
+        );
+        assert_eq!(verify_request_auth(&header_lc, tok), Some(nonce));
+    }
+
+    #[test]
+    fn test_verify_request_auth_rejects_wrong_token() {
+        let nonce = "0a1b2c3d4e5f6071";
+        let auth = compute_mac("the-real-token", REQ_DOMAIN, nonce);
+        let header = format!(
+            "POST /permission-request HTTP/1.1\r\nX-Cue-Nonce: {nonce}\r\nX-Cue-Auth: {auth}\r\n"
+        );
+        // A forger who doesn't hold the token computes the wrong MAC.
+        assert_eq!(verify_request_auth(&header, "attacker-guess"), None);
+    }
+
+    #[test]
+    fn test_verify_request_auth_rejects_missing_headers() {
+        let tok = "deadbeefcafef00d0011223344556677";
+        let nonce = "0a1b2c3d4e5f6071";
+        let auth = compute_mac(tok, REQ_DOMAIN, nonce);
+        // Missing auth header.
+        assert_eq!(
+            verify_request_auth(
+                &format!("POST /x HTTP/1.1\r\nX-Cue-Nonce: {nonce}\r\n"),
+                tok
+            ),
+            None
+        );
+        // Missing nonce header.
+        assert_eq!(
+            verify_request_auth(&format!("POST /x HTTP/1.1\r\nX-Cue-Auth: {auth}\r\n"), tok),
+            None
+        );
+        // Neither header (e.g. the old raw-token clients).
+        assert_eq!(
+            verify_request_auth("POST /x HTTP/1.1\r\nHost: localhost\r\n", tok),
+            None
+        );
+    }
+
+    #[test]
+    fn test_verify_request_auth_rejects_malformed_nonce() {
+        let tok = "deadbeefcafef00d0011223344556677";
+        // Non-hex nonce is rejected before we even compute a MAC.
+        let bad_nonce = "not-hex!!";
+        let auth = compute_mac(tok, REQ_DOMAIN, bad_nonce);
+        let header = format!(
+            "POST /permission-request HTTP/1.1\r\nX-Cue-Nonce: {bad_nonce}\r\nX-Cue-Auth: {auth}\r\n"
+        );
+        assert_eq!(verify_request_auth(&header, tok), None);
+        // Over-long nonce (>128 hex chars) is rejected.
+        let long_nonce = "a".repeat(129);
+        let auth = compute_mac(tok, REQ_DOMAIN, &long_nonce);
+        let header = format!(
+            "POST /permission-request HTTP/1.1\r\nX-Cue-Nonce: {long_nonce}\r\nX-Cue-Auth: {auth}\r\n"
+        );
+        assert_eq!(verify_request_auth(&header, tok), None);
+    }
+
+    #[test]
+    fn test_response_proof_matches_expected() {
+        // The proof the server emits must equal what a token-holder recomputes
+        // over "resp:"+nonce — this is exactly what the Python hook verifies.
+        let tok = "deadbeefcafef00d0011223344556677";
+        let nonce = "0a1b2c3d4e5f6071";
+        assert_eq!(
+            response_proof(tok, nonce),
+            compute_mac(tok, RESP_DOMAIN, nonce)
+        );
+        // A forger who doesn't hold the token produces a different proof.
+        assert_ne!(response_proof(tok, nonce), response_proof("wrong", nonce));
     }
 
     #[test]

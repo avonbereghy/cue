@@ -29,11 +29,13 @@ pub fn sessions_lock_path() -> PathBuf {
 }
 
 /// Path to permission-token — a per-launch shared secret the Python hook
-/// must present in the `X-Cue-Token` header on POSTs to the localhost
-/// permission server. Co-located with sessions.json under the user's
-/// 0700 status directory and itself written 0600, so only the same OS
-/// user can read it. Without this header any local process could win
-/// the loopback bind race and forge {"behavior":"allow"} responses.
+/// uses as the HMAC key when authenticating POSTs to the localhost
+/// permission server (the raw token is never sent on the wire; see the
+/// mutual-HMAC handshake in permission_server). Co-located with
+/// sessions.json under the user's 0700 status directory and itself written
+/// 0600, so only the same OS user can read it. Without the token a local
+/// process that wins the loopback bind race can neither authenticate a
+/// forged request nor forge a response the hook trusts.
 pub fn permission_token_path() -> PathBuf {
     sessions_json_path().with_file_name("permission-token")
 }
@@ -154,8 +156,30 @@ fn expand_tilde(path: &str, home: &Path) -> PathBuf {
     PathBuf::from(path)
 }
 
+/// Resolve the user's home directory, or terminate with a clear startup error.
+///
+/// Cue anchors every data file (sessions.json, the 0600 permission token,
+/// settings, the audit log) under the user's home. If neither `$HOME` (Unix)
+/// nor `%USERPROFILE%` (Windows) is set, there is nowhere safe to place them:
+/// falling back to `/tmp` would put a same-uid-only secret in a
+/// world-traversable directory, so that fallback is deliberately refused.
+///
+/// This previously `.expect()`-panicked, which the privacy panic hook in
+/// `run()` then rendered as an opaque "application error (details suppressed)"
+/// crash — useless to the user. Instead we log an explicit, actionable message
+/// and exit non-zero: a controlled, clearly-explained stop rather than a
+/// mystery panic, and never a silent write to the wrong place.
 fn home_dir() -> PathBuf {
-    dirs::home_dir().expect("Cannot determine home directory — refusing to use /tmp fallback")
+    match dirs::home_dir() {
+        Some(home) => home,
+        None => {
+            const MSG: &str = "Cue cannot start: unable to determine your home directory. \
+                 Set HOME (macOS/Linux) or %USERPROFILE% (Windows) and relaunch.";
+            log::error!("{MSG}");
+            eprintln!("{MSG}");
+            std::process::exit(1);
+        }
+    }
 }
 
 fn appdata_local() -> PathBuf {

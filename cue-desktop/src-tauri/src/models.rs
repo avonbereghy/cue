@@ -399,7 +399,11 @@ impl SessionMetrics {
     }
 
     pub fn cache_hit_rate(&self) -> f64 {
-        let total = self.cache_creation_tokens + self.cache_read_tokens;
+        // saturating_add: each counter can reach i64::MAX from crafted JSONL, so
+        // a plain `+` would overflow-panic in debug. Matches total_tokens above.
+        let total = self
+            .cache_creation_tokens
+            .saturating_add(self.cache_read_tokens);
         if total == 0 {
             return 0.0;
         }
@@ -950,6 +954,10 @@ pub struct Settings {
     /// Beta: show config counts (CLAUDE.md, hooks, MCP) in detail mode
     #[serde(default)]
     pub show_config_counts: bool,
+    /// Show the per-session usage line (est. cost, lifetime tokens, cache
+    /// efficiency) in the expanded card's deep-telemetry section. Defaults true.
+    #[serde(default = "default_true")]
+    pub show_usage: bool,
     /// Show comet tracers across the strings on every tool call. Off by default.
     #[serde(default)]
     pub show_tool_call_comets: bool,
@@ -1287,6 +1295,7 @@ impl Default for Settings {
             show_tool_pills: false,
             show_current_tool: false,
             show_config_counts: false,
+            show_usage: true,
             show_tool_call_comets: false,
             timer_display: "seconds".to_string(),
             auto_fit_window: true,

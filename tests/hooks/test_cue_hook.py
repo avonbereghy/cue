@@ -276,15 +276,49 @@ class TestSessionsGc:
         assert "new-ended" in sessions
         assert "old-idle" in sessions  # 7d rule is ended-only
 
-    def test_never_prunes_active_or_keep_id(self, hook):
+    def test_keeps_recent_active_and_keep_id(self, hook):
+        # Active entries within the horizon are never pruned, and keep_id is
+        # protected even when it's an old `ended` tombstone.
         now = 1_000_000.0
         sessions = {
-            "live-working": self._entry("working", 30 * 86400, now),
-            "current": self._entry("ended", 30 * 86400, now),
+            "live-working": self._entry("working", 3600, now),  # 1h old
+            "current": self._entry("ended", 30 * 86400, now),   # old, but keep_id
         }
         hook._gc_sessions(sessions, now, keep_id="current")
         assert "live-working" in sessions
         assert "current" in sessions
+
+    def test_prunes_crashed_active_past_horizon(self, hook):
+        # FIX #6: a session killed with kill -9 keeps its non-terminal state
+        # forever. Age it out once it's been idle past the 14-day horizon, so
+        # sessions.json can't regain unbounded growth. Terminal rules never
+        # reaped these before.
+        now = 1_000_000.0
+        sessions = {
+            "crashed": self._entry("working", 15 * 86400, now),   # >14d, dead
+            "recent": self._entry("working", 2 * 86400, now),     # <14d, kept
+            "current": self._entry("working", 20 * 86400, now),   # keep_id wins
+        }
+        hook._gc_sessions(sessions, now, keep_id="current")
+        assert "crashed" not in sessions
+        assert "recent" in sessions
+        assert "current" in sessions
+
+    def test_cap_falls_back_to_oldest_any_state(self, hook):
+        # A flood of still-recent stuck-active entries (younger than the horizon)
+        # must not pin the file above the cap: once terminal eviction is
+        # exhausted, the cap pass evicts oldest-of-any-state.
+        now = 1_000_000.0
+        cap = hook._GC_MAX_ENTRIES
+        sessions = {
+            f"w{i}": self._entry("working", i, now) for i in range(cap + 10)
+        }
+        hook._gc_sessions(sessions, now)
+        assert len(sessions) == cap
+        # No terminal entries exist, so the fallback evicts the oldest active
+        # ones: largest-age (largest i) go first, newest survive.
+        assert "w0" in sessions
+        assert f"w{cap + 9}" not in sessions
 
     def test_entry_cap_evicts_oldest_terminal(self, hook):
         now = 1_000_000.0
@@ -339,6 +373,114 @@ class TestPermissionRequestSeedsWaiting:
         invoke_hook("waiting", make_payload(
             hook_event_name="PermissionRequest", tool_name="Bash"))
         assert hook_env.read_sessions()["abc123"]["state"] == "error"
+
+
+class TestForwardPermissionProof:
+    """FIX #3 — mutual-HMAC handshake with the permission server.
+
+    The hook keys HMAC-SHA256 with the per-launch token (never sent on the
+    wire): it signs "req:"+nonce to authenticate the request, and it MUST
+    verify the server's "resp:"+nonce proof BEFORE emitting a decision. A
+    process that couldn't read the 0600 token file can't produce the proof,
+    so a missing/invalid proof must yield None → Claude Code falls back to its
+    native permission prompt (mirroring the 504/timeout path)."""
+
+    TOKEN = "deadbeefcafef00d0011223344556677"
+    ALLOW_BODY = json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PermissionRequest",
+            "decision": {"behavior": "allow"},
+        }
+    })
+
+    def _install(self, hook, monkeypatch, proof_fn, body=None):
+        """Patch the token read + urlopen. `proof_fn(nonce)` returns the
+        X-Cue-Proof header value the fake server sends (or None to omit it).
+        Returns a dict the test can inspect for the captured request headers."""
+        import email.message
+        import urllib.request
+
+        monkeypatch.setattr(hook, "_read_permission_token", lambda: self.TOKEN)
+        captured = {}
+        resp_body = self.ALLOW_BODY if body is None else body
+
+        class FakeResp:
+            def __init__(self, proof):
+                self.headers = email.message.Message()
+                if proof is not None:
+                    self.headers["X-Cue-Proof"] = proof
+                self._body = resp_body
+
+            def read(self):
+                return self._body.encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            # urllib capitalizes header keys: "X-Cue-Nonce" -> "X-cue-nonce".
+            nonce = req.get_header("X-cue-nonce")
+            captured["nonce"] = nonce
+            captured["auth"] = req.get_header("X-cue-auth")
+            captured["token_header"] = req.get_header("X-cue-token")
+            return FakeResp(proof_fn(nonce))
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        return captured
+
+    def _valid_proof(self, nonce):
+        import hashlib
+        import hmac
+        return hmac.new(
+            self.TOKEN.encode("utf-8"),
+            b"resp:" + nonce.encode("ascii"),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def test_valid_proof_returns_decision(self, hook, monkeypatch):
+        captured = self._install(hook, monkeypatch, self._valid_proof)
+        decision = hook._forward_permission_request({"tool_name": "Bash"}, "sess-1")
+        assert decision is not None
+        assert decision["hookSpecificOutput"]["decision"]["behavior"] == "allow"
+        # The request authenticated via nonce+HMAC and did NOT leak the raw token.
+        assert captured["nonce"] and captured["token_header"] is None
+        import hashlib
+        import hmac
+        expected_auth = hmac.new(
+            self.TOKEN.encode("utf-8"),
+            b"req:" + captured["nonce"].encode("ascii"),
+            hashlib.sha256,
+        ).hexdigest()
+        assert captured["auth"] == expected_auth
+
+    def test_wrong_proof_rejected(self, hook, monkeypatch):
+        # A forger who can't key HMAC with the real token sends a bad proof.
+        self._install(hook, monkeypatch, lambda nonce: "00" * 32)
+        decision = hook._forward_permission_request({"tool_name": "Bash"}, "sess-1")
+        assert decision is None
+
+    def test_missing_proof_rejected(self, hook, monkeypatch):
+        # No X-Cue-Proof header at all → untrusted → no decision emitted.
+        self._install(hook, monkeypatch, lambda nonce: None)
+        decision = hook._forward_permission_request({"tool_name": "Bash"}, "sess-1")
+        assert decision is None
+
+    def test_no_token_does_not_forward(self, hook, monkeypatch):
+        # Without the token file the hook must not talk to :3002 at all.
+        monkeypatch.setattr(hook, "_read_permission_token", lambda: None)
+        called = {"n": 0}
+        import urllib.request
+
+        def boom(*a, **k):
+            called["n"] += 1
+            raise AssertionError("must not open a connection without a token")
+
+        monkeypatch.setattr(urllib.request, "urlopen", boom)
+        assert hook._forward_permission_request({"tool_name": "Bash"}, "sess-1") is None
+        assert called["n"] == 0
 
 
 class TestLastToolWasAskQuestion:
@@ -412,6 +554,37 @@ class TestPostCompactTrigger:
         self._seed(hook_env)
         invoke_hook("working", make_payload(hook_event_name="PostCompact"))
         assert hook_env.read_sessions()["abc123"]["state"] == "working"
+
+
+class TestActiveSubagentsCoercion:
+    """FIX #M1: a non-int activeSubagents (string from a manual edit / version
+    skew) must not TypeError the stale-counter check or the counter arithmetic
+    — that would crash the hook on every event and permanently wedge the
+    session. The value is coerced to a non-negative int defensively."""
+
+    def test_coerces_common_shapes(self, hook):
+        assert hook._active_subagents({"activeSubagents": 3}) == 3
+        assert hook._active_subagents({"activeSubagents": "2"}) == 2
+        assert hook._active_subagents({"activeSubagents": 2.9}) == 2
+        assert hook._active_subagents({"activeSubagents": -5}) == 0  # clamped
+        assert hook._active_subagents({"activeSubagents": None}) == 0
+        assert hook._active_subagents({"activeSubagents": "garbage"}) == 0
+        assert hook._active_subagents({"activeSubagents": True}) == 0  # bool → 0
+        assert hook._active_subagents({}) == 0  # missing → 0
+
+    def test_string_counter_does_not_wedge_session(self, hook_env, invoke_hook):
+        # A stored string counter previously crashed `active_subs += 1`. The
+        # event must now process normally and persist a clean int counter.
+        hook_env.write_sessions({"abc123": {
+            "id": "abc123", "workspace": "/Users/x/proj", "state": "working",
+            "lastActivity": time.time() - 5, "startedAt": time.time() - 100,
+            "activeSubagents": "1",  # non-int from a manual edit
+        }})
+        invoke_hook("subagent", make_payload())
+        entry = hook_env.read_sessions()["abc123"]
+        assert entry["activeSubagents"] == 2
+        assert isinstance(entry["activeSubagents"], int)
+        assert entry["state"] == "subagent"
 
 
 class TestSubagentCounter:
@@ -1724,3 +1897,285 @@ class TestIsClaudeDesktopWrapper:
 
         monkeypatch.setattr(hook.subprocess, "run", lambda *a, **k: _R())
         assert hook._is_claude_desktop() is True
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Wave 3 / L1 — _read_status_or_recover must NOT silently reset on an
+# unexpected read error (EACCES/EIO): the file is presumed intact, so
+# resetting to {} and writing it back under lock would wipe every OTHER
+# session. It re-raises to drop this event instead.
+# ─────────────────────────────────────────────────────────────────────
+
+class TestReadStatusUnexpectedOSError:
+    @staticmethod
+    def _corrupt_files(hook_env):
+        import glob
+        return glob.glob(hook_env.file + ".corrupt-*")
+
+    def test_helper_reraises_on_eacces(self, hook, hook_env, monkeypatch):
+        # A valid, present file that momentarily can't be read must re-raise —
+        # not return an empty map that a later locked write would persist.
+        hook_env.write_sessions(
+            {"other": {"id": "other", "workspace": "/x", "state": "working",
+                       "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}}
+        )
+
+        def _boom(*a, **k):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(hook, "open", _boom, raising=False)
+        with pytest.raises(OSError):
+            hook._read_status_or_recover()
+        # No forensic sidecar: the rename-aside path is for parse errors only.
+        assert self._corrupt_files(hook_env) == []
+
+    def test_main_preserves_other_sessions_on_read_eacces(
+            self, hook, hook_env, invoke_hook, monkeypatch):
+        # End to end: a transient EACCES on the sessions.json read drops the
+        # event (main re-raises up to run_safe) WITHOUT clobbering the file —
+        # the pre-existing 'other' entry survives intact.
+        hook_env.write_sessions(
+            {"other": {"id": "other", "workspace": "/x", "state": "working",
+                       "lastActivity": 0.0, "startedAt": 0.0, "activeSubagents": 0}}
+        )
+        import builtins
+        real_open = builtins.open
+
+        def selective(path, *a, **k):
+            # Only the sessions.json READ fails; the lock-file open still works.
+            if isinstance(path, str) and path == hook_env.file:
+                raise PermissionError(13, "Permission denied")
+            return real_open(path, *a, **k)
+
+        monkeypatch.setattr(hook, "open", selective, raising=False)
+        with pytest.raises(OSError):
+            invoke_hook("working", make_payload(session_id="abc123"))
+        # Patch reverts at test teardown, but read_sessions uses pathlib, not
+        # hook.open, so we can read the file back right now.
+        sessions = hook_env.read_sessions()
+        assert "other" in sessions, "a transient read error must not wipe other sessions"
+        assert sessions["other"]["state"] == "working"
+        assert "abc123" not in sessions, "the errored event must be dropped, not written"
+
+    def test_missing_file_still_resets_clean(self, hook, hook_env):
+        # Regression guard: FileNotFoundError (a subclass of OSError) must keep
+        # its clean-reset behaviour and NOT be caught by the new re-raise.
+        if os.path.exists(hook_env.file):
+            os.unlink(hook_env.file)
+        assert hook._read_status_or_recover() == {"sessions": {}}
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Wave 3 / L2 — the MAIN locked write must not let a `waiting` rebuild
+# clobber a live `error` card (the done/idle guard covered only those two
+# actions; a PreToolUse promotion to `waiting` bypassed it).
+# ─────────────────────────────────────────────────────────────────────
+
+class TestWaitingDoesNotClobberErrorMainPath:
+    def _seed_error(self, hook_env):
+        now = time.time()
+        hook_env.write_sessions({
+            "abc123": {"id": "abc123", "workspace": "/x", "state": "error",
+                       "errorType": "rate_limit", "lastActivity": now,
+                       "startedAt": now, "stateChangedAt": now, "activeSubagents": 0},
+        })
+
+    def test_direct_waiting_action_preserves_error(self, hook_env, invoke_hook):
+        # A bare `waiting` action on an error card must be a no-op on the main
+        # locked path, keeping state=error and errorType intact.
+        self._seed_error(hook_env)
+        invoke_hook("waiting", make_payload(session_id="abc123",
+                                            hook_event_name="PostToolUse"))
+        s = hook_env.read_sessions()["abc123"]
+        assert s["state"] == "error"
+        assert s["errorType"] == "rate_limit"
+
+    def test_pretooluse_askquestion_preserves_error(self, hook_env, invoke_hook):
+        # The realistic path: PreToolUse(AskUserQuestion) promotes action to
+        # `waiting`; neither the quick seed nor the main write may downgrade
+        # the red error card to yellow waiting.
+        self._seed_error(hook_env)
+        invoke_hook("working", make_payload(
+            session_id="abc123", hook_event_name="PreToolUse",
+            tool_name="AskUserQuestion"))
+        s = hook_env.read_sessions()["abc123"]
+        assert s["state"] == "error"
+        assert s["errorType"] == "rate_limit"
+
+    def test_waiting_still_lands_when_not_error(self, hook_env, invoke_hook):
+        # Guard must not over-reach: a `waiting` action on a non-error card
+        # still writes waiting.
+        now = time.time()
+        hook_env.write_sessions({
+            "abc123": {"id": "abc123", "workspace": "/x", "state": "working",
+                       "lastActivity": now, "startedAt": now, "activeSubagents": 0},
+        })
+        invoke_hook("waiting", make_payload(session_id="abc123",
+                                            hook_event_name="PostToolUse"))
+        assert hook_env.read_sessions()["abc123"]["state"] == "waiting"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Wave 3 / L3 — the workspace (cwd) must be sanitized to valid UTF-8
+# before it lands in sessions.json. A lone surrogate (\udcXX from a
+# non-UTF-8 Linux path) is accepted by Python's json but REJECTED by
+# serde_json on the Rust side, bricking the whole file permanently.
+# ─────────────────────────────────────────────────────────────────────
+
+class TestWorkspaceUtf8Sanitize:
+    def test_helper_strips_lone_surrogate(self, hook):
+        out = hook._sanitize_workspace("/Users/x/pro\udce9ject")
+        out.encode("utf-8")  # must not raise — no lone surrogate remains
+        assert "\udce9" not in out
+
+    def test_helper_non_string_falls_back_to_empty(self, hook):
+        assert hook._sanitize_workspace(None) == ""
+        assert hook._sanitize_workspace(1234) == ""
+        assert hook._sanitize_workspace(["/x"]) == ""
+
+    def test_helper_passes_clean_utf8_unchanged(self, hook):
+        assert hook._sanitize_workspace("/Users/x/proj") == "/Users/x/proj"
+        # Legitimate non-ASCII UTF-8 survives.
+        assert hook._sanitize_workspace("/Users/x/café") == "/Users/x/café"
+
+    def test_written_file_has_no_lone_surrogate(self, hook_env, invoke_hook):
+        from pathlib import Path
+        bad = "/Users/x/pro\udce9ject"
+        invoke_hook("working", make_payload(session_id="abc123", cwd=bad))
+        # The bytes on disk must decode cleanly as UTF-8 (serde-safe) and carry
+        # no escaped lone surrogate.
+        raw = Path(hook_env.file).read_bytes()
+        text = raw.decode("utf-8")  # raises if a lone surrogate escaped
+        assert "\\udce9" not in text
+        ws = hook_env.read_sessions()["abc123"]["workspace"]
+        ws.encode("utf-8")  # round-trips as valid UTF-8
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Wave 3 / L4 — the launcher-source resolution (incl. the up-to-2s `ps`
+# ancestry walk) must run BEFORE the flock is taken, never inside the
+# critical section where it would starve concurrent hooks. Once-per-
+# session caching is preserved via an unlocked stored-source peek.
+# ─────────────────────────────────────────────────────────────────────
+
+class TestSourceResolvedOutsideLock:
+    def _clear_term(self, monkeypatch):
+        monkeypatch.delenv("TERM_PROGRAM", raising=False)
+        monkeypatch.delenv("VSCODE_PID", raising=False)
+
+    def test_peek_returns_stored_source(self, hook, hook_env):
+        hook_env.write_sessions({"s1": {"id": "s1", "source": "vscode"}})
+        assert hook._peek_stored_source("s1") == "vscode"
+
+    def test_peek_none_when_missing(self, hook, hook_env):
+        if os.path.exists(hook_env.file):
+            os.unlink(hook_env.file)
+        assert hook._peek_stored_source("s1") is None
+
+    def test_peek_none_when_no_such_session(self, hook, hook_env):
+        hook_env.write_sessions({"s1": {"id": "s1", "source": "vscode"}})
+        assert hook._peek_stored_source("other") is None
+
+    def test_peek_none_on_corrupt(self, hook, hook_env):
+        from pathlib import Path
+        Path(hook_env.file).write_text("{not json")
+        # Best-effort: corruption is the locked path's job; peek just yields None.
+        assert hook._peek_stored_source("s1") is None
+
+    def test_resolve_unlocked_env_verdict_skips_walk(self, hook, monkeypatch):
+        monkeypatch.setattr(
+            hook, "_is_claude_desktop",
+            lambda: pytest.fail("walked ancestry despite an env verdict"),
+        )
+        monkeypatch.setattr(
+            hook, "_peek_stored_source",
+            lambda sid: pytest.fail("peeked despite an env verdict"),
+        )
+        assert hook._resolve_source_unlocked("s1", "vscode") == "vscode"
+
+    def test_resolve_unlocked_stored_wins_no_walk(self, hook, hook_env, monkeypatch):
+        hook_env.write_sessions({"s1": {"id": "s1", "source": "iterm"}})
+        monkeypatch.setattr(
+            hook, "_is_claude_desktop",
+            lambda: pytest.fail("re-walked ancestry despite a stored source"),
+        )
+        assert hook._resolve_source_unlocked("s1", None) == "iterm"
+
+    def test_resolve_unlocked_walks_when_undetermined(self, hook, hook_env, monkeypatch):
+        if os.path.exists(hook_env.file):
+            os.unlink(hook_env.file)
+        monkeypatch.setattr(hook, "_is_claude_desktop", lambda: True)
+        assert hook._resolve_source_unlocked("s1", None) == "claude-desktop"
+
+    def test_ancestry_walk_runs_before_lock_is_held(
+            self, hook, hook_env, invoke_hook, monkeypatch):
+        # The whole point of the hoist: prove `ps` runs before flock acquisition.
+        self._clear_term(monkeypatch)
+        calls = []
+
+        def _walk():
+            calls.append("ps")
+            return True
+
+        real_lock = hook._lock
+
+        def _traced_lock(lock_file):
+            calls.append("lock")
+            return real_lock(lock_file)
+
+        monkeypatch.setattr(hook, "_is_claude_desktop", _walk)
+        monkeypatch.setattr(hook, "_lock", _traced_lock)
+        invoke_hook("working", make_payload(session_id="s-order"))
+        assert "ps" in calls and "lock" in calls
+        assert calls.index("ps") < calls.index("lock"), (
+            "the ps ancestry walk must run before the flock is acquired"
+        )
+        assert hook_env.read_sessions()["s-order"]["source"] == "claude-desktop"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Wave 3 / L5 — orphaned `*.json.tmp` files (from hooks SIGKILLed between
+# mkstemp and os.replace) are swept inside the locked write once they age
+# past the 1h horizon; fresh temps and non-temp files are never touched.
+# ─────────────────────────────────────────────────────────────────────
+
+class TestOrphanTmpSweep:
+    @staticmethod
+    def _mk(dir_, name, age_secs):
+        path = os.path.join(dir_, name)
+        with open(path, "w") as f:
+            f.write("x")
+        t = time.time() - age_secs
+        os.utime(path, (t, t))
+        return path
+
+    def test_sweeps_stale_tmp(self, hook, hook_env):
+        stale = self._mk(hook_env.dir, "tmpABCDEF.json.tmp", 7200)
+        hook._sweep_orphan_tmps(time.time())
+        assert not os.path.exists(stale)
+
+    def test_keeps_fresh_tmp(self, hook, hook_env):
+        # A temp a live hook created moments ago (about to os.replace) survives.
+        fresh = self._mk(hook_env.dir, "tmpFRESH1.json.tmp", 5)
+        hook._sweep_orphan_tmps(time.time())
+        assert os.path.exists(fresh)
+
+    def test_ignores_non_tmp_files(self, hook, hook_env):
+        # sessions.json and .corrupt sidecars must never be swept, even when old.
+        keep = self._mk(hook_env.dir, "sessions.json", 999999)
+        corrupt = self._mk(hook_env.dir, "sessions.json.corrupt-123", 999999)
+        hook._sweep_orphan_tmps(time.time())
+        assert os.path.exists(keep)
+        assert os.path.exists(corrupt)
+
+    def test_missing_dir_is_noop(self, hook, monkeypatch, tmp_path):
+        monkeypatch.setattr(hook, "STATUS_DIR", str(tmp_path / "does-not-exist"))
+        hook._sweep_orphan_tmps(time.time())  # must not raise
+
+    def test_main_write_sweeps_orphan_tmp(self, hook_env, invoke_hook, hook):
+        # End to end: a normal locked write sweeps a stale orphan tmp.
+        stale = self._mk(hook_env.dir, "tmpORPHAN1.json.tmp", 7200)
+        invoke_hook("working", make_payload(session_id="abc123"))
+        assert not os.path.exists(stale)
+        # The real write still succeeded.
+        assert "abc123" in hook_env.read_sessions()

@@ -688,6 +688,57 @@ fn get_permission_history(session_id: String) -> Vec<models::PermissionLogEntry>
     permission_log::read_permission_log(&session_id)
 }
 
+/// Build the `permission-request` frontend event payload from a stored request,
+/// computing the tool summary. Shared by the live emit path and
+/// `get_pending_permissions` so the two payloads can never drift out of shape —
+/// the frontend deserializes both as its `PermissionRequest` type.
+fn permission_request_payload(req: &models::PermissionRequest) -> serde_json::Value {
+    let summary = summary_formatter::format_tool_summary(&req.tool_name, &req.tool_input);
+    serde_json::json!({
+        "requestId": req.request_id,
+        "sessionId": req.session_id,
+        "toolName": req.tool_name,
+        "toolInput": req.tool_input,
+        "summary": summary,
+        "hookEventName": req.hook_event_name,
+        "receivedAt": req.received_at,
+    })
+}
+
+/// Map the request IDs still awaiting a decision to their frontend payloads,
+/// skipping any ID whose metadata has already been reaped (defensive: metadata
+/// is inserted before the pending slot and removed after it, so this normally
+/// maps 1:1). Split out from the command so the mapping is unit-testable
+/// without standing up a Tauri `State`.
+fn build_pending_permissions(
+    pending_ids: &[String],
+    metadata: &HashMap<String, models::PermissionRequest>,
+) -> Vec<serde_json::Value> {
+    pending_ids
+        .iter()
+        .filter_map(|id| metadata.get(id).map(permission_request_payload))
+        .collect()
+}
+
+/// Return every permission request currently awaiting a decision, in the same
+/// shape as the `permission-request` event.
+///
+/// Recovery path for the permission-prompt wipe race: the frontend's
+/// `sessions-updated` listener can receive a snapshot up to ~1s stale (the
+/// Focused-rehydrate and the 1s poll both emit a cached enriched snapshot), so
+/// a just-arrived prompt can look like it already left the "waiting" state.
+/// Rather than trust that snapshot, the frontend re-syncs against this command
+/// and drops a pending entry only when the backend confirms it is no longer
+/// pending here.
+#[tauri::command]
+fn get_pending_permissions(state: State<'_, AppState>) -> Vec<serde_json::Value> {
+    // Snapshot the still-pending IDs first (releasing that lock) before taking
+    // the metadata lock — never hold both std Mutexes at once.
+    let pending_ids = state.pending_permissions.pending_ids();
+    let metadata = state.permission_metadata.lock_safe();
+    build_pending_permissions(&pending_ids, &metadata)
+}
+
 /// Minimal session payload written by sandbox mode into sessions.json.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1689,9 +1740,15 @@ fn startup_checks() {
         log::error!("Failed to create directories: {}", e);
     }
 
-    // Verify and correct file permissions
+    // Verify and correct file permissions. The permission audit log holds a
+    // record of every tool decision, so it gets the same owner-only treatment
+    // as sessions.json and settings.json. (verify_file_permissions is a no-op
+    // when the file doesn't exist yet, e.g. before the first decision.)
     let _ = security::verify_file_permissions(&paths::sessions_json_path());
     let _ = security::verify_file_permissions(&paths::settings_path());
+    if let Ok(log_path) = permission_log::log_path() {
+        let _ = security::verify_file_permissions(&log_path);
+    }
 
     // Clean stale temp files
     if let Some(parent) = paths::sessions_json_path().parent() {
@@ -1890,6 +1947,7 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -1924,6 +1982,7 @@ pub fn run() {
             approve_permission,
             deny_permission,
             get_permission_history,
+            get_pending_permissions,
             revive_session,
             dismiss_session,
             restore_session,
@@ -2136,11 +2195,12 @@ pub fn run() {
             let perm_settings = settings::load_settings();
             if perm_settings.permissions_enabled {
                 // Provision a fresh per-launch token before opening the socket.
-                // The Python hook reads the same file and presents the token in
-                // an X-Cue-Token header; the server rejects anything else with
-                // 403. Without this, any local process winning the loopback
-                // bind race could forge `{"behavior":"allow"}` responses to
-                // Claude Code prompts.
+                // The Python hook reads the same file and uses it as the HMAC
+                // key over a per-request nonce (the raw token never crosses the
+                // wire); the server verifies that MAC and 401s anything else.
+                // Without this, any local process winning the loopback bind
+                // race could forge `{"behavior":"allow"}` responses to Claude
+                // Code prompts.
                 match permission_server::provision_token() {
                     Ok(token) => {
                         spawn_permission_server(
@@ -2316,15 +2376,14 @@ async fn handle_permission_connection(
         return Ok(());
     }
 
-    // Per-launch token auth on every mutating endpoint. /health stays open
-    // because the only caller is the Python hook's connectivity probe and
+    // Per-launch mutual-HMAC auth on every mutating endpoint. /health stays
+    // open because the only caller is the Python hook's connectivity probe and
     // we want a 200 with no auth to be a definitive "server is up" signal
-    // (otherwise diagnostics conflate "Cue is down" with "hook can't read
-    // the token file"). Anything that produces a side effect — currently
-    // just /permission-request — must present the matching X-Cue-Token
-    // header. Header parsing is case-insensitive per RFC 7230 §3.2.
-    let token_ok = permission_server::token_header_matches(&header_str, expected_token.as_str());
-
+    // (otherwise diagnostics conflate "Cue is down" with "hook can't read the
+    // token file"). Anything that produces a side effect — currently just
+    // /permission-request — must present a valid X-Cue-Nonce + X-Cue-Auth pair
+    // (see permission_server handshake docs). The raw token is never sent on
+    // the wire; we recompute the MAC and constant-time-compare below.
     match (method, path) {
         ("GET", "/health") => {
             let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK";
@@ -2332,14 +2391,25 @@ async fn handle_permission_connection(
         }
         ("POST", "/permission-request") => {
             // Reject unauthenticated POSTs before allocating any state for
-            // them. The hook reads STATUS_DIR/permission-token (0600) on
-            // every invocation and sends the value verbatim in X-Cue-Token.
-            if !token_ok {
-                let response =
-                    "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                let _ = stream.write_all(response.as_bytes()).await;
-                return Ok(());
-            }
+            // them. The hook reads STATUS_DIR/permission-token (0600) on every
+            // invocation and proves knowledge of it by HMAC'ing a per-request
+            // nonce; we recompute the MAC with the same on-disk token and
+            // constant-time-compare. On any missing header / mismatch -> 401
+            // and NO prompt (a forger who wins the bind race but can't read the
+            // token file must not be able to surface a dialog). The returned
+            // nonce is retained so we can sign the response the hook verifies.
+            let nonce = match permission_server::verify_request_auth(
+                &header_str,
+                expected_token.as_str(),
+            ) {
+                Some(n) => n.to_string(),
+                None => {
+                    let response =
+                        "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    return Ok(());
+                }
+            };
             // Parse Content-Length to ensure we have the full body
             let content_length: usize = permission_server::parse_content_length(&header_str);
 
@@ -2428,6 +2498,12 @@ async fn handle_permission_connection(
                 received_at: now,
             };
 
+            // Build the frontend event payload before we hand ownership of the
+            // request to the metadata map below. Shared with the
+            // get_pending_permissions command (permission_request_payload) so
+            // the live event and the recovery query can't drift out of shape.
+            let frontend_payload = permission_request_payload(&permission_req);
+
             // F-reliability-007 — insert metadata BEFORE the pending receiver.
             // Previously the order was reversed: a resolve that arrived between
             // the pending-insert and the metadata-insert would find pending
@@ -2447,22 +2523,11 @@ async fn handle_permission_connection(
                 Some(rx) => rx,
                 None => {
                     metadata.lock_safe().remove(&request_id);
-                    let response = "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nToo many requests";
+                    let response = "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 17\r\nConnection: close\r\n\r\nToo many requests";
                     let _ = stream.write_all(response.as_bytes()).await;
                     return Ok(());
                 }
             };
-
-            // Build frontend event payload (includes computed summary)
-            let frontend_payload = serde_json::json!({
-                "requestId": request_id,
-                "sessionId": session_id,
-                "toolName": tool_name,
-                "toolInput": tool_input,
-                "summary": summary,
-                "hookEventName": hook_event_name,
-                "receivedAt": now,
-            });
 
             // De-dupe with the state-transition notifier: on its next poll it
             // will see this session flip to "waiting" and would fire a generic
@@ -2529,8 +2594,17 @@ async fn handle_permission_connection(
                 models::PermissionDecision::Deny => permission_server::DENY_RESPONSE,
             };
 
+            // Sign the decision with hex(HMAC-SHA256(token, "resp:"+nonce)) so
+            // the hook can authenticate this response before acting on it. A
+            // process that couldn't read the token file can't produce a proof
+            // the hook will accept, so it can't forge an "allow". Only the 200
+            // decision carries a proof; the 4xx/504 arms deliberately don't, so
+            // the hook falls back to Claude Code's native prompt on any failure.
+            let proof = permission_server::response_proof(expected_token.as_str(), &nonce);
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{}: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                permission_server::PROOF_HEADER,
+                proof,
                 response_body.len(),
                 response_body
             );
@@ -3438,5 +3512,75 @@ mod tests {
             icon_cache_key(&after),
             "dropping a bar must flip the icon cache key so the icon re-renders"
         );
+    }
+
+    // ── get_pending_permissions mapping ─────────────────────────────────
+
+    fn mk_permission_req(request_id: &str, session_id: &str) -> models::PermissionRequest {
+        models::PermissionRequest {
+            request_id: request_id.to_string(),
+            session_id: session_id.to_string(),
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({ "command": "npm install" }),
+            hook_event_name: "PermissionRequest".to_string(),
+            received_at: 1234.5,
+        }
+    }
+
+    #[test]
+    fn test_build_pending_permissions_empty() {
+        // No pending IDs -> empty list, regardless of what metadata holds.
+        let mut metadata = HashMap::new();
+        metadata.insert("orphan".to_string(), mk_permission_req("orphan", "s1"));
+        assert!(build_pending_permissions(&[], &metadata).is_empty());
+    }
+
+    #[test]
+    fn test_build_pending_permissions_maps_to_event_shape() {
+        // A pending ID with metadata maps to the exact `permission-request`
+        // event shape the frontend deserializes as `PermissionRequest`.
+        let mut metadata = HashMap::new();
+        metadata.insert("req-1".to_string(), mk_permission_req("req-1", "sess-a"));
+
+        let out = build_pending_permissions(&["req-1".to_string()], &metadata);
+        assert_eq!(out.len(), 1);
+        let p = &out[0];
+        assert_eq!(p["requestId"], "req-1");
+        assert_eq!(p["sessionId"], "sess-a");
+        assert_eq!(p["toolName"], "Bash");
+        assert_eq!(p["toolInput"]["command"], "npm install");
+        assert_eq!(p["hookEventName"], "PermissionRequest");
+        assert_eq!(p["receivedAt"], 1234.5);
+        // The camelCase summary field is present and computed (not null).
+        assert!(p["summary"].is_string());
+        // Field set matches the frontend PermissionRequest interface exactly.
+        let obj = p.as_object().unwrap();
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "hookEventName",
+                "receivedAt",
+                "requestId",
+                "sessionId",
+                "summary",
+                "toolInput",
+                "toolName",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_build_pending_permissions_skips_ids_without_metadata() {
+        // A pending ID whose metadata was already reaped is skipped, and the
+        // rest still map — ordering follows the supplied id slice.
+        let mut metadata = HashMap::new();
+        metadata.insert("has-meta".to_string(), mk_permission_req("has-meta", "s1"));
+
+        let out =
+            build_pending_permissions(&["missing".to_string(), "has-meta".to_string()], &metadata);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["requestId"], "has-meta");
     }
 }

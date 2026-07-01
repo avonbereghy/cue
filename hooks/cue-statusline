@@ -21,13 +21,56 @@
 
 set -euo pipefail
 
-# Determine output path (must match paths.rs rate_limits_path)
+# --- WSL detection — mirrors cue-hook._is_wsl / _get_wsl_windows_status_dir ---
+# On WSL the Cue app runs natively on Windows and reads %LOCALAPPDATA%\Cue,
+# which is /mnt/c/Users/<user>/AppData/Local/Cue seen from inside WSL. cue-hook
+# already writes sessions.json there; without the same branch here the
+# rate-limit file lands in $XDG_DATA_HOME/cue that the Windows app never reads,
+# so the rate meter stays permanently empty. The two paths below are overridable
+# for testing but default to the exact locations cue-hook inspects.
+_is_wsl() {
+    # cue-hook: "microsoft" in /proc/version (case-insensitive).
+    local proc_version="${CUE_STATUSLINE_PROC_VERSION:-/proc/version}"
+    [[ -r "$proc_version" ]] || return 1
+    grep -qi microsoft "$proc_version" 2>/dev/null
+}
+
+_wsl_windows_status_dir() {
+    # cue-hook: list /mnt/c/Users, drop well-known system profiles and dotfiles,
+    # and only auto-detect when exactly one real profile remains. Prints the
+    # AppData\Local\Cue path on success; returns non-zero (no output) otherwise.
+    local win_users="${CUE_STATUSLINE_WIN_USERS:-/mnt/c/Users}"
+    [[ -d "$win_users" ]] || return 1
+    local candidates=() entry base
+    for entry in "$win_users"/*; do
+        [[ -e "$entry" ]] || continue  # unmatched glob expands literally — skip
+        base=${entry##*/}
+        case "$base" in
+            Public | Default | "Default User" | "All Users" | desktop.ini) continue ;;
+            .*) continue ;;
+        esac
+        candidates+=("$base")
+    done
+    [[ ${#candidates[@]} -eq 1 ]] || return 1
+    printf '%s/%s/AppData/Local/Cue\n' "$win_users" "${candidates[0]}"
+}
+
+# Determine output path. Must match the dir the Cue app reads:
+#   - cue-hook.get_status_dir() (the sessions.json writer), and
+#   - paths.rs::rate_limits_path() (the Windows-native app on WSL).
 if [[ "$OSTYPE" == "darwin"* ]]; then
     OUTPUT_DIR="$HOME/Library/Application Support/Cue"
 elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
     OUTPUT_DIR="${LOCALAPPDATA:-$HOME/AppData/Local}/Cue"
 else
-    OUTPUT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/cue"
+    # Linux (or other Unix): prefer the Windows-side dir on WSL, else XDG.
+    OUTPUT_DIR=""
+    if _is_wsl; then
+        OUTPUT_DIR=$(_wsl_windows_status_dir) || OUTPUT_DIR=""
+    fi
+    if [[ -z "$OUTPUT_DIR" ]]; then
+        OUTPUT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/cue"
+    fi
 fi
 
 mkdir -p "$OUTPUT_DIR"
@@ -75,10 +118,21 @@ try:
     }
 
     output_file = sys.argv[1]
+    # Atomic write. Use os.replace (not os.rename) so an already-present target
+    # doesn't raise on Windows/msys, and unlink the temp file on any failure
+    # after mkstemp so a crash between create and rename can't leak orphaned
+    # temp files into the output dir.
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(output_file))
-    with os.fdopen(fd, 'w') as f:
-        json.dump(result, f)
-    os.rename(tmp, output_file)
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(result, f)
+        os.replace(tmp, output_file)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 except Exception:
     pass
 " "$OUTPUT_FILE" <<< "$INPUT"

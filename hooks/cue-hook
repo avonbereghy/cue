@@ -23,8 +23,15 @@ if sys.platform == "win32":
         ~5s hook budget until Claude Code kills the hook and drops the update.
         Retry the non-blocking `LK_NBLCK` every 50ms for up to 2 seconds —
         mirroring the Unix path — then give up by raising (callers guard it)."""
-        # msvcrt.locking requires content covering the locked byte range
-        lock_file.write(b"L")
+        # msvcrt.locking needs at least one byte in the file to cover the
+        # locked byte range [0, 1). The lock file is opened append-binary, so
+        # an unconditional write(b"L") appended a byte on EVERY hook invocation
+        # forever, growing the file without bound. Seed the marker only while
+        # the file is still empty; the single existing byte suffices thereafter.
+        lock_file.seek(0, 2)  # to end → tell() is the current file size
+        if lock_file.tell() == 0:
+            lock_file.write(b"L")
+            lock_file.flush()
         deadline = time.monotonic() + 2.0
         while True:
             lock_file.seek(0)
@@ -273,6 +280,28 @@ def _subagent_jsonls_active(transcript_path, now, window_secs=30.0):
     return False
 
 
+def _active_subagents(entry):
+    """Read `activeSubagents` from a session entry as a non-negative int.
+
+    A hand-edited or version-skewed sessions.json can store this as a string
+    ("2"), null, or some other non-int. The stale-counter check (`<= 0`) and the
+    increment/decrement arithmetic downstream would then raise TypeError, which
+    crashes the hook on EVERY subsequent event and permanently wedges the
+    session (its state can never advance again). Coerce defensively here, the
+    same way lastActivity/stateChangedAt are isinstance-guarded elsewhere.
+    """
+    v = entry.get("activeSubagents", 0)
+    # bool is an int subclass but is never a meaningful subagent count.
+    if isinstance(v, bool):
+        return 0
+    if isinstance(v, (int, float)):
+        return max(0, int(v))
+    try:
+        return max(0, int(v))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _maybe_clear_stale_subagent_counter(existing, transcript_path, now):
     """Self-heal a leaked `activeSubagents` counter.
 
@@ -295,7 +324,7 @@ def _maybe_clear_stale_subagent_counter(existing, transcript_path, now):
     demoter (`should_demote_stale_subagent`); this is the persisted side so the
     next event sees a clean counter and the drift loop doesn't re-arm.
     """
-    if existing.get("activeSubagents", 0) <= 0:
+    if _active_subagents(existing) <= 0:
         return
     state_changed = existing.get("stateChangedAt")
     if not isinstance(state_changed, (int, float)):
@@ -312,19 +341,76 @@ def _maybe_clear_stale_subagent_counter(existing, transcript_path, now):
 # ever pruned them: observed 691 entries / 327 KB, rewritten + fsynced on
 # every hook event. GC runs inside the main locked write.
 _GC_ENDED_MAX_AGE_SECS = 7 * 86400
+# Sessions that die without a terminal event (kill -9, crash, OOM) keep their
+# last active state forever, so the terminal-only rules never reap them and
+# sessions.json regains unbounded growth. Age ANY entry out once it has shown
+# no activity for this long — a fortnight of silence means the process is gone
+# regardless of the recorded state. Far longer than any real session, so a
+# live-but-quiet chat is never dropped; the Rust liveness checks still handle
+# the fast, in-session demotion.
+_GC_STALE_MAX_AGE_SECS = 14 * 86400
 _GC_MAX_ENTRIES = 500
 _GC_TERMINAL_STATES = ("ended", "idle", "done", "error")
+
+# Orphaned `*.json.tmp` files: every atomic write does tempfile.mkstemp →
+# write → os.replace. A hook SIGKILLed (or crashed) in the gap between mkstemp
+# and os.replace leaves its temp file behind, and nothing ever cleaned them, so
+# they accumulate in STATUS_DIR indefinitely. Sweep any older than this horizon
+# inside the locked write. One hour is thousands of times the millisecond a
+# live hook actually spends between creating a tmp and renaming it, so the
+# sweep can never race-delete a temp file a concurrent hook just created and is
+# about to os.replace into place.
+_TMP_ORPHAN_MAX_AGE_SECS = 3600.0
+
+
+def _sweep_orphan_tmps(now):
+    """Unlink stale `*.json.tmp` files abandoned in STATUS_DIR by hooks killed
+    between tempfile.mkstemp and os.replace.
+
+    Best-effort and self-contained: a listing failure, a file that vanished
+    from under us (a concurrent hook completed its os.replace), or an unlink
+    error are all ignored. Only files whose mtime predates
+    _TMP_ORPHAN_MAX_AGE_SECS are removed, so a temp file a live hook created
+    moments ago — and is about to rename into place — is never touched. Runs
+    inside the main locked write, alongside the sessions GC.
+    """
+    try:
+        names = os.listdir(STATUS_DIR)
+    except OSError:
+        return
+    for name in names:
+        if not name.endswith(".json.tmp"):
+            continue
+        path = os.path.join(STATUS_DIR, name)
+        try:
+            if (now - os.path.getmtime(path)) > _TMP_ORPHAN_MAX_AGE_SECS:
+                os.unlink(path)
+        except OSError:
+            continue
 
 
 def _gc_sessions(sessions, now, keep_id=None):
     """Prune dead entries from the sessions dict in place.
 
-    Two passes: drop `ended` tombstones older than 7 days, then enforce a
-    hard entry cap by evicting the oldest terminal-state entries. Active
-    states (working/thinking/subagent/waiting/compacting) and the session
-    being written this invocation are never pruned — a stale active entry is
-    the Rust liveness checks' job to demote, not ours to silently delete.
+    Passes, in order:
+      1. drop `ended` tombstones older than 7 days;
+      2. drop ANY entry — active or terminal — idle past the 14-day horizon,
+         which is the only rule that can reap a session that died in a
+         non-terminal state (kill -9 / crash);
+      3. enforce a hard entry cap, evicting the oldest terminal-state entries
+         first and falling back to oldest-of-any-state if that isn't enough
+         (a flood of still-recent stuck-active entries would otherwise pin the
+         file above the cap forever).
+
+    The session being written this invocation (`keep_id`) is never pruned.
     """
+    def _age_of(sid):
+        la = sessions[sid].get("lastActivity")
+        # Unknown/garbled timestamp → treat as maximally old so it sorts to the
+        # front of the eviction order rather than being kept indefinitely.
+        return (now - la) if isinstance(la, (int, float)) else float("inf")
+
+    # Pass 1: expire old `ended` tombstones.
     expired = [
         sid for sid, e in sessions.items()
         if sid != keep_id
@@ -335,18 +421,38 @@ def _gc_sessions(sessions, now, keep_id=None):
     for sid in expired:
         del sessions[sid]
 
+    # Pass 2: expire anything idle past the generous horizon, regardless of
+    # state — reaps crashed non-terminal entries the terminal rules can't.
+    stale = [
+        sid for sid, e in sessions.items()
+        if sid != keep_id
+        and isinstance(e.get("lastActivity"), (int, float))
+        and (now - e["lastActivity"]) > _GC_STALE_MAX_AGE_SECS
+    ]
+    for sid in stale:
+        del sessions[sid]
+
+    # Pass 3: hard entry cap.
     overflow = len(sessions) - _GC_MAX_ENTRIES
     if overflow > 0:
-        def _age_key(sid):
-            la = sessions[sid].get("lastActivity")
-            return la if isinstance(la, (int, float)) else 0
-        candidates = sorted(
+        # Oldest (largest age) first.
+        terminal = sorted(
             (sid for sid, e in sessions.items()
              if sid != keep_id and e.get("state") in _GC_TERMINAL_STATES),
-            key=_age_key,
+            key=_age_of, reverse=True,
         )
-        for sid in candidates[:overflow]:
+        for sid in terminal[:overflow]:
             del sessions[sid]
+        # Still over cap? Fall back to evicting the oldest entries of ANY state
+        # so a wall of stuck-active entries can't hold the file above the cap.
+        overflow = len(sessions) - _GC_MAX_ENTRIES
+        if overflow > 0:
+            anything = sorted(
+                (sid for sid in sessions if sid != keep_id),
+                key=_age_of, reverse=True,
+            )
+            for sid in anything[:overflow]:
+                del sessions[sid]
 
 
 def _read_status_or_recover():
@@ -355,9 +461,20 @@ def _read_status_or_recover():
     A present-but-malformed file (partial write, disk corruption) is renamed
     aside to STATUS_FILE.corrupt-<ts> before returning an empty set, so a
     single bad file can't silently erase every other tracked session's entry.
-    Missing or otherwise-unreadable files reset cleanly. The caller still runs
-    the result through _validate_sessions. Shared by the fast write-path and
-    the main read-modify-write so their recovery behaviour can't drift.
+    A genuinely-missing file (FileNotFoundError) resets cleanly.
+
+    An UNEXPECTED OSError — EACCES, EIO, ENOMEM, a transient network-FS
+    hiccup — is deliberately re-raised, NOT swallowed into an empty set. The
+    file is almost certainly intact and simply momentarily unreadable; if we
+    returned {"sessions": {}} here the caller would proceed to a locked write
+    of that empty map and silently wipe every OTHER live session's entry. A
+    transient read error must drop THIS event (run_safe / _quick_state_write's
+    guard turn the raise into a safe no-op) rather than trigger a destructive
+    rewrite. Corruption still round-trips through the rename-aside above.
+
+    The caller still runs the result through _validate_sessions. Shared by the
+    fast write-path and the main read-modify-write so their recovery behaviour
+    can't drift.
     """
     try:
         with open(STATUS_FILE, "r", encoding="utf-8") as f:
@@ -371,11 +488,20 @@ def _read_status_or_recover():
         except OSError:
             pass
         return {"sessions": {}}
+    except OSError:
+        # Unexpected, non-missing read failure (EACCES/EIO/…): the on-disk
+        # file is presumed intact, so re-raise to drop this event instead of
+        # overwriting it with an empty map. Callers wrap this in fail-safe
+        # guards, so the raise degrades to a silent no-op — no destructive
+        # write, no traceback into Claude Code.
+        raise
     except Exception:
+        # Truly exotic non-OSError failure (e.g. RecursionError on pathological
+        # nesting): preserve the original resilient behaviour — start fresh.
         return {"sessions": {}}
 
 
-def _quick_state_write(session_id, workspace, source, subprocess_label,
+def _quick_state_write(session_id, workspace, resolved_source, subprocess_label,
                        last_tokens, hook_start_time,
                        team_name=None, agent_name=None,
                        permission_mode=None):
@@ -435,8 +561,12 @@ def _quick_state_write(session_id, workspace, source, subprocess_label,
                     "lastActivity": now,
                     "stateChangedAt": state_changed_at,
                     "startedAt": existing.get("startedAt", now),
-                    "source": _resolve_source(existing.get("source"), source),
-                    "activeSubagents": existing.get("activeSubagents", 0),
+                    # `resolved_source` was settled outside this lock (the `ps`
+                    # ancestry walk must not run in the critical section). A
+                    # source already on disk still wins in case a concurrent
+                    # hook stored one between the unlocked peek and this write.
+                    "source": existing.get("source") or resolved_source,
+                    "activeSubagents": _active_subagents(existing),
                     "pid": os.getppid(),
                 }
                 sub = existing.get("subprocess") or subprocess_label
@@ -508,7 +638,19 @@ def _forward_permission_request(hook_data, session_id):
 
     The dashboard's permission server (port 3002) will block this connection
     until the user approves or denies. Returns the decision JSON or None on error.
+
+    Authentication is a mutual HMAC handshake keyed by the per-launch token
+    (STATUS_DIR/permission-token, 0600). The raw token is NEVER sent on the
+    wire: we send a random nonce plus HMAC-SHA256(token, "req:"+nonce), and we
+    verify the server's HMAC-SHA256(token, "resp:"+nonce) proof BEFORE trusting
+    the decision. A process that can't read the 0600 token file can neither
+    authenticate a forged request nor forge a response we'll act on — on any
+    missing/invalid proof we return None so Claude Code falls back to its native
+    permission prompt (mirroring the 504/timeout path).
     """
+    import hashlib
+    import hmac
+    import secrets
     import urllib.request
     import urllib.error
 
@@ -520,6 +662,12 @@ def _forward_permission_request(hook_data, session_id):
     token = _read_permission_token()
     if not token:
         return None
+    key = token.encode("utf-8")
+
+    # Per-request nonce: 128 bits of CSPRNG output, hex. The server MACs
+    # "req:"+nonce to authenticate us and "resp:"+nonce to prove itself.
+    nonce = secrets.token_hex(16)
+    auth = hmac.new(key, b"req:" + nonce.encode("ascii"), hashlib.sha256).hexdigest()
 
     payload = json.dumps({
         "session_id": session_id,
@@ -533,16 +681,34 @@ def _forward_permission_request(hook_data, session_id):
         data=payload,
         headers={
             "Content-Type": "application/json",
-            "X-Cue-Token": token,
+            "X-Cue-Nonce": nonce,
+            "X-Cue-Auth": auth,
         },
         method="POST",
     )
 
     try:
         with urllib.request.urlopen(req, timeout=300) as resp:
+            proof = resp.headers.get("X-Cue-Proof")
             body = resp.read().decode("utf-8")
-            return json.loads(body)
-    except (urllib.error.URLError, OSError, json.JSONDecodeError, TimeoutError):
+    except (urllib.error.URLError, OSError, TimeoutError):
+        # HTTPError (incl. our 401) is a URLError subclass — a rejected or
+        # unreachable server means fall back to the native prompt.
+        return None
+
+    # Authenticate the response before acting on it. A forger who couldn't read
+    # the token file can't produce the expected proof, so a missing/mismatched
+    # proof means "don't trust this decision": return None and let Claude Code
+    # fall back to its native prompt.
+    expected_proof = hmac.new(
+        key, b"resp:" + nonce.encode("ascii"), hashlib.sha256
+    ).hexdigest()
+    if not proof or not hmac.compare_digest(proof, expected_proof):
+        return None
+
+    try:
+        return json.loads(body)
+    except (json.JSONDecodeError, ValueError):
         return None
 
 
@@ -640,6 +806,57 @@ def _resolve_source(stored_source, detected_source):
     return "claude-desktop" if _is_claude_desktop() else "unknown"
 
 
+def _peek_stored_source(session_id):
+    """Best-effort UNLOCKED read of a session's already-stored `source`.
+
+    Sole purpose: let `_resolve_source` be evaluated — including its up-to-2s
+    `ps` ancestry walk — BEFORE the flock is taken, while preserving the
+    once-per-session caching. The walk must run only when neither the env
+    verdict nor a previously-stored source can settle the launcher; knowing
+    the stored value up front is what keeps it from firing on every event of
+    a desktop/cron session (whose env verdict is perpetually None).
+
+    A stale or missing read is harmless — it only decides whether to spend a
+    subprocess. The locked write still lets a concurrently-stored source win
+    (`existing.get("source") or resolved_source`), and real corruption is
+    handled by the locked _read_status_or_recover, not here. Returns the
+    stored source string, or None when unknown/unreadable.
+    """
+    try:
+        with open(STATUS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    sessions = data.get("sessions")
+    if not isinstance(sessions, dict):
+        return None
+    entry = sessions.get(session_id)
+    if isinstance(entry, dict):
+        src = entry.get("source")
+        if isinstance(src, str) and src:
+            return src
+    return None
+
+
+def _resolve_source_unlocked(session_id, detected_source):
+    """Settle the launcher source OUTSIDE any lock.
+
+    When the env already decided (`detected_source is not None`) that verdict
+    wins and no read or subprocess is needed. Otherwise peek the stored source
+    (unlocked) and hand it to `_resolve_source`, so the `ps` ancestry walk —
+    the only expensive branch — runs here, never inside the flock critical
+    section where 2s of `ps` would starve concurrent hooks past their own 2s
+    lock-acquisition budget and silently drop their updates. Never returns
+    None: the locked writer treats a stored source as authoritative on top of
+    this via `existing.get("source") or resolved_source`.
+    """
+    if detected_source is not None:
+        return detected_source
+    return _resolve_source(_peek_stored_source(session_id), None)
+
+
 def _detect_source():
     """Cheap env-only launcher detection.
 
@@ -689,6 +906,28 @@ def _should_ignore_session(hook_data):
     """
     _ = hook_data  # kept for signature stability / future payload fields
     return os.environ.get("CUE_SKIP") == "1"
+
+
+def _sanitize_workspace(value):
+    """Coerce the session workspace to a string that is always valid UTF-8.
+
+    `hook_data["cwd"]` (and the os.getcwd() fallback) is written straight into
+    sessions.json. On Linux a non-UTF-8 path arrives surrogate-escaped — lone
+    \\udcXX code points from the surrogateescape filesystem codec. Python's
+    `json` happily encodes those (it emits \\udcXX escapes), but serde_json on
+    the Rust reader side REJECTS a lone surrogate: a single such entry bricks
+    the WHOLE sessions.json for the desktop app, and permanently, because
+    Python still parses the file fine so the corruption self-heal never fires.
+
+    Round-trip through UTF-8 with the "replace" error handler so any lone
+    surrogate (or otherwise un-encodable code point) is dropped to an ASCII
+    '?' and the emitted JSON is always serde-decodable. A non-string cwd (a
+    malformed payload) falls back to the empty string rather than being written
+    through unchecked.
+    """
+    if not isinstance(value, str):
+        return ""
+    return value.encode("utf-8", "replace").decode("utf-8")
 
 
 # A wrapping tool (e.g. an orchestrator that runs `claude` as a subprocess) can
@@ -943,8 +1182,19 @@ def main():
     # read files outside the projects directory.
     if not _is_valid_session_id(session_id):
         return
-    workspace = hook_data.get("cwd", os.getcwd())
+    # Sanitize the workspace to guaranteed-valid UTF-8 BEFORE it can be written
+    # into sessions.json — a lone surrogate from a non-UTF-8 cwd would be
+    # accepted by Python's json but rejected by serde_json, bricking the file
+    # for the Rust reader permanently (see _sanitize_workspace).
+    workspace = _sanitize_workspace(hook_data.get("cwd", os.getcwd()))
     source = _detect_source()
+    # Settle the launcher source NOW, before any lock is taken. When the env
+    # can't decide, this runs the up-to-2s `ps` ancestry walk — which must
+    # never execute inside the flock critical section, where it would starve
+    # concurrent hooks past their own 2s lock-acquisition budget. The result
+    # is passed into every write path; the once-per-session caching is
+    # preserved via the unlocked stored-source peek (see _resolve_source_unlocked).
+    resolved_source = _resolve_source_unlocked(session_id, source)
     subprocess_label = _detect_subprocess()
     ignored_session = _should_ignore_session(hook_data)
 
@@ -992,7 +1242,7 @@ def main():
         _ensure_status_dir()
         if notif_type in ("elicitation_dialog", "permission_prompt"):
             _quick_state_write(
-                session_id, workspace, source, subprocess_label,
+                session_id, workspace, resolved_source, subprocess_label,
                 last_tokens, hook_start_time,
                 team_name=team_name, agent_name=agent_name,
                 permission_mode=(hook_data.get("permission_mode")
@@ -1015,7 +1265,7 @@ def main():
     if event_name == "PermissionRequest":
         _ensure_status_dir()
         _quick_state_write(
-            session_id, workspace, source, subprocess_label,
+            session_id, workspace, resolved_source, subprocess_label,
             last_tokens, hook_start_time,
             team_name=team_name, agent_name=agent_name,
             permission_mode=(hook_data.get("permission_mode")
@@ -1071,7 +1321,7 @@ def main():
         if isinstance(tool_name, str) and tool_name in ("AskUserQuestion", "ExitPlanMode"):
             action = "waiting"
             _quick_state_write(
-                session_id, workspace, source, subprocess_label,
+                session_id, workspace, resolved_source, subprocess_label,
                 last_tokens, hook_start_time,
                 team_name=team_name, agent_name=agent_name,
                 permission_mode=permission_mode,
@@ -1111,7 +1361,13 @@ def main():
 
             # Retention: prune week-old ended tombstones + enforce the entry
             # cap before the write, so the file stops growing unboundedly.
-            _gc_sessions(status["sessions"], time.time(), keep_id=session_id)
+            gc_now = time.time()
+            _gc_sessions(status["sessions"], gc_now, keep_id=session_id)
+            # Sweep orphaned temp files left by hooks SIGKILLed between
+            # tempfile.mkstemp and os.replace — they'd otherwise accumulate in
+            # STATUS_DIR forever. Runs under the same lock; the age threshold
+            # keeps it from racing a tmp a live hook just created.
+            _sweep_orphan_tmps(gc_now)
 
             if ignored_session:
                 # Best-effort cleanup for already-recorded subprocess ghosts.
@@ -1167,6 +1423,18 @@ def main():
                 if action == "error" and event_name == "PostToolUseFailure":
                     action = "error" if existing.get("state") == "error" else "working"
 
+                # `waiting` must not overwrite an `error` card. A PreToolUse
+                # (AskUserQuestion / ExitPlanMode) promotion, or any other
+                # `waiting` seed, arriving on a session already showing a
+                # StopFailure `error` must NOT downgrade the red card to yellow
+                # `waiting` and drop errorType. _quick_state_write early-returns
+                # on an existing error for exactly this reason; the main locked
+                # path handled the done/idle case but not `waiting`, so a
+                # `waiting` rebuild could bypass the guard and clobber the
+                # error. Make the two paths consistent.
+                if action == "waiting" and existing.get("state") == "error":
+                    return
+
                 # Detect /clear: SessionStart after SessionEnd (state="clearing")
                 # means /clear was run. Also detect via transcript content for
                 # sessions that weren't previously tracked by Cue.
@@ -1208,8 +1476,10 @@ def main():
                 # Subagent counter: increment on start, decrement on stop.
                 # Per CLAUDE.md the override applies to `working`/`done`/`idle`
                 # only — `waiting` and `error` need user attention and must
-                # NOT be silently clobbered by subagent activity.
-                active_subs = existing.get("activeSubagents", 0)
+                # NOT be silently clobbered by subagent activity. Coerce-guard
+                # the stored value so a non-int (manual edit / version skew)
+                # can't TypeError the arithmetic below and wedge the session.
+                active_subs = _active_subagents(existing)
                 if action in ("done", "idle"):
                     # Guard: done/idle must not overwrite states that need
                     # user attention. `waiting` already had a guard; `error`
@@ -1292,7 +1562,10 @@ def main():
                     "lastActivity": now,
                     "stateChangedAt": state_changed_at,
                     "startedAt": now if is_clear else existing.get("startedAt", now),
-                    "source": _resolve_source(existing.get("source"), source),
+                    # Source was settled outside the lock (resolved_source);
+                    # a value already on disk still wins if a concurrent hook
+                    # stored one between the unlocked peek and this write.
+                    "source": existing.get("source") or resolved_source,
                     "activeSubagents": active_subs,
                     "pid": os.getppid(),
                 }
