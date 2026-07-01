@@ -96,7 +96,45 @@ pub struct SessionInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusData {
+    #[serde(deserialize_with = "deserialize_lenient_sessions")]
     pub sessions: HashMap<String, SessionInfo>,
+}
+
+/// Per-entry-tolerant deserializer for the `sessions` map (F-api-001).
+///
+/// `#[serde(default)]` on every `SessionInfo` field only rescues *absent*
+/// keys. A key that is *present* with the wrong JSON type (`"state": 5`,
+/// `"pid": "123"`) or an explicit `null` on a non-`Option` field still errors
+/// that value — and because `sessions` is a single `HashMap`, that one value
+/// error aborts `from_str::<StatusData>` for the WHOLE file, blanking every
+/// card and eventually tripping self-repair (which discards the persisted
+/// entries for all healthy sessions and resets their timers). Meanwhile the
+/// Python hook's `_validate_sessions` deliberately *preserves* wrong-typed
+/// entries and re-serializes them, so it actively feeds the reader shapes it
+/// couldn't parse. Match the writer's tolerance: read the map as raw values
+/// first, then deserialize each entry independently and drop only the ones
+/// that fail, so a single bad entry can't take healthy sessions down with it.
+fn deserialize_lenient_sessions<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, SessionInfo>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: HashMap<String, serde_json::Value> = HashMap::deserialize(deserializer)?;
+    let mut out = HashMap::with_capacity(raw.len());
+    for (key, value) in raw {
+        match serde_json::from_value::<SessionInfo>(value) {
+            Ok(info) => {
+                out.insert(key, info);
+            }
+            Err(_) => {
+                // Drop just this entry; keep every other session. Log the id
+                // (not the payload) so a silently-skipped session is traceable.
+                log::warn!(target: "cue::state", "sessions.json: dropped unparseable entry id={key}");
+            }
+        }
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -1424,6 +1462,46 @@ mod tests {
         let bad = &data.sessions["abc"];
         assert_eq!(bad.state, "");
         assert_eq!(bad.started_at, 0.0);
+    }
+
+    #[test]
+    fn test_wrong_typed_entry_dropped_not_whole_parse() {
+        // F-api-001: `#[serde(default)]` only rescues *absent* keys. A present
+        // key with the wrong type (`state` int, `pid` string) or an explicit
+        // `null` on a non-Option field errors that value, and since `sessions`
+        // is one map that aborts the WHOLE file. The Python hook deliberately
+        // preserves and re-serializes such entries, so this shape is reachable
+        // from version skew / manual edits. The lenient deserializer must drop
+        // only the bad entry and keep every healthy session.
+        let json = r#"{
+            "sessions": {
+                "bad-type": {"id": "bad-type", "workspace": "/x", "state": 5, "lastActivity": 1.0, "startedAt": 1.0},
+                "bad-null": {"id": "bad-null", "workspace": "/x", "state": null, "lastActivity": 1.0, "startedAt": 1.0},
+                "11111111-1111-1111-1111-111111111111": {
+                    "id": "11111111-1111-1111-1111-111111111111",
+                    "workspace": "/Users/x/z",
+                    "state": "working",
+                    "lastActivity": 1.0,
+                    "startedAt": 1.0
+                }
+            }
+        }"#;
+        // Pre-fix: whole parse returns Err on the first wrong-typed value.
+        let raw = serde_json::from_str::<StatusData>(json);
+        assert!(raw.is_ok(), "one wrong-typed entry must not abort the map");
+        let data = raw.unwrap();
+        assert_eq!(
+            data.sessions.len(),
+            1,
+            "both malformed entries are dropped; only the healthy one survives"
+        );
+        assert!(data.sessions.contains_key("11111111-1111-1111-1111-111111111111"));
+        assert!(!data.sessions.contains_key("bad-type"));
+        assert!(!data.sessions.contains_key("bad-null"));
+        assert_eq!(
+            data.sessions["11111111-1111-1111-1111-111111111111"].state,
+            "working"
+        );
     }
 
     #[test]
