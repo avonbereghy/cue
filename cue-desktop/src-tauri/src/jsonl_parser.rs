@@ -1289,10 +1289,31 @@ fn aggregate_entries(
     // its transcript silent for minutes). This is the deterministic signal the
     // mtime-window check can't provide; `should_demote_stale_subagent` and the
     // subagent rescue both consume it.
-    m.pending_agent_tool_count = entries
+    //
+    // F-correctness-001: scope the candidate set to the CURRENT turn. Scanning
+    // the whole transcript pinned the card on `subagent(N)` forever whenever a
+    // foreground Agent/Task batch was interrupted (ESC) or otherwise never
+    // received tool_results — those ids stayed unmatched for the life of the
+    // session, so the count never returned to 0 and `should_demote_stale_subagent`
+    // (which requires count == 0) could never undo the mislabel, while the hook
+    // self-healed to `working subs=0`. A real user prompt (`is_user_message`,
+    // which excludes tool_result/metadata rows) or an interrupt marker ends the
+    // turn: foreground agent batches block the prompt, so a later user message
+    // proves the batch is finished or abandoned. Reset the set at each such
+    // boundary and count only ids launched in the still-open turn. `resolved`
+    // stays global — a result that lands is a resolution wherever it appears.
+    let mut turn_agent_ids: Vec<&str> = Vec::new();
+    for entry in entries {
+        if entry.is_user_message || entry.is_interrupt_marker {
+            turn_agent_ids.clear();
+        }
+        for id in &entry.agent_tool_use_ids {
+            turn_agent_ids.push(id.as_str());
+        }
+    }
+    m.pending_agent_tool_count = turn_agent_ids
         .iter()
-        .flat_map(|e| e.agent_tool_use_ids.iter())
-        .filter(|id| !resolved.contains(id.as_str()))
+        .filter(|id| !resolved.contains(*id))
         .count() as i64;
 
     // Freshness marker: the newest entry timestamp this parse reflects. The
@@ -2411,6 +2432,57 @@ mod tests {
 
         let m = super::parse_jsonl_to_session_metrics(&path).unwrap();
         assert_eq!(m.pending_agent_tool_count, 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_pending_agent_tool_count_resets_on_new_user_turn() {
+        // F-correctness-001: an interrupted foreground Agent batch leaves its
+        // tool_uses unmatched forever. Before the turn-scoping fix the whole
+        // transcript was scanned, so the count stayed > 0 for the rest of the
+        // session and pinned the card on `subagent(N)` with no recovery. A real
+        // user prompt after the batch ends the turn (foreground batches block
+        // the prompt), so those unmatched agents must no longer be counted.
+        let batch = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"toolu_c1","name":"Agent","input":{}},{"type":"tool_use","id":"toolu_c2","name":"Agent","input":{}},{"type":"tool_use","id":"toolu_c3","name":"Agent","input":{}}],"stop_reason":"tool_use"}}"#;
+        let one_result = r#"{"type":"user","timestamp":2.0,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_c1","content":"done"}]}}"#;
+        // Real text prompt → is_user_message true → ends the batch's turn.
+        let next_prompt = r#"{"type":"user","timestamp":3.0,"message":{"role":"user","content":[{"type":"text","text":"ok now do something else"}]}}"#;
+
+        let dir = std::env::temp_dir().join("cue_test_agent_reset_userturn");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        std::fs::write(&path, format!("{}\n{}\n{}", batch, one_result, next_prompt)).unwrap();
+
+        let m = super::parse_jsonl_to_session_metrics(&path).unwrap();
+        assert_eq!(
+            m.pending_agent_tool_count, 0,
+            "interrupted agents from a prior turn must not be counted after a new user prompt"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_pending_agent_tool_count_resets_on_interrupt_marker() {
+        // F-correctness-001: an ESC interrupt writes an interrupt marker row
+        // (no resolving hook). That marker ends the turn, so agents launched
+        // before it must stop counting immediately — even before any new prompt.
+        let batch = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"toolu_d1","name":"Agent","input":{}},{"type":"tool_use","id":"toolu_d2","name":"Agent","input":{}}],"stop_reason":"tool_use"}}"#;
+        let interrupt = r#"{"type":"user","timestamp":2.0,"message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#;
+
+        let dir = std::env::temp_dir().join("cue_test_agent_reset_interrupt");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        std::fs::write(&path, format!("{}\n{}", batch, interrupt)).unwrap();
+
+        let m = super::parse_jsonl_to_session_metrics(&path).unwrap();
+        assert_eq!(
+            m.pending_agent_tool_count, 0,
+            "agents launched before an interrupt marker must not stay counted"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

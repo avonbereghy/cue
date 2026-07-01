@@ -433,7 +433,20 @@ impl SessionMonitorState {
                 .collect();
             let mut sys = self.sysinfo_system.lock_safe();
             if !pids_to_check.is_empty() {
-                sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&pids_to_check), false);
+                // `remove_dead_processes = true` (F-reliability-001): with
+                // `false`, sysinfo marks a queried-but-dead PID nonexistent yet
+                // KEEPS its cached `Process` (unchanged `start_time`) in
+                // `process_list`. On macOS `System::process(pid)` is a bare map
+                // lookup with no liveness filter, so the stale entry is still
+                // returned and `resolve_liveness` matches the same-pid/same-start
+                // `Alive` arm forever — the liveness backstop never demotes a
+                // crashed Claude Code process (stuck on working/waiting) and the
+                // map grows unbounded over the app's lifetime. With `true` the
+                // dead PID is evicted, `sys.process(pid)` returns `None`, and the
+                // `(None, _) => Dead` arm fires. Re-adding a live PID on a later
+                // poll works normally, and `process_identity.retain` below still
+                // handles app-side cache cleanup.
+                sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&pids_to_check), true);
             }
             let mut identity = self.process_identity.lock_safe();
             // Drop cache entries for sessions no longer present.
