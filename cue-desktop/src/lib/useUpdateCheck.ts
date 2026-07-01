@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { checkForUpdatesManually, type UpdateStatus } from "./updater";
 
 /**
@@ -27,6 +27,10 @@ export function useUpdateCheck() {
       }
     });
   }, []);
+
+  // Clear a pending status-reset timer on unmount so its setStatus can't fire
+  // (and warn) after the component is gone.
+  useEffect(() => () => window.clearTimeout(resetTimer.current), []);
 
   return { status, check };
 }

@@ -82,11 +82,12 @@ interface AlmanacCardProps {
   revived?: boolean;
   isDuplicate?: boolean;
   showConfigCounts?: boolean;
+  showUsage?: boolean;
   /** Provided for live cards (renders the dismiss "X"); omitted for revived ones. */
   onDismiss?: (id: string) => void;
 }
 
-function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pending, onApprove, onDeny, revived, isDuplicate, showConfigCounts, onDismiss }: AlmanacCardProps) {
+function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pending, onApprove, onDeny, revived, isDuplicate, showConfigCounts, showUsage, onDismiss }: AlmanacCardProps) {
   const { info, metrics } = session;
   const state = info.state;
   const meta = stMeta(state);
@@ -249,7 +250,7 @@ function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pen
         <div className="stat" style={{ gridColumn: "span 2" }}><span className="k">Output drafted</span><span className="v">{formatTokens(agg.outputTokens)}<small> tokens written</small></span></div>
       </div>
 
-      <CardExtras session={session} showConfigCounts={!!showConfigCounts} mono="var(--mono)" muted="var(--ink-soft)" faint="var(--ink-faint)" rule="var(--rule)" />
+      <CardExtras session={session} showConfigCounts={!!showConfigCounts} showUsage={showUsage !== false} mono="var(--mono)" muted="var(--ink-soft)" faint="var(--ink-faint)" rule="var(--rule)" />
 
       <div className="entry-foot">
         {session.sourceDisplay !== "—" && <span className="src"><SourceGlyph /> {session.sourceDisplay}</span>}
@@ -287,7 +288,7 @@ function stampDate(): string {
 }
 
 export function AlmanacView(props: SkinViewProps) {
-  const { sessions, revivedSessions, permissionsEnabled, pendingBySession, approvePermission, denyPermission, timerDisplay, grouped, showConfigCounts } = props;
+  const { sessions, revivedSessions, permissionsEnabled, pendingBySession, approvePermission, denyPermission, timerDisplay, grouped, showConfigCounts, showUsage } = props;
 
   const total = sessions.length;
   const active = sessions.filter((s) => isActiveState(s.info.state)).length;
@@ -330,6 +331,7 @@ export function AlmanacView(props: SkinViewProps) {
                 onDeny={denyPermission}
                 isDuplicate={dupSet.has(session.displayTitle)}
                 showConfigCounts={showConfigCounts}
+                showUsage={showUsage}
                 onDismiss={props.onDismiss}
               />
             ))}
@@ -361,6 +363,7 @@ export function AlmanacView(props: SkinViewProps) {
                         onApprove={approvePermission}
                         onDeny={denyPermission}
                         showConfigCounts={showConfigCounts}
+                        showUsage={showUsage}
                         revived
                       />
                       <div className="alm-revive-row">

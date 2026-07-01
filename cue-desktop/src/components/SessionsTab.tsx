@@ -123,6 +123,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [showToolPills, setShowToolPills] = useState(false);
   const [showCurrentTool, setShowCurrentTool] = useState(false);
   const [showConfigCounts, setShowConfigCounts] = useState(false);
+  const [showUsage, setShowUsage] = useState(true);
   const [showToolCallComets, setShowToolCallComets] = useState(false);
   const [timerDisplay, setTimerDisplay] = useState("seconds");
   const [keyPressSpeed, setKeyPressSpeed] = useState(0.35);
@@ -390,6 +391,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setShowToolPills(s.showToolPills ?? false);
     setShowCurrentTool(s.showCurrentTool ?? false);
     setShowConfigCounts(s.showConfigCounts ?? false);
+    setShowUsage(s.showUsage ?? true);
     setShowToolCallComets(s.showToolCallComets ?? false);
     setTimerDisplay(s.timerDisplay ?? "seconds");
     if (s.lowPower) document.documentElement.setAttribute("data-low-power", "");
@@ -2460,7 +2462,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     cordRetractDelay, cordDeployForce,
     cordRetractForce, stringSpread, stringDeployAngle, keyPressSpeed, keyReleaseSpeed,
     compactMode, slimMode, contextThreshold, contextDisplay,
-    showToolPills, showCurrentTool, showConfigCounts, showToolCallComets, timerDisplay,
+    showToolPills, showCurrentTool, showConfigCounts, showUsage, showToolCallComets, timerDisplay,
     lowPower, projectAccentsEnabled,
   }), [
     titleAnimation, animationSpeed, randomAnimation,
@@ -2474,7 +2476,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     cordRetractDelay, cordDeployForce, cordRetractForce, stringSpread, stringDeployAngle,
     keyPressSpeed, keyReleaseSpeed,
     compactMode, slimMode, contextThreshold, contextDisplay,
-    showToolPills, showCurrentTool, showConfigCounts, showToolCallComets, timerDisplay,
+    showToolPills, showCurrentTool, showConfigCounts, showUsage, showToolCallComets, timerDisplay,
     lowPower, projectAccentsEnabled,
   ]);
 
@@ -2887,6 +2889,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       denyPermission,
       timerDisplay,
       showConfigCounts,
+      showUsage,
       grouped: dashboardLayout === "grouped",
       reviveClicks,
       reviveClicksRequired: REVIVE_CLICKS_REQUIRED,

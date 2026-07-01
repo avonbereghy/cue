@@ -5,8 +5,8 @@ import { PermissionPrompt } from "../PermissionPrompt";
 interface DecisionBarProps {
   session: EnrichedSession;
   pending: PermissionRequest[];
-  onApprove: (sessionId: string, requestId: string) => void;
-  onDeny: (sessionId: string, requestId: string) => void;
+  onApprove: (sessionId: string, requestId: string) => void | Promise<void>;
+  onDeny: (sessionId: string, requestId: string) => void | Promise<void>;
 }
 
 /**

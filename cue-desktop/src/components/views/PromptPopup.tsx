@@ -25,6 +25,12 @@ export function PromptPopup({ text, label = "Last prompt", onClose, bg, border, 
   return createPortal(
     <div style={{ position: "fixed", inset: 0, zIndex: 99999, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.35)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)" }}>
       <div
+        // Stop mousedown (not just click) from reaching the document-level
+        // outside-close handler: without this, starting a text selection of the
+        // prompt or grabbing the scrollbar fires a mousedown inside the content
+        // that bubbles to document and instantly dismisses the popup. A genuine
+        // mousedown on the backdrop still bubbles through and closes it.
+        onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
         style={{
           background: bg,

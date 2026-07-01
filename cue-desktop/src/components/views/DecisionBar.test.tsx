@@ -34,19 +34,32 @@ describe("DecisionBar", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders Approve/Deny for a pending permission and routes them with session + request id", () => {
+  it("routes Approve with the session + request id", () => {
     const onApprove = vi.fn();
-    const onDeny = vi.fn();
     render(
       <DecisionBar
         session={makeSession("waiting")}
         pending={[makeRequest("r1")]}
         onApprove={onApprove}
-        onDeny={onDeny}
+        onDeny={() => {}}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /approve/i }));
     expect(onApprove).toHaveBeenCalledWith("s1", "r1");
+  });
+
+  it("routes Deny with the session + request id", () => {
+    // Separate render from the Approve case: the prompt disables both buttons
+    // once a decision is in flight, so approve + deny can't both fire in one mount.
+    const onDeny = vi.fn();
+    render(
+      <DecisionBar
+        session={makeSession("waiting")}
+        pending={[makeRequest("r1")]}
+        onApprove={() => {}}
+        onDeny={onDeny}
+      />,
+    );
     fireEvent.click(screen.getByRole("button", { name: /deny/i }));
     expect(onDeny).toHaveBeenCalledWith("s1", "r1");
   });

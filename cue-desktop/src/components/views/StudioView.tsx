@@ -69,11 +69,12 @@ interface StudioCardProps {
   onDeny: (sessionId: string, requestId: string) => void;
   isDuplicate?: boolean;
   showConfigCounts?: boolean;
+  showUsage?: boolean;
   /** Provided for live cards (renders the dismiss "X"); omitted for revived ones. */
   onDismiss?: (id: string) => void;
 }
 
-function StudioCardBase({ session, timerDisplay, permissionsEnabled, pending, onApprove, onDeny, isDuplicate, showConfigCounts, onDismiss }: StudioCardProps) {
+function StudioCardBase({ session, timerDisplay, permissionsEnabled, pending, onApprove, onDeny, isDuplicate, showConfigCounts, showUsage, onDismiss }: StudioCardProps) {
   const { info, metrics } = session;
   const state = info.state;
   const [copied, setCopied] = useState(false);
@@ -206,7 +207,7 @@ function StudioCardBase({ session, timerDisplay, permissionsEnabled, pending, on
         <span className="m"><span className="v">{metrics.userMessageCount}/{metrics.messageCount}</span><span className="k">msgs</span></span>
       </div>
 
-      <CardExtras session={session} showConfigCounts={!!showConfigCounts} mono="var(--mono)" muted="var(--ink-soft)" faint="var(--ink-faint)" rule="var(--paper-edge)" />
+      <CardExtras session={session} showConfigCounts={!!showConfigCounts} showUsage={showUsage !== false} mono="var(--mono)" muted="var(--ink-soft)" faint="var(--ink-faint)" rule="var(--paper-edge)" />
 
       <div className="footrow">
         <div className="chips">
@@ -232,7 +233,7 @@ function StudioCardBase({ session, timerDisplay, permissionsEnabled, pending, on
 const StudioCard = React.memo(StudioCardBase);
 
 export function StudioView(props: SkinViewProps) {
-  const { sessions, revivedSessions, permissionsEnabled, pendingBySession, approvePermission, denyPermission, timerDisplay, grouped, showConfigCounts } = props;
+  const { sessions, revivedSessions, permissionsEnabled, pendingBySession, approvePermission, denyPermission, timerDisplay, grouped, showConfigCounts, showUsage } = props;
   const total = sessions.length;
   const active = sessions.filter((s) => isActiveState(s.info.state)).length;
   const ordered = orderSessions(sessions, grouped);
@@ -247,6 +248,7 @@ export function StudioView(props: SkinViewProps) {
     onDeny: denyPermission,
     isDuplicate: withPerms ? dupSet.has(session.displayTitle) : false,
     showConfigCounts,
+    showUsage,
     onDismiss: withPerms ? props.onDismiss : undefined,
   });
 

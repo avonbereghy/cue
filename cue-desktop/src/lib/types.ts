@@ -260,6 +260,9 @@ export interface Settings {
   showCurrentTool: boolean;
   /** Beta: show config counts (CLAUDE.md, hooks, MCP) in detail mode */
   showConfigCounts: boolean;
+  /** Show the per-session usage line (est. cost, lifetime tokens, cache
+   *  efficiency) in the expanded card's deep-telemetry section. Default: true. */
+  showUsage: boolean;
   /** Show comet tracers on the strings whenever a tool call fires. Off by default. */
   showToolCallComets: boolean;
   /** Timer display: "minutes" (HH:MM), "seconds" (HH:MM:SS), or "off" */

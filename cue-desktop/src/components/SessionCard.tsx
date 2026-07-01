@@ -35,6 +35,7 @@ function effortTextClass(level: string): string {
 import type { EnrichedSession } from "@/lib/types";
 import { STATE_HEX, STATE_HEX_LIGHT, STATE_DOT_HEX, STATE_DOT_HEX_LIGHT, STATE_BADGE_HEX, STATE_BADGE_HEX_LIGHT } from "@/lib/types";
 import { formatTokens, formatDuration, formatClockTime, formatElapsedCompact, cleanPromptText, errorReason, getProjectAccent } from "@/lib/format";
+import { usageSummary, usageDisplayStrings } from "@/lib/sessionCardModel";
 import { SignalString } from "./SignalString";
 import type { StrikePulse, CometPulse } from "./SignalString";
 import { FluxEffect } from "./FluxEffect";
@@ -127,6 +128,9 @@ export interface SessionCardProps {
   showCurrentTool?: boolean;
   /** Beta: show config counts row */
   showConfigCounts?: boolean;
+  /** Show the per-session usage line (est. cost · tokens · cache efficiency) in
+   *  the deep-telemetry section. Default on. */
+  showUsage?: boolean;
   /** Fire white comet tracers across the strings on every tool call. Off by default. */
   showToolCallComets?: boolean;
   /** Timer display: "minutes" (HH:MM), "seconds" (HH:MM:SS), or "off" */
@@ -188,6 +192,12 @@ function PromptPopup({ text, onClose, isDark }: {
             : "0 24px 48px rgba(0,0,0,0.18), 0 4px 12px rgba(0,0,0,0.10)",
           animation: "prompt-popup-in 0.15s cubic-bezier(0.34, 1.4, 0.64, 1) forwards",
         }}
+        // Stop mousedown (not just click) from reaching the document-level
+        // outside-close handler: without this, starting a text selection of the
+        // prompt or grabbing the scrollbar fires a mousedown inside the content
+        // that bubbles to document and instantly dismisses the popup. A genuine
+        // mousedown on the backdrop still bubbles through and closes it.
+        onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{
@@ -219,7 +229,7 @@ function PromptPopup({ text, onClose, isDark }: {
   );
 }
 
-function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", stringsEnabled = false, sandEnabled = true, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, fluxEnabled = true, fluxAlpha = 0.9, fluxIntensity = 1.5, fluxDensity = 1.0, fluxSpeed = 1.0, fluxLineLength = 0.55, fluxTurbulence = 1.0, auroraEnabled = false, auroraAlpha = 0.75, auroraSpeed = 0.55, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, stringSpread = 0.15, stringDeployAngle = -16, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "compact", showToolPills = false, showCurrentTool = false, showConfigCounts = false, showToolCallComets = false, timerDisplay = "seconds", expandOverride, onExpandCycle, isDuplicate = false, lowPower = false, projectAccentsEnabled = true, onDismiss }: SessionCardProps) {
+function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", stringsEnabled = false, sandEnabled = true, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, fluxEnabled = true, fluxAlpha = 0.9, fluxIntensity = 1.5, fluxDensity = 1.0, fluxSpeed = 1.0, fluxLineLength = 0.55, fluxTurbulence = 1.0, auroraEnabled = false, auroraAlpha = 0.75, auroraSpeed = 0.55, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, stringSpread = 0.15, stringDeployAngle = -16, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "compact", showToolPills = false, showCurrentTool = false, showConfigCounts = false, showUsage = true, showToolCallComets = false, timerDisplay = "seconds", expandOverride, onExpandCycle, isDuplicate = false, lowPower = false, projectAccentsEnabled = true, onDismiss }: SessionCardProps) {
   // Effective display mode: expandOverride takes precedence over global compact/slim
   const effectiveCompact = expandOverride !== undefined ? expandOverride === 0 : compactMode;
   const effectiveSlim = expandOverride !== undefined ? expandOverride <= 1 : slimMode;
@@ -1795,6 +1805,22 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
               )}
             </div>
           )}
+
+          {/* Usage — per-session economics: est. cost · lifetime tokens · cache
+              efficiency. Sits with the cache tokens it summarizes. */}
+          {showDeepTelemetry && showUsage && (() => {
+            const u = usageSummary(session);
+            if (!u.hasData) return null;
+            const d = usageDisplayStrings(u);
+            return (
+              <div className="relative flex items-center gap-1.5 text-[0.625rem] text-white/30 mono-nums" title={d.tooltip}>
+                <span className="text-white/40 shrink-0">Usage</span>
+                <span>{d.cost}</span>
+                <span>{"·"} {d.tokens}</span>
+                {d.cached && <span>{"·"} {d.cached}</span>}
+              </div>
+            );
+          })()}
 
           {/* Rate limits (from statusline bridge) */}
           {showDeepTelemetry && session.rateLimits && (session.rateLimits.fiveHourPercent > 0 || session.rateLimits.sevenDayPercent > 0) && (

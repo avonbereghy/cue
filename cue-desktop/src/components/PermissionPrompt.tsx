@@ -4,8 +4,10 @@ import { announce } from "@/lib/a11y";
 
 interface PermissionPromptProps {
   request: PermissionRequest;
-  onApprove: () => void;
-  onDeny: () => void;
+  // May be async: the prompt awaits the decision so it can keep the buttons
+  // disabled while the approve/deny invoke is in flight (see `submit`).
+  onApprove: () => void | Promise<void>;
+  onDeny: () => void | Promise<void>;
 }
 
 // Mirrors the backend's PERMISSION_WAIT_TIMEOUT (lib.rs). The backend drops the
@@ -20,8 +22,26 @@ function remainingSecs(receivedAt: number): number {
 export function PermissionPrompt({ request, onApprove, onDeny }: PermissionPromptProps) {
   const [expanded, setExpanded] = useState(false);
   const [remaining, setRemaining] = useState(() => remainingSecs(request.receivedAt));
+  // True once a decision's invoke is in flight — disables both buttons so a
+  // double-click / held key can't send a duplicate approve/deny for the same
+  // requestId.
+  const [submitting, setSubmitting] = useState(false);
   const approveRef = useRef<HTMLButtonElement>(null);
   const expired = remaining <= 0;
+
+  // Run a decision once. Disables both buttons while the invoke is in flight and
+  // re-enables ONLY if it rejects — on success the request clears from pending
+  // and this prompt unmounts, so there's nothing to re-enable.
+  const submit = (decide: () => void | Promise<void>) => {
+    if (expired || submitting) return;
+    setSubmitting(true);
+    try {
+      const result = decide();
+      if (result instanceof Promise) result.catch(() => setSubmitting(false));
+    } catch {
+      setSubmitting(false);
+    }
+  };
 
   // Drain the countdown toward the backend's timeout.
   useEffect(() => {
@@ -43,12 +63,14 @@ export function PermissionPrompt({ request, onApprove, onDeny }: PermissionPromp
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (expired) return;
-    if (e.key === "Enter") {
+    // Enter is intentionally NOT intercepted here. The focused <button> handles
+    // Enter/Space natively, so Enter approves only when Approve is focused (it is
+    // autofocused on mount, so Enter-on-load still approves as intended) and
+    // DENIES once the user has tabbed to Deny — a global Enter→approve would
+    // invert that decision. Escape stays a "deny/dismiss" shortcut.
+    if (e.key === "Escape") {
       e.preventDefault();
-      onApprove();
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      onDeny();
+      submit(onDeny);
     }
   };
 
@@ -104,14 +126,16 @@ export function PermissionPrompt({ request, onApprove, onDeny }: PermissionPromp
         <div className="flex items-center gap-2">
           <button
             ref={approveRef}
-            onClick={onApprove}
-            className="px-3 py-1.5 rounded-md text-xs font-medium bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green-500"
+            onClick={() => submit(onApprove)}
+            disabled={submitting}
+            className="px-3 py-1.5 rounded-md text-xs font-medium bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Approve <span className="ml-1 text-[0.5625rem] opacity-60" aria-hidden="true">⏎</span>
           </button>
           <button
-            onClick={onDeny}
-            className="px-3 py-1.5 rounded-md text-xs font-medium bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500"
+            onClick={() => submit(onDeny)}
+            disabled={submitting}
+            className="px-3 py-1.5 rounded-md text-xs font-medium bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Deny <span className="ml-1 text-[0.5625rem] opacity-60" aria-hidden="true">esc</span>
           </button>

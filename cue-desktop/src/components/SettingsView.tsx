@@ -3,9 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { Settings, TITLE_ANIMATIONS, ANIMATION_SPEEDS, SIGNAL_THEMES } from "@/lib/types";
 import type { PresetSummary, SignalPreset } from "@/lib/types";
 import { extractPreset } from "@/lib/audioExtractor";
-import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, getCurrentTime as getPresetTime, seek as presetSeek, setGate as setGateEngine } from "@/lib/presetEngine";
+import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, getCurrentTime as getPresetTime, isPlaying as isPresetPlaying, seek as presetSeek, setGate as setGateEngine } from "@/lib/presetEngine";
 import { DEFAULT_PRESET } from "@/lib/defaultPreset";
 import { debounce } from "@/lib/debounce";
+import { usePageVisible } from "@/hooks/usePageVisible";
 
 function Toggle({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) {
   return (
@@ -233,11 +234,16 @@ function BandWaveform({ presetId, signalBass, signalMids, signalTreble, signalGa
   const presetRef = useRef<SignalPreset | null>(null);
   const animRef = useRef<number>(0);
   const dragging = useRef(false);
+  // Exposes the effect's single-frame paint so the mouse-down handler (a React
+  // event, outside the effect closure) can repaint a scrub even while the rAF
+  // loop is parked.
+  const drawRef = useRef<(() => void) | null>(null);
+  const pageVisible = usePageVisible();
 
   useEffect(() => {
     if (!presetId) return;
     invoke<SignalPreset>("load_preset", { id: presetId })
-      .then((p) => { presetRef.current = p; })
+      .then((p) => { presetRef.current = p; drawRef.current?.(); })
       .catch(() => {});
   }, [presetId]);
 
@@ -246,6 +252,14 @@ function BandWaveform({ presetId, signalBass, signalMids, signalTreble, signalGa
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    // Don't animate while the settings window is hidden/backgrounded.
+    if (!pageVisible) return;
+
+    const draw = () => {
+      const rect = canvas.getBoundingClientRect();
+      drawBandEnvelopes(ctx, rect.width, rect.height, presetRef.current, { bass: signalBass, mids: signalMids, treble: signalTreble }, undefined, signalGate);
+    };
+    drawRef.current = draw;
 
     const dpr = window.devicePixelRatio || 1;
     const resize = () => {
@@ -253,41 +267,64 @@ function BandWaveform({ presetId, signalBass, signalMids, signalTreble, signalGa
       canvas.width = rect.width * dpr;
       canvas.height = rect.height * dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      draw(); // resizing the backing store clears it — repaint at the new size
     };
+
+    // The only moving element is the playhead, which advances only while the
+    // preset is playing. Redraw at ~10fps while playing; when paused the frame
+    // is static, so park the rAF loop entirely (the poll below wakes it if
+    // playback resumes, and scrubbing repaints directly).
+    const FRAME_MS = 100; // ~10fps
+    let lastDraw = 0;
+    const tick = (now: number) => {
+      if (!isPresetPlaying()) { animRef.current = 0; return; } // paused → stop
+      animRef.current = requestAnimationFrame(tick);
+      if (now - lastDraw < FRAME_MS) return;
+      lastDraw = now;
+      draw();
+    };
+    const kick = () => {
+      if (animRef.current === 0) { lastDraw = 0; animRef.current = requestAnimationFrame(tick); }
+    };
+
     resize();
     const obs = new ResizeObserver(resize);
     obs.observe(canvas);
-
-    const draw = () => {
-      const rect = canvas.getBoundingClientRect();
-      drawBandEnvelopes(ctx, rect.width, rect.height, presetRef.current, { bass: signalBass, mids: signalMids, treble: signalTreble }, undefined, signalGate);
-      animRef.current = requestAnimationFrame(draw);
-    };
-    animRef.current = requestAnimationFrame(draw);
+    // Cheap 4Hz poll to restart the parked loop if playback (re)starts — the
+    // preset auto-plays/loops, so this normally kicks the loop right after mount.
+    const pollId = window.setInterval(() => { if (isPresetPlaying()) kick(); }, 250);
+    kick();
 
     // Drag-to-scrub
     const onMove = (e: MouseEvent) => {
       if (!dragging.current || !presetRef.current) return;
       seekFromCanvas(e, canvas, presetRef.current.durationSecs);
+      draw(); // track the cursor immediately even if the loop is parked (paused)
     };
     const onUp = () => { dragging.current = false; };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
 
     return () => {
-      cancelAnimationFrame(animRef.current);
+      if (animRef.current) cancelAnimationFrame(animRef.current);
+      animRef.current = 0;
+      drawRef.current = null;
       obs.disconnect();
+      window.clearInterval(pollId);
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [presetId, signalBass, signalMids, signalTreble, signalGate]);
+  }, [presetId, signalBass, signalMids, signalTreble, signalGate, pageVisible]);
 
   if (!presetId) return null;
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     dragging.current = true;
     const canvas = canvasRef.current;
-    if (canvas && presetRef.current) seekFromCanvas(e, canvas, presetRef.current.durationSecs);
+    if (canvas && presetRef.current) {
+      seekFromCanvas(e, canvas, presetRef.current.durationSecs);
+      drawRef.current?.(); // repaint the moved playhead even while paused
+    }
   };
 
   return (
@@ -833,6 +870,7 @@ export function SettingsView() {
       showToolPills: false,
       showCurrentTool: false,
       showConfigCounts: false,
+      showUsage: true,
       showToolCallComets: false,
       timerDisplay: "seconds",
       showInMenuBar: true,
@@ -1547,6 +1585,13 @@ export function SettingsView() {
             checked={settings.showConfigCounts ?? false}
             onChange={() => setSettings({ ...settings, showConfigCounts: !(settings.showConfigCounts ?? false) })}
             label="Config counts"
+          />
+        </SettingRow>
+        <SettingRow label="Usage" description="Show estimated cost, total tokens, and cache efficiency per session in detail mode (cost is approximate)" onReset={(settings.showUsage ?? true) ? undefined : () => setSettings({ ...settings, showUsage: true })}>
+          <Toggle
+            checked={settings.showUsage ?? true}
+            onChange={() => setSettings({ ...settings, showUsage: !(settings.showUsage ?? true) })}
+            label="Usage"
           />
         </SettingRow>
         <SettingRow label="Tool Call Comets" description="Fire a thin white tracer across the strings on each tool call" onReset={(settings.showToolCallComets ?? false) ? () => setSettings({ ...settings, showToolCallComets: false }) : undefined}>

@@ -24,6 +24,8 @@ export interface SkinViewProps {
   timerDisplay: string;
   /** Beta setting — show the Claude config-counts row (CLAUDE.md / rules / MCP / hooks). */
   showConfigCounts: boolean;
+  /** Show the per-session usage line (est. cost · tokens · cache efficiency). Default on. */
+  showUsage: boolean;
   /** dashboardLayout === "grouped" — cluster a project's agents together. */
   grouped: boolean;
   reviveClicks: Record<string, number>;

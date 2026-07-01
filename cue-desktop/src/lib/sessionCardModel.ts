@@ -7,7 +7,7 @@
 // data onto its own palette. Pure functions only (no React, no DOM).
 
 import type { EnrichedSession } from "./types";
-import { formatTokens } from "./format";
+import { formatTokens, formatCost, formatModelName, estimateCost, PRICE_TABLE_ASOF, type ModelUsage } from "./format";
 
 /** States where a turn is actively in flight (mirrors the tray/header "active"
  *  count). Used to gate "alive" treatments and tok/s. */
@@ -130,6 +130,87 @@ export function cacheBreakdown(session: EnrichedSession): {
   const m = session.metrics;
   const show = session.contextUsagePercent >= 0.85 && (m.cacheReadTokens > 0 || m.cacheCreationTokens > 0);
   return { show, input: m.inputTokens, cacheRead: m.cacheReadTokens, cacheWrite: m.cacheCreationTokens };
+}
+
+/** Per-session usage economics — the money/volume/efficiency summary rendered
+ *  in the expanded card's deep-telemetry section. Skin-agnostic (raw numbers;
+ *  each render site formats + colors them). Aggregates the parent conversation
+ *  and every subagent, each priced at ITS OWN model, so a cheap-Haiku subagent
+ *  under an Opus session isn't billed at Opus rates. */
+export interface UsageSummary {
+  /** True once any billable tokens exist — render sites hide the row otherwise. */
+  hasData: boolean;
+  /** Estimated cost in USD (cache-aware; approximate — see PRICE_TABLE_ASOF). */
+  estCost: number;
+  /** Lifetime billable tokens (all four buckets, parent + subagents). Distinct
+   *  from the context bar's live occupancy — this is cumulative volume. */
+  totalTokens: number;
+  /** Cache hit rate 0..1 = cacheRead / (cacheRead + cacheWrite). Matches the
+   *  Rust `SessionMetrics::cache_hit_rate()` semantics. */
+  cacheHitRate: number;
+  /** Per-model cost split (desc), for the tooltip. Empty when cost rounds to 0. */
+  byModel: { model: string; cost: number }[];
+}
+
+export function usageSummary(session: EnrichedSession): UsageSummary {
+  const m = session.metrics;
+  const subs = m.subagents ?? [];
+
+  // Accumulate the four billable buckets per model across parent + subagents.
+  const perModel = new Map<string, ModelUsage>();
+  const add = (model: string, input: number, output: number, cacheRead: number, cacheWrite: number) => {
+    const key = model || "unknown";
+    const cur = perModel.get(key) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    cur.input += input;
+    cur.output += output;
+    cur.cacheRead += cacheRead;
+    cur.cacheWrite += cacheWrite;
+    perModel.set(key, cur);
+  };
+  add(m.model, m.inputTokens, m.outputTokens, m.cacheReadTokens, m.cacheCreationTokens);
+  for (const a of subs) add(a.model, a.inputTokens, a.outputTokens, a.cacheReadTokens, a.cacheCreationTokens);
+
+  const usageMap: Record<string, ModelUsage> = {};
+  let totalTokens = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
+  for (const [model, u] of perModel) {
+    usageMap[model] = u;
+    totalTokens += u.input + u.output + u.cacheRead + u.cacheWrite;
+    cacheRead += u.cacheRead;
+    cacheWrite += u.cacheWrite;
+  }
+
+  const byModel = [...perModel.entries()]
+    .map(([model, u]) => ({ model, cost: estimateCost({ [model]: u }) }))
+    .filter((x) => x.cost > 0)
+    .sort((a, b) => b.cost - a.cost);
+
+  const cacheDenom = cacheRead + cacheWrite;
+  return {
+    hasData: totalTokens > 0,
+    estCost: estimateCost(usageMap),
+    totalTokens,
+    cacheHitRate: cacheDenom > 0 ? cacheRead / cacheDenom : 0,
+    byModel,
+  };
+}
+
+/** Pre-formatted display strings for the usage row, so the instrument card and
+ *  the shared skin footer render identical copy (only the styling differs). The
+ *  leading "~" and trailing "est" are load-bearing honesty for an estimate. */
+export function usageDisplayStrings(u: UsageSummary): {
+  cost: string; tokens: string; cached: string; tooltip: string;
+} {
+  const split = u.byModel.map((b) => `${formatModelName(b.model)}: ${formatCost(b.cost)}`).join(" · ");
+  return {
+    cost: `~${formatCost(u.estCost)} est`,
+    tokens: `${formatTokens(u.totalTokens)} tokens`,
+    cached: u.cacheHitRate > 0 ? `${Math.round(u.cacheHitRate * 100)}% cached` : "",
+    tooltip: [split, `estimated · cache-aware · prices as of ${PRICE_TABLE_ASOF}`]
+      .filter(Boolean)
+      .join("\n"),
+  };
 }
 
 /** Sum of the Claude config counts (CLAUDE.md + rules + MCP + hooks). */

@@ -114,11 +114,12 @@ interface NightCardProps {
   onDeny: (sessionId: string, requestId: string) => void;
   isDuplicate?: boolean;
   showConfigCounts?: boolean;
+  showUsage?: boolean;
   /** Provided for live cards (renders the dismiss "X"); omitted for revived ones. */
   onDismiss?: (id: string) => void;
 }
 
-function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pending, onApprove, onDeny, isDuplicate, showConfigCounts, onDismiss }: NightCardProps) {
+function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pending, onApprove, onDeny, isDuplicate, showConfigCounts, showUsage, onDismiss }: NightCardProps) {
   const { info, metrics } = session;
   const state = info.state;
   const alive = ALIVE.has(state);
@@ -247,7 +248,7 @@ function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pendi
         <div className="gauge"><span className="fill" style={{ width: `${pct}%`, background: ramp, color: ramp }} /></div>
       </div>
 
-      <CardExtras session={session} showConfigCounts={!!showConfigCounts} mono="var(--mono)" muted="var(--ink-soft)" faint="var(--ink-faint)" rule="rgba(198,154,78,0.16)" />
+      <CardExtras session={session} showConfigCounts={!!showConfigCounts} showUsage={showUsage !== false} mono="var(--mono)" muted="var(--ink-soft)" faint="var(--ink-faint)" rule="rgba(198,154,78,0.16)" />
 
       <div className="idrow">
         {session.modelDisplayName !== "—" && <span className="chip model"><b>{session.modelDisplayName}</b>{session.provider && ` · ${session.provider}`}</span>}
@@ -287,7 +288,7 @@ function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pendi
 const NightCard = React.memo(NightCardBase);
 
 export function NightView(props: SkinViewProps) {
-  const { sessions, revivedSessions, permissionsEnabled, pendingBySession, approvePermission, denyPermission, timerDisplay, grouped, showConfigCounts } = props;
+  const { sessions, revivedSessions, permissionsEnabled, pendingBySession, approvePermission, denyPermission, timerDisplay, grouped, showConfigCounts, showUsage } = props;
   const total = sessions.length;
   const active = sessions.filter((s) => isActiveState(s.info.state)).length;
   const ordered = orderSessions(sessions, grouped);
@@ -329,6 +330,7 @@ export function NightView(props: SkinViewProps) {
                 onDeny={denyPermission}
                 isDuplicate={dupSet.has(session.displayTitle)}
                 showConfigCounts={showConfigCounts}
+                showUsage={showUsage}
                 onDismiss={props.onDismiss}
               />
             ))}
@@ -349,7 +351,7 @@ export function NightView(props: SkinViewProps) {
                   const label = clicks === 0 ? "Revive" : remaining === 1 ? "Confirm!" : `Revive (${clicks}/${props.reviveClicksRequired})`;
                   return (
                     <div key={session.info.id} style={{ position: "relative" }}>
-                      <NightCard session={session} index={0} timerDisplay={timerDisplay} permissionsEnabled={false} pending={[]} onApprove={approvePermission} onDeny={denyPermission} showConfigCounts={showConfigCounts} />
+                      <NightCard session={session} index={0} timerDisplay={timerDisplay} permissionsEnabled={false} pending={[]} onApprove={approvePermission} onDeny={denyPermission} showConfigCounts={showConfigCounts} showUsage={showUsage} />
                       <div className="revive-row">
                         <span className="age">ended {props.formatReviveElapsed(revivedAt)} ago</span>
                         <button className="revive" onClick={() => props.onReviveClick(session)}>{label}</button>

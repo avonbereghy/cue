@@ -21,6 +21,12 @@ export function useSessionMonitor(): EnrichedSession[] {
 
   useEffect(() => {
     let cancelled = false;
+    // Set once a `sessions-updated` event has been received. The initial
+    // get_sessions fetch is slower than a live event and the backend dedups by
+    // payload hash (it won't re-emit an identical snapshot), so a late initial
+    // resolution must NOT overwrite fresher event data that already flushed —
+    // otherwise the UI regresses for a poll cycle (~3-5s).
+    let eventApplied = false;
 
     const flush = () => {
       flushTimerRef.current = null;
@@ -43,11 +49,13 @@ export function useSessionMonitor(): EnrichedSession[] {
     };
 
     // Initial fetch — apply synchronously (no need to coalesce a single read).
+    // Skip it if a live event beat it here: its payload is at least as fresh.
     invoke<EnrichedSession[]>("get_sessions")
-      .then((s) => { if (!cancelled) { setSessions(s); lastUpdateRef.current = Date.now(); } })
+      .then((s) => { if (!cancelled && !eventApplied) { setSessions(s); lastUpdateRef.current = Date.now(); } })
       .catch(console.error);
 
     const unlisten = listen<EnrichedSession[]>("sessions-updated", (event) => {
+      eventApplied = true;
       apply(event.payload);
     });
 

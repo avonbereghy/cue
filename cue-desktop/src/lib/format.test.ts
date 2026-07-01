@@ -4,6 +4,8 @@ import {
   formatDuration,
   formatElapsedCompact,
   formatModelName,
+  formatCost,
+  estimateCost,
   cleanPromptText,
   errorReason,
   getProjectAccent,
@@ -43,6 +45,16 @@ describe("formatTokens", () => {
     expect(formatTokens(1_000_000)).toBe("1M");
     expect(formatTokens(2_500_000)).toBe("2.5M");
   });
+  it("rolls the K→M rounding boundary up instead of printing '1000.0K'", () => {
+    expect(formatTokens(999_949)).toBe("999.9K"); // just under — stays K
+    expect(formatTokens(999_950)).toBe("1.0M"); // would round to 1000.0K → M
+    expect(formatTokens(999_999)).toBe("1.0M");
+  });
+  it("rolls the M→B rounding boundary up instead of printing '1000.0M'", () => {
+    expect(formatTokens(999_949_000)).toBe("999.9M"); // just under — stays M
+    expect(formatTokens(999_950_000)).toBe("1.0B"); // would round to 1000.0M → B
+    expect(formatTokens(1_000_000_000)).toBe("1B");
+  });
 });
 
 describe("formatDuration", () => {
@@ -79,6 +91,46 @@ describe("formatModelName", () => {
   it("renders an em-dash for unknown/empty", () => {
     expect(formatModelName("unknown")).toBe("—");
     expect(formatModelName("")).toBe("—");
+  });
+});
+
+describe("formatCost", () => {
+  it("shows $0.00 only for a true zero", () => {
+    expect(formatCost(0)).toBe("$0.00");
+    expect(formatCost(-1)).toBe("$0.00");
+  });
+  it("shows <$0.01 for a non-zero sub-cent amount — a cheap turn must not read as free", () => {
+    expect(formatCost(0.004)).toBe("<$0.01");
+    expect(formatCost(0.0099)).toBe("<$0.01");
+  });
+  it("shows two decimals at/above a cent", () => {
+    expect(formatCost(0.01)).toBe("$0.01");
+    expect(formatCost(0.42)).toBe("$0.42");
+    expect(formatCost(12.5)).toBe("$12.50");
+  });
+});
+
+describe("estimateCost (cache-aware)", () => {
+  it("prices all four buckets — cache read at 0.1x input, cache write at 1.25x input", () => {
+    // Opus per 1M tokens: $15 in · $75 out · $1.50 cache-read · $18.75 cache-write.
+    const cost = estimateCost({
+      "claude-opus-4-8": { input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 },
+    });
+    expect(cost).toBeCloseTo(15 + 75 + 1.5 + 18.75, 6);
+  });
+  it("prices each model at its OWN tier and sums (a Haiku subagent isn't billed at Opus rates)", () => {
+    const cost = estimateCost({
+      "claude-opus-4-8": { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, // $15
+      "claude-haiku-4-5": { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, // $0.80
+    });
+    expect(cost).toBeCloseTo(15.8, 6);
+  });
+  it("falls back to Sonnet-tier for an unknown model family", () => {
+    const cost = estimateCost({ "some-new-model-9": { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 } });
+    expect(cost).toBeCloseTo(3, 6); // Sonnet input rate
+  });
+  it("is zero for an empty map", () => {
+    expect(estimateCost({})).toBe(0);
   });
 });
 

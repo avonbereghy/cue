@@ -222,6 +222,12 @@ export interface ExtraBandSpec {
   phaseJitter?: number;
 }
 
+// Max physics timestep (seconds). Every per-frame integrator clamps its real
+// frame delta to this so a background-tab stall (or a freshly-resumed render
+// loop) can't integrate one huge catch-up jump and explode the sim. Matches
+// the audio path's prior clamp — a ~20fps floor.
+const MAX_FRAME_DT = 0.05;
+
 export function SignalString({ state, frequency = 1.0, revived = false, pulses, comets, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", stringsEnabled = true, sandEnabled = true, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, cordRetractDelay = 0.5, cordDeployForce = 1.0, cordRetractForce = 1.0, stringSpread = 0.15, stringDeployAngle = -16, sessionId = "", contentRef, keyReleaseSpeed: _keyReleaseSpeed = 0.4, onStringsConnected, extraBands, suppressBaseBands = false, baseBandsTarget = 3, baseBandsAmpMuls = [1, 1, 1] }: SignalStringProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
@@ -416,9 +422,16 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
   // can redeploy them when suppression releases while state is still active.
   const baseSuppressRetractedRef = useRef(false);
 
-  // Whip pulses — triggered when each band starts retracting
-  // Each pulse: a Gaussian kink at the cord tip that travels left and decays
+  // Whip pulses — triggered when each band starts retracting.
+  // Each pulse: a Gaussian kink at the cord tip that travels left and decays.
+  // Sized to NUM_STRINGS (5): the audio-mode draw loop indexes by band.bandIdx,
+  // which reaches 4 once the bass/mids bands are enabled, so a short 3-entry
+  // array would read undefined and throw inside the rAF callback (uncatchable
+  // by the ErrorBoundary, freezing the card canvas). dir alternates to match the
+  // retract handlers (i % 2 === 0 ? 1 : -1).
   const whipPulsesRef = useRef([
+    { active: false, t0: 0, amp: 0, dir: 1 },
+    { active: false, t0: 0, amp: 0, dir: -1 },
     { active: false, t0: 0, amp: 0, dir: 1 },
     { active: false, t0: 0, amp: 0, dir: -1 },
     { active: false, t0: 0, amp: 0, dir: 1 },
@@ -808,11 +821,17 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-    const dpr = window.devicePixelRatio || 1;
+    const reducedMotionMql = window.matchMedia("(prefers-reduced-motion: reduce)");
+    // Sampled live: a matchMedia change listener (registered after `draw` is
+    // defined, below) updates this and re-kicks the loop, so toggling the OS
+    // "reduce motion" setting takes effect without remounting the card.
+    let prefersReducedMotion = reducedMotionMql.matches;
 
     const resize = () => {
+      // Re-read devicePixelRatio on every resize so dragging the window to a
+      // display with a different DPR re-rasterizes the canvas crisply instead
+      // of reusing the DPR captured when the effect first ran.
+      const dpr = window.devicePixelRatio || 1;
       const rect = canvas.getBoundingClientRect();
       rectCacheRef.current = rect;
       canvas.width = rect.width * dpr;
@@ -884,6 +903,16 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         animRef.current = 0;
         return;
       }
+      // Real, clamped frame delta (seconds) — computed once and shared by every
+      // physics integrator below (cord deploy/retract, audio oscillators,
+      // subagent bands, sim sand) so motion speed is refresh-rate-independent:
+      // a 120Hz display steps half as far twice as often, a 30fps display twice
+      // as far half as often, netting the same speed. Clamped (MAX_FRAME_DT) so
+      // a stalled tab can't integrate a huge catch-up jump on the resume frame.
+      const dt = lastFrameRef.current > 0
+        ? Math.min((now - lastFrameRef.current) / 1000, MAX_FRAME_DT)
+        : 1 / 60;
+      lastFrameRef.current = now;
       const cfg = configRef.current;
       const { signalAlpha, signalAmplitude, signalEcho, frequency,
         signalBass, signalMids, signalTreble,
@@ -986,8 +1015,44 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       // them. Reads as background tracers sliding underneath the waveform.
       if (comets?.current) renderComets(ctx, comets.current, now, w, h);
 
-      // Reduced motion — flat line, no animation
+      // Reduced motion — render the strings as flat resting lines (the honest
+      // static form of a deployed string) instead of animating them, then stop
+      // the loop. The animation effect re-runs on every `state` change (see its
+      // deps), so this static frame is redrawn on each transition; the
+      // matchMedia listener re-kicks the loop if "reduce motion" is turned off.
       if (prefersReducedMotion) {
+        const rmState = stateRef.current;
+        const rmShowStrings =
+          cfgStringsEnabled &&
+          !revived &&
+          (rmState === "working" || rmState === "subagent" || rmState === "error" || rmState === "waiting");
+        if (rmShowStrings) {
+          const rmYOffsets = [
+            -cfgStringSpread * halfH, 0, cfgStringSpread * halfH,
+            -1.8 * cfgStringSpread * halfH, 1.8 * cfgStringSpread * halfH,
+          ];
+          const rmBandOn = [signalBass, signalMids, signalTreble, signalBass, signalMids];
+          ctx.strokeStyle = strokeColor;
+          ctx.lineWidth = 1;
+          for (let i = 0; i < NUM_STRINGS; i++) {
+            if (!bandEnabled(i, baseBandsTargetRef.current) || !rmBandOn[i]) continue;
+            const y = midY + (rmYOffsets[i] ?? 0);
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(w, y);
+            ctx.stroke();
+          }
+        }
+        // Strings "connect" instantly when motion is reduced — fire the latch
+        // now (once per deploy cycle) so the parent's thinking→working handoff
+        // commits immediately instead of waiting on its 2200ms fallback.
+        if (
+          !stringsConnectedFiredRef.current &&
+          (rmState === "working" || rmState === "subagent")
+        ) {
+          stringsConnectedFiredRef.current = true;
+          onStringsConnectedRef.current?.();
+        }
         return;
       }
 
@@ -998,7 +1063,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       const bandForceMult = [0.85, 0.75, 0.70, 0.70, 0.70];
       if (!revived) {
         const { cordDeployForce: deployF, cordRetractForce: retractF } = cfg;
-        const clipDt = 1 / 60; // approximate frame dt
+        const clipDt = dt; // shared real frame delta (refresh-rate-independent)
         const fracs = clipFractionsRef.current;
         const vels = clipVelsRef.current;
 
@@ -1351,8 +1416,8 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           modeStateRef.current = { pos: new Float64Array(totalModes), vel: new Float64Array(totalModes) };
         }
         const ms = modeStateRef.current;
-        const dt = lastFrameRef.current > 0 ? Math.min((now - lastFrameRef.current) / 1000, 0.05) : 1 / 60;
-        lastFrameRef.current = now;
+        // dt (real, clamped frame delta) + lastFrameRef are set once at the top
+        // of draw() and shared across every physics path — see there.
 
         // Oscillator constants
         const STIFFNESS = 200;
@@ -1629,7 +1694,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
               let whipContrib = 0;
               if (trail === 0) {
                 const wp = whipPulsesRef.current[band.bandIdx];
-                if (wp.active) {
+                if (wp?.active) {
                   const elapsed = (now - wp.t0) / 1000;
                   const decay = Math.exp(-elapsed * 5.5);
                   if (decay < 0.01) {
@@ -1733,7 +1798,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
         // visibly resemble the white lines but in their own colour.
         const extraMap = extraBandsStateRef.current;
         if (!revived && extraMap.size > 0) {
-          const extraDt = 1 / 60;
+          const extraDt = dt; // shared real frame delta (refresh-rate-independent)
           const { cordDeployForce: deployFE, cordRetractForce: retractFE } = cfg;
           // Snapshot ids so we can prune retired entries after iteration.
           const idsToDrop: string[] = [];
@@ -2213,7 +2278,7 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           ? (now - sandDeactivatedAtRef.current) / 1000 : 0;
         const windRamp = sandActiveSim ? 1.0 : Math.max(0, Math.exp(-deactSecs * 2.2));
         const GRAVITY = 90;
-        const simDt = 1 / 60;
+        const simDt = dt; // shared real frame delta (refresh-rate-independent)
 
         // Energy from waveform — zero when no pulses (pure gravity fall)
         let simEnergy = 0;
@@ -2314,10 +2379,22 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
       animRef.current = requestAnimationFrame(draw);
     };
 
+    // Live-toggle support for the OS "reduce motion" setting. It doesn't change
+    // any React dep, so update the sampled flag directly; if motion was just
+    // re-enabled while the reduced-motion branch had parked the loop, restart it.
+    const onReducedMotionChange = (e: MediaQueryListEvent) => {
+      prefersReducedMotion = e.matches;
+      if (!e.matches && animRef.current === 0 && renderActiveRef.current) {
+        animRef.current = requestAnimationFrame(draw);
+      }
+    };
+    reducedMotionMql.addEventListener("change", onReducedMotionChange);
+
     animRef.current = requestAnimationFrame(draw);
 
     return () => {
       cancelAnimationFrame(animRef.current);
+      reducedMotionMql.removeEventListener("change", onReducedMotionChange);
       observer.disconnect();
       contentObserver?.disconnect();
       contentMutationObserver?.disconnect();
