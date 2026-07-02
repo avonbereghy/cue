@@ -22,9 +22,9 @@ use std::path::{Path, PathBuf};
 const LOG_CAP_BYTES: u64 = 5 * 1024 * 1024;
 
 /// Decide the level-filter string. Precedence: an explicit non-empty `RUST_LOG`
-/// (terminal power users) > the `CUE_DEBUG` marker (GUI users with no terminal)
-/// > the default `info` floor (captures state traces + anomalies, not the 1 Hz
-/// tick spam which stays at `debug`).
+/// (terminal power users) beats the `CUE_DEBUG` marker (GUI users with no
+/// terminal), which beats the default `info` floor (captures state traces +
+/// anomalies, not the 1 Hz tick spam which stays at `debug`).
 fn resolve_filter(rust_log: Option<&str>, cue_debug: bool) -> String {
     if let Some(v) = rust_log {
         if !v.is_empty() {
