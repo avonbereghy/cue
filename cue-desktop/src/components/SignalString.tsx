@@ -1869,10 +1869,13 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
             // suppression branch of `drawStrings` doesn't apply — when a
             // session enters `subagent` directly from idle, base bands stay
             // suppressed, but the subagent line should still render. Gate on
-            // the conditions that genuinely apply to extras: sand not
-            // covering the card, and the band has clip to draw.
+            // the conditions that genuinely apply to extras: the STRINGS toggle
+            // is on, sand isn't covering the card, and the band has clip to
+            // draw. cfgStringsEnabled must gate extras too — base bands get it
+            // via `drawStrings`, but extras bypass that branch, so without this
+            // an off STRINGS toggle still left subagent strings drawing.
             const sandCoveringExtras = sandBlendRef.current >= 0.99;
-            if (sandCoveringExtras || st.clipFraction <= 0.001) return;
+            if (!cfgStringsEnabled || sandCoveringExtras || st.clipFraction <= 0.001) return;
 
             // Resolve axis in pixel space.
             const sx = st.spec.axisStart.xFrac * w;

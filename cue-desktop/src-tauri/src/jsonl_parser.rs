@@ -167,8 +167,28 @@ pub const AGENT_TOOL_NAMES: &[&str] = &["Agent", "Task"];
 /// stat-then-read TOCTOU window a racing writer could otherwise use to swap a
 /// small file for a huge one between the size check and the read.
 pub fn parse_jsonl_file(path: &Path) -> Vec<ParsedEntry> {
+    parse_jsonl_file_opts(path, true)
+}
+
+/// Like `parse_jsonl_file` but KEEPS `isSidechain: true` rows. Used only for
+/// `subagents/*.jsonl`: those dedicated transcripts are written entirely as
+/// sidechain rows, so the default sidechain-drop (correct for the MAIN
+/// transcript) would discard every line and the agent would vanish from
+/// `m.subagents` — leaving the parent card stuck on `idle` while a background
+/// `Agent` batch is in flight. See `parse_line_opts`.
+pub fn parse_jsonl_file_keep_sidechain(path: &Path) -> Vec<ParsedEntry> {
+    parse_jsonl_file_opts(path, false)
+}
+
+fn parse_jsonl_file_opts(path: &Path, drop_sidechain: bool) -> Vec<ParsedEntry> {
+    // Drew's bounded read is the superset of Andy's open_jsonl_no_follow + manual
+    // size check: `read_to_string_bounded` opens once with O_NOFOLLOW, enforces
+    // MAX_FILE_SIZE on that same handle's fstat, and bounds the read — closing the
+    // stat-then-read TOCTOU window. Andy's sidechain split is threaded through via
+    // `drop_sidechain` (true = MAIN transcript drops isSidechain rows; false =
+    // subagent transcript keeps them).
     match crate::security::read_to_string_bounded(path, MAX_FILE_SIZE) {
-        Ok(content) => parse_jsonl_content(&content),
+        Ok(content) => parse_jsonl_content_opts(&content, drop_sidechain),
         Err(e) => {
             if e.kind() == std::io::ErrorKind::FileTooLarge {
                 log::warn!("Skipping oversized JSONL file: {:?}", path);
@@ -219,7 +239,16 @@ fn open_jsonl_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
 /// Append newly-written lines from `path` into `cache.entries`. On truncation
 /// or a backwards-moving mtime (file replaced/forked) the cache is reset and
 /// the file is fully re-read.
-fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) {
+///
+/// `drop_sidechain` MUST match the transcript kind: `true` for a MAIN
+/// transcript (drop `isSidechain: true` rows, so a subagent's noise can't leak
+/// into the parent's metrics) and `false` for a subagent transcript under
+/// `subagents/` (which is written ENTIRELY as sidechain rows — dropping them
+/// would empty the cache, the agent would vanish from `m.subagents`, and the
+/// parent card would sit on `idle` for the whole background-Agent run). This is
+/// the production 5s-tick path, so the split has to be threaded here too, not
+/// just through the one-shot `parse_jsonl_file*` variants.
+fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache, drop_sidechain: bool) {
     let metadata = match std::fs::metadata(path) {
         Ok(m) => m,
         Err(e) => {
@@ -347,7 +376,7 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) {
         if line.is_empty() {
             continue;
         }
-        if let Some(entry) = parse_line(line) {
+        if let Some(entry) = parse_line_opts(line, drop_sidechain) {
             cache.entries.push(entry);
         }
     }
@@ -355,33 +384,46 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) {
     cache.file_mtime = mtime;
 }
 
-/// Parse JSONL content string into entries.
+/// Parse JSONL content string into entries (MAIN-transcript semantics: drops
+/// `isSidechain` rows). For subagent files use `parse_jsonl_file_keep_sidechain`.
 pub fn parse_jsonl_content(content: &str) -> Vec<ParsedEntry> {
+    parse_jsonl_content_opts(content, true)
+}
+
+fn parse_jsonl_content_opts(content: &str, drop_sidechain: bool) -> Vec<ParsedEntry> {
     content
         .lines()
         .filter(|line| !line.is_empty())
-        .filter_map(parse_line)
+        .filter_map(|line| parse_line_opts(line, drop_sidechain))
         .collect()
 }
 
-/// Parse a single JSONL line.
-fn parse_line(line: &str) -> Option<ParsedEntry> {
+/// Parse a single JSONL line. When `drop_sidechain` is true (the MAIN
+/// transcript), rows flagged `isSidechain: true` are discarded so a subagent's
+/// interleaved turn can't drive the orchestrator card's state. Subagent
+/// transcript files (`subagents/*.jsonl`) are written ENTIRELY as sidechain
+/// rows, so they MUST be parsed with `drop_sidechain = false` — otherwise every
+/// line is dropped, `parse_subagent_jsonl` returns `None`, the agent never
+/// lands in `m.subagents`, and a background `Agent` batch shows the parent as
+/// idle for its whole run (no hook counter, no unmatched parent tool_use to
+/// fall back on).
+fn parse_line_opts(line: &str, drop_sidechain: bool) -> Option<ParsedEntry> {
     let json: Value = serde_json::from_str(line).ok()?;
     let obj = json.as_object()?;
 
-    // Drop sidechain entries: these belong to a Task subagent's conversation,
-    // not the orchestrator's turn. Today Claude Code writes subagent turns to
-    // separate `subagents/*.jsonl` files (parsed independently by
-    // `parse_subagent_jsonl`), so this is currently a no-op on real data — but
-    // some versions / entrypoints interleave them into the MAIN transcript
-    // flagged `isSidechain: true`. If that happens, counting them here would
-    // let a subagent's pending tool_use, end_turn, or AskUserQuestion drive the
-    // main card's state (false "working"/"waiting"/idle verdicts). Filtering at
-    // the source keeps every downstream signal — pending_tool_use,
+    // Drop sidechain entries on the MAIN parse: these belong to a Task subagent's
+    // conversation, not the orchestrator's turn. Claude Code writes subagent
+    // turns to separate `subagents/*.jsonl` files (parsed independently by
+    // `parse_subagent_jsonl`, which passes `drop_sidechain = false`) AND, for
+    // some versions / entrypoints, interleaves them into the MAIN transcript
+    // flagged `isSidechain: true`. On the main parse, counting them would let a
+    // subagent's pending tool_use, end_turn, or AskUserQuestion drive the main
+    // card's state (false "working"/"waiting"/idle verdicts). Filtering at the
+    // source keeps every downstream signal — pending_tool_use,
     // awaiting_user_prompt, last_end_turn_ts, running tool, assistant text,
     // token totals — scoped to the main conversation. Covers both the full
     // parse and the incremental cache, which share this function.
-    if obj.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+    if drop_sidechain && obj.get("isSidechain").and_then(Value::as_bool) == Some(true) {
         return None;
     }
 
@@ -973,7 +1015,10 @@ const SUBAGENT_BACKSTOP_SECS: u64 = 600;
 /// One-shot path: reads the whole transcript every call. The incremental
 /// counterpart used by the 5s metrics tick is `parse_subagent_jsonl_cached`.
 pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::SubagentMetrics> {
-    let entries = parse_jsonl_file(jsonl_path);
+    // KEEP sidechain rows: a subagent transcript is written entirely as
+    // `isSidechain: true` rows. The default (main-transcript) parse drops them,
+    // which would empty `entries` here and make the agent invisible.
+    let entries = parse_jsonl_file_keep_sidechain(jsonl_path);
     if entries.is_empty() {
         return None;
     }
@@ -995,7 +1040,10 @@ fn parse_subagent_jsonl_cached(
     jsonl_path: &Path,
     cache: &mut JsonlEntryCache,
 ) -> Option<crate::models::SubagentMetrics> {
-    refresh_entry_cache(jsonl_path, cache);
+    // KEEP sidechain rows: a subagent transcript is written entirely as
+    // `isSidechain: true`, so dropping them here (as the main path does) would
+    // empty the cache and make the background Agent invisible on the hot path.
+    refresh_entry_cache(jsonl_path, cache, false);
     if cache.entries.is_empty() {
         return None;
     }
@@ -1127,7 +1175,10 @@ pub fn parse_jsonl_to_session_metrics_cached(
     path: &Path,
     cache: &mut JsonlEntryCache,
 ) -> Option<crate::models::SessionMetrics> {
-    refresh_entry_cache(path, cache);
+    // MAIN transcript: drop `isSidechain: true` rows so a subagent's noise can't
+    // leak into the parent session's metrics. Subagent transcripts are tailed
+    // separately (with keep-sidechain) inside `aggregate_entries`.
+    refresh_entry_cache(path, cache, true);
     // Borrow the main entries immutably and the per-subagent caches mutably —
     // disjoint fields of `cache`, so the split borrow is sound. The subagent
     // discovery inside `aggregate_entries` tails each subagent transcript
@@ -1587,8 +1638,8 @@ mod tests {
         let assistant = format!(
             r#"{{"type":"assistant","timestamp":2.0,"message":{{"role":"assistant","stop_reason":"end_turn","content":[{{"type":"text","text":"{big}"}}],"usage":{{"input_tokens":1}}}}}}"#
         );
-        let u = parse_line(&user).expect("user entry");
-        let a = parse_line(&assistant).expect("assistant entry");
+        let u = parse_line_opts(&user, true).expect("user entry");
+        let a = parse_line_opts(&assistant, true).expect("assistant entry");
         // Capped well under the 50k input (SNIPPET_CHAR_CAP + ellipsis).
         let ulen = u.user_prompt_text.as_ref().unwrap().chars().count();
         let alen = a.assistant_text.as_ref().unwrap().chars().count();
@@ -2187,7 +2238,7 @@ mod tests {
         std::fs::write(&path, format!("{line_a}\n")).unwrap();
 
         let mut cache = super::JsonlEntryCache::default();
-        super::refresh_entry_cache(&path, &mut cache);
+        super::refresh_entry_cache(&path, &mut cache, true);
         assert_eq!(cache.entries.len(), 1);
         let size_after_first = cache.file_size;
         assert!(size_after_first > 0);
@@ -2200,13 +2251,13 @@ mod tests {
         writeln!(f, "{line_b}").unwrap();
         drop(f);
 
-        super::refresh_entry_cache(&path, &mut cache);
+        super::refresh_entry_cache(&path, &mut cache, true);
         assert_eq!(cache.entries.len(), 2);
         assert!(cache.file_size > size_after_first);
 
         // No-change refresh leaves entries alone.
         let entries_before = cache.entries.len();
-        super::refresh_entry_cache(&path, &mut cache);
+        super::refresh_entry_cache(&path, &mut cache, true);
         assert_eq!(cache.entries.len(), entries_before);
 
         let _ = std::fs::remove_file(&path);
@@ -2224,7 +2275,7 @@ mod tests {
         std::fs::write(&path, format!("{long_line}\n{long_line}\n")).unwrap();
 
         let mut cache = super::JsonlEntryCache::default();
-        super::refresh_entry_cache(&path, &mut cache);
+        super::refresh_entry_cache(&path, &mut cache, true);
         assert_eq!(cache.entries.len(), 2);
 
         // Truncate file to a single line — cache should reset and re-parse.
@@ -2236,7 +2287,7 @@ mod tests {
         writeln!(f, "{long_line}").unwrap();
         drop(f);
 
-        super::refresh_entry_cache(&path, &mut cache);
+        super::refresh_entry_cache(&path, &mut cache, true);
         assert_eq!(cache.entries.len(), 1);
 
         let _ = std::fs::remove_file(&path);
@@ -2254,7 +2305,7 @@ mod tests {
         std::fs::write(&path, format!("{complete}\n{partial}")).unwrap();
 
         let mut cache = super::JsonlEntryCache::default();
-        super::refresh_entry_cache(&path, &mut cache);
+        super::refresh_entry_cache(&path, &mut cache, true);
         // Only the complete line should be parsed; the partial waits.
         assert_eq!(cache.entries.len(), 1);
 
@@ -2263,7 +2314,7 @@ mod tests {
         let third = r#"{"type":"user","timestamp":1710000002.0,"message":{"content":"c"}}"#;
         std::fs::write(&path, format!("{complete}\n{partial}{rest}\n{third}\n")).unwrap();
 
-        super::refresh_entry_cache(&path, &mut cache);
+        super::refresh_entry_cache(&path, &mut cache, true);
         assert_eq!(cache.entries.len(), 3);
 
         let _ = std::fs::remove_file(&path);
@@ -2280,11 +2331,11 @@ mod tests {
         std::fs::write(&path, format!("{line}\n")).unwrap();
 
         let mut cache = super::JsonlEntryCache::default();
-        super::refresh_entry_cache(&path, &mut cache);
+        super::refresh_entry_cache(&path, &mut cache, true);
         assert_eq!(cache.entries.len(), 1);
 
         std::fs::remove_file(&path).unwrap();
-        super::refresh_entry_cache(&path, &mut cache);
+        super::refresh_entry_cache(&path, &mut cache, true);
         assert_eq!(
             cache.entries.len(),
             0,
@@ -2312,7 +2363,7 @@ mod tests {
         assert!(std::fs::metadata(&link).is_ok());
 
         let mut cache = super::JsonlEntryCache::default();
-        super::refresh_entry_cache(&link, &mut cache);
+        super::refresh_entry_cache(&link, &mut cache, true);
         // …but our reader refuses to open through it, so no entries land.
         assert_eq!(
             cache.entries.len(),
@@ -2790,6 +2841,121 @@ mod tests {
         let m_run = super::parse_subagent_jsonl(&running).unwrap();
         assert!(m_run.is_active, "tail tool_use ⇒ still running");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_subagent_jsonl_parsed_when_all_rows_sidechain() {
+        // Real background-`Agent` transcripts (subagents/agent-*.jsonl) write
+        // EVERY row as `isSidechain: true`. The main-transcript parse drops
+        // those rows; if parse_subagent_jsonl reused that filter the file would
+        // parse to zero entries → None → the agent never reaches m.subagents →
+        // the parent card shows idle for the whole background batch. Keeping
+        // sidechain rows here is the fix.
+        let dir = std::env::temp_dir().join("cue_test_subagent_sidechain");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let running = dir.join("agent-sidechain-running.jsonl");
+        std::fs::write(&running, concat!(
+            r#"{"type":"user","isSidechain":true,"timestamp":1.0,"agentId":"a-sc","message":{"role":"user","content":[{"type":"text","text":"audit this"}]}}"#, "\n",
+            r#"{"type":"assistant","isSidechain":true,"timestamp":2.0,"agentId":"a-sc","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"sc1","name":"Read","input":{}}],"stop_reason":"tool_use"}}"#, "\n",
+        )).unwrap();
+        let m_run = super::parse_subagent_jsonl(&running)
+            .expect("all-sidechain agent file must still parse (was None before fix)");
+        assert!(m_run.is_active, "tail tool_use ⇒ still running");
+        assert_eq!(m_run.agent_id, "a-sc");
+
+        let finished = dir.join("agent-sidechain-finished.jsonl");
+        std::fs::write(&finished, concat!(
+            r#"{"type":"user","isSidechain":true,"timestamp":1.0,"agentId":"a-sc2","message":{"role":"user","content":[{"type":"text","text":"audit this"}]}}"#, "\n",
+            r#"{"type":"assistant","isSidechain":true,"timestamp":2.0,"agentId":"a-sc2","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}}"#, "\n",
+        )).unwrap();
+        let m_fin = super::parse_subagent_jsonl(&finished)
+            .expect("all-sidechain agent file must still parse");
+        assert!(!m_fin.is_active, "tail end_turn ⇒ finished");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_subagent_cached_path_keeps_sidechain_rows() {
+        // Regression for the hot-path landmine: the production 5s metrics tick
+        // reaches a subagent transcript through
+        // parse_subagent_jsonl_cached → refresh_entry_cache — NOT the one-shot
+        // parse_subagent_jsonl that test_subagent_jsonl_parsed_when_all_rows_sidechain
+        // covers. That cached path used to call the sidechain-DROPPING parse_line,
+        // so an all-`isSidechain:true` subagent file (which every real
+        // background-Agent transcript is) tailed to zero cached entries → None →
+        // the agent never reached m.subagents and the parent card sat on idle for
+        // the whole run. refresh_entry_cache(.., drop_sidechain=false) on the
+        // subagent path is the fix. Neither branch's tests exercised this path.
+        use std::io::Write;
+        let dir =
+            std::env::temp_dir().join(format!("cue-sub-cached-sidechain-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent-sidechain-cached.jsonl");
+        std::fs::write(&path, concat!(
+            r#"{"type":"user","isSidechain":true,"timestamp":1.0,"agentId":"a-cached","message":{"role":"user","content":[{"type":"text","text":"audit this"}]}}"#, "\n",
+            r#"{"type":"assistant","isSidechain":true,"timestamp":2.0,"agentId":"a-cached","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"c1","name":"Read","input":{}}],"stop_reason":"tool_use"}}"#, "\n",
+        )).unwrap();
+
+        let mut cache = super::JsonlEntryCache::default();
+        let m = super::parse_subagent_jsonl_cached(&path, &mut cache).expect(
+            "cached path must parse an all-sidechain subagent file (was None before the fix)",
+        );
+        assert!(
+            !cache.entries.is_empty(),
+            "refresh_entry_cache must KEEP sidechain rows on the subagent cached path"
+        );
+        assert_eq!(m.agent_id, "a-cached");
+        assert!(m.is_active, "tail tool_use ⇒ agent still running");
+
+        // The incremental tail read must keep sidechain rows too: append a
+        // finishing end_turn row and confirm the cache tails it in (not dropped).
+        let finish_row = r#"{"type":"assistant","isSidechain":true,"timestamp":3.0,"agentId":"a-cached","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}}"#;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(f, "{finish_row}").unwrap();
+        drop(f);
+        let m2 = super::parse_subagent_jsonl_cached(&path, &mut cache)
+            .expect("cached path still parses after tailing more sidechain rows");
+        assert_eq!(
+            cache.entries.len(),
+            3,
+            "appended sidechain row must be tailed in, not dropped"
+        );
+        assert!(!m2.is_active, "tail end_turn ⇒ agent finished");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_main_parse_still_drops_sidechain_rows() {
+        // The fix must NOT relax sidechain filtering on the MAIN transcript:
+        // an interleaved subagent end_turn must not be counted as the parent's.
+        let dir = std::env::temp_dir().join("cue_test_main_drops_sidechain");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("main.jsonl");
+        std::fs::write(&path, concat!(
+            r#"{"type":"user","timestamp":1.0,"message":{"role":"user","content":[{"type":"text","text":"go"}]}}"#, "\n",
+            r#"{"type":"assistant","isSidechain":true,"timestamp":2.0,"message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"subagent reply"}],"stop_reason":"end_turn"}}"#, "\n",
+            r#"{"type":"assistant","timestamp":3.0,"message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"m1","name":"Bash","input":{}}],"stop_reason":"tool_use"}}"#, "\n",
+        )).unwrap();
+        let m = super::parse_jsonl_to_session_metrics(&path).unwrap();
+        // The sidechain end_turn must be invisible to the main parse.
+        assert_eq!(
+            m.last_end_turn_ts, None,
+            "sidechain end_turn must not register on the main transcript"
+        );
+        assert!(
+            m.pending_tool_use,
+            "main turn's own tool_use should remain pending"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

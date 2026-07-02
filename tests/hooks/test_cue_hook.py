@@ -1820,6 +1820,44 @@ class TestResolveSource:
         assert hook._resolve_source(None, None) == "unknown"
 
 
+class TestShouldIgnoreSession:
+    """`_should_ignore_session` hides SDK/headless jobs — but never the desktop app.
+
+    The contradiction: the blanket CLAUDE_CODE_ENTRYPOINT="sdk-*" skip would
+    also suppress transcript-less Claude-desktop sessions, which the Rust
+    poller deliberately keeps alive off the hook stream alone. So a
+    resolved_source of "claude-desktop" is exempt from the SDK skip.
+    """
+
+    def _clear(self, monkeypatch):
+        monkeypatch.delenv("CUE_SKIP", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
+
+    def test_interactive_cli_not_ignored(self, hook, monkeypatch):
+        self._clear(monkeypatch)
+        monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
+        assert hook._should_ignore_session({}, "iterm") is False
+
+    def test_cue_skip_env_ignores(self, hook, monkeypatch):
+        self._clear(monkeypatch)
+        monkeypatch.setenv("CUE_SKIP", "1")
+        assert hook._should_ignore_session({}, "iterm") is True
+
+    def test_sdk_headless_job_ignored(self, hook, monkeypatch):
+        self._clear(monkeypatch)
+        monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "sdk-py")
+        # A genuine headless SDK job (unknown/terminal source) is suppressed.
+        assert hook._should_ignore_session({}, "unknown") is True
+        assert hook._should_ignore_session({}, None) is True
+
+    def test_sdk_desktop_session_not_ignored(self, hook, monkeypatch):
+        # The exemption: the desktop app can drive Claude Code via the SDK
+        # entrypoint, yet its (transcript-less) sessions must stay visible.
+        self._clear(monkeypatch)
+        monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "sdk-cli")
+        assert hook._should_ignore_session({}, "claude-desktop") is False
+
+
 class TestSourceWriteThrough:
     """End-to-end: main()'s write path resolves + persists the launcher source."""
 

@@ -1,0 +1,81 @@
+name: Update Homebrew tap
+
+# When a GitHub release is published (the release workflow ships drafts, so this
+# fires the moment you click "Publish"), regenerate the cask in the
+# avonbereghy/homebrew-cue tap with the new version and the two macOS .dmg
+# hashes pulled from the release's SHA256SUMS asset.
+#
+# Requires a repo secret HOMEBREW_TAP_TOKEN: a PAT (fine-grained, "Contents:
+# read & write" on avonbereghy/homebrew-cue, or a classic token with `repo`)
+# so this workflow can push to the separate tap repository.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to sync (e.g. v0.5.3)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  update-cask:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag and version
+        id: tag
+        run: |
+          TAG="${{ github.event.release.tag_name || github.event.inputs.tag }}"
+          if [ -z "$TAG" ]; then echo "::error::no tag resolved"; exit 1; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out cue (render script)
+        uses: actions/checkout@v4
+        with:
+          path: cue
+
+      - name: Check out homebrew-cue tap
+        uses: actions/checkout@v4
+        with:
+          repository: avonbereghy/homebrew-cue
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-cue
+
+      - name: Pull .dmg hashes from the release
+        id: sha
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          VER="${{ steps.tag.outputs.version }}"
+          curl -fsSL -o SHA256SUMS \
+            "https://github.com/avonbereghy/cue/releases/download/${TAG}/SHA256SUMS"
+          ARM=$(awk -v f="Cue_${VER}_aarch64.dmg" '$2==f {print $1}' SHA256SUMS)
+          X64=$(awk -v f="Cue_${VER}_x64.dmg"     '$2==f {print $1}' SHA256SUMS)
+          if [ -z "$ARM" ] || [ -z "$X64" ]; then
+            echo "::error::could not find both .dmg hashes in SHA256SUMS"; cat SHA256SUMS; exit 1
+          fi
+          echo "arm=$ARM" >> "$GITHUB_OUTPUT"
+          echo "x64=$X64" >> "$GITHUB_OUTPUT"
+
+      - name: Render cask
+        run: |
+          bash cue/scripts/homebrew/render-cask.sh \
+            "${{ steps.tag.outputs.version }}" \
+            "${{ steps.sha.outputs.arm }}" \
+            "${{ steps.sha.outputs.x64 }}" \
+            homebrew-cue/Casks/cue.rb
+
+      - name: Commit and push to tap
+        run: |
+          cd homebrew-cue
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- Casks/cue.rb; then
+            echo "Cask already up to date — nothing to push."
+            exit 0
+          fi
+          git add Casks/cue.rb
+          git commit -m "chore: update cue cask to ${{ steps.tag.outputs.version }}"
+          git push

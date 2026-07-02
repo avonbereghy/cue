@@ -19,7 +19,6 @@
         "minWidth": 640,
         "minHeight": 200,
         "maxWidth": 1500,
-        "maxHeight": 1100,
         "center": true,
         "resizable": true,
         "fullscreen": false,

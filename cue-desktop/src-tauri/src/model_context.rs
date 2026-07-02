@@ -7,7 +7,14 @@
 //! Claude Code's internal `Ko`/`xR` functions and keeps Cue in sync whenever
 //! Anthropic ships a new 1M-capable model — no network calls required.
 //!
-//! Falls back to a baked-in list if the binary can't be found or parsed.
+//! The baked-in `FALLBACK_1M_SUBSTRINGS` list is a permanent **floor**, not a
+//! last-resort: the binary scan only ever *adds* to it (union semantics). The
+//! scan's job is to discover models newer than the floor, never to shrink it.
+//! This matters because the scan can succeed *partially* — e.g. Claude Code
+//! 2.1.195 reshaped its bundle so the scan finds only `mythos-5` and misses the
+//! opus/sonnet/fable gates. Earlier "scan replaces fallback" semantics let that
+//! partial result drop `opus-4-8` to 200K. Unioning keeps the known-good set
+//! correct regardless of how the scanner fares against a new bundle shape.
 //!
 //! Also honors `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (the same env override the
 //! CLI respects) and the `[1m]` model-name suffix.
@@ -31,8 +38,9 @@ use std::sync::OnceLock;
 pub const DEFAULT_CONTEXT_WINDOW: i64 = 200_000;
 pub const LARGE_CONTEXT_WINDOW: i64 = 1_000_000;
 
-/// Baked-in fallback. Used when we can't find or parse the `claude` binary.
-/// Substring matches against the (lowercased) model id.
+/// Baked-in floor of known 1M models. Always part of the resolved set; the
+/// binary scan only adds to it (see `merge_with_fallback`). Substring matches
+/// against the (lowercased) model id.
 const FALLBACK_1M_SUBSTRINGS: &[&str] = &[
     "sonnet-4-0",
     "sonnet-4-5",
@@ -163,22 +171,29 @@ fn env_override() -> Option<i64> {
 }
 
 fn detect_1m_substrings() -> Vec<String> {
-    match extract_from_claude_binary() {
-        Some(v) if !v.is_empty() => {
-            log::info!(
-                "model_context: extracted 1M model list from claude binary: {:?}",
-                v
-            );
-            v
-        }
-        _ => {
-            log::debug!("model_context: falling back to baked-in 1M model list");
-            FALLBACK_1M_SUBSTRINGS
-                .iter()
-                .map(|s| s.to_string())
-                .collect()
-        }
+    let scanned = extract_from_claude_binary().unwrap_or_default();
+    if scanned.is_empty() {
+        log::debug!("model_context: binary scan empty; using baked-in 1M floor only");
+    } else {
+        log::info!(
+            "model_context: binary scan added {:?} to baked-in 1M floor",
+            scanned
+        );
     }
+    merge_with_fallback(scanned)
+}
+
+/// Union the baked-in floor with whatever the binary scan found. The fallback is
+/// always present so a partial/broken scan can never drop a known-good 1M model;
+/// the scan only ever contributes models the floor doesn't already name. Dedup
+/// is via `BTreeSet` (also gives a stable, sorted order).
+fn merge_with_fallback(scanned: Vec<String>) -> Vec<String> {
+    let mut set: std::collections::BTreeSet<String> = FALLBACK_1M_SUBSTRINGS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    set.extend(scanned);
+    set.into_iter().collect()
 }
 
 fn extract_from_claude_binary() -> Option<Vec<String>> {
@@ -761,6 +776,59 @@ mod tests {
     }
 
     #[test]
+    fn merge_with_fallback_unions_partial_scan() {
+        // The 2.1.195 regression: the binary scan succeeds but only finds
+        // `mythos-5`, missing opus/sonnet/fable. Under the old replace
+        // semantics that partial result would suppress the baked-in floor and
+        // drop opus-4-8 to 200K. Unioning keeps the floor, so opus-4-8 still
+        // resolves to 1M.
+        let merged = merge_with_fallback(vec!["claude-mythos-5".to_string()]);
+        assert!(
+            merged.iter().any(|s| s == "opus-4-8"),
+            "baked-in floor must survive a partial scan, got {:?}",
+            merged
+        );
+        assert_eq!(
+            context_limit_from_subs("claude-opus-4-8", &merged),
+            LARGE_CONTEXT_WINDOW,
+            "opus-4-8 must read 1M even when the scan only found mythos-5"
+        );
+        // The scan's lone find is still present, just not load-bearing here.
+        assert!(merged.iter().any(|s| s == "claude-mythos-5"));
+    }
+
+    #[test]
+    fn merge_with_fallback_keeps_new_scanned_models() {
+        // The scan's forward-looking job: a model the floor doesn't yet name
+        // (a hypothetical future opus) must survive the union alongside the
+        // whole baked-in floor.
+        let merged = merge_with_fallback(vec!["opus-9-9".to_string()]);
+        assert!(merged.iter().any(|s| s == "opus-9-9"));
+        for floor in FALLBACK_1M_SUBSTRINGS {
+            assert!(
+                merged.iter().any(|s| s == floor),
+                "floor entry {} dropped by union, got {:?}",
+                floor,
+                merged
+            );
+        }
+        assert_eq!(
+            context_limit_from_subs("claude-opus-9-9", &merged),
+            LARGE_CONTEXT_WINDOW
+        );
+    }
+
+    #[test]
+    fn merge_with_fallback_empty_scan_is_just_the_floor() {
+        // No binary / unparseable scan → resolved set equals the baked-in floor.
+        let merged = merge_with_fallback(Vec::new());
+        let floor: std::collections::BTreeSet<&str> =
+            FALLBACK_1M_SUBSTRINGS.iter().copied().collect();
+        let got: std::collections::BTreeSet<&str> = merged.iter().map(|s| s.as_str()).collect();
+        assert_eq!(got, floor);
+    }
+
+    #[test]
     fn family_floor_promotes_new_versions_but_not_old() {
         // Floor derived from the shipping 1M set: opus floor = 4-6, fable = 5,
         // sonnet = 4-0. New versions clear the floor; pre-floor opus stays 200K.
@@ -1014,13 +1082,27 @@ mod tests {
                 return;
             }
         };
-        let subs = scan_for_1m_models(&bytes);
+        // Raw scan first — this is the canary. When Claude Code reshapes its
+        // bundle the scan degrades (2.1.195 yields only `mythos-5`); the
+        // eprintln + warning make that visible without failing the product,
+        // because the assertions below run against the unioned set.
+        let scanned = scan_for_1m_models(&bytes);
         eprintln!(
-            "scanned {} → {} 1M substrings: {:?}",
+            "raw scan of {} → {} 1M substrings: {:?}",
             path.display(),
-            subs.len(),
-            subs
+            scanned.len(),
+            scanned
         );
+        if !scanned.iter().any(|s| s.contains("opus")) {
+            eprintln!(
+                "WARNING: scan found no opus gate — Claude Code bundle shape likely \
+                 changed; relying on baked-in floor. Update scan_for_1m_models."
+            );
+        }
+
+        // Product behavior: the resolved set is fallback ∪ scan, so today's
+        // shipping 1M models read 1M regardless of scanner breakage.
+        let resolved = merge_with_fallback(scanned);
         for model in [
             "claude-opus-4-6",
             "claude-opus-4-7",
@@ -1030,9 +1112,9 @@ mod tests {
             "claude-mythos-5",
         ] {
             assert_eq!(
-                context_limit_from_subs(model, &subs),
+                context_limit_from_subs(model, &resolved),
                 LARGE_CONTEXT_WINDOW,
-                "{} must resolve to 1M against the live binary",
+                "{} must resolve to 1M (fallback ∪ live scan)",
                 model
             );
         }
@@ -1043,9 +1125,9 @@ mod tests {
             "claude-haiku-4-5",
         ] {
             assert_eq!(
-                context_limit_from_subs(model, &subs),
+                context_limit_from_subs(model, &resolved),
                 DEFAULT_CONTEXT_WINDOW,
-                "{} must resolve to 200K against the live binary",
+                "{} must resolve to 200K (fallback ∪ live scan)",
                 model
             );
         }
