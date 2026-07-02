@@ -62,23 +62,29 @@ export function formatReset(
 
 type Variant = "tray" | "header";
 
+type Palette = { text: string; muted: string; track: string };
+
 // Tray reads the popover's CSS vars (they adapt to the active Look + light/dark).
-// The header strip lives outside the skin-view containers (so their --ink-* vars
-// aren't in scope), so it inherits the ambient Look color via `currentColor` —
-// dark on the light Looks, light on the dark ones — and derives the muted/track
-// tints from it. This is why the header text was invisible when hardcoded white.
-const PALETTE: Record<Variant, { text: string; muted: string; track: string }> = {
-  tray: {
-    text: "var(--tray-text)",
-    muted: "var(--tray-muted)",
-    track: "var(--tray-bar-track)",
-  },
-  header: {
-    text: "currentColor",
-    muted: "color-mix(in srgb, currentColor 58%, transparent)",
-    track: "color-mix(in srgb, currentColor 20%, transparent)",
-  },
+const TRAY_PALETTE: Palette = {
+  text: "var(--tray-text)",
+  muted: "var(--tray-muted)",
+  track: "var(--tray-bar-track)",
 };
+
+// The header strip OVERLAYS the active Look's fixed full-viewport "paper"
+// background, so it must adopt that Look's ink — not the app-chrome --app-text,
+// which is white under the default dark data-theme and vanishes on the light
+// Looks' cream paper (the bug this replaces). The --ink-* vars that would be
+// right are scoped to the skin-view container the strip renders outside of, so
+// we pick the palette from the active dashboardView instead.
+const ON_LIGHT: Palette = { text: "#2b2118", muted: "rgba(43,33,24,0.62)", track: "rgba(43,33,24,0.18)" };
+const ON_DARK: Palette = { text: "rgba(255,255,255,0.82)", muted: "rgba(255,255,255,0.46)", track: "rgba(255,255,255,0.12)" };
+
+function headerColors(dashboardView: string | undefined, isDark: boolean): Palette {
+  if (dashboardView === "almanac" || dashboardView === "studio") return ON_LIGHT; // light paper
+  if (dashboardView === "night") return ON_DARK; // dark paper
+  return isDark ? ON_DARK : ON_LIGHT; // "instrument": no skin paper, follow the app theme
+}
 
 function Meter({
   label,
@@ -145,12 +151,19 @@ function Meter({
 export function UsageStatus({
   sessions,
   variant = "header",
+  dashboardView,
+  isDark = true,
 }: {
   sessions: readonly RateLimitSource[];
   variant?: Variant;
+  /** Active dashboard Look — selects the header ink so it stays readable on
+   *  that Look's paper (ignored for the tray variant). */
+  dashboardView?: string;
+  /** App theme, for the "instrument" (no-skin) view whose bg follows the theme. */
+  isDark?: boolean;
 }) {
   const rateLimits = deriveRateLimits(sessions);
-  const colors = PALETTE[variant];
+  const colors = variant === "tray" ? TRAY_PALETTE : headerColors(dashboardView, isDark);
 
   // Recompute the countdowns on a timer so "resets 2h 13m" ticks down without a
   // fresh session poll. 30s keeps the minute readout honest; the cleanup clears

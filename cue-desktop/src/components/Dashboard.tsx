@@ -6,6 +6,7 @@ import { useSessionAnnouncements } from "@/hooks/useSessionAnnouncements";
 import { SessionsTab } from "./SessionsTab";
 import { SettingsView } from "./SettingsView";
 import { UsageStatus } from "./UsageStatus";
+import { useIsDark } from "@/hooks/useIsDark";
 import { useUpdateCheck } from "@/lib/useUpdateCheck";
 import { updateStatusLabel } from "@/lib/updater";
 import type { Settings } from "@/lib/types";
@@ -19,6 +20,8 @@ export function Dashboard() {
   const [justExpanded, setJustExpanded] = useState(false);
   const [autoFitWindow, setAutoFitWindow] = useState(true);
   const [showLimitStatus, setShowLimitStatus] = useState(true);
+  const [dashboardView, setDashboardView] = useState("instrument");
+  const isDark = useIsDark();
   const sessions = useSessionMonitor();
   useSessionAnnouncements(sessions);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -56,6 +59,7 @@ export function Dashboard() {
       if (cancelled) return;
       setAutoFitWindow(s.autoFitWindow ?? true);
       setShowLimitStatus(s.showLimitStatus ?? true);
+      setDashboardView(s.dashboardView || "instrument");
     };
     invoke<Settings>("get_settings").then(apply).catch(() => {});
     listen<Settings>("settings-changed", (e) => apply(e.payload))
@@ -265,7 +269,7 @@ export function Dashboard() {
               active Claude account, mirroring the tray popover. */}
           {showLimitStatus && (
             <div className="px-4 pt-0.5 pb-1.5">
-              <UsageStatus sessions={sessions} variant="header" />
+              <UsageStatus sessions={sessions} variant="header" dashboardView={dashboardView} isDark={isDark} />
             </div>
           )}
           <SessionsTab sessions={sessions} />
