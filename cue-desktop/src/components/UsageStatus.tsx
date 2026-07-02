@@ -62,8 +62,11 @@ export function formatReset(
 
 type Variant = "tray" | "header";
 
-// Tray reads the popover's CSS vars (they adapt to the active Look + light/dark);
-// the header strip matches SessionCard's existing white-on-dark rate-limit bars.
+// Tray reads the popover's CSS vars (they adapt to the active Look + light/dark).
+// The header strip lives outside the skin-view containers (so their --ink-* vars
+// aren't in scope), so it inherits the ambient Look color via `currentColor` —
+// dark on the light Looks, light on the dark ones — and derives the muted/track
+// tints from it. This is why the header text was invisible when hardcoded white.
 const PALETTE: Record<Variant, { text: string; muted: string; track: string }> = {
   tray: {
     text: "var(--tray-text)",
@@ -71,9 +74,9 @@ const PALETTE: Record<Variant, { text: string; muted: string; track: string }> =
     track: "var(--tray-bar-track)",
   },
   header: {
-    text: "rgba(255,255,255,0.72)",
-    muted: "rgba(255,255,255,0.4)",
-    track: "rgba(255,255,255,0.08)",
+    text: "currentColor",
+    muted: "color-mix(in srgb, currentColor 58%, transparent)",
+    track: "color-mix(in srgb, currentColor 20%, transparent)",
   },
 };
 
