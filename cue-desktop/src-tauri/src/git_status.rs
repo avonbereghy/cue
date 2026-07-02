@@ -75,11 +75,16 @@ fn run_git(workspace: &str, args: &[&str]) -> Option<String> {
     // otherwise let `git status`/`rev-list` execute config-driven commands —
     // most notably `core.fsmonitor`, which git spawns as a subprocess. A `-c`
     // on the git command line overrides both repo-local and global config, so
-    // force `core.fsmonitor` empty. `GIT_OPTIONAL_LOCKS=0` additionally stops
-    // status from taking/refreshing the index lock, so background polling has
-    // no write side effects on the user's repos.
+    // force `core.fsmonitor` empty. `core.alternateRefsCommand` is the other
+    // repo-config value that `rev-list` can execute as a subprocess (higher
+    // preconditions, but zero-cost to neutralize), so empty it too.
+    // `GIT_OPTIONAL_LOCKS=0` additionally stops status from taking/refreshing
+    // the index lock, so background polling has no write side effects on the
+    // user's repos.
     cmd.arg("-c")
         .arg("core.fsmonitor=")
+        .arg("-c")
+        .arg("core.alternateRefsCommand=")
         .args(args)
         .current_dir(workspace)
         .env("GIT_OPTIONAL_LOCKS", "0");
