@@ -15,9 +15,22 @@
 # Or run:  claude settings set statusLine.command /path/to/cue-statusline
 #
 # Claude Code pipes JSON via stdin on each render cycle containing:
-#   { model, context, rateLimits, transcriptPath, cwd, ... }
+#   { model, context, rate_limits, transcript_path, cwd, ... }
 #
-# This script extracts rateLimits and writes rate_limits.json for Cue.
+# The rate-limit shape (snake_case, present only for Pro/Max after the first
+# response — otherwise `.rate_limits` is absent):
+#   .rate_limits.five_hour.used_percentage   (0–100 number)
+#   .rate_limits.five_hour.resets_at         (Unix EPOCH SECONDS)
+#   .rate_limits.seven_day.{used_percentage,resets_at}
+# There is no `limit`, `used`, or `limitReached` field — `limitReached` is
+# derived here (used_percentage >= 100).
+#
+# This script reads that shape and writes rate_limits.json for Cue in the
+# app's own camelCase contract (deserialized by src-tauri RateLimitInfo):
+#   { fiveHourPercent, sevenDayPercent, fiveHourResetAt, sevenDayResetAt,
+#     limitReached }
+# where *ResetAt stay EPOCH SECONDS end-to-end. When `.rate_limits` is absent
+# we SKIP the write so a transient missing payload can't blank the meter.
 
 set -euo pipefail
 
@@ -82,14 +95,21 @@ INPUT=$(cat)
 
 # Check if we have jq available
 if command -v jq &>/dev/null; then
-    # Extract rate limit data using jq
-    RATE_LIMITS=$(echo "$INPUT" | jq -c '{
-        fiveHourPercent: (if .rateLimits.fiveHour then (.rateLimits.fiveHour.used / .rateLimits.fiveHour.limit * 100) else 0 end),
-        sevenDayPercent: (if .rateLimits.sevenDay then (.rateLimits.sevenDay.used / .rateLimits.sevenDay.limit * 100) else 0 end),
-        fiveHourResetAt: (.rateLimits.fiveHour.resetAt // null),
-        sevenDayResetAt: (.rateLimits.sevenDay.resetAt // null),
-        limitReached: ((.rateLimits.fiveHour.limitReached // false) or (.rateLimits.sevenDay.limitReached // false))
-    }' 2>/dev/null || echo "")
+    # Extract rate limit data using jq. When `.rate_limits` is absent/null (or
+    # an empty object — no Pro/Max data yet, or a transient render), the filter
+    # yields `empty` → RATE_LIMITS="" → the guard below SKIPS the write so a
+    # missing payload never clobbers a previously-written rate_limits.json.
+    RATE_LIMITS=$(echo "$INPUT" | jq -c '
+        if (.rate_limits // {}) == {} then empty
+        else {
+            fiveHourPercent: (.rate_limits.five_hour.used_percentage // 0),
+            sevenDayPercent: (.rate_limits.seven_day.used_percentage // 0),
+            fiveHourResetAt: (.rate_limits.five_hour.resets_at // null),
+            sevenDayResetAt: (.rate_limits.seven_day.resets_at // null),
+            limitReached: (((.rate_limits.five_hour.used_percentage // 0) >= 100)
+                or ((.rate_limits.seven_day.used_percentage // 0) >= 100))
+        }
+        end' 2>/dev/null || echo "")
 
     if [[ -n "$RATE_LIMITS" ]]; then
         # Atomic write: temp file → rename
@@ -104,35 +124,44 @@ import json, sys, os, tempfile
 
 try:
     data = json.loads(sys.stdin.read())
-    rl = data.get('rateLimits', {})
+    rl = data.get('rate_limits')
 
-    five = rl.get('fiveHour', {})
-    seven = rl.get('sevenDay', {})
+    # Absent/null/empty rate_limits (no Pro/Max data yet, or a transient render)
+    # — SKIP the write so we don't clobber a previously-written rate_limits.json.
+    # Mirrors the jq branch's `empty` skip above.
+    if rl:
+        five = rl.get('five_hour') or {}
+        seven = rl.get('seven_day') or {}
+        # used_percentage is already 0–100; default 0 when the sub-object or the
+        # field is absent/null. `... or 0` also coerces a null back to 0.
+        five_pct = five.get('used_percentage') or 0
+        seven_pct = seven.get('used_percentage') or 0
 
-    result = {
-        'fiveHourPercent': (five.get('used', 0) / five['limit'] * 100) if five.get('limit') else 0,
-        'sevenDayPercent': (seven.get('used', 0) / seven['limit'] * 100) if seven.get('limit') else 0,
-        'fiveHourResetAt': five.get('resetAt'),
-        'sevenDayResetAt': seven.get('resetAt'),
-        'limitReached': five.get('limitReached', False) or seven.get('limitReached', False),
-    }
+        result = {
+            'fiveHourPercent': five_pct,
+            'sevenDayPercent': seven_pct,
+            'fiveHourResetAt': five.get('resets_at'),
+            'sevenDayResetAt': seven.get('resets_at'),
+            # Claude no longer sends limitReached — derive it from the percents.
+            'limitReached': (five_pct >= 100) or (seven_pct >= 100),
+        }
 
-    output_file = sys.argv[1]
-    # Atomic write. Use os.replace (not os.rename) so an already-present target
-    # doesn't raise on Windows/msys, and unlink the temp file on any failure
-    # after mkstemp so a crash between create and rename can't leak orphaned
-    # temp files into the output dir.
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(output_file))
-    try:
-        with os.fdopen(fd, 'w') as f:
-            json.dump(result, f)
-        os.replace(tmp, output_file)
-    except Exception:
+        output_file = sys.argv[1]
+        # Atomic write. Use os.replace (not os.rename) so an already-present
+        # target doesn't raise on Windows/msys, and unlink the temp file on any
+        # failure after mkstemp so a crash between create and rename can't leak
+        # orphaned temp files into the output dir.
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(output_file))
         try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+            with os.fdopen(fd, 'w') as f:
+                json.dump(result, f)
+            os.replace(tmp, output_file)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 except Exception:
     pass
 " "$OUTPUT_FILE" <<< "$INPUT"

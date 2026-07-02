@@ -5,6 +5,7 @@ import { useSessionMonitor } from "@/hooks/useSessionMonitor";
 import { useSessionAnnouncements } from "@/hooks/useSessionAnnouncements";
 import { SessionsTab } from "./SessionsTab";
 import { SettingsView } from "./SettingsView";
+import { UsageStatus } from "./UsageStatus";
 import { useUpdateCheck } from "@/lib/useUpdateCheck";
 import { updateStatusLabel } from "@/lib/updater";
 import type { Settings } from "@/lib/types";
@@ -17,6 +18,7 @@ export function Dashboard() {
   const updateCheck = useUpdateCheck();
   const [justExpanded, setJustExpanded] = useState(false);
   const [autoFitWindow, setAutoFitWindow] = useState(true);
+  const [showLimitStatus, setShowLimitStatus] = useState(true);
   const sessions = useSessionMonitor();
   useSessionAnnouncements(sessions);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -44,12 +46,17 @@ export function Dashboard() {
     return () => { cancelled = true; unlisten?.(); };
   }, []);
 
-  // Auto-fit preference — load once and keep it live (Settings emits
-  // settings-changed on save). When off, the window keeps the user's size.
+  // Display preferences that live on the Dashboard shell — loaded once and kept
+  // live (Settings emits settings-changed on save). autoFitWindow controls the
+  // window-height fit; showLimitStatus gates the account usage-limit strip.
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
-    const apply = (s: Settings) => { if (!cancelled) setAutoFitWindow(s.autoFitWindow ?? true); };
+    const apply = (s: Settings) => {
+      if (cancelled) return;
+      setAutoFitWindow(s.autoFitWindow ?? true);
+      setShowLimitStatus(s.showLimitStatus ?? true);
+    };
     invoke<Settings>("get_settings").then(apply).catch(() => {});
     listen<Settings>("settings-changed", (e) => apply(e.payload))
       .then((fn) => { if (cancelled) fn(); else unlisten = fn; });
@@ -254,6 +261,13 @@ export function Dashboard() {
       {/* Tab content */}
       {tab === "Sessions" && (
         <div role="tabpanel" id="panel-sessions" aria-label="Sessions" className="flex flex-col flex-1 min-h-0">
+          {/* Account usage-limit strip — the 5-hour + weekly meters for the
+              active Claude account, mirroring the tray popover. */}
+          {showLimitStatus && (
+            <div className="px-4 pt-0.5 pb-1.5">
+              <UsageStatus sessions={sessions} variant="header" />
+            </div>
+          )}
           <SessionsTab sessions={sessions} />
         </div>
       )}

@@ -263,6 +263,11 @@ export interface Settings {
   /** Show the per-session usage line (est. cost, lifetime tokens, cache
    *  efficiency) in the expanded card's deep-telemetry section. Default: true. */
   showUsage: boolean;
+  /** Show the account-level usage-limit meters (5-hour + weekly rate-limit bars)
+   *  in the tray popover and the dashboard header strip. A DIFFERENT feature
+   *  from showUsage (the per-session cost line) — this surfaces the global
+   *  Claude rate limits the statusline bridge captures. Default: true. */
+  showLimitStatus: boolean;
   /** Show comet tracers on the strings whenever a tool call fires. Off by default. */
   showToolCallComets: boolean;
   /** Timer display: "minutes" (HH:MM), "seconds" (HH:MM:SS), or "off" */

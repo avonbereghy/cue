@@ -958,6 +958,13 @@ pub struct Settings {
     /// efficiency) in the expanded card's deep-telemetry section. Defaults true.
     #[serde(default = "default_true")]
     pub show_usage: bool,
+    /// Show the account-level usage-limit meters (the 5-hour + weekly rate-limit
+    /// bars) in the tray popover and the dashboard header strip. This is a
+    /// DIFFERENT feature from `show_usage` (the per-session cost line above) —
+    /// it surfaces the global Claude rate limits the statusline bridge captures.
+    /// Defaults true.
+    #[serde(default = "default_true")]
+    pub show_limit_status: bool,
     /// Show comet tracers across the strings on every tool call. Off by default.
     #[serde(default)]
     pub show_tool_call_comets: bool,
@@ -1296,6 +1303,7 @@ impl Default for Settings {
             show_current_tool: false,
             show_config_counts: false,
             show_usage: true,
+            show_limit_status: true,
             show_tool_call_comets: false,
             timer_display: "seconds".to_string(),
             auto_fit_window: true,

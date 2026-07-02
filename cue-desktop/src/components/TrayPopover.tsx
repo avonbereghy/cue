@@ -5,6 +5,7 @@ import { useSessionMonitor } from "@/hooks/useSessionMonitor";
 import type { EnrichedSession, Settings } from "@/lib/types";
 import { cleanPromptText, errorReason } from "@/lib/format";
 import { normalizeView } from "@/lib/dashboardViews";
+import { UsageStatus } from "./UsageStatus";
 import { openSession } from "@/lib/openSession";
 import { useUpdateCheck } from "@/lib/useUpdateCheck";
 import { updateStatusLabel } from "@/lib/updater";
@@ -361,13 +362,18 @@ export function TrayPopoverPage() {
     if (!root) return;
     const header = root.querySelector<HTMLElement>(".tray-header");
     const list = root.querySelector<HTMLElement>(".tray-list");
+    // The optional account usage-limit strip sits between the header and the
+    // list; it's a fixed (non-scrolling) band, so add its height to the total or
+    // the window clips the top session rows when the meters are shown.
+    const usage = root.querySelector<HTMLElement>(".tray-usage");
     const SHELL_PADDING_PX = 14; // .tray-popover has padding:6 + 1px borders
     const headerH = header?.offsetHeight ?? 0;
-    let total = headerH + (list?.scrollHeight ?? 0) + SHELL_PADDING_PX;
+    const usageH = usage?.offsetHeight ?? 0;
+    let total = headerH + usageH + (list?.scrollHeight ?? 0) + SHELL_PADDING_PX;
     const menu = menuRef.current;
     if (menu) {
       // Menu is anchored at top:100% of the header's "⋯" with a 4px gap.
-      total = Math.max(total, headerH + 4 + menu.offsetHeight + SHELL_PADDING_PX);
+      total = Math.max(total, headerH + usageH + 4 + menu.offsetHeight + SHELL_PADDING_PX);
     }
     invoke("resize_tray_popover", { contentHeight: total }).catch(() => {});
   }, []);
@@ -399,13 +405,19 @@ export function TrayPopoverPage() {
   }, []);
 
   // Active dashboard Look — the tray popover mirrors it. Read from settings (the
-  // tray is its own window, so the main window's data-view attribute isn't shared).
+  // tray is its own window, so the main window's data-view attribute isn't
+  // shared). Same read carries showLimitStatus, which gates the usage-limit strip.
   const [view, setView] = useState("instrument");
+  const [showLimitStatus, setShowLimitStatus] = useState(true);
   useEffect(() => {
-    invoke<Settings>("get_settings").then((s) => setView(normalizeView(s.dashboardView))).catch(() => {});
+    const apply = (s: Settings) => {
+      setView(normalizeView(s.dashboardView));
+      setShowLimitStatus(s.showLimitStatus ?? true);
+    };
+    invoke<Settings>("get_settings").then(apply).catch(() => {});
     let cancelled = false;
     let unlisten: (() => void) | undefined;
-    listen<Settings>("settings-changed", (e) => setView(normalizeView(e.payload.dashboardView)))
+    listen<Settings>("settings-changed", (e) => apply(e.payload))
       .then((fn) => { if (cancelled) fn(); else unlisten = fn; });
     return () => { cancelled = true; unlisten?.(); };
   }, []);
@@ -474,8 +486,9 @@ export function TrayPopoverPage() {
   );
 
   // Re-fit whenever the visible session list changes (rows added/removed, or a
-  // state/prompt update that changes a row's height).
-  useLayoutEffect(() => { measureAndResize(); }, [sorted, measureAndResize]);
+  // state/prompt update that changes a row's height), or the usage strip is
+  // toggled on/off (which adds/removes its band height).
+  useLayoutEffect(() => { measureAndResize(); }, [sorted, showLimitStatus, measureAndResize]);
 
   return (
     <div ref={rootRef} className="tray-popover" data-view={view} data-tray-light={effLight ? "1" : "0"}>
@@ -562,6 +575,15 @@ export function TrayPopoverPage() {
           </div>
         </div>
       </div>
+
+      {/* Account usage-limit strip — the 5-hour + weekly meters for the active
+          Claude account. Derived from the global rate limits any session carries;
+          a fixed band above the scrolling list. */}
+      {showLimitStatus && (
+        <div className="tray-usage" style={{ padding: "2px 8px 6px" }}>
+          <UsageStatus sessions={sessions} variant="tray" />
+        </div>
+      )}
 
       <div className="tray-list">
         {sorted.length === 0 ? (

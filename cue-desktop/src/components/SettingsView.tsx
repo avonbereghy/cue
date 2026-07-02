@@ -871,6 +871,7 @@ export function SettingsView() {
       showCurrentTool: false,
       showConfigCounts: false,
       showUsage: true,
+      showLimitStatus: true,
       showToolCallComets: false,
       timerDisplay: "seconds",
       showInMenuBar: true,
@@ -1592,6 +1593,13 @@ export function SettingsView() {
             checked={settings.showUsage ?? true}
             onChange={() => setSettings({ ...settings, showUsage: !(settings.showUsage ?? true) })}
             label="Usage"
+          />
+        </SettingRow>
+        <SettingRow label="Usage Limits" description="Show the account-level limit meters (5-hour and weekly rate limits) in the tray popover and the dashboard header. Needs the Cue statusline installed." onReset={(settings.showLimitStatus ?? true) ? undefined : () => setSettings({ ...settings, showLimitStatus: true })}>
+          <Toggle
+            checked={settings.showLimitStatus ?? true}
+            onChange={() => setSettings({ ...settings, showLimitStatus: !(settings.showLimitStatus ?? true) })}
+            label="Limit meters"
           />
         </SettingRow>
         <SettingRow label="Tool Call Comets" description="Fire a thin white tracer across the strings on each tool call" onReset={(settings.showToolCallComets ?? false) ? () => setSettings({ ...settings, showToolCallComets: false }) : undefined}>

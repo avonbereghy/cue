@@ -2,8 +2,13 @@
 
 cue-statusline is a bash script (Claude Code invokes it via shebang), so unlike
 the Python cue-hook it can't be imported — we drive it through subprocess with a
-synthetic rateLimits payload on stdin and assert *where* it writes
-rate_limits.json.
+synthetic rate_limits payload on stdin and assert *where* it writes
+rate_limits.json and *what* it writes into it.
+
+The input schema is Claude Code's real statusline shape (snake_case):
+`.rate_limits.five_hour.{used_percentage,resets_at}` (and seven_day), where
+resets_at is Unix EPOCH SECONDS. The output rate_limits.json keeps the app's own
+camelCase contract (`fiveHourPercent`, `fiveHourResetAt`, `limitReached`, …).
 
 The WSL branch is the whole point of FIX C: on WSL the Cue app runs natively on
 Windows and reads %LOCALAPPDATA%\\Cue (i.e. /mnt/c/Users/<user>/AppData/Local/Cue
@@ -28,12 +33,18 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STATUSLINE = REPO_ROOT / "hooks" / "cue-statusline"
 
+# Realistic Claude Code statusline payload in the NEW schema: percents are
+# already 0–100, resets_at are Unix EPOCH SECONDS. 50% / 10% are both below the
+# 100% limit, so the derived limitReached must be False.
+FIVE_HOUR_RESET = 1_719_849_600
+SEVEN_DAY_RESET = 1_720_454_400
 PAYLOAD = json.dumps(
     {
-        "rateLimits": {
-            "fiveHour": {"used": 50, "limit": 100, "resetAt": "R5"},
-            "sevenDay": {"used": 10, "limit": 100, "resetAt": "R7"},
-        }
+        "model": {"id": "claude-opus-4"},
+        "rate_limits": {
+            "five_hour": {"used_percentage": 50, "resets_at": FIVE_HOUR_RESET},
+            "seven_day": {"used_percentage": 10, "resets_at": SEVEN_DAY_RESET},
+        },
     }
 )
 
@@ -43,8 +54,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _run(env_overrides):
-    """Invoke cue-statusline with the payload on stdin under a controlled env.
+def _run(env_overrides, payload=PAYLOAD):
+    """Invoke cue-statusline with `payload` on stdin under a controlled env.
 
     OSTYPE is forced to a Linux value so the WSL/XDG branch runs regardless of
     the OS running pytest (the suite runs on macOS and Ubuntu CI alike).
@@ -57,7 +68,7 @@ def _run(env_overrides):
     env.update(env_overrides)
     result = subprocess.run(
         ["bash", str(STATUSLINE)],
-        input=PAYLOAD,
+        input=payload,
         env=env,
         capture_output=True,
         text=True,
@@ -94,7 +105,11 @@ def test_wsl_single_profile_writes_to_windows_dir(tmp_path):
     data = json.loads(win_file.read_text())
     assert data["fiveHourPercent"] == 50
     assert data["sevenDayPercent"] == 10
-    assert data["fiveHourResetAt"] == "R5"
+    # resets_at is passed through unchanged as EPOCH SECONDS (not reformatted).
+    assert data["fiveHourResetAt"] == FIVE_HOUR_RESET
+    assert data["sevenDayResetAt"] == SEVEN_DAY_RESET
+    # 50% / 10% are both under 100% → limitReached is derived False.
+    assert data["limitReached"] is False
 
 
 def test_wsl_ambiguous_profiles_fall_back_to_xdg(tmp_path):
@@ -172,6 +187,77 @@ def test_non_wsl_linux_writes_to_xdg(tmp_path):
     data = json.loads(xdg_file.read_text())
     assert data["fiveHourPercent"] == 50
     assert data["sevenDayPercent"] == 10
+    assert data["fiveHourResetAt"] == FIVE_HOUR_RESET
+    assert data["limitReached"] is False
+
+
+def test_limit_reached_is_derived_from_percent(tmp_path):
+    # Claude Code no longer ships limitReached — the script derives it. A
+    # five_hour at 100% must set limitReached True even though seven_day is low.
+    proc = tmp_path / "proc_version"
+    proc.write_text("Linux version 6.1.0 generic-cloud\n")  # non-WSL
+    win_users = tmp_path / "mnt_users"
+    xdg = tmp_path / "xdg"
+    payload = json.dumps(
+        {
+            "rate_limits": {
+                "five_hour": {"used_percentage": 100, "resets_at": FIVE_HOUR_RESET},
+                "seven_day": {"used_percentage": 42, "resets_at": SEVEN_DAY_RESET},
+            }
+        }
+    )
+
+    _run(
+        {
+            "CUE_STATUSLINE_PROC_VERSION": str(proc),
+            "CUE_STATUSLINE_WIN_USERS": str(win_users),
+            "XDG_DATA_HOME": str(xdg),
+        },
+        payload=payload,
+    )
+
+    data = json.loads((xdg / "cue" / "rate_limits.json").read_text())
+    assert data["fiveHourPercent"] == 100
+    assert data["sevenDayPercent"] == 42
+    assert data["limitReached"] is True
+
+
+def test_absent_rate_limits_does_not_clobber(tmp_path):
+    # `.rate_limits` is only present for Pro/Max after the first response — a
+    # payload without it (a Free session, or a transient render) must NOT
+    # overwrite a rate_limits.json a prior render already wrote. Otherwise the
+    # meter would blank out every time a non-rate-limited render fired.
+    proc = tmp_path / "proc_version"
+    proc.write_text("Linux version 6.1.0 generic-cloud\n")  # non-WSL
+    win_users = tmp_path / "mnt_users"
+    xdg = tmp_path / "xdg"
+    out_dir = xdg / "cue"
+    out_dir.mkdir(parents=True)
+    out_file = out_dir / "rate_limits.json"
+    sentinel = {
+        "fiveHourPercent": 63,
+        "sevenDayPercent": 21,
+        "fiveHourResetAt": FIVE_HOUR_RESET,
+        "sevenDayResetAt": SEVEN_DAY_RESET,
+        "limitReached": False,
+    }
+    out_file.write_text(json.dumps(sentinel))
+
+    # A payload with NO rate_limits key at all.
+    _run(
+        {
+            "CUE_STATUSLINE_PROC_VERSION": str(proc),
+            "CUE_STATUSLINE_WIN_USERS": str(win_users),
+            "XDG_DATA_HOME": str(xdg),
+        },
+        payload=json.dumps({"model": {"id": "claude-opus-4"}}),
+    )
+
+    # The file is byte-for-byte untouched (skipped write, not an empty clobber).
+    assert json.loads(out_file.read_text()) == sentinel
+    # And no leaked temp file from a half-started atomic write.
+    leftovers = [p.name for p in out_dir.iterdir() if p.name != "rate_limits.json"]
+    assert leftovers == [], f"absent-payload path leaked a temp file: {leftovers}"
 
 
 # ─────────────────────────────────────────────────────────────────────
