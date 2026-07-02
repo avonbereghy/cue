@@ -5,23 +5,52 @@
 use crate::models::Settings;
 use crate::paths;
 use crate::security;
+use std::sync::Mutex;
+use std::time::SystemTime;
 
 /// Current settings schema version. Bump when defaults change in a way that
 /// should override existing user customizations (e.g. sand particle defaults).
 /// Migrations in `apply_migrations` run for each version below this.
 pub const CURRENT_SETTINGS_VERSION: u32 = 2;
 
+/// In-memory cache of the last-parsed settings, keyed on the file's
+/// (mtime, size) (F-performance-004). `update_tray` calls `load_settings` on the
+/// 250 ms blink timer, which was doing a syscall + full serde deserialize 4×/s
+/// forever. An external write (the frontend's save → atomic_write → new mtime)
+/// changes the signature, so the cache self-refreshes; there is no way to get a
+/// stale value short of two writes within the same nanosecond-precision mtime
+/// AND identical size, which user-driven settings edits never produce.
+static SETTINGS_CACHE: Mutex<Option<(SystemTime, u64, Settings)>> = Mutex::new(None);
+
+fn cache_lock() -> std::sync::MutexGuard<'static, Option<(SystemTime, u64, Settings)>> {
+    SETTINGS_CACHE.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 /// Load settings from disk, returning defaults if not found. Runs one-shot
-/// migrations when the stored `settings_version` lags behind CURRENT.
+/// migrations when the stored `settings_version` lags behind CURRENT. Reads are
+/// cached and only re-parsed when the file's (mtime, size) changes.
 pub fn load_settings() -> Settings {
     let path = paths::settings_path();
+
+    // Fast path: reuse the cached parse when the file is byte-for-byte the same.
+    let sig = std::fs::metadata(&path)
+        .ok()
+        .and_then(|m| Some((m.modified().ok()?, m.len())));
+    if let Some((mtime, size)) = sig {
+        let guard = cache_lock();
+        if let Some((cm, cs, cached)) = guard.as_ref() {
+            if *cm == mtime && *cs == size {
+                return cached.clone();
+            }
+        }
+    }
 
     // Bound the read at 4 MiB. Cue is the only legitimate writer of this
     // file, but it lives in a user-writable dir and load_settings is called
     // on the UI-blocking startup path — a multi-GiB blob would freeze the
     // app boot. Real settings.json is well under 64 KiB.
     const SETTINGS_MAX_BYTES: u64 = 4 * 1024 * 1024;
-    match security::read_to_string_bounded(&path, SETTINGS_MAX_BYTES) {
+    let settings = match security::read_to_string_bounded(&path, SETTINGS_MAX_BYTES) {
         Ok(content) => {
             let mut loaded: Settings = serde_json::from_str(&content).unwrap_or_default();
             if loaded.settings_version < CURRENT_SETTINGS_VERSION {
@@ -37,7 +66,16 @@ pub fn load_settings() -> Settings {
             let _ = save_settings(&defaults);
             defaults
         }
+    };
+
+    // Populate the cache with the CURRENT on-disk signature — re-stat after any
+    // migration/default write above so the cached (mtime, size) matches disk.
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if let Ok(mtime) = meta.modified() {
+            *cache_lock() = Some((mtime, meta.len(), settings.clone()));
+        }
     }
+    settings
 }
 
 /// Apply migrations for each version upgrade.
@@ -67,6 +105,14 @@ pub fn save_settings(settings: &Settings) -> Result<(), String> {
 
     security::atomic_write(&path, content.as_bytes())
         .map_err(|e| format!("Failed to write settings: {}", e))?;
+
+    // Write-through: refresh the load_settings cache so a save is reflected
+    // immediately (F-performance-004), independent of mtime granularity.
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if let Ok(mtime) = meta.modified() {
+            *cache_lock() = Some((mtime, meta.len(), settings.clone()));
+        }
+    }
 
     Ok(())
 }

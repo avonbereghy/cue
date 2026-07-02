@@ -69,7 +69,25 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Option<Vec<u8>> {
 /// Run `git <args>` in `workspace` with the module timeout, returning stdout on success.
 fn run_git(workspace: &str, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new("git");
-    cmd.args(args).current_dir(workspace);
+    // Hardening (F-security-002): Cue polls git in every tracked workspace on a
+    // timer with no user action. A workspace that carries an attacker-planted
+    // `.git/config` (e.g. an archive/shared folder that includes `.git`) would
+    // otherwise let `git status`/`rev-list` execute config-driven commands —
+    // most notably `core.fsmonitor`, which git spawns as a subprocess. A `-c`
+    // on the git command line overrides both repo-local and global config, so
+    // force `core.fsmonitor` empty. `core.alternateRefsCommand` is the other
+    // repo-config value that `rev-list` can execute as a subprocess (higher
+    // preconditions, but zero-cost to neutralize), so empty it too.
+    // `GIT_OPTIONAL_LOCKS=0` additionally stops status from taking/refreshing
+    // the index lock, so background polling has no write side effects on the
+    // user's repos.
+    cmd.arg("-c")
+        .arg("core.fsmonitor=")
+        .arg("-c")
+        .arg("core.alternateRefsCommand=")
+        .args(args)
+        .current_dir(workspace)
+        .env("GIT_OPTIONAL_LOCKS", "0");
     run_with_timeout(cmd, GIT_TIMEOUT).map(|b| String::from_utf8_lossy(&b).into_owned())
 }
 
@@ -242,5 +260,63 @@ mod tests {
         let cmd = Command::new("false");
         let out = run_with_timeout(cmd, Duration::from_secs(5));
         assert!(out.is_none(), "non-zero exit yields None even when fast");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_get_git_status_does_not_execute_repo_fsmonitor() {
+        // F-security-002: a repo-local `core.fsmonitor` must NOT be executed by
+        // Cue's background git polling. Build a real repo whose fsmonitor is a
+        // command that would drop a marker file, run get_git_status, and assert
+        // the marker never appears (the `-c core.fsmonitor=` override wins).
+        use std::process::Command;
+        // Skip gracefully if git is unavailable in the test environment.
+        if Command::new("git")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| !s.success())
+            .unwrap_or(true)
+        {
+            return;
+        }
+
+        let dir = std::env::temp_dir().join(format!("cue_test_fsmon_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ws = dir.to_string_lossy().into_owned();
+        let marker = dir.join("PWNED");
+
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        };
+        // Minimal repo with a commit so status/rev-list have something to read.
+        assert!(git(&["init", "-q"]));
+        let _ = git(&["config", "user.email", "t@t"]);
+        let _ = git(&["config", "user.name", "t"]);
+        std::fs::write(dir.join("f.txt"), "x").unwrap();
+        let _ = git(&["add", "f.txt"]);
+        let _ = git(&["commit", "-q", "-m", "init"]);
+        // Plant the malicious repo-local fsmonitor command.
+        let fsmon = format!("touch {}", marker.to_string_lossy());
+        assert!(git(&["config", "core.fsmonitor", &fsmon]));
+        // Make the tree dirty so `git status` actually queries fsmonitor.
+        std::fs::write(dir.join("f.txt"), "y").unwrap();
+
+        let _ = get_git_status(&ws);
+
+        assert!(
+            !marker.exists(),
+            "core.fsmonitor command was executed by git polling — hardening failed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

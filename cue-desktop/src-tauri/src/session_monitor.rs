@@ -340,7 +340,8 @@ impl SessionMonitorState {
                         // team lead which only has agentName via agent-name entry.
                         let is_teammate =
                             s.team_name.is_some() || metrics.is_some_and(|m| m.team_name.is_some());
-                        if is_teammate && (now_secs - s.last_activity) > 30.0 {
+                        if should_promote_teammate_done(is_teammate, s.last_activity, now_secs) {
+                            log::debug!(target: "cue::state", "id={} idle->done pass=team_done idle_secs={:.0}", s.id, now_secs - s.last_activity);
                             s.state = "done".to_string();
                         }
                     }
@@ -348,6 +349,26 @@ impl SessionMonitorState {
                 })
                 .collect()
         };
+
+        // Snapshot the session ids admitted from source THIS poll (post
+        // dedup/team-promote, pre-demotion). The per-session data caches are
+        // pruned against this set below — NOT the post-demotion *display* set —
+        // so a session that gets demoted and then filtered out by the
+        // launched_at sweep keeps its cached metrics.
+        //
+        // Pruning on the display set instead created a visible flip-flop for
+        // ESC-interrupted sessions: hitting escape mid-turn fires NO hook, so
+        // sessions.json stays frozen on "working". Each poll the turn-ended pass
+        // demotes it to idle off the transcript's interrupt marker, the sweep
+        // then filters that idle out (pre-launch timestamps), and the prune
+        // evicted its metrics — so the NEXT poll re-read "working" from the
+        // unchanged source with no metrics, whiffed the interrupt demote
+        // (metrics == None → no-op), and showed "working" again. The card
+        // strobed working → gone → working every few seconds. Retaining metrics
+        // for still-in-source ids keeps the demote deterministic across polls,
+        // so the card settles instead of flickering.
+        let admitted_ids: std::collections::HashSet<String> =
+            active.iter().map(|s| s.id.clone()).collect();
 
         // JSONL-presence check: demote liveness-sensitive sessions whose
         // ~/.claude/projects/<encoded-ws>/<id>.jsonl file no longer exists.
@@ -382,7 +403,8 @@ impl SessionMonitorState {
                         && !self.jsonl_exists_on_disk(&s.id, &s.workspace, &projects_path)
                     {
                         log::debug!(
-                            "session {} demoted: JSONL missing for state={}",
+                            target: "cue::state",
+                            "id={} {}->idle pass=jsonl_missing",
                             s.id,
                             s.state
                         );
@@ -413,7 +435,20 @@ impl SessionMonitorState {
                 .collect();
             let mut sys = self.sysinfo_system.lock_safe();
             if !pids_to_check.is_empty() {
-                sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&pids_to_check), false);
+                // `remove_dead_processes = true` (F-reliability-001): with
+                // `false`, sysinfo marks a queried-but-dead PID nonexistent yet
+                // KEEPS its cached `Process` (unchanged `start_time`) in
+                // `process_list`. On macOS `System::process(pid)` is a bare map
+                // lookup with no liveness filter, so the stale entry is still
+                // returned and `resolve_liveness` matches the same-pid/same-start
+                // `Alive` arm forever — the liveness backstop never demotes a
+                // crashed Claude Code process (stuck on working/waiting) and the
+                // map grows unbounded over the app's lifetime. With `true` the
+                // dead PID is evicted, `sys.process(pid)` returns `None`, and the
+                // `(None, _) => Dead` arm fires. Re-adding a live PID on a later
+                // poll works normally, and `process_identity.retain` below still
+                // handles app-side cache cleanup.
+                sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&pids_to_check), true);
             }
             let mut identity = self.process_identity.lock_safe();
             // Drop cache entries for sessions no longer present.
@@ -441,6 +476,7 @@ impl SessionMonitorState {
                         }
                         LivenessOutcome::Dead => {
                             identity.remove(&s.id);
+                            log::debug!(target: "cue::state", "id={} {}->idle pass=liveness_dead pid={}", s.id, s.state, pid);
                             s.state = "idle".to_string();
                             s.active_subagents = 0;
                         }
@@ -463,6 +499,13 @@ impl SessionMonitorState {
                 .map(|mut s| {
                     let metrics = cache.get(&s.id);
                     if should_demote_turn_ended(&s.state, s.state_changed_at, metrics) {
+                        log::debug!(
+                            target: "cue::state",
+                            "id={} {}->idle pass=turn_ended end_turn_ts={:?} state_changed_at={:?}",
+                            s.id, s.state,
+                            metrics.and_then(|m| m.last_end_turn_ts),
+                            s.state_changed_at
+                        );
                         s.state = "idle".to_string();
                     }
                     s
@@ -480,6 +523,7 @@ impl SessionMonitorState {
             .into_iter()
             .map(|mut s| {
                 if should_demote_stuck_active(&s.state, s.state_changed_at, now_secs) {
+                    log::debug!(target: "cue::state", "id={} {}->idle pass=stuck_active_cap", s.id, s.state);
                     s.state = "idle".to_string();
                 }
                 s
@@ -501,7 +545,7 @@ impl SessionMonitorState {
                 .map(|mut s| {
                     let metrics = cache.get(&s.id);
                     if should_demote_stalled_turn(&s.state, metrics, now_secs) {
-                        log::debug!("stalled-turn-demote id={} state={} → idle", s.id, s.state,);
+                        log::debug!(target: "cue::state", "id={} {}->idle pass=stalled_turn_cap", s.id, s.state);
                         s.state = "idle".to_string();
                     }
                     s
@@ -525,8 +569,10 @@ impl SessionMonitorState {
                     if should_demote_stale_subagent(&s.state, s.state_changed_at, metrics, now_secs)
                     {
                         log::debug!(
-                            "stale-subagent-demote id={} active_subagents={} → idle",
+                            target: "cue::state",
+                            "id={} {}->idle pass=stale_subagent active_subagents={}",
                             s.id,
+                            s.state,
                             s.active_subagents,
                         );
                         s.state = "idle".to_string();
@@ -573,6 +619,7 @@ impl SessionMonitorState {
                     let awaiting = metrics.map(|m| m.awaiting_user_prompt).unwrap_or(false);
                     let pending = metrics.map(|m| m.pending_tool_use).unwrap_or(false);
                     if awaiting && is_promotable_to_waiting(&s.state) {
+                        log::debug!(target: "cue::state", "id={} {}->waiting pass=waiting_promote src=awaiting_prompt", s.id, s.state);
                         s.state = "waiting".to_string();
                     } else if s.state == "waiting"
                         && should_resolve_waiting(awaiting, pending)
@@ -581,6 +628,7 @@ impl SessionMonitorState {
                             s.state_changed_at,
                         )
                     {
+                        log::debug!(target: "cue::state", "id={} waiting->idle pass=waiting_resolve awaiting={} pending={}", s.id, awaiting, pending);
                         s.state = "idle".to_string();
                     }
                     s
@@ -742,33 +790,42 @@ impl SessionMonitorState {
             };
             let current_ids: std::collections::HashSet<&str> =
                 active.iter().map(|s| s.id.as_str()).collect();
-            // Prune sessions that no longer exist
+            // Prune the active-duration timer to what's actually displayed —
+            // it's a per-card render timer, not demote evidence, so a
+            // filtered-out session shouldn't keep one.
             active_since.retain(|id, _| current_ids.contains(id.as_str()));
-            // Prune the five other per-session caches that previously
+            // Prune the five per-session DATA caches that previously
             // accumulated forever — metrics_cache, jsonl_entry_cache,
             // file_mod_dates, resolved_paths, output_speed_cache. Without
             // this, a long-running tray app grew linearly in memory per
-            // session-id ever observed. Lock-ordering: we already hold
-            // `active_since`; these caches are acquired AFTER it in the
-            // documented order, so the chained locks below are safe.
+            // session-id ever observed. Retain against `admitted_ids` (present
+            // in source this poll) rather than `current_ids` (survived to the
+            // display list): a session demoted-then-filtered by the launched_at
+            // sweep is still in source and MUST keep its metrics, or the next
+            // poll loses the demote signal and flip-flops it back to its stale
+            // active state (the ESC-interrupt strobe — see `admitted_ids`).
+            // Still bounded: `admitted_ids ⊆ sessions.json`, which the hook
+            // prunes. Lock-ordering: we already hold `active_since`; these
+            // caches are acquired AFTER it in the documented order, so the
+            // chained locks below are safe.
             self.metrics_cache
                 .lock_safe()
-                .retain(|id, _| current_ids.contains(id.as_str()));
+                .retain(|id, _| admitted_ids.contains(id.as_str()));
             self.jsonl_entry_cache
                 .lock_safe()
-                .retain(|id, _| current_ids.contains(id.as_str()));
+                .retain(|id, _| admitted_ids.contains(id.as_str()));
             // `file_mod_dates` also stores subagent-dir entries keyed as
             // `<sid>-subagents`, so prefix-match the live ids.
             self.file_mod_dates.lock_safe().retain(|key, _| {
                 let stripped = key.strip_suffix("-subagents").unwrap_or(key);
-                current_ids.contains(stripped)
+                admitted_ids.contains(stripped)
             });
             self.resolved_paths
                 .lock_safe()
-                .retain(|id, _| current_ids.contains(id.as_str()));
+                .retain(|id, _| admitted_ids.contains(id.as_str()));
             self.output_speed_cache
                 .lock_safe()
-                .retain(|id, _| current_ids.contains(id.as_str()));
+                .retain(|id, _| admitted_ids.contains(id.as_str()));
             for s in &active {
                 if is_active_state(&s.state) {
                     // Prefer the hook-supplied stateChangedAt — it captures
@@ -1696,6 +1753,21 @@ pub(crate) fn floor_extends(state: &str, until: Option<f64>, now: f64) -> bool {
         return false;
     }
     until.is_some_and(|u| u > now)
+}
+
+/// Whether an `idle` team-agent session should be promoted to `done`.
+///
+/// A teammate that finished a turn goes idle and stays there (no `TaskCompleted`
+/// fires for a sub-agent), so after a grace window we surface it as `done`. Pure
+/// predicate so the 30s boundary and the `is_teammate` gate are unit-testable
+/// (F-tests-001) — the inlined form read `SystemTime::now()` directly and had no
+/// coverage. The caller applies this only while the session is `idle`.
+pub(crate) fn should_promote_teammate_done(
+    is_teammate: bool,
+    last_activity: f64,
+    now: f64,
+) -> bool {
+    is_teammate && (now - last_activity) > 30.0
 }
 
 fn resolve_liveness(
@@ -2923,6 +2995,27 @@ mod tests {
         assert!(!should_demote_stuck_active("compacting", None, 1000.0));
     }
 
+    // ── should_promote_teammate_done (F-tests-001) ──────────────────────
+
+    #[test]
+    fn test_promote_teammate_done_past_grace() {
+        // A teammate idle for more than 30s promotes to done.
+        assert!(should_promote_teammate_done(true, 100.0, 131.0));
+    }
+
+    #[test]
+    fn test_no_promote_teammate_at_or_within_grace() {
+        // Strict `>`: exactly 30s and anything below holds at idle.
+        assert!(!should_promote_teammate_done(true, 100.0, 130.0));
+        assert!(!should_promote_teammate_done(true, 100.0, 120.0));
+    }
+
+    #[test]
+    fn test_no_promote_non_teammate() {
+        // Non-teammate idle sessions must never be promoted, at any age.
+        assert!(!should_promote_teammate_done(false, 0.0, 100_000.0));
+    }
+
     // ── dedup_state_priority ────────────────────────────────────────────
 
     #[test]
@@ -3416,12 +3509,142 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn test_poll_esc_interrupt_does_not_strobe_working() {
+        // Regression: hitting ESC mid-turn interrupts Claude Code but fires NO
+        // hook, so sessions.json stays frozen on "working". For a session that
+        // was already running when Cue launched (pre-launch timestamps), the
+        // turn-ended pass demotes it to idle off the transcript interrupt
+        // marker, then the launched_at sweep filters that idle out — and the
+        // per-session cache prune MUST retain its metrics. If the prune keys on
+        // the *display* set it drops them, so the next poll re-reads "working"
+        // from the unchanged source with no metrics, whiffs the interrupt
+        // demote, and re-shows "working": the card strobes working → gone →
+        // working every few seconds. This locks the metrics retention that
+        // keeps the demote deterministic across polls.
+        let dir = std::env::temp_dir().join("cue_test_poll_esc_strobe");
+        let _ = std::fs::remove_dir_all(&dir);
+        let projects = dir.join("projects");
+        let ws_dir = projects.join("-Users-dev-App");
+        std::fs::create_dir_all(&ws_dir).unwrap();
+        std::fs::write(ws_dir.join("sess-esc.jsonl"), "{}").unwrap();
+
+        let m = SessionMonitorState::new();
+        // Pre-launch timestamps: the session was mid-generation when Cue
+        // started, so its last hook event predates launch. "working" bypasses
+        // the launch gate on admission, but once demoted to idle it fails the
+        // sweep — exactly the population the user hit ESC on.
+        let started = m.launched_at - 1000.0;
+        let sessions = format!(
+            r#"{{"sessions":{{"sess-esc":{{"id":"sess-esc","workspace":"/Users/dev/App","state":"working","lastActivity":{},"startedAt":{},"stateChangedAt":{}}}}}}}"#,
+            started, started, started
+        );
+        let status_path = dir.join("sessions.json");
+        std::fs::write(&status_path, &sessions).unwrap();
+
+        // Metrics as refresh_metrics would produce them after ESC: a
+        // "[Request interrupted by user]" marker newer than stateChangedAt.
+        m.metrics_cache.lock_safe().insert(
+            "sess-esc".to_string(),
+            crate::models::SessionMetrics {
+                last_interrupt_ts: Some(started + 100.0),
+                ..Default::default()
+            },
+        );
+
+        // Poll 1: interrupt demotes working → idle, the sweep filters it out.
+        m.poll_status_with(status_path.clone(), projects.clone());
+        assert!(
+            m.enriched_sessions
+                .lock_safe()
+                .iter()
+                .all(|s| s.info.id != "sess-esc"),
+            "interrupted pre-launch session should be filtered out, not shown"
+        );
+        // ...and its metrics MUST survive the prune (the fix). Before the fix
+        // this key was evicted because the session left the display set.
+        assert!(
+            m.metrics_cache.lock_safe().contains_key("sess-esc"),
+            "metrics for a still-in-source session must survive the prune"
+        );
+
+        // Poll 2 with metrics UNCHANGED (refresh_metrics has not run again).
+        // The retained interrupt keeps the demote firing, so the card stays
+        // gone — it must NOT reappear as "working".
+        m.poll_status_with(status_path.clone(), projects.clone());
+        assert!(
+            m.enriched_sessions
+                .lock_safe()
+                .iter()
+                .all(|s| s.info.state != "working"),
+            "ESC-interrupted session must not strobe back to working next poll"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn dummy_enriched(id: &str) -> crate::models::EnrichedSession {
         crate::models::EnrichedSession::from_info_and_metrics(
             make_session(id, "idle", 100.0, 100.0),
             crate::models::SessionMetrics::default(),
             &crate::models::SupplementalData::default(),
         )
+    }
+
+    #[test]
+    fn test_poll_promotes_idle_teammate_to_done_after_grace() {
+        // F-tests-001: end-to-end wiring of the teammate idle→done promotion.
+        // A sub-agent that finished its turn goes idle (no TaskCompleted fires
+        // for a teammate) and must surface as `done` once past the 30s grace,
+        // while a freshly-idle teammate stays `idle`.
+        let dir = std::env::temp_dir().join("cue_test_team_done_e2e");
+        let _ = std::fs::remove_dir_all(&dir);
+        let projects = dir.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        let status_path = dir.join("sessions.json");
+
+        let mut m = SessionMonitorState::new();
+        // Far-past launch time so the recent activity timestamps below clear the
+        // launched_at admission gate for a non-bypass (idle/done) state.
+        m.launched_at = 1000.0;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        // tm-old: teammate idle 40s ago (> grace) → promotes to done.
+        // tm-new: teammate idle 5s ago (< grace) → stays idle.
+        let sessions = format!(
+            r#"{{"sessions":{{
+                "tm-old":{{"id":"tm-old","workspace":"/Users/dev/App","state":"idle","teamName":"squad","agentName":"reviewer","lastActivity":{o},"startedAt":{s},"stateChangedAt":{o}}},
+                "tm-new":{{"id":"tm-new","workspace":"/Users/dev/App2","state":"idle","teamName":"squad","agentName":"tester","lastActivity":{n},"startedAt":{s},"stateChangedAt":{n}}}
+            }}}}"#,
+            o = now - 40.0,
+            n = now - 5.0,
+            s = now - 300.0,
+        );
+        std::fs::write(&status_path, &sessions).unwrap();
+
+        m.poll_status_with(status_path.clone(), projects.clone());
+        let e = m.enriched_sessions.lock_safe();
+        let old = e
+            .iter()
+            .find(|s| s.info.id == "tm-old")
+            .expect("tm-old present");
+        assert_eq!(
+            old.info.state, "done",
+            "teammate idle past the 30s grace must promote to done"
+        );
+        let new = e
+            .iter()
+            .find(|s| s.info.id == "tm-new")
+            .expect("tm-new present");
+        assert_eq!(
+            new.info.state, "idle",
+            "teammate idle within the grace must stay idle"
+        );
+        drop(e);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

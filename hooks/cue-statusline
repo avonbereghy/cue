@@ -21,13 +21,40 @@
 
 set -euo pipefail
 
-# Determine output path (must match paths.rs rate_limits_path)
+# Determine output path (must match paths.rs rate_limits_path AND
+# cue-hook get_status_dir). Under WSL the Cue app runs natively on Windows and
+# reads %LOCALAPPDATA%\Cue, so cue-hook redirects sessions.json there. This
+# script must apply the SAME redirect or rate_limits.json lands in the
+# Linux-side dir and the app never finds it (F-api-002). Mirror cue-hook's
+# _is_wsl() + _get_wsl_windows_status_dir(): only redirect when exactly one
+# non-system Windows user can be resolved, else fall back to the Linux dir.
+OUTPUT_DIR=""
 if [[ "$OSTYPE" == "darwin"* ]]; then
     OUTPUT_DIR="$HOME/Library/Application Support/Cue"
 elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
     OUTPUT_DIR="${LOCALAPPDATA:-$HOME/AppData/Local}/Cue"
 else
-    OUTPUT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/cue"
+    # Linux — detect WSL (case-insensitive "microsoft" in /proc/version, read
+    # with a bash builtin, no subprocess) and redirect to the Windows-side dir.
+    if [[ -r /proc/version && "$(< /proc/version)" == *icrosoft* && -d /mnt/c/Users ]]; then
+        wsl_user=""
+        wsl_count=0
+        for d in /mnt/c/Users/*/; do
+            [[ -d "$d" ]] || continue  # guards the no-match literal glob
+            name="${d%/}"; name="${name##*/}"
+            case "$name" in
+                Public|Default|"Default User"|"All Users"|.*) continue ;;
+            esac
+            wsl_user="$name"
+            wsl_count=$((wsl_count + 1))
+        done
+        if [[ $wsl_count -eq 1 ]]; then
+            OUTPUT_DIR="/mnt/c/Users/$wsl_user/AppData/Local/Cue"
+        fi
+    fi
+    if [[ -z "$OUTPUT_DIR" ]]; then
+        OUTPUT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/cue"
+    fi
 fi
 
 mkdir -p "$OUTPUT_DIR"

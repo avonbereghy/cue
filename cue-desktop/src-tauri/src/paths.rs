@@ -37,6 +37,18 @@ pub fn permission_token_path() -> PathBuf {
     sessions_json_path().with_file_name("permission-token")
 }
 
+/// Path to permission-proof — the SECOND per-launch secret (F-security-001).
+/// The server returns this value in the `X-Cue-Proof` response header to
+/// authenticate ITSELF to the hook. Unlike `permission-token` (which the hook
+/// sends on the wire), the hook only ever READS this file and compares — it is
+/// never transmitted by the hook, so a different-uid process that wins the
+/// loopback port never learns it (and can't read the 0600 file), and therefore
+/// cannot forge an "allow" the hook will honor. Co-located and 0600 like the
+/// token.
+pub fn permission_proof_path() -> PathBuf {
+    sessions_json_path().with_file_name("permission-proof")
+}
+
 /// Path to settings.json — app preferences.
 pub fn settings_path() -> PathBuf {
     if cfg!(target_os = "macos") {
@@ -74,6 +86,25 @@ pub fn rate_limits_path() -> PathBuf {
     } else {
         xdg_data_home().join("cue").join("rate_limits.json")
     }
+}
+
+/// Path to the app log file (F-observability-001). A Finder/Dock-launched
+/// `.app` discards stderr, so logs must land in a durable, user-reachable
+/// file. Uses the conventional OS log location.
+pub fn log_file_path() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        home_dir().join("Library/Logs/Cue/cue.log")
+    } else if cfg!(target_os = "windows") {
+        appdata_local().join("Cue").join("logs").join("cue.log")
+    } else {
+        xdg_data_home().join("cue").join("logs").join("cue.log")
+    }
+}
+
+/// Marker file a user can create (next to sessions.json) to raise the log level
+/// to debug without a terminal — the packaged app can't read `RUST_LOG`.
+pub fn debug_marker_path() -> PathBuf {
+    sessions_json_path().with_file_name("CUE_DEBUG")
 }
 
 /// Ensure all required directories exist.

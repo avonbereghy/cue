@@ -9,6 +9,7 @@ pub mod config_counter;
 pub mod env_detect;
 pub mod git_status;
 pub mod jsonl_parser;
+pub mod logging;
 pub mod model_context;
 pub mod models;
 pub mod paths;
@@ -1600,7 +1601,11 @@ pub fn run() {
         );
     }));
 
-    env_logger::init();
+    // Durable, size-bounded, user-reachable log sink (F-observability-001).
+    // Replaces the bare `env_logger::init()`, whose stderr output is discarded
+    // for a Finder-launched .app — so state traces and anomalies were unlogged
+    // in production.
+    logging::init();
     startup_checks();
 
     let monitor = Arc::new(SessionMonitorState::new());
@@ -1788,30 +1793,15 @@ pub fn run() {
             // Only start if user has opted in via settings
             let perm_settings = settings::load_settings();
             if perm_settings.permissions_enabled {
-                // Provision a fresh per-launch token before opening the socket.
-                // The Python hook reads the same file and presents the token in
-                // an X-Cue-Token header; the server rejects anything else with
-                // 403. Without this, any local process winning the loopback
-                // bind race could forge `{"behavior":"allow"}` responses to
-                // Claude Code prompts.
-                match permission_server::provision_token() {
-                    Ok(token) => {
-                        spawn_permission_server(
-                            handle,
-                            pending_for_server,
-                            metadata_for_server,
-                            token,
-                        );
-                        log::info!("Permission server started (permissions_enabled=true)");
-                    }
-                    Err(e) => {
-                        log::error!(
-                            "Permission server NOT started — failed to provision auth token: {}",
-                            e
-                        );
-                    }
-                }
+                // Provisioning happens INSIDE spawn_permission_server, only
+                // after the 3002 bind succeeds (F-security-001) — so the
+                // per-launch secrets exist on disk only while Cue actually owns
+                // the port, never while some other process holds it.
+                spawn_permission_server(handle, pending_for_server, metadata_for_server);
             } else {
+                // Clear any secrets left by a prior run so the hook won't
+                // forward `req_token` to whatever is on 3002 now.
+                permission_server::remove_secrets();
                 log::info!("Permission server not started (permissions_enabled=false)");
             }
 
@@ -1831,6 +1821,13 @@ pub fn run() {
                     let _ = window.set_focus();
                 }
             }
+            // On a clean exit, remove the permission secrets so the hook won't
+            // forward to whatever binds 3002 after we're gone (F-security-001).
+            // A hard crash can't run this, but resp_token still defeats a rogue
+            // server in that window.
+            if let tauri::RunEvent::Exit = _event {
+                permission_server::remove_secrets();
+            }
         });
 }
 
@@ -1844,22 +1841,37 @@ fn spawn_permission_server(
     app_handle: AppHandle,
     pending: Arc<permission_server::PendingRequests>,
     metadata: Arc<Mutex<HashMap<String, models::PermissionRequest>>>,
-    token: String,
 ) {
     tauri::async_runtime::spawn(async move {
         let listener = match tokio::net::TcpListener::bind("127.0.0.1:3002").await {
             Ok(l) => l,
             Err(e) => {
                 log::warn!("Permission server failed to start: {}", e);
+                // The port is held by something else (possibly a rogue server).
+                // Remove any stale secrets so the hook won't forward to it.
+                permission_server::remove_secrets();
                 let _ = app_handle.emit("permission-server-error", e.to_string());
+                return;
+            }
+        };
+
+        // Provision the per-launch secrets ONLY now that we own the port
+        // (F-security-001). req_token authenticates the hook to us; resp_token
+        // (returned in X-Cue-Proof) authenticates us to the hook.
+        let secrets = match permission_server::provision_secrets() {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("Permission server: failed to provision auth secrets: {}", e);
+                permission_server::remove_secrets();
                 return;
             }
         };
         log::info!("Permission server listening on 127.0.0.1:3002");
 
-        // Single shared Arc so spawned per-connection tasks compare against
-        // the same byte slice without cloning the 32-char string repeatedly.
-        let token = Arc::new(token);
+        // Single shared Arcs so spawned per-connection tasks compare against
+        // the same byte slices without cloning the 32-char strings repeatedly.
+        let token = Arc::new(secrets.req_token);
+        let resp_token = Arc::new(secrets.resp_token);
 
         // Bound concurrent in-flight connections so a local flood of slow or
         // stalled peers can't accumulate unbounded Tokio tasks + file
@@ -1895,13 +1907,15 @@ fn spawn_permission_server(
             let pending = pending.clone();
             let metadata = metadata.clone();
             let token = token.clone();
+            let resp_token = resp_token.clone();
 
             tokio::spawn(async move {
                 // Hold the permit for the connection's lifetime; releasing it on
                 // task end (including on ingest timeout) frees the slot.
                 let _permit = permit;
                 if let Err(e) =
-                    handle_permission_connection(stream, app, pending, metadata, token).await
+                    handle_permission_connection(stream, app, pending, metadata, token, resp_token)
+                        .await
                 {
                     log::debug!("Permission connection error: {}", e);
                 }
@@ -1917,6 +1931,7 @@ async fn handle_permission_connection(
     pending: Arc<permission_server::PendingRequests>,
     metadata: Arc<Mutex<HashMap<String, models::PermissionRequest>>>,
     expected_token: Arc<String>,
+    resp_token: Arc<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -2189,8 +2204,16 @@ async fn handle_permission_connection(
                 models::PermissionDecision::Deny => permission_server::DENY_RESPONSE,
             };
 
+            // Return resp_token in X-Cue-Proof so the hook can authenticate US
+            // (F-security-001). A different-uid process that won the loopback
+            // port received `req_token` in this request but never learns
+            // `resp_token` (the hook never sends it, and the 0600 proof file is
+            // unreadable cross-uid), so it can't produce this header and the
+            // hook rejects its forged "allow".
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{}: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                permission_server::PROOF_HEADER,
+                resp_token,
                 response_body.len(),
                 response_body
             );
