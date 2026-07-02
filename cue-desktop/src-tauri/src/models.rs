@@ -1495,7 +1495,9 @@ mod tests {
             1,
             "both malformed entries are dropped; only the healthy one survives"
         );
-        assert!(data.sessions.contains_key("11111111-1111-1111-1111-111111111111"));
+        assert!(data
+            .sessions
+            .contains_key("11111111-1111-1111-1111-111111111111"));
         assert!(!data.sessions.contains_key("bad-type"));
         assert!(!data.sessions.contains_key("bad-null"));
         assert_eq!(

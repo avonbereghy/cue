@@ -428,7 +428,10 @@ mod tests {
         let s = provision_secrets_at(&token_path, &proof_path).unwrap();
         assert_eq!(s.req_token.len(), 32);
         assert_eq!(s.resp_token.len(), 32);
-        assert_ne!(s.req_token, s.resp_token, "the two secrets must be independent");
+        assert_ne!(
+            s.req_token, s.resp_token,
+            "the two secrets must be independent"
+        );
         assert_eq!(read_token(&token_path).unwrap(), s.req_token);
         assert_eq!(read_token(&proof_path).unwrap(), s.resp_token);
 
@@ -454,8 +457,14 @@ mod tests {
             .unwrap();
 
         // Real server proof matches; the request token (all a rogue holds) does not.
-        assert!(constant_time_eq(s.resp_token.as_bytes(), s.resp_token.as_bytes()));
-        assert!(!constant_time_eq(s.req_token.as_bytes(), s.resp_token.as_bytes()));
+        assert!(constant_time_eq(
+            s.resp_token.as_bytes(),
+            s.resp_token.as_bytes()
+        ));
+        assert!(!constant_time_eq(
+            s.req_token.as_bytes(),
+            s.resp_token.as_bytes()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

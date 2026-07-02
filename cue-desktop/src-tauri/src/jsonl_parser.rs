@@ -2617,7 +2617,10 @@ mod tests {
 
         // Parent append must be reflected.
         let user = r#"{"type":"user","timestamp":3.0,"message":{"role":"user","content":[{"type":"text","text":"more"}]}}"#;
-        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
         writeln!(f, "{}", user).unwrap();
         let m4 = parse_jsonl_to_session_metrics_cached(&path, &mut cache).unwrap();
         assert_eq!(m4.user_message_count, 1, "parent append must be reflected");

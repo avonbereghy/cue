@@ -89,7 +89,11 @@ pub fn init() {
     }
     rotate_if_oversized(&path, LOG_CAP_BYTES);
 
-    let file = OpenOptions::new().create(true).append(true).open(&path).ok();
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .ok();
     // The log can carry session ids and workspace paths; keep it owner-only,
     // matching the 0600 posture of sessions.json.
     #[cfg(unix)]

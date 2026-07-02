@@ -1762,7 +1762,11 @@ pub(crate) fn floor_extends(state: &str, until: Option<f64>, now: f64) -> bool {
 /// predicate so the 30s boundary and the `is_teammate` gate are unit-testable
 /// (F-tests-001) — the inlined form read `SystemTime::now()` directly and had no
 /// coverage. The caller applies this only while the session is `idle`.
-pub(crate) fn should_promote_teammate_done(is_teammate: bool, last_activity: f64, now: f64) -> bool {
+pub(crate) fn should_promote_teammate_done(
+    is_teammate: bool,
+    last_activity: f64,
+    now: f64,
+) -> bool {
     is_teammate && (now - last_activity) > 30.0
 }
 
