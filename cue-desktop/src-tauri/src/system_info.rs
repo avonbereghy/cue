@@ -67,7 +67,9 @@ pub fn get_claude_default_effort() -> (Option<String>, Option<f64>) {
     // a runaway writer (or a stale corrupted append) would otherwise stall
     // every poll on a multi-GB read.
     const CLAUDE_SETTINGS_MAX_BYTES: u64 = 4 * 1024 * 1024;
-    let level = crate::security::read_to_string_bounded(&path, CLAUDE_SETTINGS_MAX_BYTES)
+    // The user's own ~/.claude/settings.json — follow a symlink (dotfile
+    // managers commonly symlink it); it isn't the untrusted status-dir boundary.
+    let level = crate::security::read_to_string_bounded_follow(&path, CLAUDE_SETTINGS_MAX_BYTES)
         .ok()
         .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
         .and_then(|v| {

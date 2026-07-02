@@ -2217,3 +2217,36 @@ class TestOrphanTmpSweep:
         assert not os.path.exists(stale)
         # The real write still succeeded.
         assert "abc123" in hook_env.read_sessions()
+
+
+class TestSanitizeJsonStrings:
+    """The write-boundary sanitizer must make every dumped structure valid for
+    the Rust (serde_json) reader — no lone surrogates AND no non-finite floats,
+    either of which would brick the whole sessions.json permanently."""
+
+    def test_replaces_lone_surrogate_strings(self, hook):
+        out = hook._sanitize_json_strings({"workspace": "/home/x/pro\udce9ject"})
+        assert "\udce9" not in out["workspace"]
+        json.dumps(out)  # must be emittable (a lone surrogate would blow up on write)
+
+    def test_coerces_nonfinite_floats(self, hook):
+        out = hook._sanitize_json_strings(
+            {"lastActivity": float("nan"), "a": float("inf"), "b": float("-inf")}
+        )
+        assert out["lastActivity"] == 0 and out["a"] == 0 and out["b"] == 0
+        # allow_nan=False raises if ANY bare NaN/Infinity slipped through — serde
+        # rejects those, so this asserts the emitted file is strict JSON.
+        json.dumps(out, allow_nan=False)
+
+    def test_recurses_nested_structures(self, hook):
+        out = hook._sanitize_json_strings(
+            {"sessions": {"id1": {"lastActivity": float("nan"), "workspace": "a\udcffb"}}}
+        )
+        assert out["sessions"]["id1"]["lastActivity"] == 0
+        assert "\udcff" not in out["sessions"]["id1"]["workspace"]
+
+    def test_noop_for_valid_values(self, hook):
+        # Valid UTF-8 (incl. accents), finite numbers, bools, ints pass through
+        # unchanged — the sanitizer must not corrupt legitimate data.
+        src = {"n": 3, "f": 2.5, "s": "café", "list": [1, "x"], "b": True}
+        assert hook._sanitize_json_strings(src) == src

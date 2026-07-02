@@ -1664,7 +1664,8 @@ fn check_settings_hooks(settings_path: &std::path::Path) -> (usize, usize, usize
     let total = env_detect::HOOK_EVENTS.len();
     const CLAUDE_SETTINGS_MAX_BYTES: u64 = 4 * 1024 * 1024;
     let settings: serde_json::Value =
-        match security::read_to_string_bounded(settings_path, CLAUDE_SETTINGS_MAX_BYTES)
+        // User's own ~/.claude/settings.json — follow a symlink (dotfile managers).
+        match security::read_to_string_bounded_follow(settings_path, CLAUDE_SETTINGS_MAX_BYTES)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
         {

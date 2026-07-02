@@ -5,6 +5,7 @@ Called by Claude Code hooks with: cue-hook <idle|working|waiting|done|remove>
 Receives hook JSON on stdin (contains session_id, cwd, etc.)
 """
 import json
+import math
 import re
 import sys
 import os
@@ -294,12 +295,16 @@ def _active_subagents(entry):
     # bool is an int subclass but is never a meaningful subagent count.
     if isinstance(v, bool):
         return 0
-    if isinstance(v, (int, float)):
-        return max(0, int(v))
+    # Route every value through one int() guard: catches non-numeric strings and
+    # None (ValueError/TypeError) AND float NaN (ValueError) / Infinity
+    # (OverflowError) — the last two would still crash a naive isinstance(float)
+    # branch (`int(nan)`), re-wedging the very session this helper protects.
+    # json.loads accepts bare NaN/Infinity literals, so a skewed writer can emit them.
     try:
-        return max(0, int(v))
-    except (TypeError, ValueError):
+        n = int(v)
+    except (TypeError, ValueError, OverflowError):
         return 0
+    return max(0, n)
 
 
 def _maybe_clear_stale_subagent_counter(existing, transcript_path, now):
@@ -594,7 +599,7 @@ def _quick_state_write(session_id, workspace, resolved_source, subprocess_label,
                 fd, tmp = tempfile.mkstemp(dir=STATUS_DIR, suffix=".json.tmp")
                 try:
                     with os.fdopen(fd, "w", encoding="utf-8") as f:
-                        json.dump(status, f, indent=2)
+                        json.dump(_sanitize_json_strings(status), f, indent=2)
                         f.flush()
                         os.fsync(f.fileno())
                     if sys.platform != "win32":
@@ -669,6 +674,14 @@ def _forward_permission_request(hook_data, session_id):
     nonce = secrets.token_hex(16)
     auth = hmac.new(key, b"req:" + nonce.encode("ascii"), hashlib.sha256).hexdigest()
 
+    # NOTE (residual, accepted): this request carries tool_input to whoever
+    # holds 127.0.0.1:3002 BEFORE we verify the server's proof — inherent to
+    # request→response ordering. The mutual-HMAC handshake prevents a forged
+    # DECISION (X-Cue-Proof is checked before we act, below) and never puts the
+    # raw token on the wire (only HMAC-of-nonce), but a same-uid process that
+    # squats the port could still HARVEST request contents. Fully closing it
+    # would need a pre-auth round-trip (server proves itself before we send the
+    # payload); accepted as low-risk given the same-uid threat model + 0600 token.
     payload = json.dumps({
         "session_id": session_id,
         "tool_name": hook_data.get("tool_name", "unknown"),
@@ -952,6 +965,39 @@ def _sanitize_workspace(value):
     return value.encode("utf-8", "replace").decode("utf-8")
 
 
+def _sanitize_json_strings(obj):
+    """Recursively replace lone surrogates / un-encodable code points in EVERY
+    string of a JSON structure so the file we write is always valid UTF-8 for
+    the Rust (serde_json) reader.
+
+    `_sanitize_workspace` only guards the incoming cwd; this is the write-boundary
+    safety net for every other path to a bad string — a surrogate workspace
+    already STORED in sessions.json and carried forward, a CUE_SUBPROCESS_LABEL
+    read from os.environ (surrogateescape-decoded on POSIX), or a team/agent/model
+    name parsed from a transcript. A single lone surrogate anywhere bricks the
+    WHOLE sessions.json for the desktop app permanently (Python still parses it,
+    so the corruption self-heal never fires). Applying this to the full dict on
+    each write also heals any pre-existing bad entry on the next write. It is a
+    no-op for valid UTF-8 (encode+decode round-trips identically), so real
+    unicode (accents, emoji) is preserved.
+    """
+    if isinstance(obj, str):
+        return obj.encode("utf-8", "replace").decode("utf-8")
+    if isinstance(obj, dict):
+        return {_sanitize_json_strings(k): _sanitize_json_strings(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_json_strings(x) for x in obj]
+    # NaN / Infinity: json.dump emits bare NaN/Infinity tokens, which serde_json
+    # REJECTS — the same whole-file brick this function exists to prevent and
+    # heal. json.loads accepts them, so a skewed writer or hand edit can plant a
+    # non-finite float in any numeric field (e.g. lastActivity/stateChangedAt);
+    # coerce to 0 so the emitted file is always valid JSON. (bool is an int
+    # subclass, not float; plain ints can't be non-finite — neither hits this.)
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return 0
+    return obj
+
+
 # A wrapping tool (e.g. an orchestrator that runs `claude` as a subprocess) can
 # set CUE_SUBPROCESS_LABEL to a short name; Cue shows it as the session's
 # subprocess pill. Generic on purpose — any caller can opt in by exporting this
@@ -1210,15 +1256,21 @@ def main():
     # for the Rust reader permanently (see _sanitize_workspace).
     workspace = _sanitize_workspace(hook_data.get("cwd", os.getcwd()))
     source = _detect_source()
-    # Settle the launcher source NOW, before any lock is taken. When the env
-    # can't decide, this runs the up-to-2s `ps` ancestry walk — which must
-    # never execute inside the flock critical section, where it would starve
-    # concurrent hooks past their own 2s lock-acquisition budget. The result
-    # is passed into every write path; the once-per-session caching is
-    # preserved via the unlocked stored-source peek (see _resolve_source_unlocked).
-    resolved_source = _resolve_source_unlocked(session_id, source)
     subprocess_label = _detect_subprocess()
-    ignored_session = _should_ignore_session(hook_data, resolved_source)
+    # CUE_SKIP is an unconditional opt-out that needs no source, so short-circuit
+    # it BEFORE the up-to-2s `ps` ancestry walk. For an sdk-* run the walk is
+    # load-bearing and still runs below: the Claude desktop app can drive Claude
+    # Code via the SDK entrypoint and is distinguishable from a genuinely-headless
+    # batch ONLY by the ancestry walk (see _should_ignore_session's claude-desktop
+    # exception), so skipping it there would erase real, transcript-less desktop
+    # cards. The walk must never run inside the flock critical section (it would
+    # starve concurrent hooks past their 2s lock budget); once-per-session caching
+    # is preserved via the unlocked stored-source peek (see _resolve_source_unlocked).
+    if os.environ.get("CUE_SKIP") == "1":
+        resolved_source, ignored_session = source, True
+    else:
+        resolved_source = _resolve_source_unlocked(session_id, source)
+        ignored_session = _should_ignore_session(hook_data, resolved_source)
 
     # Read latest token usage directly from the JSONL transcript. Only trust
     # the path if it resolves under the expected Claude projects directory —
@@ -1399,7 +1451,7 @@ def main():
                 fd, tmp = tempfile.mkstemp(dir=STATUS_DIR, suffix=".json.tmp")
                 try:
                     with os.fdopen(fd, "w", encoding="utf-8") as f:
-                        json.dump(status, f, indent=2)
+                        json.dump(_sanitize_json_strings(status), f, indent=2)
                         f.flush()
                         os.fsync(f.fileno())
                     if sys.platform != "win32":
@@ -1636,7 +1688,7 @@ def main():
             fd, tmp = tempfile.mkstemp(dir=STATUS_DIR, suffix=".json.tmp")
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(status, f, indent=2)
+                    json.dump(_sanitize_json_strings(status), f, indent=2)
                     # Task 2: Flush and fsync before replace to prevent data loss
                     f.flush()
                     os.fsync(f.fileno())

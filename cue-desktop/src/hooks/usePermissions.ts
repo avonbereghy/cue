@@ -48,6 +48,10 @@ export function usePermissions() {
   // than stacking invokes.
   const reconcileInflight = useRef(false);
   const reconcileQueued = useRef(false);
+  // Requests we resolved locally (approve/deny) whose removal the backend may
+  // not have processed yet. Suppress re-seeding them from a stale snapshot so a
+  // just-answered prompt can't be resurrected; pruned once the backend agrees.
+  const recentlyResolvedRef = useRef<Set<string>>(new Set());
 
   const reconcileOnce = useCallback(async () => {
     // Snapshot what we knew before the async round-trip so we never drop a
@@ -66,8 +70,13 @@ export function usePermissions() {
 
     setPendingBySession((prev) => {
       const next: Record<string, PermissionRequest[]> = {};
-      // 1) Seed from backend truth — this adds anything we were missing.
+      // 1) Seed from backend truth — this adds anything we were missing, EXCEPT
+      //    a request we just resolved locally: the snapshot can predate the
+      //    backend processing our approve/deny, so re-seeding it would remount an
+      //    enabled prompt for an already-answered request (a duplicate-decision
+      //    error on the next click). Our local resolution is the fresher truth.
       for (const r of backendList) {
+        if (recentlyResolvedRef.current.has(r.requestId)) continue;
         (next[r.sessionId] ??= []).push(r);
       }
       // 2) Re-attach local entries the backend didn't return but that arrived
@@ -83,6 +92,12 @@ export function usePermissions() {
       }
       return next;
     });
+
+    // Once the backend stops reporting a locally-resolved request, it has caught
+    // up and the suppression is no longer needed — drop it so the set stays bounded.
+    for (const id of [...recentlyResolvedRef.current]) {
+      if (!backendIds.has(id)) recentlyResolvedRef.current.delete(id);
+    }
   }, []);
 
   const runReconcile = useCallback(async () => {
@@ -149,6 +164,9 @@ export function usePermissions() {
     async (sessionId: string, requestId: string) => {
       try {
         await invoke("approve_permission", { sessionId, requestId });
+        // Record the local resolution so an in-flight reconcile can't re-seed
+        // this request from a snapshot taken before the backend removed it.
+        recentlyResolvedRef.current.add(requestId);
         // Remove from pending
         setPendingBySession((prev) => {
           const updated = { ...prev };
@@ -178,6 +196,9 @@ export function usePermissions() {
     async (sessionId: string, requestId: string) => {
       try {
         await invoke("deny_permission", { sessionId, requestId });
+        // Record the local resolution so an in-flight reconcile can't re-seed
+        // this request from a snapshot taken before the backend removed it.
+        recentlyResolvedRef.current.add(requestId);
         // Remove from pending
         setPendingBySession((prev) => {
           const updated = { ...prev };

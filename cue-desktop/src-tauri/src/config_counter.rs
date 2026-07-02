@@ -53,8 +53,9 @@ pub fn count_config(workspace: &str) -> ConfigCounts {
 
     // MCP servers and hooks from the user-scope settings.json
     let settings_path = user_claude.join("settings.json");
+    // User-owned config (may be symlinked by a dotfile manager) → follow.
     if let Ok(content) =
-        crate::security::read_to_string_bounded(&settings_path, SETTINGS_JSON_MAX_BYTES)
+        crate::security::read_to_string_bounded_follow(&settings_path, SETTINGS_JSON_MAX_BYTES)
     {
         if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&content) {
             // Count MCP servers (minus disabled ones)
@@ -73,8 +74,9 @@ pub fn count_config(workspace: &str) -> ConfigCounts {
 
     // Also check project-scope settings
     let project_settings = ws.join(".claude/settings.json");
+    // Project .claude/settings.json is user-managed (may be symlinked) → follow.
     if let Ok(content) =
-        crate::security::read_to_string_bounded(&project_settings, SETTINGS_JSON_MAX_BYTES)
+        crate::security::read_to_string_bounded_follow(&project_settings, SETTINGS_JSON_MAX_BYTES)
     {
         if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&content) {
             if let Some(mcp) = settings.get("mcpServers").and_then(|v| v.as_object()) {

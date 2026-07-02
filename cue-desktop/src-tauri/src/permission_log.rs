@@ -27,6 +27,15 @@ pub fn log_path() -> Result<PathBuf, String> {
 /// a symlink dropped at the log path can't redirect audit appends at another
 /// file (e.g. `~/.bash_profile`).
 fn append_entry(path: &Path, entry: &PermissionLogEntry) -> Result<(), String> {
+    // Serialize append + rotation within the process. Tauri commands run on a
+    // thread pool, so two decisions can append concurrently; without this, an
+    // append landing between another thread's rotate tail-read and its atomic
+    // rename would write to the soon-orphaned inode and vanish from the audit
+    // log despite returning Ok. Cue is the only writer, so a process-local lock
+    // fully closes it. Recover a poisoned lock rather than panic the audit path.
+    static APPEND_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = APPEND_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create log directory: {}", e))?;

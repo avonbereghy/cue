@@ -160,10 +160,30 @@ where
 /// Returns `io::ErrorKind::FileTooLarge` if the file exceeds `max_bytes`, and
 /// `io::ErrorKind::InvalidData` if the bytes read aren't valid UTF-8.
 pub fn read_to_string_bounded(path: &Path, max_bytes: u64) -> io::Result<String> {
+    read_to_string_bounded_inner(path, max_bytes, true)
+}
+
+/// Like [`read_to_string_bounded`] but FOLLOWS a final-component symlink.
+///
+/// Use ONLY for files the user legitimately owns and may symlink themselves —
+/// their own `~/.claude/settings.json` under a dotfile manager (stow / chezmoi /
+/// home-manager). The untrusted status dir must keep [`read_to_string_bounded`]
+/// (`O_NOFOLLOW`), where a same-uid process could plant a symlink to redirect a
+/// read; the user's own config is not that threat model, and `O_NOFOLLOW` there
+/// only breaks a legitimate symlink into a silent fall-back to defaults.
+pub fn read_to_string_bounded_follow(path: &Path, max_bytes: u64) -> io::Result<String> {
+    read_to_string_bounded_inner(path, max_bytes, false)
+}
+
+fn read_to_string_bounded_inner(
+    path: &Path,
+    max_bytes: u64,
+    no_follow: bool,
+) -> io::Result<String> {
     let mut opts = fs::OpenOptions::new();
     opts.read(true);
     #[cfg(unix)]
-    {
+    if no_follow {
         use std::os::unix::fs::OpenOptionsExt;
         opts.custom_flags(libc::O_NOFOLLOW);
     }

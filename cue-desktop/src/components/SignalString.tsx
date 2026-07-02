@@ -1053,6 +1053,11 @@ export function SignalString({ state, frequency = 1.0, revived = false, pulses, 
           stringsConnectedFiredRef.current = true;
           onStringsConnectedRef.current?.();
         }
+        // Park the loop AND clear animRef (mirrors the render-inactive park
+        // above) so the matchMedia "reduce motion off" listener can re-kick it —
+        // its guard is `animRef.current === 0`. Leaving the consumed frame id in
+        // place made that re-kick unreachable, freezing the card indefinitely.
+        animRef.current = 0;
         return;
       }
 
