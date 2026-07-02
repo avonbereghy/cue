@@ -1520,3 +1520,63 @@ class TestPermissionForwardServerAuth:
         self._patch_urlopen(monkeypatch, self._ALLOW, {"X-Cue-Proof": "x"}, counter)
         assert hook._forward_permission_request({"tool_name": "Bash"}, "sess1") is None
         assert counter["n"] == 0, "must not POST req_token without the proof secret"
+
+
+class TestSessionStartColdStart:
+    """F-tests-002: the SessionStart cold-start branch. A restored/resumed
+    session (SessionStart with a pre-existing transcript) must resolve to
+    `idle`, NOT `working` — a reverted change (F-state-coverage-004) promoted it
+    to working and pinned every iTerm/Claude-restored card there with nothing to
+    demote it. On /clear or /compact (is_clear) startedAt resets to now; with no
+    prior transcript it is preserved. Previously fired zero times in the suite."""
+
+    def _transcript_under_claude(self, tmp_path, monkeypatch, size):
+        # The hook only honors transcript_path under ~/.claude (path
+        # sanitization), so point HOME at a temp dir and place the file there.
+        home = tmp_path / "home"
+        claude = home / ".claude" / "projects" / "-Users-x-proj"
+        claude.mkdir(parents=True)
+        transcript = claude / "t.jsonl"
+        transcript.write_text("x" * size)
+        monkeypatch.setenv("HOME", str(home))
+        return str(transcript)
+
+    def test_cold_start_with_prior_transcript_stays_idle(
+        self, hook, hook_env, invoke_hook, tmp_path, monkeypatch
+    ):
+        t = self._transcript_under_claude(tmp_path, monkeypatch, 200)  # >100 → is_clear
+        invoke_hook("idle", make_payload(
+            hook_event_name="SessionStart", source="resume", transcript=t))
+        entry = hook_env.read_sessions()["abc123"]
+        assert entry["state"] == "idle", "restored session must NOT pin on working"
+
+    def test_cold_start_resets_started_at_on_clear(
+        self, hook, hook_env, invoke_hook, tmp_path, monkeypatch
+    ):
+        t = self._transcript_under_claude(tmp_path, monkeypatch, 200)
+        old = time.time() - 9999
+        hook_env.write_sessions({"abc123": {
+            "id": "abc123", "workspace": "/Users/x/proj", "state": "ended",
+            "lastActivity": old, "startedAt": old, "activeSubagents": 0,
+        }})
+        before = time.time()
+        invoke_hook("idle", make_payload(
+            hook_event_name="SessionStart", source="resume", transcript=t))
+        entry = hook_env.read_sessions()["abc123"]
+        assert entry["startedAt"] >= before - 1, "is_clear must reset startedAt to ~now"
+        assert entry["state"] == "idle"
+
+    def test_fresh_session_without_prior_transcript_preserves_started_at(
+        self, hook, hook_env, invoke_hook, tmp_path, monkeypatch
+    ):
+        # Tiny transcript (<100 bytes) → not a clear → startedAt preserved.
+        t = self._transcript_under_claude(tmp_path, monkeypatch, 10)
+        old = time.time() - 9999
+        hook_env.write_sessions({"abc123": {
+            "id": "abc123", "workspace": "/Users/x/proj", "state": "idle",
+            "lastActivity": old, "startedAt": old, "activeSubagents": 0,
+        }})
+        invoke_hook("idle", make_payload(
+            hook_event_name="SessionStart", source="startup", transcript=t))
+        entry = hook_env.read_sessions()["abc123"]
+        assert abs(entry["startedAt"] - old) < 2, "fresh SessionStart must preserve startedAt"

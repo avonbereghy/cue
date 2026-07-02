@@ -340,7 +340,7 @@ impl SessionMonitorState {
                         // team lead which only has agentName via agent-name entry.
                         let is_teammate =
                             s.team_name.is_some() || metrics.is_some_and(|m| m.team_name.is_some());
-                        if is_teammate && (now_secs - s.last_activity) > 30.0 {
+                        if should_promote_teammate_done(is_teammate, s.last_activity, now_secs) {
                             log::debug!(target: "cue::state", "id={} idle->done pass=team_done idle_secs={:.0}", s.id, now_secs - s.last_activity);
                             s.state = "done".to_string();
                         }
@@ -1755,6 +1755,17 @@ pub(crate) fn floor_extends(state: &str, until: Option<f64>, now: f64) -> bool {
     until.is_some_and(|u| u > now)
 }
 
+/// Whether an `idle` team-agent session should be promoted to `done`.
+///
+/// A teammate that finished a turn goes idle and stays there (no `TaskCompleted`
+/// fires for a sub-agent), so after a grace window we surface it as `done`. Pure
+/// predicate so the 30s boundary and the `is_teammate` gate are unit-testable
+/// (F-tests-001) — the inlined form read `SystemTime::now()` directly and had no
+/// coverage. The caller applies this only while the session is `idle`.
+pub(crate) fn should_promote_teammate_done(is_teammate: bool, last_activity: f64, now: f64) -> bool {
+    is_teammate && (now - last_activity) > 30.0
+}
+
 fn resolve_liveness(
     pid: u32,
     live_start: Option<u64>,
@@ -2980,6 +2991,27 @@ mod tests {
         assert!(!should_demote_stuck_active("compacting", None, 1000.0));
     }
 
+    // ── should_promote_teammate_done (F-tests-001) ──────────────────────
+
+    #[test]
+    fn test_promote_teammate_done_past_grace() {
+        // A teammate idle for more than 30s promotes to done.
+        assert!(should_promote_teammate_done(true, 100.0, 131.0));
+    }
+
+    #[test]
+    fn test_no_promote_teammate_at_or_within_grace() {
+        // Strict `>`: exactly 30s and anything below holds at idle.
+        assert!(!should_promote_teammate_done(true, 100.0, 130.0));
+        assert!(!should_promote_teammate_done(true, 100.0, 120.0));
+    }
+
+    #[test]
+    fn test_no_promote_non_teammate() {
+        // Non-teammate idle sessions must never be promoted, at any age.
+        assert!(!should_promote_teammate_done(false, 0.0, 100_000.0));
+    }
+
     // ── dedup_state_priority ────────────────────────────────────────────
 
     #[test]
@@ -3553,6 +3585,62 @@ mod tests {
             crate::models::SessionMetrics::default(),
             &crate::models::SupplementalData::default(),
         )
+    }
+
+    #[test]
+    fn test_poll_promotes_idle_teammate_to_done_after_grace() {
+        // F-tests-001: end-to-end wiring of the teammate idle→done promotion.
+        // A sub-agent that finished its turn goes idle (no TaskCompleted fires
+        // for a teammate) and must surface as `done` once past the 30s grace,
+        // while a freshly-idle teammate stays `idle`.
+        let dir = std::env::temp_dir().join("cue_test_team_done_e2e");
+        let _ = std::fs::remove_dir_all(&dir);
+        let projects = dir.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        let status_path = dir.join("sessions.json");
+
+        let mut m = SessionMonitorState::new();
+        // Far-past launch time so the recent activity timestamps below clear the
+        // launched_at admission gate for a non-bypass (idle/done) state.
+        m.launched_at = 1000.0;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        // tm-old: teammate idle 40s ago (> grace) → promotes to done.
+        // tm-new: teammate idle 5s ago (< grace) → stays idle.
+        let sessions = format!(
+            r#"{{"sessions":{{
+                "tm-old":{{"id":"tm-old","workspace":"/Users/dev/App","state":"idle","teamName":"squad","agentName":"reviewer","lastActivity":{o},"startedAt":{s},"stateChangedAt":{o}}},
+                "tm-new":{{"id":"tm-new","workspace":"/Users/dev/App2","state":"idle","teamName":"squad","agentName":"tester","lastActivity":{n},"startedAt":{s},"stateChangedAt":{n}}}
+            }}}}"#,
+            o = now - 40.0,
+            n = now - 5.0,
+            s = now - 300.0,
+        );
+        std::fs::write(&status_path, &sessions).unwrap();
+
+        m.poll_status_with(status_path.clone(), projects.clone());
+        let e = m.enriched_sessions.lock_safe();
+        let old = e
+            .iter()
+            .find(|s| s.info.id == "tm-old")
+            .expect("tm-old present");
+        assert_eq!(
+            old.info.state, "done",
+            "teammate idle past the 30s grace must promote to done"
+        );
+        let new = e
+            .iter()
+            .find(|s| s.info.id == "tm-new")
+            .expect("tm-new present");
+        assert_eq!(
+            new.info.state, "idle",
+            "teammate idle within the grace must stay idle"
+        );
+        drop(e);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
