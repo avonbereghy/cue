@@ -1128,6 +1128,15 @@ pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::Sess
     aggregate_entries(&entries, path)
 }
 
+/// Whether cached metrics may be reused on a no-change tick, i.e. none of their
+/// outputs can still change without a file change the caller already gates on.
+/// The only time-dependent output is a subagent's `is_active` (600s wall-clock
+/// crash backstop), so cached metrics are stable only while no subagent is
+/// active. See the skip site in `parse_jsonl_to_session_metrics_cached`.
+fn cached_metrics_are_stable(m: &crate::models::SessionMetrics) -> bool {
+    m.subagents.iter().all(|a| !a.is_active)
+}
+
 /// Same as `parse_jsonl_to_session_metrics`, but tails new lines incrementally
 /// using `cache` so unchanged sessions skip the read and long-running sessions
 /// skip re-parsing every prior line on each poll.
@@ -1152,9 +1161,22 @@ pub fn parse_jsonl_to_session_metrics_cached(
 
     if !entries_changed && cache.subagents_sig == sub_sig {
         if let Some(cached) = &cache.last_metrics {
-            let mut m = cached.clone();
-            m.parsed_file_mtime = mtime_secs;
-            return Some(m);
+            // Never skip while a cached subagent is still `is_active`. That flag
+            // is the ONE aggregation output that depends on wall-clock time, not
+            // file state: `parse_subagent_jsonl` sets it via the 600s crash
+            // backstop (`now - file_mtime < 600s`) for an agent whose transcript
+            // froze mid-turn (no end_turn tail). A frozen file never moves the
+            // subagents signature, so skipping would serve `is_active=true`
+            // forever — pinning the card on `subagent` past the backstop, since
+            // `should_demote_stale_subagent` (the sole recovery for a subagent
+            // card) needs the active count to reach 0. Re-aggregating while any
+            // subagent is active keeps re-evaluating the backstop so it heals at
+            // 600s, exactly as the pre-cache code did. (F-performance-001 verify.)
+            if cached_metrics_are_stable(cached) {
+                let mut m = cached.clone();
+                m.parsed_file_mtime = mtime_secs;
+                return Some(m);
+            }
         }
     }
 
@@ -2573,6 +2595,33 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_cached_metrics_stable_only_without_active_subagent() {
+        // F-performance-001 verify: the no-change skip must NOT reuse cached
+        // metrics while a subagent is is_active, because is_active flips off via
+        // the 600s wall-clock backstop with no file change (invisible to the
+        // subagents signature) — reusing it would pin the card on `subagent`.
+        use crate::models::{SessionMetrics, SubagentMetrics};
+        let mut m = SessionMetrics::default();
+        assert!(cached_metrics_are_stable(&m), "no subagents → reusable");
+        m.subagents.push(SubagentMetrics {
+            is_active: false,
+            ..Default::default()
+        });
+        assert!(
+            cached_metrics_are_stable(&m),
+            "finished (inactive) subagent → reusable"
+        );
+        m.subagents.push(SubagentMetrics {
+            is_active: true,
+            ..Default::default()
+        });
+        assert!(
+            !cached_metrics_are_stable(&m),
+            "active subagent → must re-aggregate so the 600s backstop can heal"
+        );
     }
 
     #[test]
