@@ -34,7 +34,7 @@ function effortTextClass(level: string): string {
 }
 import type { EnrichedSession } from "@/lib/types";
 import { STATE_HEX, STATE_HEX_LIGHT, STATE_DOT_HEX, STATE_DOT_HEX_LIGHT, STATE_BADGE_HEX, STATE_BADGE_HEX_LIGHT } from "@/lib/types";
-import { formatTokens, formatDuration, formatClockTime, formatElapsedCompact, cleanPromptText, errorReason, getProjectAccent } from "@/lib/format";
+import { formatTokens, formatDuration, formatClockTime, formatElapsedCompact, cleanPromptText, errorReason, getProjectAccent, formatModelName } from "@/lib/format";
 import { usageSummary, usageDisplayStrings } from "@/lib/sessionCardModel";
 import { SignalString } from "./SignalString";
 import type { StrikePulse, CometPulse } from "./SignalString";
@@ -1853,6 +1853,11 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
               <span className={`shrink-0 ${agent.isActive ? "text-[#7CC5FF]" : "text-white/30"}`}>
                 @{label}
               </span>
+              {formatModelName(agent.model) !== "—" && (
+                <span className="shrink-0 text-[0.5625rem] text-white/30 mono-nums" title={agent.model}>
+                  {formatModelName(agent.model)}
+                </span>
+              )}
               {agent.description && (
                 <span className="text-white/30 truncate text-[0.625rem]" title={agent.description}>
                   {agent.description}

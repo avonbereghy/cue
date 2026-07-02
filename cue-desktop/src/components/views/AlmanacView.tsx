@@ -5,7 +5,7 @@ import {
   isActiveState, STATE_DISPLAY_NAME, contextRampRgb, rgbCss,
   permissionModeMeta, aggregateMetrics, branchStatus, contextDisplay, splitSubagents,
 } from "@/lib/sessionCardModel";
-import { formatTokens, formatDuration, cleanPromptText, errorReason } from "@/lib/format";
+import { formatTokens, formatDuration, cleanPromptText, errorReason, formatModelName } from "@/lib/format";
 import { DecisionBar } from "./DecisionBar";
 import { CardExtras } from "./CardExtras";
 import { PromptPopup } from "./PromptPopup";
@@ -161,7 +161,7 @@ function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pen
       <div className="sub" key={a.agentId || i}>
         <span className={`slug ${a.isActive ? "" : "muted"}`}>{a.isActive && <span className="livedot" />}{a.slug || a.agentId.slice(0, 8)}</span>
         <span className="desc">{a.description}</span>
-        <span className="nums">{formatTokens(a.inputTokens + a.outputTokens)} · {toolUses}t</span>
+        <span className="nums">{formatModelName(a.model) !== "—" ? `${formatModelName(a.model)} · ` : ""}{formatTokens(a.inputTokens + a.outputTokens)} · {toolUses}t</span>
       </div>
     );
   };

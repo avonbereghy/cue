@@ -5,7 +5,7 @@ import {
   isActiveState, contextRampRgb, rgbCss, permissionModeMeta,
   aggregateMetrics, branchStatus, contextDisplay, shortPath, splitSubagents,
 } from "@/lib/sessionCardModel";
-import { formatTokens, formatDuration, cleanPromptText, errorReason } from "@/lib/format";
+import { formatTokens, formatDuration, cleanPromptText, errorReason, formatModelName } from "@/lib/format";
 import { DecisionBar } from "./DecisionBar";
 import { CardExtras } from "./CardExtras";
 import { PromptPopup } from "./PromptPopup";
@@ -181,7 +181,7 @@ function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pendi
         <div className="sub-body">
           <span className="sub-slug">{a.slug || a.agentId.slice(0, 8)}</span>
           <div className="sub-desc">{a.description}</div>
-          <div className="sub-meta"><span>{formatTokens(a.inputTokens + a.outputTokens)} tok</span><span>{toolUses} tools</span></div>
+          <div className="sub-meta"><span>{formatTokens(a.inputTokens + a.outputTokens)} tok</span><span>{toolUses} tools</span>{formatModelName(a.model) !== "—" && <span title={a.model}>{formatModelName(a.model)}</span>}</div>
         </div>
       </div>
     );

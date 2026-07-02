@@ -5,7 +5,7 @@ import {
   isActiveState, contextRampRgb, rgbCss, permissionModeMeta,
   aggregateMetrics, branchStatus, contextDisplay, splitSubagents,
 } from "@/lib/sessionCardModel";
-import { formatTokens, formatDuration, cleanPromptText, errorReason } from "@/lib/format";
+import { formatTokens, formatDuration, cleanPromptText, errorReason, formatModelName } from "@/lib/format";
 import { DecisionBar } from "./DecisionBar";
 import { CardExtras } from "./CardExtras";
 import { PromptPopup } from "./PromptPopup";
@@ -133,7 +133,7 @@ function StudioCardBase({ session, timerDisplay, permissionsEnabled, pending, on
         <div className="sub-body">
           <span className="slug">{a.slug || a.agentId.slice(0, 8)}</span>
           <div className="desc">{a.description}</div>
-          <div className="smeta">{formatTokens(a.inputTokens + a.outputTokens)} tok · {toolUses} tools</div>
+          <div className="smeta">{formatTokens(a.inputTokens + a.outputTokens)} tok · {toolUses} tools{formatModelName(a.model) !== "—" ? ` · ${formatModelName(a.model)}` : ""}</div>
         </div>
       </div>
     );
