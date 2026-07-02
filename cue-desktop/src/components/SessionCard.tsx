@@ -1822,37 +1822,6 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             );
           })()}
 
-          {/* Rate limits (from statusline bridge) */}
-          {showDeepTelemetry && session.rateLimits && (session.rateLimits.fiveHourPercent > 0 || session.rateLimits.sevenDayPercent > 0) && (
-            <div className="relative flex items-center gap-2 flex-wrap">
-              <span className="text-[0.625rem] text-white/40 shrink-0 w-6">5h</span>
-              <div className="flex-1 relative h-1 rounded-full bg-white/8 overflow-hidden min-w-[40px]">
-                <div className="absolute left-0 top-0 bottom-0 rounded-full" style={{
-                  transition: "width 500ms cubic-bezier(0.33, 1, 0.68, 1), background-color 300ms cubic-bezier(0.33, 1, 0.68, 1)",
-                  width: `${Math.min(session.rateLimits.fiveHourPercent, 100)}%`,
-                  background: session.rateLimits.fiveHourPercent >= 90 ? "#ef4444" : session.rateLimits.fiveHourPercent >= 75 ? "#d946ef" : "#3b82f6",
-                  opacity: 0.4,
-                }} />
-              </div>
-              <span className="text-[0.625rem] text-white/40 mono-nums shrink-0">{Math.round(session.rateLimits.fiveHourPercent)}%</span>
-              {session.rateLimits.sevenDayPercent > 0 && (<>
-                <span className="text-[0.625rem] text-white/40 shrink-0 w-6">7d</span>
-                <div className="flex-1 relative h-1 rounded-full bg-white/8 overflow-hidden min-w-[40px]">
-                  <div className="absolute left-0 top-0 bottom-0 rounded-full" style={{
-                  transition: "width 500ms cubic-bezier(0.33, 1, 0.68, 1), background-color 300ms cubic-bezier(0.33, 1, 0.68, 1)",
-                    width: `${Math.min(session.rateLimits.sevenDayPercent, 100)}%`,
-                    background: session.rateLimits.sevenDayPercent >= 90 ? "#ef4444" : session.rateLimits.sevenDayPercent >= 75 ? "#d946ef" : "#3b82f6",
-                    opacity: 0.4,
-                  }} />
-                </div>
-                <span className="text-[0.625rem] text-white/40 mono-nums shrink-0">{Math.round(session.rateLimits.sevenDayPercent)}%</span>
-              </>)}
-              {session.rateLimits.limitReached && (
-                <span className="text-[0.625rem] text-red-400 font-medium">Limit reached</span>
-              )}
-            </div>
-          )}
-
           {/* Config counts (beta) */}
           {showConfigCounts && showDeepTelemetry && session.configCounts && (
             (session.configCounts.claudeMdCount + session.configCounts.rulesCount + session.configCounts.mcpServers + session.configCounts.hooksCount) > 0
