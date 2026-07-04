@@ -207,6 +207,21 @@ pub struct SubagentMetrics {
     /// is the most recent activity; for completed agents it's the end time.
     #[serde(default)]
     pub ended_at: Option<f64>,
+    /// Name of the currently running tool (from the agent's last pending
+    /// tool_use). Populated only while the agent is mid-turn; mirrors
+    /// `SessionMetrics::running_tool_name`.
+    #[serde(default)]
+    pub running_tool_name: Option<String>,
+    /// Target of the running tool (file path, command, pattern). Mirrors
+    /// `SessionMetrics::running_tool_target`.
+    #[serde(default)]
+    pub running_tool_target: Option<String>,
+    /// First non-empty text block from the agent's most recent assistant
+    /// message. For an active agent this is its latest in-flight prose; for a
+    /// finished agent it's the final result. Mirrors
+    /// `SessionMetrics::last_assistant_text` (length-bounded via cap_snippet).
+    #[serde(default)]
+    pub last_assistant_text: Option<String>,
 }
 
 impl SubagentMetrics {
@@ -1787,6 +1802,9 @@ mod tests {
             is_active: false,
             started_at: None,
             ended_at,
+            running_tool_name: None,
+            running_tool_target: None,
+            last_assistant_text: None,
         }
     }
 

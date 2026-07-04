@@ -8,6 +8,7 @@ import {
 import { formatTokens, formatDuration, cleanPromptText, errorReason, formatModelName } from "@/lib/format";
 import { DecisionBar } from "./DecisionBar";
 import { CardExtras } from "./CardExtras";
+import { SubagentDetail } from "./SubagentDetail";
 import { PromptPopup } from "./PromptPopup";
 import { orderSessions, duplicateTitleSet, type SkinViewProps } from "./skinView";
 import { DismissButton } from "./DismissButton";
@@ -93,6 +94,8 @@ function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pen
   const meta = stMeta(state);
   const [copied, setCopied] = useState(false);
   const [promptOpen, setPromptOpen] = useState(false);
+  // Which child-agent row is expanded to its quick-report (one per card).
+  const [openAgentId, setOpenAgentId] = useState<string | null>(null);
 
   const tilt = ((index % 3) - 1) * 0.22;
   const delay = `${(0.06 * Math.min(index, 12)).toFixed(2)}s`;
@@ -155,14 +158,26 @@ function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pen
     openWorkspace();
   };
 
-  const renderSub = (a: SubagentMetrics, i: number) => {
+  const renderSub = (a: SubagentMetrics, i: number, kind: string) => {
     const toolUses = Object.values(a.toolCounts).reduce((x, y) => x + y, 0);
+    const id = a.agentId || `${kind}-${i}`;
+    const open = openAgentId === id;
+    const toggle = (e: React.SyntheticEvent) => {
+      e.stopPropagation();
+      setOpenAgentId(open ? null : id);
+    };
+    const onKey = (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(e); }
+    };
     return (
-      <div className="sub" key={a.agentId || i}>
-        <span className={`slug ${a.isActive ? "" : "muted"}`}>{a.isActive && <span className="livedot" />}{a.slug || a.agentId.slice(0, 8)}</span>
-        <span className="desc">{a.description}</span>
-        <span className="nums">{formatModelName(a.model) !== "—" ? `${formatModelName(a.model)} · ` : ""}{formatTokens(a.inputTokens + a.outputTokens)} · {toolUses}t</span>
-      </div>
+      <React.Fragment key={id}>
+        <div className="sub" role="button" tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={onKey} style={{ cursor: "pointer" }}>
+          <span className={`slug ${a.isActive ? "" : "muted"}`}>{a.isActive && <span className="livedot" />}{a.slug || a.agentId.slice(0, 8)}</span>
+          <span className="desc">{a.description}</span>
+          <span className="nums">{formatModelName(a.model) !== "—" ? `${formatModelName(a.model)} · ` : ""}{formatTokens(a.inputTokens + a.outputTokens)} · {toolUses}t <span aria-hidden style={{ color: "var(--ink-faint)" }}>{open ? "▾" : "▸"}</span></span>
+        </div>
+        {open && <SubagentDetail agent={a} palette={{ text: "var(--ink)", muted: "var(--ink-soft)", faint: "var(--ink-faint)", rule: "var(--rule)", mono: "var(--mono)", accent: "var(--ink-teal)" }} />}
+      </React.Fragment>
     );
   };
 
@@ -220,11 +235,11 @@ function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pen
       {subs.length > 0 && (
         <div className="subs">
           <div className="subs-h">⌥ Dispatched parties · {subs.length}</div>
-          {subActive.map((a, i) => renderSub(a, i))}
+          {subActive.map((a, i) => renderSub(a, i, "a"))}
           {subDone.length > 0 && (
             <details>
               <summary style={{ cursor: "pointer", fontFamily: "var(--mono)", fontSize: 11, color: "var(--ink-faint)", padding: "4px 0" }}>{subDone.length} returned</summary>
-              {subDone.map((a, i) => renderSub(a, i))}
+              {subDone.map((a, i) => renderSub(a, i, "d"))}
             </details>
           )}
         </div>

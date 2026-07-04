@@ -2973,6 +2973,9 @@ mod tests {
             is_active,
             started_at: None,
             ended_at: None,
+            running_tool_name: None,
+            running_tool_target: None,
+            last_assistant_text: None,
         }
     }
 

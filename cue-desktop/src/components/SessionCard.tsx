@@ -4,6 +4,7 @@ import { usePageVisible } from "@/hooks/usePageVisible";
 import { useTheme } from "@/hooks/useIsDark";
 import { openSession } from "@/lib/openSession";
 import { DismissButton } from "./views/DismissButton";
+import { SubagentDetail } from "./views/SubagentDetail";
 
 /** Deterministic per-character hash for stable animation randomness */
 function charHash(i: number, title: string): number {
@@ -238,6 +239,8 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   const contextMeetsThreshold = contextThreshold !== "after200k" || metrics.lastInputTokens >= contextTokenThreshold;
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  // Which child-agent row is expanded to its inline quick-report (one per card).
+  const [openAgentId, setOpenAgentId] = useState<string | null>(null);
   // Optional "show even more" for the wide instrument strip. Deliberately a
   // SEPARATE per-card boolean from expandOverride — it never touches the global
   // slim/compact density, so it can't leak across the Cmd+D toggle.
@@ -1583,7 +1586,13 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             )}
             {hasSubagents && (
               <button
-                onClick={() => setExpanded(!expanded)}
+                onClick={() => {
+                  const next = !expanded;
+                  setExpanded(next);
+                  // Collapsing the team hides the rows; drop any open detail so
+                  // it doesn't silently reappear when the team is expanded again.
+                  if (!next) setOpenAgentId(null);
+                }}
                 className="flex items-center gap-1 text-blue-600 hover:text-blue-500 transition-colors cursor-pointer text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full border border-blue-600/40 hover:border-blue-500/50 whitespace-nowrap"
                 aria-label={expanded ? "Collapse agent team" : "Expand agent team"}
                 aria-expanded={expanded}
@@ -1847,8 +1856,25 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           const isLast = i === list.length - 1;
           const prefix = isLast ? "\u2514\u2500" : "\u251C\u2500";
           const label = agent.slug || agent.agentId.slice(0, 8);
+          const agentKey = agent.agentId || `${list === activeAgents ? "a" : "d"}-${i}`;
+          const open = openAgentId === agentKey;
+          const toggleAgent = (e: React.SyntheticEvent) => {
+            e.stopPropagation();
+            setOpenAgentId(open ? null : agentKey);
+          };
+          const onAgentKey = (e: React.KeyboardEvent) => {
+            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleAgent(e); }
+          };
           return (
-            <div key={agent.agentId || i} className="flex items-center gap-2 text-xs text-white/50">
+            <React.Fragment key={agentKey}>
+            <div
+              role="button"
+              tabIndex={0}
+              aria-expanded={open}
+              onClick={toggleAgent}
+              onKeyDown={onAgentKey}
+              className="flex items-center gap-2 text-xs text-white/50 cursor-pointer rounded hover:bg-white/5 transition-colors"
+            >
               <span className="font-mono text-white/30 shrink-0">{prefix}</span>
               <span className={`shrink-0 ${agent.isActive ? "text-[#7CC5FF]" : "text-white/30"}`}>
                 @{label}
@@ -1895,8 +1921,23 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                   <span className="text-[0.625rem]">{agentToolUses} tools</span>
                 )}
                 <span className="text-[0.625rem]">{formatTokens(agentTotalTokens)} tokens</span>
+                <span aria-hidden className="text-[0.625rem] text-white/30">{open ? "▾" : "▸"}</span>
               </span>
             </div>
+            {open && (
+              <SubagentDetail
+                agent={agent}
+                palette={{
+                  text: "rgba(255,255,255,0.72)",
+                  muted: "rgba(255,255,255,0.5)",
+                  faint: "rgba(255,255,255,0.32)",
+                  rule: "rgba(255,255,255,0.14)",
+                  mono: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                  accent: "#7CC5FF",
+                }}
+              />
+            )}
+            </React.Fragment>
           );
         };
 

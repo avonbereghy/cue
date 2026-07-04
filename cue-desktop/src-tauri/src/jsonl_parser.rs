@@ -1121,9 +1121,32 @@ fn subagent_metrics_from_entries(
                 .cache_creation_tokens
                 .saturating_add(entry.cache_creation_tokens);
             m.cache_read_tokens = m.cache_read_tokens.saturating_add(entry.cache_read_tokens);
+            // Latest non-empty assistant text wins — skip pure tool_use messages
+            // so the snippet stays on the agent's actual prose (its in-flight
+            // output while active, its final result once done). Same cap_snippet
+            // bound as the main-session extraction.
+            if let Some(ref txt) = entry.assistant_text {
+                m.last_assistant_text = Some(cap_snippet(txt));
+            }
             for (tool, count) in &entry.tool_counts {
                 *m.tool_counts.entry(tool.clone()).or_insert(0) += count;
             }
+        }
+    }
+
+    // Currently-running tool: scan backwards for the last assistant tool_use
+    // with no subsequent tool_result — the same pending-tool detection the
+    // main-session parse uses. Only populated while the agent is mid-turn; a
+    // finished agent's tail is a tool_result or end_turn text, so both fields
+    // stay None.
+    for entry in entries.iter().rev() {
+        if entry.is_tool_result {
+            break;
+        }
+        if entry.has_pending_tool_use {
+            m.running_tool_name = entry.running_tool_name.clone();
+            m.running_tool_target = entry.running_tool_target.clone();
+            break;
         }
     }
 
@@ -2840,6 +2863,57 @@ mod tests {
         )).unwrap();
         let m_run = super::parse_subagent_jsonl(&running).unwrap();
         assert!(m_run.is_active, "tail tool_use ⇒ still running");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_subagent_surfaces_running_tool_and_last_text() {
+        // The per-subagent quick-report fields mirror the main-session parse:
+        // an active agent (tail = pending tool_use) exposes running_tool_name /
+        // running_tool_target and its latest assistant prose; a finished agent
+        // (tail = end_turn text) has no running tool but keeps its final text
+        // as the result.
+        let dir = std::env::temp_dir().join("cue_test_subagent_activity");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let running = dir.join("agent-activity-running.jsonl");
+        std::fs::write(&running, concat!(
+            r#"{"type":"assistant","timestamp":1.0,"agentId":"a-act","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"Scanning the codebase"}],"stop_reason":"end_turn"}}"#, "\n",
+            r#"{"type":"assistant","timestamp":2.0,"agentId":"a-act","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"ra1","name":"Read","input":{"file_path":"src/audit.rs"}}],"stop_reason":"tool_use"}}"#, "\n",
+        )).unwrap();
+        let m_run = super::parse_subagent_jsonl(&running).unwrap();
+        assert!(m_run.is_active, "tail tool_use ⇒ still running");
+        assert_eq!(m_run.running_tool_name.as_deref(), Some("Read"));
+        assert_eq!(
+            m_run.running_tool_target.as_deref(),
+            Some("src/audit.rs"),
+            "running tool target is the pending tool_use input"
+        );
+        assert_eq!(
+            m_run.last_assistant_text.as_deref(),
+            Some("Scanning the codebase"),
+            "latest non-empty assistant text is surfaced"
+        );
+
+        let finished = dir.join("agent-activity-finished.jsonl");
+        std::fs::write(&finished, concat!(
+            r#"{"type":"assistant","timestamp":1.0,"agentId":"a-done","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"rb1","name":"Bash","input":{}}],"stop_reason":"tool_use"}}"#, "\n",
+            r#"{"type":"user","timestamp":2.0,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"rb1","content":"ok"}]}}"#, "\n",
+            r#"{"type":"assistant","timestamp":3.0,"agentId":"a-done","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"Audit complete: no issues found"}],"stop_reason":"end_turn"}}"#, "\n",
+        )).unwrap();
+        let m_fin = super::parse_subagent_jsonl(&finished).unwrap();
+        assert!(!m_fin.is_active, "tail end_turn ⇒ finished");
+        assert!(
+            m_fin.running_tool_name.is_none(),
+            "a resolved tool_result clears the running tool"
+        );
+        assert_eq!(
+            m_fin.last_assistant_text.as_deref(),
+            Some("Audit complete: no issues found"),
+            "finished agent keeps its final text as the result"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

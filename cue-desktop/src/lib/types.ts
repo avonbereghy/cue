@@ -55,6 +55,14 @@ export interface SubagentMetrics {
   /** Unix timestamp (seconds) of the last JSONL entry. For active agents this
    *  is the most recent activity; for completed agents it's the end time. */
   endedAt?: number | null;
+  /** Name of the tool the agent is currently running (last pending tool_use).
+   *  Only set while the agent is mid-turn. */
+  runningToolName?: string | null;
+  /** Target of the running tool (file path, command, pattern). */
+  runningToolTarget?: string | null;
+  /** First non-empty text block from the agent's most recent assistant message.
+   *  In-flight prose while active; the final result once finished. */
+  lastAssistantText?: string | null;
 }
 
 export interface TodoItem {

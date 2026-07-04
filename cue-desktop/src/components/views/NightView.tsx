@@ -8,6 +8,7 @@ import {
 import { formatTokens, formatDuration, cleanPromptText, errorReason, formatModelName } from "@/lib/format";
 import { DecisionBar } from "./DecisionBar";
 import { CardExtras } from "./CardExtras";
+import { SubagentDetail } from "./SubagentDetail";
 import { PromptPopup } from "./PromptPopup";
 import { orderSessions, duplicateTitleSet, type SkinViewProps } from "./skinView";
 import { DismissButton } from "./DismissButton";
@@ -126,6 +127,8 @@ function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pendi
   const dim = DIM.has(state);
   const [copied, setCopied] = useState(false);
   const [promptOpen, setPromptOpen] = useState(false);
+  // Which child-agent row is expanded to its quick-report (one per card).
+  const [openAgentId, setOpenAgentId] = useState<string | null>(null);
 
   const branch = branchStatus(session);
   const agg = aggregateMetrics(session);
@@ -173,17 +176,30 @@ function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pendi
     openWorkspace();
   };
 
-  const renderSub = (a: SubagentMetrics, i: number) => {
+  const renderSub = (a: SubagentMetrics, i: number, kind: string) => {
     const toolUses = Object.values(a.toolCounts).reduce((x, y) => x + y, 0);
+    const id = a.agentId || `${kind}-${i}`;
+    const open = openAgentId === id;
+    const toggle = (e: React.SyntheticEvent) => {
+      e.stopPropagation();
+      setOpenAgentId(open ? null : id);
+    };
+    const onKey = (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(e); }
+    };
     return (
-      <div className="sub" key={a.agentId || i}>
-        <span className={`livedot ${a.isActive ? "" : "off"}`} />
-        <div className="sub-body">
-          <span className="sub-slug">{a.slug || a.agentId.slice(0, 8)}</span>
-          <div className="sub-desc">{a.description}</div>
-          <div className="sub-meta"><span>{formatTokens(a.inputTokens + a.outputTokens)} tok</span><span>{toolUses} tools</span>{formatModelName(a.model) !== "—" && <span title={a.model}>{formatModelName(a.model)}</span>}</div>
+      <React.Fragment key={id}>
+        <div className="sub" role="button" tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={onKey} style={{ cursor: "pointer" }}>
+          <span className={`livedot ${a.isActive ? "" : "off"}`} />
+          <div className="sub-body">
+            <span className="sub-slug">{a.slug || a.agentId.slice(0, 8)}</span>
+            <div className="sub-desc">{a.description}</div>
+            <div className="sub-meta"><span>{formatTokens(a.inputTokens + a.outputTokens)} tok</span><span>{toolUses} tools</span>{formatModelName(a.model) !== "—" && <span title={a.model}>{formatModelName(a.model)}</span>}</div>
+          </div>
+          <span aria-hidden style={{ color: "var(--ink-faint)", fontSize: 11, alignSelf: "center" }}>{open ? "▾" : "▸"}</span>
         </div>
-      </div>
+        {open && <SubagentDetail agent={a} palette={{ text: "var(--ink)", muted: "var(--ink-soft)", faint: "var(--ink-faint)", rule: "rgba(198,154,78,0.16)", mono: "var(--mono)", accent: "var(--ember)" }} />}
+      </React.Fragment>
     );
   };
 
@@ -230,11 +246,11 @@ function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pendi
       {allSubs.length > 0 && (
         <div className="subs">
           <div className="subs-lab">{allSubs.length} helpers at the bench</div>
-          {subActive.map((a, i) => renderSub(a, i))}
+          {subActive.map((a, i) => renderSub(a, i, "a"))}
           {subDone.length > 0 && (
             <details>
               <summary style={{ cursor: "pointer", fontSize: 10, letterSpacing: ".06em", color: "var(--ink-faint)", padding: "2px 0" }}>{subDone.length} returned to the shelf</summary>
-              {subDone.map((a, i) => renderSub(a, i))}
+              {subDone.map((a, i) => renderSub(a, i, "d"))}
             </details>
           )}
         </div>
