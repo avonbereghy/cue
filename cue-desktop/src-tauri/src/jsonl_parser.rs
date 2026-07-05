@@ -1417,11 +1417,41 @@ fn aggregate_entries(
         .iter()
         .flat_map(|e| e.tool_result_ids.iter().map(String::as_str))
         .collect();
-    m.awaiting_user_prompt = entries.iter().any(|e| {
+    // A prompting tool_use (AskUserQuestion / ExitPlanMode) pins state="waiting"
+    // ONLY while it is the newest turn-relevant event. Claude Code does not
+    // always write a tool_result for an ANSWERED AskUserQuestion, so the
+    // resolved-id check alone can't distinguish "answered" from "still open":
+    // an abandoned/superseded prompt — the assistant went on to run more tools,
+    // write prose, or end the turn; the turn was interrupted; or the user sent a
+    // new message — would otherwise pin the card on "waiting" indefinitely
+    // (observed: a card stuck "awaiting you" for hours while the session had
+    // long since moved on). So take the LAST unresolved prompt and clear it if
+    // any turn-advancing entry follows it. A genuinely-open prompt IS the tail —
+    // only the timestampless last-prompt/ai-title/mode metadata rows come after
+    // it, and none of those are turn-advancing.
+    let last_open_prompt = entries.iter().enumerate().rev().find_map(|(i, e)| {
         e.prompting_tool_use_ids
             .iter()
             .any(|id| !resolved.contains(id.as_str()))
+            .then_some(i)
     });
+    m.awaiting_user_prompt = match last_open_prompt {
+        None => false,
+        Some(p) => !entries.iter().skip(p + 1).any(|e| {
+            // "Moved on" = a NEW assistant message (it continued: tool_use or
+            // prose), the turn ended, it was interrupted, or the user sent a new
+            // message. Deliberately NOT a bare tool_result: if a question were
+            // ever batched with another tool, that tool finishing while the
+            // question is still open must not clear it (the answer itself, when
+            // recorded, resolves the prompt id via `resolved` above, or arrives
+            // as a user message caught here).
+            e.has_pending_tool_use
+                || e.has_text_content
+                || e.has_end_turn
+                || e.is_interrupt_marker
+                || e.user_prompt_text.is_some()
+        }),
+    };
 
     // Subagents-in-flight verdict: count Agent/Task tool_uses with no matching
     // tool_result. While > 0, a foreground agent batch is running — regardless
@@ -3203,6 +3233,36 @@ mod tests {
             m.custom_title.as_deref(),
             Some("My deliberate title"),
             "explicit custom-title must win over a later ai-title"
+        );
+    }
+
+    #[test]
+    fn test_awaiting_cleared_when_prompt_superseded_by_later_work() {
+        // Regression: an AskUserQuestion with NO tool_result (Claude Code doesn't
+        // always record one for an answered prompt) followed by more work must NOT
+        // keep the session "waiting" — it was answered/abandoned and the session
+        // moved on. Previously this pinned a card on "awaiting you" for hours.
+        let ask = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"toolu_ask_open","name":"AskUserQuestion","input":{}}],"stop_reason":"tool_use"}}"#;
+        // …then the assistant went on to run an Edit that returned a tool_result.
+        let edit = r#"{"type":"assistant","timestamp":2.0,"message":{"model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"toolu_edit1","name":"Edit","input":{}}],"stop_reason":"tool_use"}}"#;
+        let result = r#"{"type":"user","timestamp":3.0,"message":{"content":[{"type":"tool_result","tool_use_id":"toolu_edit1"}]}}"#;
+        let m = write_metrics_transcript("await_superseded", &[ask, edit, result]);
+        assert!(
+            !m.awaiting_user_prompt,
+            "an unresolved AskUserQuestion superseded by later work must NOT mark awaiting"
+        );
+    }
+
+    #[test]
+    fn test_awaiting_true_when_open_prompt_is_the_tail() {
+        // Guard the other direction: a genuinely-open AskUserQuestion (nothing
+        // turn-advancing after it, only metadata rows) still marks awaiting.
+        let ask = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"toolu_ask_tail","name":"AskUserQuestion","input":{}}],"stop_reason":"tool_use"}}"#;
+        let meta = r#"{"type":"ai-title","aiTitle":"Some title","sessionId":"s1"}"#;
+        let m = write_metrics_transcript("await_tail", &[ask, meta]);
+        assert!(
+            m.awaiting_user_prompt,
+            "an open AskUserQuestion at the tail (only metadata after) must mark awaiting"
         );
     }
 }
