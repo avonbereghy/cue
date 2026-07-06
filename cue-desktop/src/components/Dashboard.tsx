@@ -26,18 +26,6 @@ export function Dashboard() {
   useSessionAnnouncements(sessions);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
-  // Compact and Standard (slim) densities are retired from the dashboard — the
-  // menu-bar dots + tray popover own the lean/compact glance, so the dashboard
-  // is always the full Detailed view. Migrate any persisted density off once so
-  // a returning user isn't stuck in a mode the UI no longer exposes.
-  useEffect(() => {
-    invoke<Settings>("get_settings").then((s) => {
-      if (s.compactMode || s.slimMode) {
-        invoke("update_settings", { newSettings: { ...s, compactMode: false, slimMode: false } }).catch(() => {});
-      }
-    }).catch(() => {});
-  }, []);
-
   // The tray popover's "Settings" and the native macOS Settings menu reveal the
   // dashboard and emit `navigate-settings`; land on the Settings tab so the
   // action actually does something (without this it just showed Sessions).

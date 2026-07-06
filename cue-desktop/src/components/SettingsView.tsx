@@ -943,6 +943,18 @@ export function SettingsView() {
           ]} onChange={(v) => setSettings({ ...settings, dashboardView: v })} />
         </SettingRow>
 
+        {/* Card density — how much each session card shows. Detailed is the full
+            card; Standard hides metrics/tool chips (keeps title, timer, context
+            bar); Compact strips to title + status + animation. Maps onto the
+            compactMode/slimMode pair the cards already honour. */}
+        <SettingRow label="Card density" description="How much each session card shows: Detailed (everything), Standard (no metrics/tool chips), or Compact (title + status only)." onReset={(settings.compactMode || settings.slimMode) ? () => setSettings({ ...settings, compactMode: false, slimMode: false }) : undefined}>
+          <Select value={settings.compactMode ? "compact" : settings.slimMode ? "standard" : "detailed"} options={[
+            { id: "detailed", label: "Detailed" },
+            { id: "standard", label: "Standard" },
+            { id: "compact", label: "Compact" },
+          ]} onChange={(v) => setSettings({ ...settings, compactMode: v === "compact", slimMode: v === "standard" })} />
+        </SettingRow>
+
         {/* Light / Dark — only Instrument honours it; hidden for the fixed-palette Looks.
             Glass is a dark-only palette, so it's shown as locked rather than a live control. */}
         {isInstrument && (activePalette.id === "glass" ? (

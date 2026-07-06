@@ -21,6 +21,7 @@ import type { CardSettings } from "./BranchView";
 import { PermissionHistory } from "./PermissionHistory";
 import { DecisionBar } from "./views/DecisionBar";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useSnapAlignment } from "@/hooks/useSnapAlignment";
 
 const REVIVED_STORAGE_KEY = "cue-revived-sessions";
 
@@ -149,6 +150,12 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   sessionsRef.current = sessions;
   const cardPositions = useRef<Map<string, DOMRect>>(new Map());
   const listRef = useRef<HTMLDivElement>(null);
+  // Card column hugs whichever screen half the window is snapped to (right
+  // half → right-align, left half → left-align). A visual no-op below the
+  // column's max-width and for the full-width responsive grid, where the
+  // column already fills the available space.
+  const snapAlignment = useSnapAlignment();
+  const listAlignClass = snapAlignment === "right" ? "ml-auto" : "mr-auto";
   const [revivedSessions, setRevivedSessions] = useState<RevivedSession[]>(loadRevivedSessions);
   const [reviveClicks, setReviveClicks] = useState<Record<string, number>>({});
   const prevSessionIdsRef = useRef<Set<string>>(new Set());
@@ -1815,17 +1822,91 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     const list = listRef.current;
     if (!list || !autoReorder) return;
 
-    // The FLIP choreography below assumes a single vertical column (it animates
-    // translateY only and derives gaps from vertical sibling spacing). In the
-    // multi-column grid a reorder can move a card across columns, which that
-    // can't express — so skip the animation and let cards reposition instantly,
-    // keeping the snapshot current so single-column reorders still animate.
+    // The "ladder" choreography further down assumes a single vertical column
+    // (it decomposes the reorder into adjacent vertical swaps and animates
+    // translateY only). In a multi-column grid a card can move across columns,
+    // which the ladder can't express. Rather than skip the animation (which
+    // made grid reorders jump instantly), run a simple simultaneous 2D FLIP
+    // here: invert each moved card to its previous position, then play it back
+    // to the new one along BOTH axes; new cards fade + rise in place. This
+    // keeps shuffle visible in grid mode while leaving the single-column ladder
+    // path untouched below.
     if (getComputedStyle(list).gridTemplateColumns.split(" ").filter(Boolean).length > 1) {
-      const snap = new Map<string, DOMRect>();
-      list.querySelectorAll<HTMLElement>("[data-session-id]").forEach((el) => {
-        snap.set(el.dataset.sessionId!, el.getBoundingClientRect());
+      const gridCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
+      const snapshotGrid = () => {
+        const snap = new Map<string, DOMRect>();
+        gridCards.forEach((el) => {
+          const id = el.dataset.sessionId;
+          if (id) snap.set(id, el.getBoundingClientRect());
+        });
+        cardPositions.current = snap;
+      };
+      // Let an in-flight animation own cardPositions; retrigger when it settles.
+      if (isAnimatingRef.current) {
+        pendingFlipReRunRef.current = true;
+        return;
+      }
+      const prevGrid = cardPositions.current;
+      if (prevGrid.size === 0) {
+        snapshotGrid(); // first paint — just record positions
+        return;
+      }
+      const reduceMotion =
+        window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+      const GRID_FLIP_DUR = 520;
+      const GRID_FLIP_EASING = "cubic-bezier(0.65, 0, 0.35, 1)";
+      const gen = ++animationGenRef.current;
+      const gridAnims: Animation[] = [];
+      gridCards.forEach((el) => {
+        const id = el.dataset.sessionId;
+        if (!id) return;
+        const oldRect = prevGrid.get(id);
+        const newRect = el.getBoundingClientRect();
+        if (!oldRect) {
+          // New card entering — fade + rise into its settled slot.
+          if (reduceMotion) return;
+          const inner = el.querySelector<HTMLElement>(".session-card") ?? el;
+          gridAnims.push(
+            inner.animate(
+              [
+                { opacity: 0, transform: "translateY(10px) scale(0.98)" },
+                { opacity: 1, transform: "translateY(0) scale(1)" },
+              ],
+              { duration: GRID_FLIP_DUR, easing: GRID_FLIP_EASING, fill: "backwards" },
+            ),
+          );
+          return;
+        }
+        const dx = oldRect.left - newRect.left;
+        const dy = oldRect.top - newRect.top;
+        if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+        if (reduceMotion) return;
+        // Invert → Play along both axes. No fill: the animation ends at the
+        // element's natural (transform-free) grid position, so nothing to clean.
+        gridAnims.push(
+          el.animate(
+            [
+              { transform: `translate(${dx}px, ${dy}px)` },
+              { transform: "translate(0px, 0px)" },
+            ],
+            { duration: GRID_FLIP_DUR, easing: GRID_FLIP_EASING },
+          ),
+        );
       });
-      cardPositions.current = snap;
+      if (gridAnims.length === 0) {
+        snapshotGrid();
+        return;
+      }
+      isAnimatingRef.current = true;
+      void Promise.all(gridAnims.map((a) => a.finished.catch(() => null))).then(() => {
+        if (animationGenRef.current !== gen) return;
+        isAnimatingRef.current = false;
+        snapshotGrid();
+        if (pendingFlipReRunRef.current) {
+          pendingFlipReRunRef.current = false;
+          setReorderTick((t) => t + 1);
+        }
+      });
       return;
     }
 
@@ -2758,7 +2839,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             </div>
           </div>
         ) : (
-          <div ref={listRef} className={`flex-1 w-full max-w-5xl mx-auto ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 space-y-3"}`}>
+          <div ref={listRef} className={`flex-1 w-full max-w-5xl ${listAlignClass} ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 space-y-3"}`}>
             {sortedSandbox.map((session) => {
               // Apply keyboard state override if active
               const overrideState = stateOverrides[session.info.id];
@@ -2928,7 +3009,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         <div
           ref={listRef}
           style={compactMode ? undefined : { gridTemplateColumns: "repeat(auto-fill, minmax(400px, 1fr))" }}
-          className={`flex-1 w-full ${compactMode ? "max-w-5xl mx-auto overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 grid gap-3 content-start items-start"}`}
+          className={`flex-1 w-full ${compactMode ? `max-w-5xl ${listAlignClass} overflow-visible p-2 space-y-1.5` : "overflow-y-auto sessions-scroll p-4 grid gap-3 content-start items-start"}`}
         >
           {/* Empty active sessions message */}
           {sessions.length === 0 && revivedSessions.length > 0 && (

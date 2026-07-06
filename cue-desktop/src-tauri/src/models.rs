@@ -970,8 +970,10 @@ pub struct Settings {
     /// Compact mode: strip cards to title, status, and animation only
     #[serde(default)]
     pub compact_mode: bool,
-    /// Slim mode: hide metrics and tool chips, keep title, timer, context bar, and animations
-    #[serde(default = "default_true")]
+    /// Slim mode: hide metrics and tool chips, keep title, timer, context bar, and animations.
+    /// Defaults off so a fresh install lands on the full Detailed card; the user
+    /// picks Standard (slim) or Compact from Settings › Appearance › Card density.
+    #[serde(default)]
     pub slim_mode: bool,
     /// When to show the context bar: "always", "never", or "after200k"
     #[serde(default = "default_context_threshold")]
@@ -1343,7 +1345,7 @@ impl Default for Settings {
             test_mode: false,
             vine_border: false,
             compact_mode: false,
-            slim_mode: true,
+            slim_mode: false,
             context_threshold: "always".to_string(),
             context_display: "compact".to_string(),
             low_power: false,
