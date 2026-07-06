@@ -37,6 +37,10 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background-color: var(--app-bg);
   color: var(--app-text);
+  /* Ease the shell between themes / light-dark instead of a hard cut, the way
+     native macOS surfaces crossfade their appearance. */
+  transition: background-color 280ms cubic-bezier(0.4, 0, 0.2, 1),
+    color 280ms cubic-bezier(0.4, 0, 0.2, 1);
   user-select: none;
   -webkit-user-select: none;
   cursor: default;
@@ -47,9 +51,11 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* Global focus-visible style for all interactive elements */
+/* Global focus-visible style for all interactive elements.
+   Adopts the active theme's accent (like a native macOS focus ring) instead of
+   a hardcoded blue that clashes in Neon/Ember. */
 :focus-visible {
-  outline: 2px solid #3b82f6;
+  outline: 2px solid var(--accent, #3b82f6);
   outline-offset: 2px;
 }
 
@@ -57,6 +63,88 @@ body {
 @media (forced-colors: active) {
   * { border-color: CanvasText !important; }
   .progress-fill { border: 1px solid CanvasText; }
+}
+
+/* Reduce Transparency (macOS accessibility): drop frosted/glass blur so
+   surfaces become legible solid fills rather than staying glassy. */
+@media (prefers-reduced-transparency: reduce) {
+  *,
+  *::before,
+  *::after {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+/* "Expand" gesture: the dashboard blooms in from the top-right (where the tray
+   popover lives) when opened via the popover's Expand button. */
+@keyframes dashboard-expand-in {
+  from { opacity: 0; transform: scale(0.975); }
+  to { opacity: 1; transform: scale(1); }
+}
+.dashboard-expand-in {
+  animation: dashboard-expand-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform-origin: top right;
+}
+
+/* Tray popover "Expand to full dashboard" button. */
+.tray-expand-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--tray-muted);
+  cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+.tray-expand-btn:hover {
+  color: var(--tray-text);
+  background-color: rgba(128, 128, 128, 0.16);
+}
+
+/* Items inside the popover's "⋯" overflow menu (Settings / Quit) */
+.tray-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--tray-text);
+  transition: background-color 100ms ease;
+}
+.tray-menu-item:hover { background-color: rgba(128, 128, 128, 0.16); }
+.tray-menu-item-danger { color: var(--tray-danger); }
+/* Danger hover matches the dashboard's Quit (red tint), not the generic gray. */
+.tray-menu-item-danger:hover { background-color: rgba(248, 113, 113, 0.14); color: #fca5a5; }
+
+/* "+N more in the dashboard" row shown when the session count exceeds the cap */
+.tray-overflow-row {
+  display: block;
+  width: 100%;
+  text-align: center;
+  padding: 9px 12px;
+  margin-top: 2px;
+  font-size: 11.5px;
+  font-weight: 500;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--tray-divider);
+  color: var(--tray-muted);
+  cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+.tray-overflow-row:hover {
+  color: var(--tray-text);
+  background-color: var(--tray-row-hover);
 }
 
 /* Pulsing dot for active session states */
@@ -840,6 +928,29 @@ html:not([data-theme="light"]) [class*="text-white/60"] { color: rgba(255,255,25
 html:not([data-theme="light"]) [class*="text-white/70"] { color: rgba(255,255,255,0.88) !important; }
 
 /* ---------------------------------------------------------------------------
+   Light Looks (Almanac / Studio) render on warm paper but keep data-theme="dark"
+   (each look owns its own palette), so the dark-mode white-text boosts above
+   would force muted Tailwind text-white/* utilities to WHITE — unreadable on
+   paper (e.g. the Settings page). Re-darken them to warm ink for the light
+   looks. Equal specificity to the rules above + declared later, so these win.
+   Night is a dark look and is intentionally NOT included.
+   --------------------------------------------------------------------------- */
+html[data-view="almanac"] [class*="text-white/25"], html[data-view="studio"] [class*="text-white/25"] { color: rgba(43,33,24,0.50) !important; }
+html[data-view="almanac"] [class*="text-white/30"], html[data-view="studio"] [class*="text-white/30"] { color: rgba(43,33,24,0.58) !important; }
+html[data-view="almanac"] [class*="text-white/40"], html[data-view="studio"] [class*="text-white/40"] { color: rgba(43,33,24,0.66) !important; }
+html[data-view="almanac"] [class*="text-white/50"], html[data-view="studio"] [class*="text-white/50"] { color: rgba(43,33,24,0.74) !important; }
+html[data-view="almanac"] [class*="text-white/60"], html[data-view="studio"] [class*="text-white/60"] { color: rgba(43,33,24,0.82) !important; }
+html[data-view="almanac"] [class*="text-white/70"], html[data-view="studio"] [class*="text-white/70"] { color: rgba(43,33,24,0.90) !important; }
+
+/* The shared ⋯ overflow menu is hardcoded dark (bg-zinc-900); on a light look
+   its now-darkened items would be dark-on-dark, so give the panel a paper
+   surface too. */
+html[data-view="almanac"] [role="menu"], html[data-view="studio"] [role="menu"] {
+  background: #f3ecde !important;
+  border-color: rgba(120, 90, 50, 0.22) !important;
+}
+
+/* ---------------------------------------------------------------------------
    Glass theme — frosted glass morphism with layered depth
    Activated by data-glass attribute on <html>
    --------------------------------------------------------------------------- */
@@ -976,6 +1087,60 @@ html[data-glass] .session-card--error {
     0 4px 12px rgba(0, 0, 0, 0.10);
 }
 
+/* Per-Look tray theming — `data-view` is set by TrayPopoverPage so the menu-bar
+   glance matches the active dashboard skin. These override the dark/light
+   --tray-* vars above (same specificity, declared later = wins). */
+.tray-popover[data-view="almanac"] {
+  --tray-shell-bg: #f2e8d2;
+  --tray-shell-border: rgba(120, 90, 50, 0.22);
+  --tray-text: #2b2118;
+  --tray-muted: #8a7758;
+  --tray-border: rgba(120, 90, 50, 0.18);
+  --tray-row-hover: rgba(120, 90, 50, 0.08);
+  --tray-bar-track: rgba(120, 90, 50, 0.16);
+  --tray-divider: rgba(120, 90, 50, 0.16);
+  --tray-danger: #a23a2e;
+  font-family: "Spectral", "Iowan Old Style", Georgia, serif;
+  box-shadow: 0 0 0 0.5px rgba(80, 55, 25, 0.12), 0 12px 40px rgba(80, 55, 25, 0.22), 0 4px 12px rgba(80, 55, 25, 0.12);
+}
+.tray-popover[data-view="almanac"] .tray-wordmark { font-family: "Zilla Slab", "Rockwell", Georgia, serif; }
+
+.tray-popover[data-view="studio"] {
+  --tray-shell-bg: #efe6d6;
+  --tray-shell-border: rgba(96, 72, 42, 0.22);
+  --tray-text: #2b2620;
+  --tray-muted: #8a8070;
+  --tray-border: rgba(96, 72, 42, 0.16);
+  --tray-row-hover: rgba(96, 72, 42, 0.06);
+  --tray-bar-track: #e3d7c2;
+  --tray-divider: rgba(96, 72, 42, 0.14);
+  --tray-danger: #a83a32;
+  font-family: "Spectral", "Iowan Old Style", Georgia, serif;
+  box-shadow: 0 0 0 0.5px rgba(96, 72, 42, 0.12), 0 12px 40px rgba(96, 72, 42, 0.20), 0 4px 12px rgba(96, 72, 42, 0.12);
+}
+.tray-popover[data-view="studio"] .tray-wordmark { font-family: "Fraunces", Georgia, serif; }
+
+.tray-popover[data-view="night"] {
+  --tray-shell-bg: #241c14;
+  --tray-shell-border: rgba(198, 154, 78, 0.20);
+  --tray-text: #f3e7d2;
+  --tray-muted: #a8967a;
+  --tray-border: rgba(198, 154, 78, 0.16);
+  --tray-row-hover: rgba(255, 225, 180, 0.05);
+  --tray-bar-track: rgba(0, 0, 0, 0.4);
+  --tray-divider: rgba(198, 154, 78, 0.12);
+  --tray-danger: #c2552e;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.4), 0 12px 40px rgba(0, 0, 0, 0.5), 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.tray-popover[data-view="night"] .tray-wordmark { font-family: "Fraunces", Georgia, serif; text-transform: none; letter-spacing: 0.01em; }
+
+/* Light-look bodies use a serif — keep figures crisp in IBM Plex Mono. */
+.tray-popover[data-view="almanac"] .mono-nums,
+.tray-popover[data-view="studio"] .mono-nums {
+  font-family: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+
 .tray-popover html, .tray-popover body { background: transparent !important; }
 
 .tray-header {
@@ -1020,24 +1185,6 @@ html[data-glass] .session-card--error {
   background-color: var(--tray-row-hover);
 }
 
-.tray-footer {
-  flex: 0 0 auto;
-  display: flex;
-  gap: 6px;
-  padding: 8px;
-  border-top: 1px solid var(--tray-divider);
-}
-
-.tray-footer-btn:hover {
-  background-color: var(--tray-row-hover) !important;
-  border-color: var(--tray-border) !important;
-}
-.tray-footer-btn:active { transform: scale(0.98); }
-.tray-footer-btn:focus-visible {
-  outline: 2px solid rgb(124,197,255);
-  outline-offset: 1px;
-}
-
 @keyframes tray-pulse-anim {
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.35; }
@@ -1053,3 +1200,170 @@ html.tray-popover-root body {
   background: transparent !important;
   background-color: transparent !important;
 }
+
+/* --- Resting disclosure (shared by the instrument view + every Look) ---------
+   Everything is derived from `currentColor` + opacity / color-mix so the block
+   inherits whatever ink the host view sets and stays legible on both the dark
+   instrument surface and the light paper Looks — one component, no per-skin copy. */
+.resting-disclosure { padding-top: 1rem; }
+.resting-disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  padding: 0.5rem 0.75rem;
+  margin: 0 -0.75rem;
+  border-radius: 0.5rem;
+  transition: background 150ms;
+}
+.resting-disclosure > summary::-webkit-details-marker { display: none; }
+.resting-disclosure > summary:hover {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+.resting-rule { flex: 1; border-top: 1px solid currentColor; opacity: 0.15; }
+.resting-label {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+  opacity: 0.5;
+  white-space: nowrap;
+}
+.resting-caret { display: inline-block; transition: transform 200ms; }
+.resting-disclosure[open] .resting-caret { transform: rotate(90deg); }
+.resting-list { display: flex; flex-direction: column; gap: 0.125rem; padding-top: 0.5rem; }
+.resting-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  transition: background 150ms;
+}
+.resting-row:hover { background: color-mix(in srgb, currentColor 6%, transparent); }
+.resting-dot { width: 8px; height: 8px; border-radius: 9999px; background: currentColor; opacity: 0.3; flex: 0 0 auto; }
+.resting-title { font-weight: 500; opacity: 0.8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resting-reason { font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.03em; opacity: 0.55; flex: 0 0 auto; }
+.resting-workspace { flex: 1; font-size: 0.75rem; opacity: 0.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resting-restore {
+  font-size: 0.75rem;
+  opacity: 0.6;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.375rem;
+  flex: 0 0 auto;
+  transition: background 150ms, opacity 150ms;
+}
+.resting-restore:hover { opacity: 1; background: color-mix(in srgb, currentColor 12%, transparent); }
+@media (prefers-reduced-motion: reduce) {
+  .resting-caret, .resting-row, .resting-restore, .resting-disclosure > summary { transition: none; }
+}
+
+/* --- Card dismiss "X" (shared by the instrument card + every Look) -----------
+   The host card needn't know it's positioned: any element that directly contains
+   a .card-dismiss is made the positioning context. Reveals on card hover or
+   keyboard focus; colored from currentColor so it reads on any surface. */
+*:has(> .card-dismiss) { position: relative; }
+.card-dismiss {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  z-index: 20;
+  width: 1.25rem;
+  height: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.375rem;
+  color: currentColor;
+  opacity: 0;
+  transition: opacity 150ms, background 150ms;
+}
+*:hover > .card-dismiss { opacity: 0.5; }
+.card-dismiss:hover,
+.card-dismiss:focus-visible { opacity: 1; background: color-mix(in srgb, currentColor 12%, transparent); }
+@media (prefers-reduced-motion: reduce) { .card-dismiss { transition: none; } }
+
+/* --- Decision bar: the action a session is blocked on, pinned to the card top.
+   Permission case wraps PermissionPrompt (already styled); only the
+   "answer in your editor" CTA needs styling here. Amber framing + a ping carry
+   the "needs you" semantics; the TEXT is currentColor so it stays legible on the
+   dark instrument surface and the light paper Looks alike. */
+.decision-bar { display: flex; flex-direction: column; gap: 0.5rem; }
+.decision-answer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  text-align: left;
+  cursor: pointer;
+  color: currentColor;
+  background: color-mix(in srgb, #f59e0b 14%, transparent);
+  border: 1px solid color-mix(in srgb, #f59e0b 45%, transparent);
+  transition: background 150ms;
+}
+.decision-answer:hover { background: color-mix(in srgb, #f59e0b 22%, transparent); }
+.decision-answer:focus-visible { outline: 2px solid #f59e0b; outline-offset: 2px; }
+.decision-answer__ping {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 9999px;
+  background: #f59e0b;
+  box-shadow: 0 0 0 0 color-mix(in srgb, #f59e0b 70%, transparent);
+  animation: decision-ping 1.8s ease-out infinite;
+}
+.decision-answer__label { font-size: 0.8125rem; font-weight: 600; white-space: nowrap; }
+.decision-answer__hint { font-size: 0.75rem; opacity: 0.6; margin-left: auto; white-space: nowrap; }
+@keyframes decision-ping {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, #f59e0b 70%, transparent); }
+  70% { box-shadow: 0 0 0 7px color-mix(in srgb, #f59e0b 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in srgb, #f59e0b 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .decision-answer { transition: none; }
+  .decision-answer__ping { animation: none; }
+}
+
+/* --- Foot conversation: the prompt / Claude-message detail, pinned to the
+   BOTTOM of every Look's card as a single quiet line (tap to read in full via
+   PromptPopup) so a long message never pushes the vitals out of view. Shared,
+   currentColor-based so it inherits each Look's ink + serif — one rule, parity. */
+.convo {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  width: 100%;
+  margin-top: 0.6rem;
+  padding-top: 0.55rem;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: currentColor;
+  font-style: italic;
+  opacity: 0.6;
+  overflow: hidden;
+  transition: opacity 150ms;
+}
+.convo:hover { opacity: 0.95; }
+.convo:focus-visible { outline: 2px solid color-mix(in srgb, currentColor 45%, transparent); outline-offset: 2px; }
+.convo .convo-mark { flex: 0 0 auto; font-size: 1.1rem; line-height: 0; opacity: 0.7; transform: translateY(0.18em); }
+.convo .convo-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8125rem; }
+@media (prefers-reduced-motion: reduce) { .convo { transition: none; } }
+/* The foot .convo is a single nowrap line. Each Look's card is a 1fr grid/flex
+   item with the default min-width:auto, so without this it would expand to the
+   message's full intrinsic width instead of truncating — making the card balloon
+   sideways. min-width:0 lets the card shrink to its track so .convo-text (and the
+   title/metrics) ellipsize within it instead. */
+.studio-view .card,
+.night-view .card,
+.almanac-view .entry { min-width: 0; }

@@ -6,7 +6,7 @@
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 /// Maximum file size we'll parse (500 MB).
@@ -105,6 +105,9 @@ pub struct ParsedEntry {
     /// workspace. Captured regardless of block position so the snippet is
     /// deterministic.
     pub assistant_text: Option<String>,
+    /// Error text from an entry flagged `isApiErrorMessage` — the human-readable
+    /// reason a turn failed (bad/unavailable model, rate limit, billing, …).
+    pub api_error_text: Option<String>,
     /// `id` fields of tool_use blocks in this assistant message whose `name`
     /// is in the user-prompting set (AskUserQuestion, ExitPlanMode). When such
     /// an id has no matching tool_result anywhere in the file, the session is
@@ -155,11 +158,14 @@ pub const AGENT_TOOL_NAMES: &[&str] = &["Agent", "Task"];
 /// Parse a JSONL file into a list of entries.
 /// Returns an empty Vec if the file is too large, unreadable, or empty.
 ///
-/// Uses `open_jsonl_no_follow` so a symlink dropped at
-/// `~/.claude/projects/<encoded-ws>/<sid>.jsonl` can't redirect this read
-/// at e.g. `~/.ssh/id_rsa` and surface its contents through SessionMetrics
-/// into the frontend. Mirrors the hardening already applied to the
-/// incremental cache path in `refresh_entry_cache`.
+/// Reads through `security::read_to_string_bounded`, which opens the file
+/// once (with `O_NOFOLLOW` on Unix so a symlink dropped at
+/// `~/.claude/projects/<encoded-ws>/<sid>.jsonl` can't redirect this read at
+/// e.g. `~/.ssh/id_rsa` and surface its contents through SessionMetrics),
+/// enforces the `MAX_FILE_SIZE` cap on that same handle's `fstat`, and bounds
+/// the read with `take(max + 1)`. The single-handle policy closes the
+/// stat-then-read TOCTOU window a racing writer could otherwise use to swap a
+/// small file for a huge one between the size check and the read.
 pub fn parse_jsonl_file(path: &Path) -> Vec<ParsedEntry> {
     parse_jsonl_file_opts(path, true)
 }
@@ -175,33 +181,23 @@ pub fn parse_jsonl_file_keep_sidechain(path: &Path) -> Vec<ParsedEntry> {
 }
 
 fn parse_jsonl_file_opts(path: &Path, drop_sidechain: bool) -> Vec<ParsedEntry> {
-    // Check file size
-    if let Ok(metadata) = std::fs::metadata(path) {
-        if metadata.len() > MAX_FILE_SIZE {
-            log::warn!(
-                "Skipping oversized JSONL file: {:?} ({} bytes)",
-                path,
-                metadata.len()
-            );
-            return Vec::new();
-        }
-    }
-
-    let mut file = match open_jsonl_no_follow(path) {
-        Ok(f) => f,
+    // Drew's bounded read is the superset of Andy's open_jsonl_no_follow + manual
+    // size check: `read_to_string_bounded` opens once with O_NOFOLLOW, enforces
+    // MAX_FILE_SIZE on that same handle's fstat, and bounds the read — closing the
+    // stat-then-read TOCTOU window. Andy's sidechain split is threaded through via
+    // `drop_sidechain` (true = MAIN transcript drops isSidechain rows; false =
+    // subagent transcript keeps them).
+    match crate::security::read_to_string_bounded(path, MAX_FILE_SIZE) {
+        Ok(content) => parse_jsonl_content_opts(&content, drop_sidechain),
         Err(e) => {
-            log::debug!("Failed to open JSONL file {:?}: {}", path, e);
-            return Vec::new();
+            if e.kind() == std::io::ErrorKind::FileTooLarge {
+                log::warn!("Skipping oversized JSONL file: {:?}", path);
+            } else {
+                log::debug!("Failed to read JSONL file {:?}: {}", path, e);
+            }
+            Vec::new()
         }
-    };
-
-    let mut content = String::new();
-    if let Err(e) = file.read_to_string(&mut content) {
-        log::debug!("Failed to read JSONL file {:?}: {}", path, e);
-        return Vec::new();
     }
-
-    parse_jsonl_content_opts(&content, drop_sidechain)
 }
 
 /// Cached parse state for a single JSONL file.
@@ -215,16 +211,15 @@ pub struct JsonlEntryCache {
     pub file_size: u64,
     pub file_mtime: Option<SystemTime>,
     pub entries: Vec<ParsedEntry>,
-    /// Last aggregated metrics, kept so a poll that finds no new transcript
-    /// bytes AND no subagent-dir change can skip the O(N-entries) re-aggregation
-    /// entirely (F-performance-001). Cleared implicitly whenever we re-aggregate.
-    pub last_metrics: Option<crate::models::SessionMetrics>,
-    /// Cheap signature of the `<stem>/subagents/` directory (file count, latest
-    /// mtime nanos, total size) captured at the last aggregation. Subagent state
-    /// is derived INSIDE `aggregate_entries` from separate files, so the skip
-    /// gate must also detect subagent-only changes — a mismatch forces a full
-    /// re-aggregation even when the parent transcript is quiet.
-    pub subagents_sig: Option<(u64, u128, u64)>,
+    /// Per-subagent-transcript incremental caches, keyed by the subagent JSONL
+    /// path. Only populated on the cached parse path
+    /// (`parse_jsonl_to_session_metrics_cached`); the one-shot
+    /// `parse_jsonl_to_session_metrics` path leaves this empty and re-reads
+    /// each subagent in full. Each nested cache obeys the same tail-read /
+    /// truncation / mtime-regression rules as the main transcript. Entries for
+    /// subagent files that no longer exist are pruned every refresh so the map
+    /// can't grow unbounded across a long-lived session.
+    pub subagent_caches: HashMap<PathBuf, JsonlEntryCache>,
 }
 
 /// Open a JSONL file for reading, refusing to follow symlinks on Unix. Mirrors
@@ -245,11 +240,15 @@ fn open_jsonl_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
 /// or a backwards-moving mtime (file replaced/forked) the cache is reset and
 /// the file is fully re-read.
 ///
-/// Returns `true` if `cache.entries` was modified this call (cleared, or new
-/// entries appended). A `false` return means the aggregated metrics can only
-/// have changed via subagent files — the caller pairs it with the subagent
-/// signature to decide whether re-aggregation can be skipped (F-performance-001).
-fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) -> bool {
+/// `drop_sidechain` MUST match the transcript kind: `true` for a MAIN
+/// transcript (drop `isSidechain: true` rows, so a subagent's noise can't leak
+/// into the parent's metrics) and `false` for a subagent transcript under
+/// `subagents/` (which is written ENTIRELY as sidechain rows — dropping them
+/// would empty the cache, the agent would vanish from `m.subagents`, and the
+/// parent card would sit on `idle` for the whole background-Agent run). This is
+/// the production 5s-tick path, so the split has to be threaded here too, not
+/// just through the one-shot `parse_jsonl_file*` variants.
+fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache, drop_sidechain: bool) {
     let metadata = match std::fs::metadata(path) {
         Ok(m) => m,
         Err(e) => {
@@ -257,13 +256,11 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) -> bool {
             // cached entries so a later poll doesn't keep yielding metrics
             // synthesized from a transcript that no longer exists.
             if e.kind() == std::io::ErrorKind::NotFound {
-                let had = !cache.entries.is_empty();
                 cache.file_size = 0;
                 cache.entries.clear();
-                return had;
             }
             log::debug!("Failed to stat JSONL file {:?}: {}", path, e);
-            return false;
+            return;
         }
     };
     let size = metadata.len();
@@ -271,40 +268,56 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) -> bool {
 
     if size > MAX_FILE_SIZE {
         log::warn!("Skipping oversized JSONL file: {:?} ({} bytes)", path, size);
-        let had = !cache.entries.is_empty();
         cache.file_size = 0;
         cache.file_mtime = mtime;
         cache.entries.clear();
-        return had;
+        return;
     }
 
-    let mut changed = false;
     let mtime_regressed = matches!(
         (cache.file_mtime, mtime),
         (Some(prev), Some(now)) if now < prev
     );
     if size < cache.file_size || mtime_regressed {
-        changed = !cache.entries.is_empty();
         cache.file_size = 0;
         cache.entries.clear();
     }
 
     if size == cache.file_size {
         cache.file_mtime = mtime;
-        return changed;
+        return;
     }
 
     let mut file = match open_jsonl_no_follow(path) {
         Ok(f) => f,
         Err(e) => {
             log::debug!("Failed to open JSONL file {:?}: {}", path, e);
-            return changed;
+            return;
         }
     };
+
+    // TOCTOU guard: the `fs::metadata` above is only for change detection
+    // (unchanged→skip, truncation, mtime). Re-check the size on the handle we
+    // are about to read so a racing writer that swapped in (or grew) a huge
+    // file after that stat can't drive an unbounded read. Mirrors the
+    // single-handle policy in `security::read_to_string_bounded`.
+    if let Ok(handle_md) = file.metadata() {
+        if handle_md.len() > MAX_FILE_SIZE {
+            log::warn!(
+                "Skipping oversized JSONL file: {:?} ({} bytes)",
+                path,
+                handle_md.len()
+            );
+            cache.file_size = 0;
+            cache.file_mtime = mtime;
+            cache.entries.clear();
+            return;
+        }
+    }
+
     if cache.file_size > 0 {
         if let Err(e) = file.seek(SeekFrom::Start(cache.file_size)) {
             log::debug!("Seek failed on {:?}: {}", path, e);
-            changed = changed || !cache.entries.is_empty();
             cache.file_size = 0;
             cache.entries.clear();
             // Fall through and re-open at offset 0.
@@ -312,16 +325,35 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) -> bool {
                 Ok(f) => f,
                 Err(e2) => {
                     log::debug!("Re-open failed on {:?}: {}", path, e2);
-                    return changed;
+                    return;
                 }
             };
         }
     }
 
+    // Bounded tail read on the same handle: capping at MAX_FILE_SIZE + 1 means
+    // a file that grew past the cap after the fstat surfaces the extra byte and
+    // is rejected without a large allocation. For a well-formed file the tail
+    // from `cache.file_size` to EOF is <= MAX_FILE_SIZE, so this reads through
+    // verbatim — behavior identical to the previous unbounded `read_to_string`.
     let mut buf = String::new();
-    if let Err(e) = file.read_to_string(&mut buf) {
+    if let Err(e) = file
+        .take(MAX_FILE_SIZE.saturating_add(1))
+        .read_to_string(&mut buf)
+    {
         log::debug!("Read failed on {:?}: {}", path, e);
-        return changed;
+        return;
+    }
+    if buf.len() as u64 > MAX_FILE_SIZE {
+        log::warn!(
+            "Skipping JSONL file that grew past the {} byte cap mid-read: {:?}",
+            MAX_FILE_SIZE,
+            path
+        );
+        cache.file_size = 0;
+        cache.file_mtime = mtime;
+        cache.entries.clear();
+        return;
     }
 
     // Only consume up to the last complete line so we never parse a half-
@@ -335,7 +367,7 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) -> bool {
                 // No newline at all — the trailing partial line spans the
                 // entire delta; don't advance.
                 cache.file_mtime = mtime;
-                return changed;
+                return;
             }
         }
     };
@@ -344,47 +376,12 @@ fn refresh_entry_cache(path: &Path, cache: &mut JsonlEntryCache) -> bool {
         if line.is_empty() {
             continue;
         }
-        if let Some(entry) = parse_line(line) {
+        if let Some(entry) = parse_line_opts(line, drop_sidechain) {
             cache.entries.push(entry);
-            changed = true;
         }
     }
     cache.file_size += consumed as u64;
     cache.file_mtime = mtime;
-    changed
-}
-
-/// Cheap change-signature for a session's `<stem>/subagents/` directory:
-/// (file count, latest mtime in nanos, total size). Recomputed each tick and
-/// compared to the cached value so a subagent-only change (a new agent file, or
-/// an append to an existing one) still forces re-aggregation even when the
-/// parent transcript is quiet. A `read_dir` + `stat` per file is far cheaper
-/// than `parse_subagent_jsonl`'s full read+parse of every file (F-perf-001/002).
-fn subagents_signature(path: &Path) -> Option<(u64, u128, u64)> {
-    let parent_dir = path.parent()?;
-    let session_stem = path.file_stem().and_then(|s| s.to_str())?;
-    let subagents_dir = parent_dir.join(session_stem).join("subagents");
-    let read = std::fs::read_dir(&subagents_dir).ok()?;
-    let mut count: u64 = 0;
-    let mut latest_nanos: u128 = 0;
-    let mut total_size: u64 = 0;
-    for dir_entry in read.flatten() {
-        let p = dir_entry.path();
-        if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-            continue;
-        }
-        let Ok(meta) = dir_entry.metadata() else {
-            continue;
-        };
-        count += 1;
-        total_size = total_size.saturating_add(meta.len());
-        if let Ok(m) = meta.modified() {
-            if let Ok(d) = m.duration_since(std::time::UNIX_EPOCH) {
-                latest_nanos = latest_nanos.max(d.as_nanos());
-            }
-        }
-    }
-    Some((count, latest_nanos, total_size))
 }
 
 /// Parse JSONL content string into entries (MAIN-transcript semantics: drops
@@ -399,11 +396,6 @@ fn parse_jsonl_content_opts(content: &str, drop_sidechain: bool) -> Vec<ParsedEn
         .filter(|line| !line.is_empty())
         .filter_map(|line| parse_line_opts(line, drop_sidechain))
         .collect()
-}
-
-/// Parse a single JSONL line (MAIN-transcript semantics: drops `isSidechain`).
-fn parse_line(line: &str) -> Option<ParsedEntry> {
-    parse_line_opts(line, true)
 }
 
 /// Parse a single JSONL line. When `drop_sidechain` is true (the MAIN
@@ -443,6 +435,12 @@ fn parse_line_opts(line: &str, drop_sidechain: bool) -> Option<ParsedEntry> {
 
     // Extract timestamp — try multiple formats
     entry.timestamp = extract_timestamp(obj);
+
+    // Claude Code flags an API-level failure turn (unavailable model, rate
+    // limit, billing, …) with a top-level `isApiErrorMessage: true`; the
+    // human-readable reason is the message's text block. Capture it so error
+    // cards can explain themselves instead of just saying "Error".
+    let is_api_error = obj.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true);
 
     // Extract custom title. Claude Code's branch/fork feature seeds the
     // customTitle with the originating user message's raw text, which can
@@ -604,6 +602,9 @@ fn parse_line_opts(line: &str, drop_sidechain: bool) -> Option<ParsedEntry> {
                                         // per cached entry just bloats memory
                                         // over a long-running session.
                                         entry.assistant_text = Some(cap_snippet(trimmed));
+                                    }
+                                    if is_api_error && entry.api_error_text.is_none() {
+                                        entry.api_error_text = Some(cap_snippet(trimmed));
                                     }
                                 }
                             }
@@ -1010,11 +1011,54 @@ fn strip_bracket_markers(s: &str) -> String {
 const SUBAGENT_BACKSTOP_SECS: u64 = 600;
 
 /// Parse a subagent JSONL file and its companion .meta.json into SubagentMetrics.
+///
+/// One-shot path: reads the whole transcript every call. The incremental
+/// counterpart used by the 5s metrics tick is `parse_subagent_jsonl_cached`.
 pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::SubagentMetrics> {
     // KEEP sidechain rows: a subagent transcript is written entirely as
     // `isSidechain: true` rows. The default (main-transcript) parse drops them,
     // which would empty `entries` here and make the agent invisible.
     let entries = parse_jsonl_file_keep_sidechain(jsonl_path);
+    if entries.is_empty() {
+        return None;
+    }
+    let mtime = std::fs::metadata(jsonl_path)
+        .and_then(|meta| meta.modified())
+        .ok();
+    subagent_metrics_from_entries(&entries, mtime, jsonl_path)
+}
+
+/// Incremental variant of [`parse_subagent_jsonl`]: tails only newly-appended
+/// lines via `cache` so an unchanged subagent transcript is neither re-read nor
+/// re-parsed on each poll. The cache carries the same correctness guarantees as
+/// the main transcript — a truncated or replaced (mtime-regressed) subagent
+/// file invalidates the cache and forces a full re-read rather than serving
+/// stale entries (see `refresh_entry_cache`). The `mtime` used for the crash
+/// backstop is the one the refresh reflects (`cache.file_mtime`), so a stale
+/// stat can't extend an agent's liveness.
+fn parse_subagent_jsonl_cached(
+    jsonl_path: &Path,
+    cache: &mut JsonlEntryCache,
+) -> Option<crate::models::SubagentMetrics> {
+    // KEEP sidechain rows: a subagent transcript is written entirely as
+    // `isSidechain: true`, so dropping them here (as the main path does) would
+    // empty the cache and make the background Agent invisible on the hot path.
+    refresh_entry_cache(jsonl_path, cache, false);
+    if cache.entries.is_empty() {
+        return None;
+    }
+    subagent_metrics_from_entries(&cache.entries, cache.file_mtime, jsonl_path)
+}
+
+/// Aggregate a subagent's parsed entries (+ its file mtime for the liveness
+/// backstop) into `SubagentMetrics`, then enrich with the companion .meta.json.
+/// Shared by the one-shot and cached subagent parse paths so both compute
+/// liveness and metrics identically.
+fn subagent_metrics_from_entries(
+    entries: &[ParsedEntry],
+    mtime: Option<SystemTime>,
+    jsonl_path: &Path,
+) -> Option<crate::models::SubagentMetrics> {
     if entries.is_empty() {
         return None;
     }
@@ -1031,14 +1075,9 @@ pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::Subagent
         .rev()
         .find(|e| e.is_assistant_message)
         .is_some_and(|e| e.has_end_turn);
-    let within_backstop = std::fs::metadata(jsonl_path)
-        .and_then(|meta| meta.modified())
-        .map(|mod_time| {
-            mod_time
-                .elapsed()
-                .map(|elapsed| elapsed.as_secs() < SUBAGENT_BACKSTOP_SECS)
-                .unwrap_or(false)
-        })
+    let within_backstop = mtime
+        .and_then(|mod_time| mod_time.elapsed().ok())
+        .map(|elapsed| elapsed.as_secs() < SUBAGENT_BACKSTOP_SECS)
         .unwrap_or(false);
     let is_active = !tail_finished && within_backstop;
 
@@ -1048,7 +1087,7 @@ pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::Subagent
     };
 
     // Extract agentId and slug from first entry that has them
-    for entry in &entries {
+    for entry in entries {
         if m.agent_id.is_empty() {
             if let Some(ref id) = entry.agent_id {
                 m.agent_id = id.clone();
@@ -1065,7 +1104,7 @@ pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::Subagent
     }
 
     // Aggregate metrics
-    for entry in &entries {
+    for entry in entries {
         // Track earliest and latest entry timestamps for start/end display.
         if let Some(ts) = entry.timestamp {
             m.started_at = Some(m.started_at.map_or(ts, |s| s.min(ts)));
@@ -1082,9 +1121,32 @@ pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::Subagent
                 .cache_creation_tokens
                 .saturating_add(entry.cache_creation_tokens);
             m.cache_read_tokens = m.cache_read_tokens.saturating_add(entry.cache_read_tokens);
+            // Latest non-empty assistant text wins — skip pure tool_use messages
+            // so the snippet stays on the agent's actual prose (its in-flight
+            // output while active, its final result once done). Same cap_snippet
+            // bound as the main-session extraction.
+            if let Some(ref txt) = entry.assistant_text {
+                m.last_assistant_text = Some(cap_snippet(txt));
+            }
             for (tool, count) in &entry.tool_counts {
                 *m.tool_counts.entry(tool.clone()).or_insert(0) += count;
             }
+        }
+    }
+
+    // Currently-running tool: scan backwards for the last assistant tool_use
+    // with no subsequent tool_result — the same pending-tool detection the
+    // main-session parse uses. Only populated while the agent is mid-turn; a
+    // finished agent's tail is a tool_result or end_turn text, so both fields
+    // stay None.
+    for entry in entries.iter().rev() {
+        if entry.is_tool_result {
+            break;
+        }
+        if entry.has_pending_tool_use {
+            m.running_tool_name = entry.running_tool_name.clone();
+            m.running_tool_target = entry.running_tool_target.clone();
+            break;
         }
     }
 
@@ -1101,18 +1163,18 @@ pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::Subagent
         if let Some(parent) = jsonl_path.parent() {
             let meta_path = parent.join(meta_filename);
             const META_MAX_BYTES: u64 = 256 * 1024;
-            let oversized = std::fs::metadata(&meta_path)
-                .map(|md| md.len() > META_MAX_BYTES)
-                .unwrap_or(false);
-            if !oversized {
-                if let Ok(mut file) = open_jsonl_no_follow(&meta_path) {
-                    let mut content = String::new();
-                    if file.read_to_string(&mut content).is_ok() {
-                        if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&content) {
-                            if let Some(desc) = meta.get("description").and_then(|v| v.as_str()) {
-                                m.description = desc.to_string();
-                            }
-                        }
+            // Single-handle bounded read (O_NOFOLLOW + fstat + take): a
+            // stat-then-read pair leaves a TOCTOU window where a racing writer
+            // could swap a small meta file for a huge one — or a symlink —
+            // between the size check and the read. `read_to_string_bounded`
+            // opens once and enforces the cap on that same handle. Any error
+            // (missing/oversized/non-UTF-8) leaves the default empty
+            // description, exactly as before.
+            if let Ok(content) = crate::security::read_to_string_bounded(&meta_path, META_MAX_BYTES)
+            {
+                if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(desc) = meta.get("description").and_then(|v| v.as_str()) {
+                        m.description = desc.to_string();
                     }
                 }
             }
@@ -1125,16 +1187,8 @@ pub fn parse_subagent_jsonl(jsonl_path: &Path) -> Option<crate::models::Subagent
 /// Parse a JSONL file and extract aggregated SessionMetrics (for session_monitor).
 pub fn parse_jsonl_to_session_metrics(path: &Path) -> Option<crate::models::SessionMetrics> {
     let entries = parse_jsonl_file(path);
-    aggregate_entries(&entries, path)
-}
-
-/// Whether cached metrics may be reused on a no-change tick, i.e. none of their
-/// outputs can still change without a file change the caller already gates on.
-/// The only time-dependent output is a subagent's `is_active` (600s wall-clock
-/// crash backstop), so cached metrics are stable only while no subagent is
-/// active. See the skip site in `parse_jsonl_to_session_metrics_cached`.
-fn cached_metrics_are_stable(m: &crate::models::SessionMetrics) -> bool {
-    m.subagents.iter().all(|a| !a.is_active)
+    // No cache on the one-shot path: subagents are re-read in full.
+    aggregate_entries(&entries, path, None)
 }
 
 /// Same as `parse_jsonl_to_session_metrics`, but tails new lines incrementally
@@ -1144,67 +1198,34 @@ pub fn parse_jsonl_to_session_metrics_cached(
     path: &Path,
     cache: &mut JsonlEntryCache,
 ) -> Option<crate::models::SessionMetrics> {
-    let entries_changed = refresh_entry_cache(path, cache);
-    let sub_sig = subagents_signature(path);
-
-    // Skip the O(N-entries) re-aggregation when nothing that feeds it moved this
-    // tick: no new parent-transcript entries AND the same subagents-dir
-    // signature (F-performance-001). This is the common case for an active
-    // session parked on a long tool call — the transcript is silent for minutes,
-    // yet the old code re-folded every prior entry every 5s. The cached metrics
-    // are byte-identical to a fresh aggregation over the unchanged inputs; only
-    // `parsed_file_mtime` is re-stamped (it may advance on a partial-line write).
-    let mtime_secs = cache
+    // MAIN transcript: drop `isSidechain: true` rows so a subagent's noise can't
+    // leak into the parent session's metrics. Subagent transcripts are tailed
+    // separately (with keep-sidechain) inside `aggregate_entries`.
+    refresh_entry_cache(path, cache, true);
+    // Borrow the main entries immutably and the per-subagent caches mutably —
+    // disjoint fields of `cache`, so the split borrow is sound. The subagent
+    // discovery inside `aggregate_entries` tails each subagent transcript
+    // through its own nested cache instead of re-reading it every tick.
+    let mut m = aggregate_entries(&cache.entries, path, Some(&mut cache.subagent_caches))?;
+    // Stamp the transcript file mtime this parse reflects so the turn-ended
+    // demote can tell a genuinely-idle session (file unchanged since the last
+    // end_turn) from a resumed/stale-bumped one where stateChangedAt jumped
+    // ahead of the end_turn without a new turn.
+    m.parsed_file_mtime = cache
         .file_mtime
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs_f64());
-
-    if !entries_changed && cache.subagents_sig == sub_sig {
-        if let Some(cached) = &cache.last_metrics {
-            // Never skip while a cached subagent is still `is_active`. That flag
-            // is the ONE aggregation output that depends on wall-clock time, not
-            // file state: `parse_subagent_jsonl` sets it via the 600s crash
-            // backstop (`now - file_mtime < 600s`) for an agent whose transcript
-            // froze mid-turn (no end_turn tail). A frozen file never moves the
-            // subagents signature, so skipping would serve `is_active=true`
-            // forever — pinning the card on `subagent` past the backstop, since
-            // `should_demote_stale_subagent` (the sole recovery for a subagent
-            // card) needs the active count to reach 0. Re-aggregating while any
-            // subagent is active keeps re-evaluating the backstop so it heals at
-            // 600s, exactly as the pre-cache code did. (F-performance-001 verify.)
-            if cached_metrics_are_stable(cached) {
-                let mut m = cached.clone();
-                m.parsed_file_mtime = mtime_secs;
-                return Some(m);
-            }
-        }
-    }
-
-    match aggregate_entries(&cache.entries, path) {
-        Some(mut m) => {
-            // Stamp the transcript file mtime this parse reflects so the
-            // turn-ended demote can tell a genuinely-idle session (file
-            // unchanged since the last end_turn) from a resumed/stale-bumped
-            // one where stateChangedAt jumped ahead of the end_turn without a
-            // new turn.
-            m.parsed_file_mtime = mtime_secs;
-            cache.subagents_sig = sub_sig;
-            cache.last_metrics = Some(m.clone());
-            Some(m)
-        }
-        None => {
-            // Empty or deleted transcript — drop any stale cached metrics so a
-            // later no-change tick can't serve them back.
-            cache.last_metrics = None;
-            cache.subagents_sig = sub_sig;
-            None
-        }
-    }
+    Some(m)
 }
 
 fn aggregate_entries(
     entries: &[ParsedEntry],
     path: &Path,
+    // Per-subagent incremental caches, threaded from the caller's
+    // `JsonlEntryCache`. `Some` on the cached poll path (subagents are tailed
+    // incrementally and pruned when their files vanish); `None` on the one-shot
+    // path (each subagent re-read in full).
+    mut subagent_caches: Option<&mut HashMap<PathBuf, JsonlEntryCache>>,
 ) -> Option<crate::models::SessionMetrics> {
     if entries.is_empty() {
         return None;
@@ -1328,6 +1349,15 @@ fn aggregate_entries(
             if let Some(ref txt) = entry.assistant_text {
                 m.last_assistant_text = Some(cap_snippet(txt));
             }
+            // The latest assistant turn drives the error reason: an
+            // isApiErrorMessage entry sets it, and any normal assistant turn
+            // after it means the session recovered — clear the stale reason so an
+            // error card only ever shows the current failure.
+            if let Some(ref err) = entry.api_error_text {
+                m.last_error_message = Some(cap_snippet(err));
+            } else {
+                m.last_error_message = None;
+            }
 
             for (tool, count) in &entry.tool_counts {
                 *m.tool_counts.entry(tool.clone()).or_insert(0) += count;
@@ -1387,11 +1417,41 @@ fn aggregate_entries(
         .iter()
         .flat_map(|e| e.tool_result_ids.iter().map(String::as_str))
         .collect();
-    m.awaiting_user_prompt = entries.iter().any(|e| {
+    // A prompting tool_use (AskUserQuestion / ExitPlanMode) pins state="waiting"
+    // ONLY while it is the newest turn-relevant event. Claude Code does not
+    // always write a tool_result for an ANSWERED AskUserQuestion, so the
+    // resolved-id check alone can't distinguish "answered" from "still open":
+    // an abandoned/superseded prompt — the assistant went on to run more tools,
+    // write prose, or end the turn; the turn was interrupted; or the user sent a
+    // new message — would otherwise pin the card on "waiting" indefinitely
+    // (observed: a card stuck "awaiting you" for hours while the session had
+    // long since moved on). So take the LAST unresolved prompt and clear it if
+    // any turn-advancing entry follows it. A genuinely-open prompt IS the tail —
+    // only the timestampless last-prompt/ai-title/mode metadata rows come after
+    // it, and none of those are turn-advancing.
+    let last_open_prompt = entries.iter().enumerate().rev().find_map(|(i, e)| {
         e.prompting_tool_use_ids
             .iter()
             .any(|id| !resolved.contains(id.as_str()))
+            .then_some(i)
     });
+    m.awaiting_user_prompt = match last_open_prompt {
+        None => false,
+        Some(p) => !entries.iter().skip(p + 1).any(|e| {
+            // "Moved on" = a NEW assistant message (it continued: tool_use or
+            // prose), the turn ended, it was interrupted, or the user sent a new
+            // message. Deliberately NOT a bare tool_result: if a question were
+            // ever batched with another tool, that tool finishing while the
+            // question is still open must not clear it (the answer itself, when
+            // recorded, resolves the prompt id via `resolved` above, or arrives
+            // as a user message caught here).
+            e.has_pending_tool_use
+                || e.has_text_content
+                || e.has_end_turn
+                || e.is_interrupt_marker
+                || e.user_prompt_text.is_some()
+        }),
+    };
 
     // Subagents-in-flight verdict: count Agent/Task tool_uses with no matching
     // tool_result. While > 0, a foreground agent batch is running — regardless
@@ -1399,31 +1459,10 @@ fn aggregate_entries(
     // its transcript silent for minutes). This is the deterministic signal the
     // mtime-window check can't provide; `should_demote_stale_subagent` and the
     // subagent rescue both consume it.
-    //
-    // F-correctness-001: scope the candidate set to the CURRENT turn. Scanning
-    // the whole transcript pinned the card on `subagent(N)` forever whenever a
-    // foreground Agent/Task batch was interrupted (ESC) or otherwise never
-    // received tool_results — those ids stayed unmatched for the life of the
-    // session, so the count never returned to 0 and `should_demote_stale_subagent`
-    // (which requires count == 0) could never undo the mislabel, while the hook
-    // self-healed to `working subs=0`. A real user prompt (`is_user_message`,
-    // which excludes tool_result/metadata rows) or an interrupt marker ends the
-    // turn: foreground agent batches block the prompt, so a later user message
-    // proves the batch is finished or abandoned. Reset the set at each such
-    // boundary and count only ids launched in the still-open turn. `resolved`
-    // stays global — a result that lands is a resolution wherever it appears.
-    let mut turn_agent_ids: Vec<&str> = Vec::new();
-    for entry in entries {
-        if entry.is_user_message || entry.is_interrupt_marker {
-            turn_agent_ids.clear();
-        }
-        for id in &entry.agent_tool_use_ids {
-            turn_agent_ids.push(id.as_str());
-        }
-    }
-    m.pending_agent_tool_count = turn_agent_ids
+    m.pending_agent_tool_count = entries
         .iter()
-        .filter(|id| !resolved.contains(*id))
+        .flat_map(|e| e.agent_tool_use_ids.iter())
+        .filter(|id| !resolved.contains(id.as_str()))
         .count() as i64;
 
     // Freshness marker: the newest entry timestamp this parse reflects. The
@@ -1491,12 +1530,28 @@ fn aggregate_entries(
     if let Some(parent_dir) = path.parent() {
         if let Some(session_stem) = path.file_stem().and_then(|s| s.to_str()) {
             let subagents_dir = parent_dir.join(session_stem).join("subagents");
+            // Track which subagent files we saw this pass so stale cache
+            // entries (deleted agents) can be pruned. `listed` gates the prune:
+            // a transient `read_dir` error must NOT wipe live caches, but an
+            // absent directory (`is_dir` false) is authoritative — every
+            // subagent is gone, so those caches should clear.
+            let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+            let mut listed = false;
             if subagents_dir.is_dir() {
                 if let Ok(dir_entries) = std::fs::read_dir(&subagents_dir) {
+                    listed = true;
                     for dir_entry in dir_entries.flatten() {
                         let file_path = dir_entry.path();
                         if file_path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-                            if let Some(sub_metrics) = parse_subagent_jsonl(&file_path) {
+                            let sub_metrics = match subagent_caches {
+                                Some(ref mut caches) => {
+                                    seen.insert(file_path.clone());
+                                    let sub_cache = caches.entry(file_path.clone()).or_default();
+                                    parse_subagent_jsonl_cached(&file_path, sub_cache)
+                                }
+                                None => parse_subagent_jsonl(&file_path),
+                            };
+                            if let Some(sub_metrics) = sub_metrics {
                                 m.subagents.push(sub_metrics);
                             }
                         }
@@ -1505,6 +1560,17 @@ fn aggregate_entries(
                 // Sort by description for stable display order
                 m.subagents
                     .sort_by(|a, b| a.description.cmp(&b.description));
+            } else {
+                // No subagents directory: authoritative "none present".
+                listed = true;
+            }
+
+            // Evict caches for subagent files that are no longer present so the
+            // map is bounded by the live agent count, not the session's history.
+            if listed {
+                if let Some(ref mut caches) = subagent_caches {
+                    caches.retain(|k, _| seen.contains(k));
+                }
             }
         }
     }
@@ -1625,8 +1691,8 @@ mod tests {
         let assistant = format!(
             r#"{{"type":"assistant","timestamp":2.0,"message":{{"role":"assistant","stop_reason":"end_turn","content":[{{"type":"text","text":"{big}"}}],"usage":{{"input_tokens":1}}}}}}"#
         );
-        let u = parse_line(&user).expect("user entry");
-        let a = parse_line(&assistant).expect("assistant entry");
+        let u = parse_line_opts(&user, true).expect("user entry");
+        let a = parse_line_opts(&assistant, true).expect("assistant entry");
         // Capped well under the 50k input (SNIPPET_CHAR_CAP + ellipsis).
         let ulen = u.user_prompt_text.as_ref().unwrap().chars().count();
         let alen = a.assistant_text.as_ref().unwrap().chars().count();
@@ -2040,6 +2106,22 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_entry_captures_api_error_text() {
+        // An isApiErrorMessage entry yields the human-readable failure reason.
+        let line = r#"{"type":"assistant","timestamp":1710000000.0,"isApiErrorMessage":true,"message":{"role":"assistant","stop_reason":"stop_sequence","content":[{"type":"text","text":"There's an issue with the selected model (claude-fable-5)."}]}}"#;
+        let entries = parse_jsonl_content(line);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].api_error_text.as_deref(),
+            Some("There's an issue with the selected model (claude-fable-5).")
+        );
+        // A normal assistant message must NOT populate api_error_text.
+        let normal = r#"{"type":"assistant","timestamp":1.0,"message":{"content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn"}}"#;
+        let n = parse_jsonl_content(normal);
+        assert!(n[0].api_error_text.is_none());
+    }
+
+    #[test]
     fn test_metrics_captures_last_end_turn_ts() {
         // user → assistant(end_turn) → nothing newer. Should populate the ts.
         let user = r#"{"type":"user","timestamp":1.0,"message":{"content":"hi"}}"#;
@@ -2054,6 +2136,34 @@ mod tests {
         let m = parse_jsonl_to_session_metrics(&path).unwrap();
         assert_eq!(m.last_end_turn_ts, Some(2.5));
         assert!(!m.pending_tool_use);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_metrics_error_message_set_then_cleared_on_recovery() {
+        let user = r#"{"type":"user","timestamp":1.0,"message":{"content":"go"}}"#;
+        let api_err = r#"{"type":"assistant","timestamp":2.0,"isApiErrorMessage":true,"message":{"role":"assistant","stop_reason":"stop_sequence","content":[{"type":"text","text":"Model unavailable: claude-fable-5"}]}}"#;
+        let recovered = r#"{"type":"assistant","timestamp":3.0,"message":{"model":"claude-opus-4-7","usage":{"input_tokens":5,"output_tokens":2},"content":[{"type":"text","text":"ok now"}],"stop_reason":"end_turn"}}"#;
+
+        let dir = std::env::temp_dir().join("cue_test_err_msg");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Error is the last assistant turn → its reason is surfaced.
+        let p1 = dir.join("a.jsonl");
+        std::fs::write(&p1, format!("{user}\n{api_err}")).unwrap();
+        let m1 = parse_jsonl_to_session_metrics(&p1).unwrap();
+        assert_eq!(
+            m1.last_error_message.as_deref(),
+            Some("Model unavailable: claude-fable-5")
+        );
+
+        // A normal assistant turn after the error → cleared (recovered).
+        let p2 = dir.join("b.jsonl");
+        std::fs::write(&p2, format!("{user}\n{api_err}\n{recovered}")).unwrap();
+        let m2 = parse_jsonl_to_session_metrics(&p2).unwrap();
+        assert_eq!(m2.last_error_message, None);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2181,7 +2291,7 @@ mod tests {
         std::fs::write(&path, format!("{line_a}\n")).unwrap();
 
         let mut cache = super::JsonlEntryCache::default();
-        super::refresh_entry_cache(&path, &mut cache);
+        super::refresh_entry_cache(&path, &mut cache, true);
         assert_eq!(cache.entries.len(), 1);
         let size_after_first = cache.file_size;
         assert!(size_after_first > 0);
@@ -2194,13 +2304,13 @@ mod tests {
         writeln!(f, "{line_b}").unwrap();
         drop(f);
 
-        super::refresh_entry_cache(&path, &mut cache);
+        super::refresh_entry_cache(&path, &mut cache, true);
         assert_eq!(cache.entries.len(), 2);
         assert!(cache.file_size > size_after_first);
 
         // No-change refresh leaves entries alone.
         let entries_before = cache.entries.len();
-        super::refresh_entry_cache(&path, &mut cache);
+        super::refresh_entry_cache(&path, &mut cache, true);
         assert_eq!(cache.entries.len(), entries_before);
 
         let _ = std::fs::remove_file(&path);
@@ -2218,7 +2328,7 @@ mod tests {
         std::fs::write(&path, format!("{long_line}\n{long_line}\n")).unwrap();
 
         let mut cache = super::JsonlEntryCache::default();
-        super::refresh_entry_cache(&path, &mut cache);
+        super::refresh_entry_cache(&path, &mut cache, true);
         assert_eq!(cache.entries.len(), 2);
 
         // Truncate file to a single line — cache should reset and re-parse.
@@ -2230,7 +2340,7 @@ mod tests {
         writeln!(f, "{long_line}").unwrap();
         drop(f);
 
-        super::refresh_entry_cache(&path, &mut cache);
+        super::refresh_entry_cache(&path, &mut cache, true);
         assert_eq!(cache.entries.len(), 1);
 
         let _ = std::fs::remove_file(&path);
@@ -2248,7 +2358,7 @@ mod tests {
         std::fs::write(&path, format!("{complete}\n{partial}")).unwrap();
 
         let mut cache = super::JsonlEntryCache::default();
-        super::refresh_entry_cache(&path, &mut cache);
+        super::refresh_entry_cache(&path, &mut cache, true);
         // Only the complete line should be parsed; the partial waits.
         assert_eq!(cache.entries.len(), 1);
 
@@ -2257,7 +2367,7 @@ mod tests {
         let third = r#"{"type":"user","timestamp":1710000002.0,"message":{"content":"c"}}"#;
         std::fs::write(&path, format!("{complete}\n{partial}{rest}\n{third}\n")).unwrap();
 
-        super::refresh_entry_cache(&path, &mut cache);
+        super::refresh_entry_cache(&path, &mut cache, true);
         assert_eq!(cache.entries.len(), 3);
 
         let _ = std::fs::remove_file(&path);
@@ -2274,11 +2384,11 @@ mod tests {
         std::fs::write(&path, format!("{line}\n")).unwrap();
 
         let mut cache = super::JsonlEntryCache::default();
-        super::refresh_entry_cache(&path, &mut cache);
+        super::refresh_entry_cache(&path, &mut cache, true);
         assert_eq!(cache.entries.len(), 1);
 
         std::fs::remove_file(&path).unwrap();
-        super::refresh_entry_cache(&path, &mut cache);
+        super::refresh_entry_cache(&path, &mut cache, true);
         assert_eq!(
             cache.entries.len(),
             0,
@@ -2306,7 +2416,7 @@ mod tests {
         assert!(std::fs::metadata(&link).is_ok());
 
         let mut cache = super::JsonlEntryCache::default();
-        super::refresh_entry_cache(&link, &mut cache);
+        super::refresh_entry_cache(&link, &mut cache, true);
         // …but our reader refuses to open through it, so no entries land.
         assert_eq!(
             cache.entries.len(),
@@ -2316,6 +2426,215 @@ mod tests {
 
         let _ = std::fs::remove_file(&link);
         let _ = std::fs::remove_file(&real);
+    }
+
+    // ── Subagent incremental cache (F-perf: don't re-read every tick) ──
+    // The main transcript already tailed incrementally; subagents did not, so
+    // every active session re-read + re-parsed every agent JSONL in full each
+    // 5s tick. These cover the cache's correctness guarantees: hit on an
+    // unchanged file, re-parse on growth, invalidation on truncation and
+    // mtime-regression, and eviction of caches for deleted agents.
+
+    /// Minimal finished-agent transcript line (tail end_turn ⇒ inactive).
+    fn agent_line(id: &str, in_tok: i64, out_tok: i64) -> String {
+        format!(
+            r#"{{"type":"assistant","timestamp":1.0,"agentId":"{id}","message":{{"model":"m","usage":{{"input_tokens":{in_tok},"output_tokens":{out_tok}}},"content":[{{"type":"text","text":"done"}}],"stop_reason":"end_turn"}}}}"#
+        )
+    }
+
+    #[test]
+    fn subagent_cache_hits_on_unchanged_file() {
+        let dir = std::env::temp_dir().join(format!("cue-sub-hit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.jsonl");
+        std::fs::write(&path, format!("{}\n", agent_line("a1", 10, 5))).unwrap();
+
+        let mut cache = super::JsonlEntryCache::default();
+        let m1 = super::parse_subagent_jsonl_cached(&path, &mut cache).unwrap();
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(m1.input_tokens, 10);
+        assert_eq!(m1.output_tokens, 5);
+        let size_after_first = cache.file_size;
+        assert!(size_after_first > 0);
+
+        // Unchanged file: the second parse must reuse the cached entries — the
+        // offset doesn't advance and the metrics are identical.
+        let m2 = super::parse_subagent_jsonl_cached(&path, &mut cache).unwrap();
+        assert_eq!(
+            cache.file_size, size_after_first,
+            "unchanged file must not re-read"
+        );
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(m2.input_tokens, m1.input_tokens);
+        assert_eq!(m2.output_tokens, m1.output_tokens);
+        assert_eq!(m2.message_count, m1.message_count);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn subagent_cache_reparses_on_grow() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("cue-sub-grow-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.jsonl");
+        std::fs::write(&path, format!("{}\n", agent_line("a1", 10, 5))).unwrap();
+
+        let mut cache = super::JsonlEntryCache::default();
+        let m1 = super::parse_subagent_jsonl_cached(&path, &mut cache).unwrap();
+        assert_eq!(m1.message_count, 1);
+        let size_after_first = cache.file_size;
+
+        // Append a second assistant turn — only the new line should be parsed,
+        // and its tokens must roll into the aggregate.
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(f, "{}", agent_line("a1", 100, 50)).unwrap();
+        drop(f);
+
+        let m2 = super::parse_subagent_jsonl_cached(&path, &mut cache).unwrap();
+        assert_eq!(cache.entries.len(), 2);
+        assert!(cache.file_size > size_after_first);
+        assert_eq!(m2.message_count, 2);
+        assert_eq!(m2.input_tokens, 110);
+        assert_eq!(m2.output_tokens, 55);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn subagent_cache_invalidates_on_truncation() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("cue-sub-trunc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.jsonl");
+        std::fs::write(
+            &path,
+            format!("{}\n{}\n", agent_line("a1", 10, 5), agent_line("a1", 20, 7)),
+        )
+        .unwrap();
+
+        let mut cache = super::JsonlEntryCache::default();
+        let m1 = super::parse_subagent_jsonl_cached(&path, &mut cache).unwrap();
+        assert_eq!(cache.entries.len(), 2);
+        assert_eq!(m1.input_tokens, 30);
+
+        // Rewrite shorter (file shrank) — the cache must reset and re-read
+        // rather than serve the stale two-entry aggregate.
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        writeln!(f, "{}", agent_line("a1", 3, 1)).unwrap();
+        drop(f);
+
+        let m2 = super::parse_subagent_jsonl_cached(&path, &mut cache).unwrap();
+        assert_eq!(
+            cache.entries.len(),
+            1,
+            "truncation must invalidate the cache"
+        );
+        assert_eq!(m2.input_tokens, 3);
+        assert_eq!(m2.output_tokens, 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn subagent_cache_invalidates_on_mtime_regression() {
+        // A replaced/forked subagent file can keep the same byte length while
+        // its mtime moves backwards. The cache stamps `file_mtime` from the
+        // stat it reflects; a stored mtime NEWER than the file on disk means
+        // the file was swapped underneath us, so the cache must drop its
+        // entries and re-read rather than trust the stale accumulation.
+        let dir = std::env::temp_dir().join(format!("cue-sub-mtime-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.jsonl");
+        std::fs::write(&path, format!("{}\n", agent_line("a1", 10, 5))).unwrap();
+
+        let mut cache = super::JsonlEntryCache::default();
+        super::parse_subagent_jsonl_cached(&path, &mut cache).unwrap();
+        assert_eq!(cache.entries.len(), 1);
+
+        // Poison the cache: pretend it reflects a FUTURE mtime and holds a
+        // sentinel entry the real file never had. A correct invalidation drops
+        // both when it sees the on-disk mtime is older.
+        cache.file_mtime =
+            Some(std::time::SystemTime::now() + std::time::Duration::from_secs(3600));
+        cache.entries.push(super::ParsedEntry {
+            entry_type: "SENTINEL".to_string(),
+            ..Default::default()
+        });
+
+        super::parse_subagent_jsonl_cached(&path, &mut cache).unwrap();
+        assert_eq!(
+            cache.entries.len(),
+            1,
+            "mtime regression must reset the cache and re-read from scratch"
+        );
+        assert!(
+            !cache.entries.iter().any(|e| e.entry_type == "SENTINEL"),
+            "stale sentinel entry must not survive an mtime-regression reset"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn subagent_caches_evict_deleted_agents() {
+        // The cached session parse holds a nested cache per subagent file. When
+        // an agent's transcript is removed, its cache entry must be pruned so
+        // the map is bounded by the live agent count, not the session history.
+        let dir = std::env::temp_dir().join(format!("cue-sub-evict-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Main transcript: <dir>/<sid>.jsonl ; subagents: <dir>/<sid>/subagents/
+        let sid = "11111111-1111-1111-1111-111111111111";
+        let main_path = dir.join(format!("{sid}.jsonl"));
+        std::fs::write(
+            &main_path,
+            concat!(
+                r#"{"type":"user","timestamp":1.0,"message":{"role":"user","content":"go"}}"#,
+                "\n",
+                r#"{"type":"assistant","timestamp":2.0,"message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let subagents_dir = dir.join(sid).join("subagents");
+        std::fs::create_dir_all(&subagents_dir).unwrap();
+        let agent_a = subagents_dir.join("agent-a.jsonl");
+        let agent_b = subagents_dir.join("agent-b.jsonl");
+        std::fs::write(&agent_a, format!("{}\n", agent_line("a", 10, 5))).unwrap();
+        std::fs::write(&agent_b, format!("{}\n", agent_line("b", 20, 7))).unwrap();
+
+        let mut cache = super::JsonlEntryCache::default();
+        let m1 = super::parse_jsonl_to_session_metrics_cached(&main_path, &mut cache).unwrap();
+        assert_eq!(m1.subagents.len(), 2);
+        assert_eq!(cache.subagent_caches.len(), 2, "both agents cached");
+
+        // Delete one agent transcript, re-parse: its cache entry is evicted.
+        std::fs::remove_file(&agent_b).unwrap();
+        let m2 = super::parse_jsonl_to_session_metrics_cached(&main_path, &mut cache).unwrap();
+        assert_eq!(m2.subagents.len(), 1);
+        assert_eq!(
+            cache.subagent_caches.len(),
+            1,
+            "deleted agent's cache entry must be pruned"
+        );
+        assert!(cache.subagent_caches.contains_key(&agent_a));
+        assert!(!cache.subagent_caches.contains_key(&agent_b));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ── Hostile-input hardening (F-tests-009) ──────────────────────────
@@ -2547,137 +2866,6 @@ mod tests {
     }
 
     #[test]
-    fn test_pending_agent_tool_count_resets_on_new_user_turn() {
-        // F-correctness-001: an interrupted foreground Agent batch leaves its
-        // tool_uses unmatched forever. Before the turn-scoping fix the whole
-        // transcript was scanned, so the count stayed > 0 for the rest of the
-        // session and pinned the card on `subagent(N)` with no recovery. A real
-        // user prompt after the batch ends the turn (foreground batches block
-        // the prompt), so those unmatched agents must no longer be counted.
-        let batch = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"toolu_c1","name":"Agent","input":{}},{"type":"tool_use","id":"toolu_c2","name":"Agent","input":{}},{"type":"tool_use","id":"toolu_c3","name":"Agent","input":{}}],"stop_reason":"tool_use"}}"#;
-        let one_result = r#"{"type":"user","timestamp":2.0,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_c1","content":"done"}]}}"#;
-        // Real text prompt → is_user_message true → ends the batch's turn.
-        let next_prompt = r#"{"type":"user","timestamp":3.0,"message":{"role":"user","content":[{"type":"text","text":"ok now do something else"}]}}"#;
-
-        let dir = std::env::temp_dir().join("cue_test_agent_reset_userturn");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("t.jsonl");
-        std::fs::write(&path, format!("{}\n{}\n{}", batch, one_result, next_prompt)).unwrap();
-
-        let m = super::parse_jsonl_to_session_metrics(&path).unwrap();
-        assert_eq!(
-            m.pending_agent_tool_count, 0,
-            "interrupted agents from a prior turn must not be counted after a new user prompt"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_pending_agent_tool_count_resets_on_interrupt_marker() {
-        // F-correctness-001: an ESC interrupt writes an interrupt marker row
-        // (no resolving hook). That marker ends the turn, so agents launched
-        // before it must stop counting immediately — even before any new prompt.
-        let batch = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"toolu_d1","name":"Agent","input":{}},{"type":"tool_use","id":"toolu_d2","name":"Agent","input":{}}],"stop_reason":"tool_use"}}"#;
-        let interrupt = r#"{"type":"user","timestamp":2.0,"message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#;
-
-        let dir = std::env::temp_dir().join("cue_test_agent_reset_interrupt");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("t.jsonl");
-        std::fs::write(&path, format!("{}\n{}", batch, interrupt)).unwrap();
-
-        let m = super::parse_jsonl_to_session_metrics(&path).unwrap();
-        assert_eq!(
-            m.pending_agent_tool_count, 0,
-            "agents launched before an interrupt marker must not stay counted"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_cached_metrics_stable_only_without_active_subagent() {
-        // F-performance-001 verify: the no-change skip must NOT reuse cached
-        // metrics while a subagent is is_active, because is_active flips off via
-        // the 600s wall-clock backstop with no file change (invisible to the
-        // subagents signature) — reusing it would pin the card on `subagent`.
-        use crate::models::{SessionMetrics, SubagentMetrics};
-        let mut m = SessionMetrics::default();
-        assert!(cached_metrics_are_stable(&m), "no subagents → reusable");
-        m.subagents.push(SubagentMetrics {
-            is_active: false,
-            ..Default::default()
-        });
-        assert!(
-            cached_metrics_are_stable(&m),
-            "finished (inactive) subagent → reusable"
-        );
-        m.subagents.push(SubagentMetrics {
-            is_active: true,
-            ..Default::default()
-        });
-        assert!(
-            !cached_metrics_are_stable(&m),
-            "active subagent → must re-aggregate so the 600s backstop can heal"
-        );
-    }
-
-    #[test]
-    fn test_cached_metrics_skip_is_equivalent_and_picks_up_changes() {
-        // F-performance-001/002: a no-change tick must skip re-aggregation yet
-        // return metrics identical to a full parse, and a subagent-only OR
-        // parent change must still be reflected.
-        use std::io::Write as _;
-        let dir = std::env::temp_dir().join(format!("cue_test_cached_skip_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("sess.jsonl");
-        let asst = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"m","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}}"#;
-        std::fs::write(&path, format!("{}\n", asst)).unwrap();
-
-        let mut cache = JsonlEntryCache::default();
-        let m1 = parse_jsonl_to_session_metrics_cached(&path, &mut cache).unwrap();
-        // Second call, nothing changed → served from last_metrics (skip path).
-        let m2 = parse_jsonl_to_session_metrics_cached(&path, &mut cache).unwrap();
-        assert_eq!(m1.input_tokens, m2.input_tokens);
-        assert_eq!(m1.message_count, m2.message_count);
-        // Equivalent to a fresh uncached full parse.
-        let fresh = parse_jsonl_to_session_metrics(&path).unwrap();
-        assert_eq!(m2.input_tokens, fresh.input_tokens);
-        assert_eq!(m2.message_count, fresh.message_count);
-        assert_eq!(m2.subagents.len(), fresh.subagents.len());
-
-        // Subagent-only change (parent quiet) must still be picked up.
-        let sub_dir = dir.join("sess").join("subagents");
-        std::fs::create_dir_all(&sub_dir).unwrap();
-        std::fs::write(
-            sub_dir.join("agent-1.jsonl"),
-            format!("{}\n", r#"{"type":"assistant","timestamp":2.0,"agentId":"a1","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}],"stop_reason":"tool_use"}}"#),
-        )
-        .unwrap();
-        let m3 = parse_jsonl_to_session_metrics_cached(&path, &mut cache).unwrap();
-        assert_eq!(
-            m3.subagents.len(),
-            1,
-            "subagent-only change must re-aggregate despite quiet parent"
-        );
-
-        // Parent append must be reflected.
-        let user = r#"{"type":"user","timestamp":3.0,"message":{"role":"user","content":[{"type":"text","text":"more"}]}}"#;
-        let mut f = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .unwrap();
-        writeln!(f, "{}", user).unwrap();
-        let m4 = parse_jsonl_to_session_metrics_cached(&path, &mut cache).unwrap();
-        assert_eq!(m4.user_message_count, 1, "parent append must be reflected");
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn test_subagent_is_active_by_tail_state_not_mtime() {
         // Both files have fresh mtimes (just written). The finished agent
         // (tail end_turn) must read inactive immediately; the mid-turn agent
@@ -2705,6 +2893,57 @@ mod tests {
         )).unwrap();
         let m_run = super::parse_subagent_jsonl(&running).unwrap();
         assert!(m_run.is_active, "tail tool_use ⇒ still running");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_subagent_surfaces_running_tool_and_last_text() {
+        // The per-subagent quick-report fields mirror the main-session parse:
+        // an active agent (tail = pending tool_use) exposes running_tool_name /
+        // running_tool_target and its latest assistant prose; a finished agent
+        // (tail = end_turn text) has no running tool but keeps its final text
+        // as the result.
+        let dir = std::env::temp_dir().join("cue_test_subagent_activity");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let running = dir.join("agent-activity-running.jsonl");
+        std::fs::write(&running, concat!(
+            r#"{"type":"assistant","timestamp":1.0,"agentId":"a-act","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"Scanning the codebase"}],"stop_reason":"end_turn"}}"#, "\n",
+            r#"{"type":"assistant","timestamp":2.0,"agentId":"a-act","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"ra1","name":"Read","input":{"file_path":"src/audit.rs"}}],"stop_reason":"tool_use"}}"#, "\n",
+        )).unwrap();
+        let m_run = super::parse_subagent_jsonl(&running).unwrap();
+        assert!(m_run.is_active, "tail tool_use ⇒ still running");
+        assert_eq!(m_run.running_tool_name.as_deref(), Some("Read"));
+        assert_eq!(
+            m_run.running_tool_target.as_deref(),
+            Some("src/audit.rs"),
+            "running tool target is the pending tool_use input"
+        );
+        assert_eq!(
+            m_run.last_assistant_text.as_deref(),
+            Some("Scanning the codebase"),
+            "latest non-empty assistant text is surfaced"
+        );
+
+        let finished = dir.join("agent-activity-finished.jsonl");
+        std::fs::write(&finished, concat!(
+            r#"{"type":"assistant","timestamp":1.0,"agentId":"a-done","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"rb1","name":"Bash","input":{}}],"stop_reason":"tool_use"}}"#, "\n",
+            r#"{"type":"user","timestamp":2.0,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"rb1","content":"ok"}]}}"#, "\n",
+            r#"{"type":"assistant","timestamp":3.0,"agentId":"a-done","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"Audit complete: no issues found"}],"stop_reason":"end_turn"}}"#, "\n",
+        )).unwrap();
+        let m_fin = super::parse_subagent_jsonl(&finished).unwrap();
+        assert!(!m_fin.is_active, "tail end_turn ⇒ finished");
+        assert!(
+            m_fin.running_tool_name.is_none(),
+            "a resolved tool_result clears the running tool"
+        );
+        assert_eq!(
+            m_fin.last_assistant_text.as_deref(),
+            Some("Audit complete: no issues found"),
+            "finished agent keeps its final text as the result"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2739,6 +2978,61 @@ mod tests {
         let m_fin = super::parse_subagent_jsonl(&finished)
             .expect("all-sidechain agent file must still parse");
         assert!(!m_fin.is_active, "tail end_turn ⇒ finished");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_subagent_cached_path_keeps_sidechain_rows() {
+        // Regression for the hot-path landmine: the production 5s metrics tick
+        // reaches a subagent transcript through
+        // parse_subagent_jsonl_cached → refresh_entry_cache — NOT the one-shot
+        // parse_subagent_jsonl that test_subagent_jsonl_parsed_when_all_rows_sidechain
+        // covers. That cached path used to call the sidechain-DROPPING parse_line,
+        // so an all-`isSidechain:true` subagent file (which every real
+        // background-Agent transcript is) tailed to zero cached entries → None →
+        // the agent never reached m.subagents and the parent card sat on idle for
+        // the whole run. refresh_entry_cache(.., drop_sidechain=false) on the
+        // subagent path is the fix. Neither branch's tests exercised this path.
+        use std::io::Write;
+        let dir =
+            std::env::temp_dir().join(format!("cue-sub-cached-sidechain-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent-sidechain-cached.jsonl");
+        std::fs::write(&path, concat!(
+            r#"{"type":"user","isSidechain":true,"timestamp":1.0,"agentId":"a-cached","message":{"role":"user","content":[{"type":"text","text":"audit this"}]}}"#, "\n",
+            r#"{"type":"assistant","isSidechain":true,"timestamp":2.0,"agentId":"a-cached","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"c1","name":"Read","input":{}}],"stop_reason":"tool_use"}}"#, "\n",
+        )).unwrap();
+
+        let mut cache = super::JsonlEntryCache::default();
+        let m = super::parse_subagent_jsonl_cached(&path, &mut cache).expect(
+            "cached path must parse an all-sidechain subagent file (was None before the fix)",
+        );
+        assert!(
+            !cache.entries.is_empty(),
+            "refresh_entry_cache must KEEP sidechain rows on the subagent cached path"
+        );
+        assert_eq!(m.agent_id, "a-cached");
+        assert!(m.is_active, "tail tool_use ⇒ agent still running");
+
+        // The incremental tail read must keep sidechain rows too: append a
+        // finishing end_turn row and confirm the cache tails it in (not dropped).
+        let finish_row = r#"{"type":"assistant","isSidechain":true,"timestamp":3.0,"agentId":"a-cached","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}}"#;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(f, "{finish_row}").unwrap();
+        drop(f);
+        let m2 = super::parse_subagent_jsonl_cached(&path, &mut cache)
+            .expect("cached path still parses after tailing more sidechain rows");
+        assert_eq!(
+            cache.entries.len(),
+            3,
+            "appended sidechain row must be tailed in, not dropped"
+        );
+        assert!(!m2.is_active, "tail end_turn ⇒ agent finished");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2939,6 +3233,36 @@ mod tests {
             m.custom_title.as_deref(),
             Some("My deliberate title"),
             "explicit custom-title must win over a later ai-title"
+        );
+    }
+
+    #[test]
+    fn test_awaiting_cleared_when_prompt_superseded_by_later_work() {
+        // Regression: an AskUserQuestion with NO tool_result (Claude Code doesn't
+        // always record one for an answered prompt) followed by more work must NOT
+        // keep the session "waiting" — it was answered/abandoned and the session
+        // moved on. Previously this pinned a card on "awaiting you" for hours.
+        let ask = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"toolu_ask_open","name":"AskUserQuestion","input":{}}],"stop_reason":"tool_use"}}"#;
+        // …then the assistant went on to run an Edit that returned a tool_result.
+        let edit = r#"{"type":"assistant","timestamp":2.0,"message":{"model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"toolu_edit1","name":"Edit","input":{}}],"stop_reason":"tool_use"}}"#;
+        let result = r#"{"type":"user","timestamp":3.0,"message":{"content":[{"type":"tool_result","tool_use_id":"toolu_edit1"}]}}"#;
+        let m = write_metrics_transcript("await_superseded", &[ask, edit, result]);
+        assert!(
+            !m.awaiting_user_prompt,
+            "an unresolved AskUserQuestion superseded by later work must NOT mark awaiting"
+        );
+    }
+
+    #[test]
+    fn test_awaiting_true_when_open_prompt_is_the_tail() {
+        // Guard the other direction: a genuinely-open AskUserQuestion (nothing
+        // turn-advancing after it, only metadata rows) still marks awaiting.
+        let ask = r#"{"type":"assistant","timestamp":1.0,"message":{"model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"toolu_ask_tail","name":"AskUserQuestion","input":{}}],"stop_reason":"tool_use"}}"#;
+        let meta = r#"{"type":"ai-title","aiTitle":"Some title","sessionId":"s1"}"#;
+        let m = write_metrics_transcript("await_tail", &[ask, meta]);
+        assert!(
+            m.awaiting_user_prompt,
+            "an open AskUserQuestion at the tail (only metadata after) must mark awaiting"
         );
     }
 }

@@ -12,6 +12,7 @@ pub mod jsonl_parser;
 pub mod logging;
 pub mod model_context;
 pub mod models;
+pub mod notifier;
 pub mod paths;
 pub mod permission_log;
 pub mod permission_server;
@@ -26,7 +27,7 @@ use models::{EnrichedSession, Settings};
 use session_monitor::{LockSafe, SessionMonitorState};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, Theme, WebviewUrl,
@@ -35,6 +36,10 @@ use tauri::{
 /// Application state managed by Tauri.
 pub struct AppState {
     pub monitor: Arc<SessionMonitorState>,
+    /// Decides which session state transitions deserve a native notification.
+    /// Holds its own previous-state memory + a cached projection of the user's
+    /// notification settings (refreshed by `update_settings`).
+    pub notifier: Arc<notifier::Notifier>,
     pub pending_permissions: Arc<permission_server::PendingRequests>,
     pub permission_metadata: Arc<Mutex<HashMap<String, models::PermissionRequest>>>,
     /// Last-known screen rect of the tray icon, captured on every click. Used
@@ -44,6 +49,18 @@ pub struct AppState {
     /// Currently-registered global shortcut string, so we know what to
     /// unregister before applying a new settings value.
     pub registered_shortcut: Arc<Mutex<Option<String>>>,
+    /// Auto-fit state for the main dashboard window.
+    pub main_autosize: Arc<Mutex<MainAutosize>>,
+}
+
+/// Tracks whether the main window still auto-fits its height to the dashboard
+/// content. We disable it the moment the user resizes the window themselves so
+/// auto-fit never fights a manual size. `last_applied` records the content
+/// height (logical px) we last set; the next auto-fit compares the window's
+/// current height to it and yields if they no longer match.
+pub struct MainAutosize {
+    pub enabled: bool,
+    pub last_applied: Option<f64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -184,8 +201,8 @@ fn open_theme_picker(app: AppHandle) -> Result<(), String> {
         "theme-picker",
         WebviewUrl::App("index.html#/theme-picker".into()),
     )
-    .title("Themes")
-    .inner_size(240.0, 360.0)
+    .title("Appearance")
+    .inner_size(250.0, 500.0)
     .resizable(false)
     .always_on_top(true)
     .build()
@@ -226,11 +243,11 @@ fn open_dashboard_from_tray(app: AppHandle) -> Result<(), String> {
     if let Some(popover) = app.get_webview_window("tray-popover") {
         let _ = popover.hide();
     }
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
+    reveal_main(&app);
+    // Tell the dashboard it was opened via "expand" so it can play the
+    // bloom-in animation that makes the popover feel like it grew into the
+    // full window.
+    let _ = app.emit("dashboard-expanded", ());
     Ok(())
 }
 
@@ -239,13 +256,23 @@ fn open_settings_from_tray(app: AppHandle) -> Result<(), String> {
     if let Some(popover) = app.get_webview_window("tray-popover") {
         let _ = popover.hide();
     }
+    reveal_main(&app);
+    let _ = app.emit("navigate-settings", ());
+    Ok(())
+}
+
+/// Canonical "bring the dashboard to the user" path. Every reopen entry point —
+/// the Dock Reopen event, the tray menu, the popover buttons, the global
+/// shortcut — funnels through this so they behave identically: a hidden OR
+/// minimized window is always shown, de-miniaturized, and focused. Omitting
+/// `unminimize()` was why the tray menu "Dashboard..." silently did nothing when
+/// the window had been minimized to the Dock.
+fn reveal_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
-        let _ = app.emit("navigate-settings", ());
     }
-    Ok(())
 }
 
 #[tauri::command]
@@ -264,7 +291,11 @@ fn get_settings() -> Settings {
 }
 
 #[tauri::command]
-fn update_settings(app: tauri::AppHandle, new_settings: Settings) -> Result<(), String> {
+fn update_settings(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    new_settings: Settings,
+) -> Result<(), String> {
     // Vibrancy is toggled by the frontend via the set_vibrancy command
     // when the user actively selects a glass theme. We do NOT call
     // toggle_vibrancy here — doing so on every save resets the window
@@ -272,8 +303,91 @@ fn update_settings(app: tauri::AppHandle, new_settings: Settings) -> Result<(), 
     settings::save_settings(&new_settings)?;
     apply_visibility_settings(&app, &new_settings);
     apply_shortcut_settings(&app, &new_settings);
+    // Keep the notifier's cached preferences in lockstep with disk so the
+    // poll loop honors a freshly-toggled notification setting on the next tick.
+    state
+        .notifier
+        .update_settings(notifier::NotificationSettings::from(&new_settings));
+    // Keep the poll loop's cached idle auto-hide threshold in lockstep with disk
+    // so a freshly-changed value takes effect on the next ~1s tick.
+    state
+        .monitor
+        .set_auto_hide_idle_secs(new_settings.auto_hide_idle_secs);
+    // Keep the poll loop's cached Claude projects-dir override in lockstep with
+    // disk so a freshly-set path takes effect on the next ~1s tick (empty value
+    // normalizes to "auto-detect" inside the setter).
+    state
+        .monitor
+        .set_claude_projects_override(Some(new_settings.claude_config_dir.clone()));
     let _ = app.emit("settings-changed", &new_settings);
     Ok(())
+}
+
+/// Result of probing a candidate Claude config directory for the Settings UI.
+/// Lets the frontend show "✓ found N sessions" / "⚠ nothing here" feedback as
+/// the user edits the override, and surface the auto-detected default as a hint.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeDirProbe {
+    /// The projects directory that WOULD be monitored for the given input
+    /// (`<dir>/projects`, or the auto-detected path when `dir` is blank).
+    projects_path: String,
+    /// Whether that directory currently exists on disk.
+    exists: bool,
+    /// Count of session transcripts (`*.jsonl`) one level deep, capped.
+    session_count: usize,
+    /// True when the count hit the cap, so the UI can render "N+".
+    capped: bool,
+    /// The auto-detected projects dir (`$CLAUDE_CONFIG_DIR` or `~/.claude`),
+    /// shown as the placeholder / "currently using" hint when no override is set.
+    auto_detected: String,
+}
+
+/// Probe a candidate Claude config directory (the value typed into the Settings
+/// override field). Runs only on user edit — never on the poll path — so the
+/// bounded directory walk can't stall the UI. The path is the user's own input
+/// for their own machine; we list directories and check extensions only (no
+/// file-content reads), so no workspace sanitization is required.
+#[tauri::command]
+fn probe_claude_dir(dir: String) -> ClaudeDirProbe {
+    const PROBE_CAP: usize = 200;
+    let trimmed = dir.trim();
+    let projects = if trimmed.is_empty() {
+        paths::claude_projects_path()
+    } else {
+        paths::claude_projects_path_from_override(trimmed)
+    };
+
+    // Sessions live at <projects>/<encoded-workspace>/<id>.jsonl — count
+    // transcripts one level deep, bounded so a huge tree can't freeze the UI.
+    let mut session_count = 0usize;
+    let mut capped = false;
+    if let Ok(workspaces) = std::fs::read_dir(&projects) {
+        'outer: for ws in workspaces.flatten() {
+            if !ws.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            if let Ok(entries) = std::fs::read_dir(ws.path()) {
+                for e in entries.flatten() {
+                    if e.path().extension().and_then(|x| x.to_str()) == Some("jsonl") {
+                        session_count += 1;
+                        if session_count >= PROBE_CAP {
+                            capped = true;
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    ClaudeDirProbe {
+        exists: projects.exists(),
+        session_count,
+        capped,
+        projects_path: projects.to_string_lossy().into_owned(),
+        auto_detected: paths::claude_projects_path().to_string_lossy().into_owned(),
+    }
 }
 
 #[tauri::command]
@@ -298,11 +412,6 @@ fn get_claude_version(state: State<'_, AppState>) -> Option<String> {
         .lock_safe()
         .claude_version
         .clone()
-}
-
-#[tauri::command]
-fn set_frameless(window: tauri::Window, frameless: bool) {
-    let _ = window.set_decorations(!frameless);
 }
 
 #[tauri::command]
@@ -580,6 +689,57 @@ fn get_permission_history(session_id: String) -> Vec<models::PermissionLogEntry>
     permission_log::read_permission_log(&session_id)
 }
 
+/// Build the `permission-request` frontend event payload from a stored request,
+/// computing the tool summary. Shared by the live emit path and
+/// `get_pending_permissions` so the two payloads can never drift out of shape —
+/// the frontend deserializes both as its `PermissionRequest` type.
+fn permission_request_payload(req: &models::PermissionRequest) -> serde_json::Value {
+    let summary = summary_formatter::format_tool_summary(&req.tool_name, &req.tool_input);
+    serde_json::json!({
+        "requestId": req.request_id,
+        "sessionId": req.session_id,
+        "toolName": req.tool_name,
+        "toolInput": req.tool_input,
+        "summary": summary,
+        "hookEventName": req.hook_event_name,
+        "receivedAt": req.received_at,
+    })
+}
+
+/// Map the request IDs still awaiting a decision to their frontend payloads,
+/// skipping any ID whose metadata has already been reaped (defensive: metadata
+/// is inserted before the pending slot and removed after it, so this normally
+/// maps 1:1). Split out from the command so the mapping is unit-testable
+/// without standing up a Tauri `State`.
+fn build_pending_permissions(
+    pending_ids: &[String],
+    metadata: &HashMap<String, models::PermissionRequest>,
+) -> Vec<serde_json::Value> {
+    pending_ids
+        .iter()
+        .filter_map(|id| metadata.get(id).map(permission_request_payload))
+        .collect()
+}
+
+/// Return every permission request currently awaiting a decision, in the same
+/// shape as the `permission-request` event.
+///
+/// Recovery path for the permission-prompt wipe race: the frontend's
+/// `sessions-updated` listener can receive a snapshot up to ~1s stale (the
+/// Focused-rehydrate and the 1s poll both emit a cached enriched snapshot), so
+/// a just-arrived prompt can look like it already left the "waiting" state.
+/// Rather than trust that snapshot, the frontend re-syncs against this command
+/// and drops a pending entry only when the backend confirms it is no longer
+/// pending here.
+#[tauri::command]
+fn get_pending_permissions(state: State<'_, AppState>) -> Vec<serde_json::Value> {
+    // Snapshot the still-pending IDs first (releasing that lock) before taking
+    // the metadata lock — never hold both std Mutexes at once.
+    let pending_ids = state.pending_permissions.pending_ids();
+    let metadata = state.permission_metadata.lock_safe();
+    build_pending_permissions(&pending_ids, &metadata)
+}
+
 /// Minimal session payload written by sandbox mode into sessions.json.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -776,6 +936,25 @@ fn revive_session(session_id: String, workspace: String) -> Result<(), String> {
     spawn_terminal_with_resume(&session_id, &canonical_str)
 }
 
+/// Manually tuck a session into the recoverable "Resting" group (the card "X").
+/// Stays hidden until the session next does something, then re-surfaces. Takes
+/// effect on the next ~1s poll.
+#[tauri::command]
+fn dismiss_session(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    validate_alphanumeric_id(&session_id, "session ID")?;
+    state.monitor.dismiss_session(&session_id);
+    Ok(())
+}
+
+/// Bring a resting session back into the main view ("restore" in the Resting
+/// group). Overrides the idle auto-hide rule until the session next transitions.
+#[tauri::command]
+fn restore_session(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    validate_alphanumeric_id(&session_id, "session ID")?;
+    state.monitor.restore_session(&session_id);
+    Ok(())
+}
+
 #[tauri::command]
 fn save_preset(preset: models::SignalPreset) -> Result<(), String> {
     let dir = paths::presets_dir();
@@ -914,10 +1093,11 @@ fn spawn_terminal_with_resume(_session_id: &str, _workspace: &str) -> Result<(),
 }
 
 /// Map a session's launcher `source` (as recorded by the hook: "vscode",
-/// "cursor", terminal names, "unknown") to a known editor, as
+/// "cursor", terminal names, "claude-desktop", "unknown") to a known editor, as
 /// `(macOS application name, cross-platform CLI)`, or `None` to fall back to the
-/// OS file manager. Pure so the mapping stays unit-testable; each platform reads
-/// only the field it needs.
+/// OS file manager. The Claude desktop app has no "open this folder" entry point,
+/// so "claude-desktop" intentionally falls through to the file manager. Pure so
+/// the mapping stays unit-testable; each platform reads only the field it needs.
 fn known_editor_for_source(source: Option<&str>) -> Option<(&'static str, &'static str)> {
     match source {
         Some("vscode") => Some(("Visual Studio Code", "code")),
@@ -1014,6 +1194,96 @@ fn open_session_workspace(workspace: String, source: Option<String>) -> Result<(
     reveal_in_file_manager(path)
 }
 
+/// Try to focus the *exact* terminal tab running a session's Claude process, so
+/// clicking one of several cards for the same project lands on the right one.
+/// Works for native terminals that expose a per-tab tty over AppleScript
+/// (iTerm2, Apple Terminal); editors (VS Code/Cursor) have no such API, so this
+/// returns `false` for them and the caller falls back to opening the project.
+/// Returns `true` only when it actually focused a specific tab.
+#[tauri::command]
+fn focus_session_terminal(source: Option<String>, pid: Option<u32>) -> bool {
+    focus_terminal_tab(source.as_deref(), pid)
+}
+
+#[cfg(target_os = "macos")]
+fn tty_for_pid(pid: u32) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "tty=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // ps prints the device name only ("ttys003"); the terminal apps report the
+    // full "/dev/ttys003". A detached/no-tty process prints "??" / "-".
+    if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some(format!("/dev/{raw}"))
+}
+
+#[cfg(target_os = "macos")]
+fn focus_terminal_tab(source: Option<&str>, pid: Option<u32>) -> bool {
+    let pid = match pid {
+        Some(p) => p,
+        None => return false,
+    };
+    let is_iterm = match source {
+        Some("iterm") => true,
+        Some("terminal") => false,
+        _ => return false, // editors / unknown — caller opens the project instead
+    };
+    let Some(tty) = tty_for_pid(pid) else {
+        return false;
+    };
+    // Defense-in-depth: tty is machine-derived, but never interpolate anything
+    // that isn't a plain /dev/<alnum> device into the AppleScript.
+    match tty.strip_prefix("/dev/") {
+        Some(rest) if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_alphanumeric()) => {}
+        _ => return false,
+    }
+
+    let script = if is_iterm {
+        format!(
+            "tell application \"iTerm2\"\n\
+               repeat with w in windows\n\
+                 repeat with t in tabs of w\n\
+                   repeat with s in sessions of t\n\
+                     if (tty of s) is \"{tty}\" then\n\
+                       select w\n select t\n select s\n activate\n return \"ok\"\n\
+                     end if\n\
+                   end repeat\n\
+                 end repeat\n\
+               end repeat\n\
+             end tell\n\
+             return \"no\""
+        )
+    } else {
+        format!(
+            "tell application \"Terminal\"\n\
+               repeat with w in windows\n\
+                 repeat with t in tabs of w\n\
+                   if (tty of t) is \"{tty}\" then\n\
+                     set selected of t to true\n set frontmost of w to true\n activate\n return \"ok\"\n\
+                   end if\n\
+                 end repeat\n\
+               end repeat\n\
+             end tell\n\
+             return \"no\""
+        )
+    };
+
+    std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "ok")
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn focus_terminal_tab(_source: Option<&str>, _pid: Option<u32>) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod open_workspace_tests {
     use super::known_editor_for_source;
@@ -1033,7 +1303,14 @@ mod open_workspace_tests {
     #[test]
     fn falls_back_for_terminals_and_unknown() {
         for s in [
-            "iterm", "terminal", "wezterm", "tmux", "ghostty", "unknown", "",
+            "iterm",
+            "terminal",
+            "wezterm",
+            "tmux",
+            "ghostty",
+            "claude-desktop",
+            "unknown",
+            "",
         ] {
             assert_eq!(known_editor_for_source(Some(s)), None, "source {s:?}");
         }
@@ -1388,7 +1665,8 @@ fn check_settings_hooks(settings_path: &std::path::Path) -> (usize, usize, usize
     let total = env_detect::HOOK_EVENTS.len();
     const CLAUDE_SETTINGS_MAX_BYTES: u64 = 4 * 1024 * 1024;
     let settings: serde_json::Value =
-        match security::read_to_string_bounded(settings_path, CLAUDE_SETTINGS_MAX_BYTES)
+        // User's own ~/.claude/settings.json — follow a symlink (dotfile managers).
+        match security::read_to_string_bounded_follow(settings_path, CLAUDE_SETTINGS_MAX_BYTES)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
         {
@@ -1464,9 +1742,15 @@ fn startup_checks() {
         log::error!("Failed to create directories: {}", e);
     }
 
-    // Verify and correct file permissions
+    // Verify and correct file permissions. The permission audit log holds a
+    // record of every tool decision, so it gets the same owner-only treatment
+    // as sessions.json and settings.json. (verify_file_permissions is a no-op
+    // when the file doesn't exist yet, e.g. before the first decision.)
     let _ = security::verify_file_permissions(&paths::sessions_json_path());
     let _ = security::verify_file_permissions(&paths::settings_path());
+    if let Ok(log_path) = permission_log::log_path() {
+        let _ = security::verify_file_permissions(&log_path);
+    }
 
     // Clean stale temp files
     if let Some(parent) = paths::sessions_json_path().parent() {
@@ -1478,7 +1762,11 @@ fn startup_checks() {
 }
 
 /// Spawn background timers for polling and metrics refresh.
-fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
+fn spawn_timers(
+    app_handle: AppHandle,
+    monitor: Arc<SessionMonitorState>,
+    notifier: Arc<notifier::Notifier>,
+) {
     // Eager prime on app start: run one full pass (metrics + supplemental +
     // poll_status) before the periodic loops settle in. The 1s interval below
     // ticks immediately too, but this gives us belt-and-suspenders coverage so
@@ -1508,6 +1796,7 @@ fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
 
     let monitor_poll = monitor.clone();
     let app_poll = app_handle.clone();
+    let notifier_poll = notifier.clone();
 
     // Poll sessions.json every 1 second.
     //
@@ -1529,6 +1818,45 @@ fn spawn_timers(app_handle: AppHandle, monitor: Arc<SessionMonitorState>) {
             .await;
             match result {
                 Ok(sessions) => {
+                    // Decide + fire native notifications for state transitions
+                    // (waiting / error / finished). Runs every tick independent
+                    // of the emit-dedup below: the notifier seeds silently on a
+                    // session's first sight, so the first poll after launch never
+                    // produces a storm. Firing from the backend means the alert
+                    // reaches the user even when no window is open.
+                    let now_secs = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs_f64())
+                        .unwrap_or(0.0);
+                    // Is the dashboard up and frontmost? If so, a "finished" ping
+                    // is something the user can already see, so it's suppressed
+                    // (tunable). is_focused() is false when the window is hidden
+                    // or closed — so a backgrounded/absent Cue still notifies.
+                    let window_focused = app_poll
+                        .get_webview_window("main")
+                        .and_then(|w| w.is_focused().ok())
+                        .unwrap_or(false);
+                    for ev in notifier_poll.diff_and_collect_with_focus(
+                        &sessions,
+                        now_secs,
+                        window_focused,
+                    ) {
+                        use tauri_plugin_notification::NotificationExt;
+                        let builder = app_poll
+                            .notification()
+                            .builder()
+                            .title(&ev.title)
+                            .body(&ev.body);
+                        // Sound only on the pings that ask you to act (needs-you /
+                        // error); a "finished" ping stays silent. Builder is moved
+                        // by value, so rebind through the match.
+                        let builder = match notifier::sound_name(ev.kind) {
+                            Some(sound) => builder.sound(sound),
+                            None => builder,
+                        };
+                        let _ = builder.show();
+                    }
+
                     let payload = match serde_json::to_vec(&sessions) {
                         Ok(b) => b,
                         Err(e) => {
@@ -1609,6 +1937,7 @@ pub fn run() {
     startup_checks();
 
     let monitor = Arc::new(SessionMonitorState::new());
+    let app_notifier = Arc::new(notifier::Notifier::new());
     let pending_permissions = Arc::new(permission_server::PendingRequests::new());
     let permission_metadata: Arc<Mutex<HashMap<String, models::PermissionRequest>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -1624,6 +1953,8 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -1636,23 +1967,33 @@ pub fn run() {
         )
         .manage(AppState {
             monitor: monitor.clone(),
+            notifier: app_notifier.clone(),
             pending_permissions,
             permission_metadata,
             last_tray_rect: Arc::new(Mutex::new(None)),
             registered_shortcut: Arc::new(Mutex::new(None)),
+            main_autosize: Arc::new(Mutex::new(MainAutosize {
+                enabled: true,
+                last_applied: None,
+            })),
         })
         .invoke_handler(tauri::generate_handler![
             get_sessions,
             get_settings,
             update_settings,
+            probe_claude_dir,
             get_theme,
             detect_environment,
             configure_hooks,
             approve_permission,
             deny_permission,
             get_permission_history,
+            get_pending_permissions,
             revive_session,
+            dismiss_session,
+            restore_session,
             open_session_workspace,
+            focus_session_terminal,
             save_preset,
             list_presets,
             load_preset,
@@ -1663,7 +2004,6 @@ pub fn run() {
             open_theme_picker,
             get_system_memory,
             get_claude_version,
-            set_frameless,
             set_vibrancy,
             write_sandbox_sessions,
             clear_sandbox_sessions,
@@ -1674,6 +2014,7 @@ pub fn run() {
             uninstall_cue,
             hide_tray_popover,
             resize_tray_popover,
+            resize_main_to_content,
             open_dashboard_from_tray,
             open_settings_from_tray,
             quit_app,
@@ -1778,30 +2119,112 @@ pub fn run() {
             // --- System Tray ---
             setup_tray(&handle, &monitor_tray)?;
 
+            // --- Native macOS app menu ---
+            // Without this there is no menu bar, so Cmd-Q/Cmd-,/Cmd-W/Cmd-M do
+            // nothing and the app feels un-Mac-like. Quit/Window/Edit use the
+            // standard predefined items; Settings (Cmd-,) reuses the same path
+            // as the tray. Distinct id ("app-settings") so it never collides
+            // with the tray menu's own handler.
+            #[cfg(target_os = "macos")]
+            {
+                let settings_item = MenuItemBuilder::with_id("app-settings", "Settings…")
+                    .accelerator("CmdOrCtrl+,")
+                    .build(app)?;
+                let app_menu = SubmenuBuilder::new(app, "Cue")
+                    .about(None)
+                    .separator()
+                    .item(&settings_item)
+                    .separator()
+                    .hide()
+                    .hide_others()
+                    .show_all()
+                    .separator()
+                    .quit()
+                    .build()?;
+                let edit_menu = SubmenuBuilder::new(app, "Edit")
+                    .undo()
+                    .redo()
+                    .separator()
+                    .cut()
+                    .copy()
+                    .paste()
+                    .select_all()
+                    .build()?;
+                let window_menu = SubmenuBuilder::new(app, "Window")
+                    .minimize()
+                    .separator()
+                    .close_window()
+                    .build()?;
+                let menu = MenuBuilder::new(app)
+                    .items(&[&app_menu, &edit_menu, &window_menu])
+                    .build()?;
+                app.set_menu(menu)?;
+                app.on_menu_event(|app_handle, event| {
+                    if event.id().as_ref() == "app-settings" {
+                        reveal_main(app_handle);
+                        let _ = app_handle.emit("navigate-settings", ());
+                    }
+                });
+            }
+
+            // --- Notifications: request permission up front so the
+            // "a session needs you" alert can fire (best-effort; macOS prompts
+            // once). ---
+            {
+                use tauri_plugin_notification::NotificationExt;
+                let _ = handle.notification().request_permission();
+            }
+
             // --- Menu-bar / Dock / login settings ---
             let startup_settings = settings::load_settings();
             apply_visibility_settings(&handle, &startup_settings);
             apply_shortcut_settings(&handle, &startup_settings);
 
+            // Apply the persisted notification preferences before the poll loop
+            // starts firing (until now the notifier holds all-on defaults).
+            app_notifier.update_settings(notifier::NotificationSettings::from(&startup_settings));
+            // Seed the poll loop's idle auto-hide threshold from disk (the state
+            // defaults to 15 min until this runs).
+            monitor.set_auto_hide_idle_secs(startup_settings.auto_hide_idle_secs);
+            // Seed the poll loop's Claude projects-dir override from disk (the
+            // state defaults to auto-detect until this runs).
+            monitor.set_claude_projects_override(Some(startup_settings.claude_config_dir.clone()));
+
             // --- Blink timer (0.5s) ---
             spawn_blink_timer(handle.clone(), monitor_tray.clone());
 
             // --- Data polling timers ---
-            spawn_timers(handle.clone(), monitor);
+            spawn_timers(handle.clone(), monitor, app_notifier.clone());
 
             // --- Permission server (localhost-only HTTP for Claude Code hooks) ---
             // Only start if user has opted in via settings
             let perm_settings = settings::load_settings();
             if perm_settings.permissions_enabled {
-                // Provisioning happens INSIDE spawn_permission_server, only
-                // after the 3002 bind succeeds (F-security-001) — so the
-                // per-launch secrets exist on disk only while Cue actually owns
-                // the port, never while some other process holds it.
-                spawn_permission_server(handle, pending_for_server, metadata_for_server);
+                // Provision a fresh per-launch token before opening the socket.
+                // The Python hook reads the same file and uses it as the HMAC
+                // key over a per-request nonce (the raw token never crosses the
+                // wire); the server verifies that MAC and 401s anything else.
+                // Without this, any local process winning the loopback bind
+                // race could forge `{"behavior":"allow"}` responses to Claude
+                // Code prompts.
+                match permission_server::provision_token() {
+                    Ok(token) => {
+                        spawn_permission_server(
+                            handle,
+                            pending_for_server,
+                            metadata_for_server,
+                            token,
+                        );
+                        log::info!("Permission server started (permissions_enabled=true)");
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "Permission server NOT started — failed to provision auth token: {}",
+                            e
+                        );
+                    }
+                }
             } else {
-                // Clear any secrets left by a prior run so the hook won't
-                // forward `req_token` to whatever is on 3002 now.
-                permission_server::remove_secrets();
                 log::info!("Permission server not started (permissions_enabled=false)");
             }
 
@@ -1815,18 +2238,7 @@ pub fn run() {
             // doing nothing. `Reopen` fires on dock-icon activation.
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = _event {
-                if let Some(window) = _app_handle.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.unminimize();
-                    let _ = window.set_focus();
-                }
-            }
-            // On a clean exit, remove the permission secrets so the hook won't
-            // forward to whatever binds 3002 after we're gone (F-security-001).
-            // A hard crash can't run this, but resp_token still defeats a rogue
-            // server in that window.
-            if let tauri::RunEvent::Exit = _event {
-                permission_server::remove_secrets();
+                reveal_main(_app_handle);
             }
         });
 }
@@ -1841,37 +2253,22 @@ fn spawn_permission_server(
     app_handle: AppHandle,
     pending: Arc<permission_server::PendingRequests>,
     metadata: Arc<Mutex<HashMap<String, models::PermissionRequest>>>,
+    token: String,
 ) {
     tauri::async_runtime::spawn(async move {
         let listener = match tokio::net::TcpListener::bind("127.0.0.1:3002").await {
             Ok(l) => l,
             Err(e) => {
                 log::warn!("Permission server failed to start: {}", e);
-                // The port is held by something else (possibly a rogue server).
-                // Remove any stale secrets so the hook won't forward to it.
-                permission_server::remove_secrets();
                 let _ = app_handle.emit("permission-server-error", e.to_string());
-                return;
-            }
-        };
-
-        // Provision the per-launch secrets ONLY now that we own the port
-        // (F-security-001). req_token authenticates the hook to us; resp_token
-        // (returned in X-Cue-Proof) authenticates us to the hook.
-        let secrets = match permission_server::provision_secrets() {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("Permission server: failed to provision auth secrets: {}", e);
-                permission_server::remove_secrets();
                 return;
             }
         };
         log::info!("Permission server listening on 127.0.0.1:3002");
 
-        // Single shared Arcs so spawned per-connection tasks compare against
-        // the same byte slices without cloning the 32-char strings repeatedly.
-        let token = Arc::new(secrets.req_token);
-        let resp_token = Arc::new(secrets.resp_token);
+        // Single shared Arc so spawned per-connection tasks compare against
+        // the same byte slice without cloning the 32-char string repeatedly.
+        let token = Arc::new(token);
 
         // Bound concurrent in-flight connections so a local flood of slow or
         // stalled peers can't accumulate unbounded Tokio tasks + file
@@ -1907,15 +2304,13 @@ fn spawn_permission_server(
             let pending = pending.clone();
             let metadata = metadata.clone();
             let token = token.clone();
-            let resp_token = resp_token.clone();
 
             tokio::spawn(async move {
                 // Hold the permit for the connection's lifetime; releasing it on
                 // task end (including on ingest timeout) frees the slot.
                 let _permit = permit;
                 if let Err(e) =
-                    handle_permission_connection(stream, app, pending, metadata, token, resp_token)
-                        .await
+                    handle_permission_connection(stream, app, pending, metadata, token).await
                 {
                     log::debug!("Permission connection error: {}", e);
                 }
@@ -1931,7 +2326,6 @@ async fn handle_permission_connection(
     pending: Arc<permission_server::PendingRequests>,
     metadata: Arc<Mutex<HashMap<String, models::PermissionRequest>>>,
     expected_token: Arc<String>,
-    resp_token: Arc<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -1973,51 +2367,29 @@ async fn handle_permission_connection(
     let raw = &buf[..];
     let header_str = String::from_utf8_lossy(&raw[..header_end]);
 
-    let first_line = header_str.lines().next().unwrap_or("");
-    let parts: Vec<&str> = first_line.split_whitespace().collect();
-    let method = parts.first().copied().unwrap_or("");
-    let path = parts.get(1).copied().unwrap_or("");
+    let (method, path) = permission_server::request_method_and_path(&header_str);
 
     // DNS-rebinding defense: only accept requests whose Host header names the
     // loopback address or localhost. A webpage that rebinds attacker.example to
     // 127.0.0.1 would reach the socket, but browsers always send the original
     // hostname in Host:, so this blocks cross-origin loopback abuse.
     // Reject any Origin header too — the legit Python hook sends none.
-    let host_ok = header_str.lines().any(|line| {
-        let lower = line.to_lowercase();
-        if !lower.starts_with("host:") {
-            return false;
-        }
-        let val = lower.split(':').skip(1).collect::<Vec<_>>().join(":");
-        let val = val.trim();
-        val.starts_with("127.0.0.1") || val.starts_with("localhost")
-    });
-    let has_origin = header_str
-        .lines()
-        .any(|line| line.to_lowercase().starts_with("origin:"));
+    let host_ok = permission_server::host_header_ok(&header_str);
+    let has_origin = permission_server::has_origin_header(&header_str);
     if !host_ok || has_origin {
         let response = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
         let _ = stream.write_all(response.as_bytes()).await;
         return Ok(());
     }
 
-    // Per-launch token auth on every mutating endpoint. /health stays open
-    // because the only caller is the Python hook's connectivity probe and
+    // Per-launch mutual-HMAC auth on every mutating endpoint. /health stays
+    // open because the only caller is the Python hook's connectivity probe and
     // we want a 200 with no auth to be a definitive "server is up" signal
-    // (otherwise diagnostics conflate "Cue is down" with "hook can't read
-    // the token file"). Anything that produces a side effect — currently
-    // just /permission-request — must present the matching X-Cue-Token
-    // header. Header parsing is case-insensitive per RFC 7230 §3.2.
-    let token_ok = header_str.lines().any(|line| {
-        let Some((name, value)) = line.split_once(':') else {
-            return false;
-        };
-        if !name.eq_ignore_ascii_case(permission_server::TOKEN_HEADER) {
-            return false;
-        }
-        permission_server::constant_time_eq(value.trim().as_bytes(), expected_token.as_bytes())
-    });
-
+    // (otherwise diagnostics conflate "Cue is down" with "hook can't read the
+    // token file"). Anything that produces a side effect — currently just
+    // /permission-request — must present a valid X-Cue-Nonce + X-Cue-Auth pair
+    // (see permission_server handshake docs). The raw token is never sent on
+    // the wire; we recompute the MAC and constant-time-compare below.
     match (method, path) {
         ("GET", "/health") => {
             let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK";
@@ -2025,26 +2397,27 @@ async fn handle_permission_connection(
         }
         ("POST", "/permission-request") => {
             // Reject unauthenticated POSTs before allocating any state for
-            // them. The hook reads STATUS_DIR/permission-token (0600) on
-            // every invocation and sends the value verbatim in X-Cue-Token.
-            if !token_ok {
-                let response =
-                    "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                let _ = stream.write_all(response.as_bytes()).await;
-                return Ok(());
-            }
+            // them. The hook reads STATUS_DIR/permission-token (0600) on every
+            // invocation and proves knowledge of it by HMAC'ing a per-request
+            // nonce; we recompute the MAC with the same on-disk token and
+            // constant-time-compare. On any missing header / mismatch -> 401
+            // and NO prompt (a forger who wins the bind race but can't read the
+            // token file must not be able to surface a dialog). The returned
+            // nonce is retained so we can sign the response the hook verifies.
+            let nonce = match permission_server::verify_request_auth(
+                &header_str,
+                expected_token.as_str(),
+            ) {
+                Some(n) => n.to_string(),
+                None => {
+                    let response =
+                        "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    return Ok(());
+                }
+            };
             // Parse Content-Length to ensure we have the full body
-            let content_length: usize = header_str
-                .lines()
-                .find_map(|line| {
-                    let lower = line.to_lowercase();
-                    if lower.starts_with("content-length:") {
-                        lower.split(':').nth(1)?.trim().parse().ok()
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(0);
+            let content_length: usize = permission_server::parse_content_length(&header_str);
 
             // Cap body size so a hostile local caller can't claim Content-Length
             // of 4 GB and OOM the process before we even try to read.
@@ -2131,6 +2504,12 @@ async fn handle_permission_connection(
                 received_at: now,
             };
 
+            // Build the frontend event payload before we hand ownership of the
+            // request to the metadata map below. Shared with the
+            // get_pending_permissions command (permission_request_payload) so
+            // the live event and the recovery query can't drift out of shape.
+            let frontend_payload = permission_request_payload(&permission_req);
+
             // F-reliability-007 — insert metadata BEFORE the pending receiver.
             // Previously the order was reversed: a resolve that arrived between
             // the pending-insert and the metadata-insert would find pending
@@ -2150,22 +2529,39 @@ async fn handle_permission_connection(
                 Some(rx) => rx,
                 None => {
                     metadata.lock_safe().remove(&request_id);
-                    let response = "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nToo many requests";
+                    let response = "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 17\r\nConnection: close\r\n\r\nToo many requests";
                     let _ = stream.write_all(response.as_bytes()).await;
                     return Ok(());
                 }
             };
 
-            // Build frontend event payload (includes computed summary)
-            let frontend_payload = serde_json::json!({
-                "requestId": request_id,
-                "sessionId": session_id,
-                "toolName": tool_name,
-                "toolInput": tool_input,
-                "summary": summary,
-                "hookEventName": hook_event_name,
-                "receivedAt": now,
-            });
+            // De-dupe with the state-transition notifier: on its next poll it
+            // will see this session flip to "waiting" and would fire a generic
+            // "needs you" ping — tell it to skip that one, since we fire the more
+            // specific "Permission needed" notification right here.
+            if let Some(app_state) = app.try_state::<AppState>() {
+                app_state.notifier.suppress_next_waiting(&session_id);
+            }
+
+            // Native notification so a blocked session reaches the user even
+            // when the dashboard is hidden in the tray (the whole point of a
+            // menu-bar app). Fired from the backend so it works regardless of
+            // whether any window is open. Best-effort.
+            {
+                use tauri_plugin_notification::NotificationExt;
+                let builder = app
+                    .notification()
+                    .builder()
+                    .title(format!("Permission needed · {}", tool_name))
+                    .body(&summary);
+                // A blocked session is a "needs you" alert — give it the same
+                // audible cue as the engine's waiting ping.
+                let builder = match notifier::sound_name(notifier::NotificationKind::Waiting) {
+                    Some(sound) => builder.sound(sound),
+                    None => builder,
+                };
+                let _ = builder.show();
+            }
 
             // Emit to React frontend
             let _ = app.emit("permission-request", &frontend_payload);
@@ -2204,16 +2600,17 @@ async fn handle_permission_connection(
                 models::PermissionDecision::Deny => permission_server::DENY_RESPONSE,
             };
 
-            // Return resp_token in X-Cue-Proof so the hook can authenticate US
-            // (F-security-001). A different-uid process that won the loopback
-            // port received `req_token` in this request but never learns
-            // `resp_token` (the hook never sends it, and the 0600 proof file is
-            // unreadable cross-uid), so it can't produce this header and the
-            // hook rejects its forged "allow".
+            // Sign the decision with hex(HMAC-SHA256(token, "resp:"+nonce)) so
+            // the hook can authenticate this response before acting on it. A
+            // process that couldn't read the token file can't produce a proof
+            // the hook will accept, so it can't forge an "allow". Only the 200
+            // decision carries a proof; the 4xx/504 arms deliberately don't, so
+            // the hook falls back to Claude Code's native prompt on any failure.
+            let proof = permission_server::response_proof(expected_token.as_str(), &nonce);
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{}: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 permission_server::PROOF_HEADER,
-                resp_token,
+                proof,
                 response_body.len(),
                 response_body
             );
@@ -2255,12 +2652,15 @@ fn render_tray_icon(
     }
 }
 
-/// Sessions to surface in the tray. Excludes "ended" — those are revivable
-/// in the main app and shouldn't clutter the menu bar dots or popover.
+/// Sessions to surface in the tray. Excludes "ended" (revivable in the main
+/// app) AND "resting" (auto-hidden idles + manual dismissals) — neither should
+/// clutter the menu-bar dots, the tooltip, the native menu, or the popover. This
+/// is the single chokepoint feeding all of those, so filtering here keeps the
+/// menu bar in lockstep with the React popover (which filters resting too).
 fn tray_active_sessions(sessions: &[EnrichedSession]) -> Vec<EnrichedSession> {
     sessions
         .iter()
-        .filter(|s| s.info.state.as_str() != "ended")
+        .filter(|s| s.info.state.as_str() != "ended" && !s.resting)
         .cloned()
         .collect()
 }
@@ -2376,25 +2776,11 @@ fn setup_tray(
         })
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "dashboard" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                reveal_main(app);
             }
             "settings" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                    let _ = app.emit("navigate-settings", ());
-                }
-            }
-            "show-title-bar" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.set_decorations(true);
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                    let _ = app.emit("frameless-changed", false);
-                }
+                reveal_main(app);
+                let _ = app.emit("navigate-settings", ());
             }
             "quit" => {
                 app.exit(0);
@@ -2410,9 +2796,10 @@ fn setup_tray(
 /// occupy. Past this size the inner list scrolls instead of growing further.
 const TRAY_POPOVER_MAX_HEIGHT_FRAC: f64 = 0.80;
 
-/// Floor for the popover height (logical px) — covers the empty-state and
-/// keeps a 1-session popover from collapsing into something unusably small.
-const TRAY_POPOVER_MIN_HEIGHT: f64 = 200.0;
+/// Floor for the popover height (logical px) — large enough to seat the
+/// empty-state placeholder and a single session row, small enough that one
+/// session reads as a short window rather than a half-empty panel.
+const TRAY_POPOVER_MIN_HEIGHT: f64 = 150.0;
 
 /// Clamp a desired popover content height against the monitor's available
 /// vertical extent. Returned in logical pixels.
@@ -2433,20 +2820,22 @@ fn clamp_popover_height(win: &tauri::WebviewWindow, content_h: f64) -> f64 {
 /// doesn't see the default 460px shell briefly before the frontend's exact
 /// measurement lands.
 fn estimate_popover_content_height(session_count: usize) -> f64 {
-    // Logical-pixel constants tuned to the tray-popover CSS / layout. We err
-    // slightly tall (rather than short) so the frontend's fine-tune resize
-    // shrinks rather than grows the window — growing past the screen is the
-    // visible failure mode.
+    // Logical-pixel constants tuned to the tray-popover CSS / layout. ROW_PX
+    // tracks the real rendered `.tray-row` height — roughly 80px for a typical
+    // row (10+10 padding, the state/name line, context bar, model+prompt line,
+    // and inter-row gap) — with a small margin so we err slightly tall. The
+    // frontend's exact re-measure then shrinks rather than grows the window,
+    // since growing past the screen is the worse failure mode. There is no
+    // footer; the header carries the only chrome (Cue label + Expand / menu).
     const HEADER_PX: f64 = 44.0;
-    const FOOTER_PX: f64 = 60.0;
     const SHELL_PAD_PX: f64 = 14.0;
-    const ROW_PX: f64 = 150.0;
+    const ROW_PX: f64 = 92.0;
     const EMPTY_PLACEHOLDER_PX: f64 = 100.0;
 
     if session_count == 0 {
-        HEADER_PX + EMPTY_PLACEHOLDER_PX + FOOTER_PX + SHELL_PAD_PX
+        HEADER_PX + EMPTY_PLACEHOLDER_PX + SHELL_PAD_PX
     } else {
-        HEADER_PX + (session_count as f64 * ROW_PX) + FOOTER_PX + SHELL_PAD_PX
+        HEADER_PX + (session_count as f64 * ROW_PX) + SHELL_PAD_PX
     }
 }
 
@@ -2464,9 +2853,103 @@ fn resize_tray_popover(app: AppHandle, content_height: f64) -> Result<(), String
     let target_h_phys = (target_h * scale).round() as u32;
     let cur = win.outer_size().map_err(|e| e.to_string())?;
     if cur.height != target_h_phys {
+        // Capture the top-left before resizing. On macOS a raw NSWindow resize
+        // can pivot around the bottom-left origin, which would drift the popover
+        // away from the tray icon as it grows/shrinks; re-asserting the position
+        // pins the top edge so the popover stays anchored under the icon.
+        let origin = win.outer_position().ok();
         win.set_size(PhysicalSize::new(cur.width, target_h_phys))
             .map_err(|e| e.to_string())?;
+        if let Some(origin) = origin {
+            let _ = win.set_position(origin);
+        }
     }
+    Ok(())
+}
+
+/// Max fraction of the monitor height the auto-fitting dashboard may occupy
+/// before its session list scrolls instead of growing further.
+const MAIN_AUTOFIT_MAX_HEIGHT_FRAC: f64 = 0.85;
+
+/// Floor (logical px) for the auto-fit height. Set generously so a one- or
+/// two-session dashboard opens as a comfortably tall window rather than hugging
+/// a single card; auto-fit grows from here as more sessions arrive.
+const MAIN_AUTOFIT_MIN_HEIGHT: f64 = 560.0;
+
+/// Hard ceiling (logical px) kept below the window's configured maxHeight
+/// (tauri.conf.json: 1100, outer) minus the title bar. If auto-fit asked for a
+/// height the OS then clamped to maxHeight, the next fit would see the clamped
+/// size as a "manual" resize and disable itself — so never request past this.
+const MAIN_AUTOFIT_MAX_HEIGHT: f64 = 1050.0;
+
+/// Clamp a desired main-window content height to [floor, min(85% of monitor,
+/// maxHeight)], returned in logical pixels. Same shape as `clamp_popover_height`
+/// but with the dashboard's own bounds.
+fn clamp_main_height(win: &tauri::WebviewWindow, content_h: f64) -> f64 {
+    let scale = win.scale_factor().unwrap_or(1.0);
+    let monitor_h = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .map(|m| m.size().height as f64 / scale)
+        .unwrap_or(900.0);
+    let max_h = (monitor_h * MAIN_AUTOFIT_MAX_HEIGHT_FRAC).floor();
+    // Effective ceiling is the monitor fraction bounded to [floor, absolute cap]
+    // — the lower bound guards clamp against an inverted range on an implausibly
+    // short monitor.
+    let upper = max_h.clamp(MAIN_AUTOFIT_MIN_HEIGHT, MAIN_AUTOFIT_MAX_HEIGHT);
+    content_h.clamp(MAIN_AUTOFIT_MIN_HEIGHT, upper)
+}
+
+/// Tolerance (logical px) for the manual-resize check below. Generous enough to
+/// absorb the title bar and rounding, small enough that a real drag is caught.
+const MAIN_AUTOFIT_MANUAL_TOLERANCE: f64 = 40.0;
+
+/// Auto-fit the main window's height to the dashboard's content (the session
+/// list), clamped to a floor and 85% of the monitor — past that the inner list
+/// scrolls. Works in inner (content) sizes so it composes with the title bar,
+/// and pins the top-left so the window grows/shrinks downward rather than
+/// drifting.
+///
+/// Yields to a manual resize: if the window's current height no longer matches
+/// the height we last applied, the user resized it, so we disable auto-fit for
+/// the rest of the session. Checking at fit time (rather than via Resized
+/// events) avoids races with the window's own show/restore resizes.
+#[tauri::command]
+fn resize_main_to_content(app: AppHandle, content_height: f64) -> Result<(), String> {
+    let win = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    let scale = win.scale_factor().unwrap_or(1.0);
+    let cur = win.inner_size().map_err(|e| e.to_string())?;
+
+    let Some(state) = app.try_state::<AppState>() else {
+        return Ok(());
+    };
+    let mut a = state.main_autosize.lock_safe();
+    if !a.enabled {
+        return Ok(());
+    }
+    // Detect a manual resize since our last auto-fit and yield to it.
+    let cur_logical = cur.height as f64 / scale;
+    if let Some(last) = a.last_applied {
+        if (cur_logical - last).abs() > MAIN_AUTOFIT_MANUAL_TOLERANCE {
+            a.enabled = false;
+            return Ok(());
+        }
+    }
+
+    let target_h = clamp_main_height(&win, content_height);
+    let target_h_phys = (target_h * scale).round() as u32;
+    if cur.height != target_h_phys {
+        let origin = win.outer_position().ok();
+        win.set_size(PhysicalSize::new(cur.width, target_h_phys))
+            .map_err(|e| e.to_string())?;
+        if let Some(origin) = origin {
+            let _ = win.set_position(origin);
+        }
+    }
+    a.last_applied = Some(target_h);
     Ok(())
 }
 
@@ -2662,7 +3145,6 @@ fn build_tray_menu(
 
     builder = builder.separator();
     builder = builder.text("dashboard", "Dashboard...");
-    builder = builder.text("show-title-bar", "Show Title Bar");
     builder = builder.text("settings", "Settings...");
     builder = builder.separator();
     builder = builder.text("quit", "Quit");
@@ -3036,5 +3518,75 @@ mod tests {
             icon_cache_key(&after),
             "dropping a bar must flip the icon cache key so the icon re-renders"
         );
+    }
+
+    // ── get_pending_permissions mapping ─────────────────────────────────
+
+    fn mk_permission_req(request_id: &str, session_id: &str) -> models::PermissionRequest {
+        models::PermissionRequest {
+            request_id: request_id.to_string(),
+            session_id: session_id.to_string(),
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({ "command": "npm install" }),
+            hook_event_name: "PermissionRequest".to_string(),
+            received_at: 1234.5,
+        }
+    }
+
+    #[test]
+    fn test_build_pending_permissions_empty() {
+        // No pending IDs -> empty list, regardless of what metadata holds.
+        let mut metadata = HashMap::new();
+        metadata.insert("orphan".to_string(), mk_permission_req("orphan", "s1"));
+        assert!(build_pending_permissions(&[], &metadata).is_empty());
+    }
+
+    #[test]
+    fn test_build_pending_permissions_maps_to_event_shape() {
+        // A pending ID with metadata maps to the exact `permission-request`
+        // event shape the frontend deserializes as `PermissionRequest`.
+        let mut metadata = HashMap::new();
+        metadata.insert("req-1".to_string(), mk_permission_req("req-1", "sess-a"));
+
+        let out = build_pending_permissions(&["req-1".to_string()], &metadata);
+        assert_eq!(out.len(), 1);
+        let p = &out[0];
+        assert_eq!(p["requestId"], "req-1");
+        assert_eq!(p["sessionId"], "sess-a");
+        assert_eq!(p["toolName"], "Bash");
+        assert_eq!(p["toolInput"]["command"], "npm install");
+        assert_eq!(p["hookEventName"], "PermissionRequest");
+        assert_eq!(p["receivedAt"], 1234.5);
+        // The camelCase summary field is present and computed (not null).
+        assert!(p["summary"].is_string());
+        // Field set matches the frontend PermissionRequest interface exactly.
+        let obj = p.as_object().unwrap();
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "hookEventName",
+                "receivedAt",
+                "requestId",
+                "sessionId",
+                "summary",
+                "toolInput",
+                "toolName",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_build_pending_permissions_skips_ids_without_metadata() {
+        // A pending ID whose metadata was already reaped is skipped, and the
+        // rest still map — ordering follows the supplied id slice.
+        let mut metadata = HashMap::new();
+        metadata.insert("has-meta".to_string(), mk_permission_req("has-meta", "s1"));
+
+        let out =
+            build_pending_permissions(&["missing".to_string(), "has-meta".to_string()], &metadata);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["requestId"], "has-meta");
     }
 }

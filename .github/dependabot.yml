@@ -1,13 +1,17 @@
 # Dependabot configuration. Daily checks on Cargo + npm, plus the GitHub
 # Actions ecosystem so workflow steps stay current.
 #
-# Two `ignore` entries below correspond to dismissed Dependabot alerts:
+# The two `ignore` entries below stop Dependabot from opening version-bump PRs
+# for advisories we've accepted. NB: `ignore` suppresses update PRs only — it
+# does NOT dismiss the security alert (alerts are dismissed separately, in the
+# Security tab or via the API). Both advisories are mirrored in
+# cue-desktop/src-tauri/.cargo/audit.toml and security-audit.yml.
 #   - rand 0.7.x (RUSTSEC-2026-0097, GHSA-cq8v-f236-94qc) — Tauri build-dep
 #     chain locks rand "0.7"; advisory only triggers via custom log handlers
 #     calling rand::rng(), which the chain does not use.
 #   - glib < 0.20 (RUSTSEC-2024-0429, GHSA-wrw7-89jp-8q8g) — Tauri's GTK stack
 #     uses gtk-rs 0.18; advisory affects VariantStrIter on non-UTF-8 input
-#     paths Tauri does not exercise.
+#     paths Tauri does not exercise. Alert dismissed (tolerable_risk).
 # Re-evaluate both when Tauri bumps to the next major.
 
 version: 2

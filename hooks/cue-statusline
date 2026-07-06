@@ -15,42 +15,71 @@
 # Or run:  claude settings set statusLine.command /path/to/cue-statusline
 #
 # Claude Code pipes JSON via stdin on each render cycle containing:
-#   { model, context, rateLimits, transcriptPath, cwd, ... }
+#   { model, context, rate_limits, transcript_path, cwd, ... }
 #
-# This script extracts rateLimits and writes rate_limits.json for Cue.
+# The rate-limit shape (snake_case, present only for Pro/Max after the first
+# response — otherwise `.rate_limits` is absent):
+#   .rate_limits.five_hour.used_percentage   (0–100 number)
+#   .rate_limits.five_hour.resets_at         (Unix EPOCH SECONDS)
+#   .rate_limits.seven_day.{used_percentage,resets_at}
+# There is no `limit`, `used`, or `limitReached` field — `limitReached` is
+# derived here (used_percentage >= 100).
+#
+# This script reads that shape and writes rate_limits.json for Cue in the
+# app's own camelCase contract (deserialized by src-tauri RateLimitInfo):
+#   { fiveHourPercent, sevenDayPercent, fiveHourResetAt, sevenDayResetAt,
+#     limitReached }
+# where *ResetAt stay EPOCH SECONDS end-to-end. When `.rate_limits` is absent
+# we SKIP the write so a transient missing payload can't blank the meter.
 
 set -euo pipefail
 
-# Determine output path (must match paths.rs rate_limits_path AND
-# cue-hook get_status_dir). Under WSL the Cue app runs natively on Windows and
-# reads %LOCALAPPDATA%\Cue, so cue-hook redirects sessions.json there. This
-# script must apply the SAME redirect or rate_limits.json lands in the
-# Linux-side dir and the app never finds it (F-api-002). Mirror cue-hook's
-# _is_wsl() + _get_wsl_windows_status_dir(): only redirect when exactly one
-# non-system Windows user can be resolved, else fall back to the Linux dir.
-OUTPUT_DIR=""
+# --- WSL detection — mirrors cue-hook._is_wsl / _get_wsl_windows_status_dir ---
+# On WSL the Cue app runs natively on Windows and reads %LOCALAPPDATA%\Cue,
+# which is /mnt/c/Users/<user>/AppData/Local/Cue seen from inside WSL. cue-hook
+# already writes sessions.json there; without the same branch here the
+# rate-limit file lands in $XDG_DATA_HOME/cue that the Windows app never reads,
+# so the rate meter stays permanently empty. The two paths below are overridable
+# for testing but default to the exact locations cue-hook inspects.
+_is_wsl() {
+    # cue-hook: "microsoft" in /proc/version (case-insensitive).
+    local proc_version="${CUE_STATUSLINE_PROC_VERSION:-/proc/version}"
+    [[ -r "$proc_version" ]] || return 1
+    grep -qi microsoft "$proc_version" 2>/dev/null
+}
+
+_wsl_windows_status_dir() {
+    # cue-hook: list /mnt/c/Users, drop well-known system profiles and dotfiles,
+    # and only auto-detect when exactly one real profile remains. Prints the
+    # AppData\Local\Cue path on success; returns non-zero (no output) otherwise.
+    local win_users="${CUE_STATUSLINE_WIN_USERS:-/mnt/c/Users}"
+    [[ -d "$win_users" ]] || return 1
+    local candidates=() entry base
+    for entry in "$win_users"/*; do
+        [[ -e "$entry" ]] || continue  # unmatched glob expands literally — skip
+        base=${entry##*/}
+        case "$base" in
+            Public | Default | "Default User" | "All Users" | desktop.ini) continue ;;
+            .*) continue ;;
+        esac
+        candidates+=("$base")
+    done
+    [[ ${#candidates[@]} -eq 1 ]] || return 1
+    printf '%s/%s/AppData/Local/Cue\n' "$win_users" "${candidates[0]}"
+}
+
+# Determine output path. Must match the dir the Cue app reads:
+#   - cue-hook.get_status_dir() (the sessions.json writer), and
+#   - paths.rs::rate_limits_path() (the Windows-native app on WSL).
 if [[ "$OSTYPE" == "darwin"* ]]; then
     OUTPUT_DIR="$HOME/Library/Application Support/Cue"
 elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
     OUTPUT_DIR="${LOCALAPPDATA:-$HOME/AppData/Local}/Cue"
 else
-    # Linux — detect WSL (case-insensitive "microsoft" in /proc/version, read
-    # with a bash builtin, no subprocess) and redirect to the Windows-side dir.
-    if [[ -r /proc/version && "$(< /proc/version)" == *icrosoft* && -d /mnt/c/Users ]]; then
-        wsl_user=""
-        wsl_count=0
-        for d in /mnt/c/Users/*/; do
-            [[ -d "$d" ]] || continue  # guards the no-match literal glob
-            name="${d%/}"; name="${name##*/}"
-            case "$name" in
-                Public|Default|"Default User"|"All Users"|.*) continue ;;
-            esac
-            wsl_user="$name"
-            wsl_count=$((wsl_count + 1))
-        done
-        if [[ $wsl_count -eq 1 ]]; then
-            OUTPUT_DIR="/mnt/c/Users/$wsl_user/AppData/Local/Cue"
-        fi
+    # Linux (or other Unix): prefer the Windows-side dir on WSL, else XDG.
+    OUTPUT_DIR=""
+    if _is_wsl; then
+        OUTPUT_DIR=$(_wsl_windows_status_dir) || OUTPUT_DIR=""
     fi
     if [[ -z "$OUTPUT_DIR" ]]; then
         OUTPUT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/cue"
@@ -66,14 +95,21 @@ INPUT=$(cat)
 
 # Check if we have jq available
 if command -v jq &>/dev/null; then
-    # Extract rate limit data using jq
-    RATE_LIMITS=$(echo "$INPUT" | jq -c '{
-        fiveHourPercent: (if .rateLimits.fiveHour then (.rateLimits.fiveHour.used / .rateLimits.fiveHour.limit * 100) else 0 end),
-        sevenDayPercent: (if .rateLimits.sevenDay then (.rateLimits.sevenDay.used / .rateLimits.sevenDay.limit * 100) else 0 end),
-        fiveHourResetAt: (.rateLimits.fiveHour.resetAt // null),
-        sevenDayResetAt: (.rateLimits.sevenDay.resetAt // null),
-        limitReached: ((.rateLimits.fiveHour.limitReached // false) or (.rateLimits.sevenDay.limitReached // false))
-    }' 2>/dev/null || echo "")
+    # Extract rate limit data using jq. When `.rate_limits` is absent/null (or
+    # an empty object — no Pro/Max data yet, or a transient render), the filter
+    # yields `empty` → RATE_LIMITS="" → the guard below SKIPS the write so a
+    # missing payload never clobbers a previously-written rate_limits.json.
+    RATE_LIMITS=$(echo "$INPUT" | jq -c '
+        if (.rate_limits // {}) == {} then empty
+        else {
+            fiveHourPercent: (.rate_limits.five_hour.used_percentage // 0),
+            sevenDayPercent: (.rate_limits.seven_day.used_percentage // 0),
+            fiveHourResetAt: (.rate_limits.five_hour.resets_at // null),
+            sevenDayResetAt: (.rate_limits.seven_day.resets_at // null),
+            limitReached: (((.rate_limits.five_hour.used_percentage // 0) >= 100)
+                or ((.rate_limits.seven_day.used_percentage // 0) >= 100))
+        }
+        end' 2>/dev/null || echo "")
 
     if [[ -n "$RATE_LIMITS" ]]; then
         # Atomic write: temp file → rename
@@ -88,24 +124,44 @@ import json, sys, os, tempfile
 
 try:
     data = json.loads(sys.stdin.read())
-    rl = data.get('rateLimits', {})
+    rl = data.get('rate_limits')
 
-    five = rl.get('fiveHour', {})
-    seven = rl.get('sevenDay', {})
+    # Absent/null/empty rate_limits (no Pro/Max data yet, or a transient render)
+    # — SKIP the write so we don't clobber a previously-written rate_limits.json.
+    # Mirrors the jq branch's `empty` skip above.
+    if rl:
+        five = rl.get('five_hour') or {}
+        seven = rl.get('seven_day') or {}
+        # used_percentage is already 0–100; default 0 when the sub-object or the
+        # field is absent/null. `... or 0` also coerces a null back to 0.
+        five_pct = five.get('used_percentage') or 0
+        seven_pct = seven.get('used_percentage') or 0
 
-    result = {
-        'fiveHourPercent': (five.get('used', 0) / five['limit'] * 100) if five.get('limit') else 0,
-        'sevenDayPercent': (seven.get('used', 0) / seven['limit'] * 100) if seven.get('limit') else 0,
-        'fiveHourResetAt': five.get('resetAt'),
-        'sevenDayResetAt': seven.get('resetAt'),
-        'limitReached': five.get('limitReached', False) or seven.get('limitReached', False),
-    }
+        result = {
+            'fiveHourPercent': five_pct,
+            'sevenDayPercent': seven_pct,
+            'fiveHourResetAt': five.get('resets_at'),
+            'sevenDayResetAt': seven.get('resets_at'),
+            # Claude no longer sends limitReached — derive it from the percents.
+            'limitReached': (five_pct >= 100) or (seven_pct >= 100),
+        }
 
-    output_file = sys.argv[1]
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(output_file))
-    with os.fdopen(fd, 'w') as f:
-        json.dump(result, f)
-    os.rename(tmp, output_file)
+        output_file = sys.argv[1]
+        # Atomic write. Use os.replace (not os.rename) so an already-present
+        # target doesn't raise on Windows/msys, and unlink the temp file on any
+        # failure after mkstemp so a crash between create and rename can't leak
+        # orphaned temp files into the output dir.
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(output_file))
+        try:
+            with os.fdopen(fd, 'w') as f:
+                json.dump(result, f)
+            os.replace(tmp, output_file)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 except Exception:
     pass
 " "$OUTPUT_FILE" <<< "$INPUT"

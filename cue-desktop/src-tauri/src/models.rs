@@ -245,6 +245,21 @@ pub struct SubagentMetrics {
     /// is the most recent activity; for completed agents it's the end time.
     #[serde(default)]
     pub ended_at: Option<f64>,
+    /// Name of the currently running tool (from the agent's last pending
+    /// tool_use). Populated only while the agent is mid-turn; mirrors
+    /// `SessionMetrics::running_tool_name`.
+    #[serde(default)]
+    pub running_tool_name: Option<String>,
+    /// Target of the running tool (file path, command, pattern). Mirrors
+    /// `SessionMetrics::running_tool_target`.
+    #[serde(default)]
+    pub running_tool_target: Option<String>,
+    /// First non-empty text block from the agent's most recent assistant
+    /// message. For an active agent this is its latest in-flight prose; for a
+    /// finished agent it's the final result. Mirrors
+    /// `SessionMetrics::last_assistant_text` (length-bounded via cap_snippet).
+    #[serde(default)]
+    pub last_assistant_text: Option<String>,
 }
 
 impl SubagentMetrics {
@@ -372,6 +387,12 @@ pub struct SessionMetrics {
     /// where the final answer is a better thread cue than the user's last prompt.
     #[serde(default)]
     pub last_assistant_text: Option<String>,
+    /// Human-readable error text from the most recent entry flagged
+    /// `isApiErrorMessage` (e.g. "There's an issue with the selected model …").
+    /// Surfaced on error-state cards so the failure explains itself; the UI only
+    /// shows it while the session is in the error state.
+    #[serde(default)]
+    pub last_error_message: Option<String>,
     /// Session ID extracted from the JSONL file's metadata header.
     /// Used to verify the parsed JSONL actually belongs to this session
     /// (guards against dedup stable-id / cache mismatch returning the wrong file).
@@ -432,7 +453,11 @@ impl SessionMetrics {
     }
 
     pub fn cache_hit_rate(&self) -> f64 {
-        let total = self.cache_creation_tokens + self.cache_read_tokens;
+        // saturating_add: each counter can reach i64::MAX from crafted JSONL, so
+        // a plain `+` would overflow-panic in debug. Matches total_tokens above.
+        let total = self
+            .cache_creation_tokens
+            .saturating_add(self.cache_read_tokens);
         if total == 0 {
             return 0.0;
         }
@@ -499,6 +524,18 @@ pub struct EnrichedSession {
     /// Passed through as-is; frontend title-cases for display.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort_level: Option<String>,
+    /// True when this session is "resting" — tucked out of the main view but
+    /// recoverable (the dashboard shows it in a "Resting" disclosure, one click
+    /// to restore; the tray just counts it). Either auto-hidden after sitting
+    /// idle past the user's threshold, or manually dismissed via the card's X.
+    /// Computed fresh every poll, so a resting session re-surfaces the moment it
+    /// does anything (its transition marker advances). Default false.
+    #[serde(default)]
+    pub resting: bool,
+    /// Why the session is resting: "idle" (auto-hidden) or "dismissed" (manual
+    /// X). `None` when not resting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resting_reason: Option<String>,
 }
 
 /// Resolve the effort level shown for a session.
@@ -697,6 +734,11 @@ impl EnrichedSession {
             system_memory: supplemental.system_memory.clone(),
             claude_version: supplemental.claude_version.clone(),
             effort_level,
+            // Resting is decided by the poll loop (it needs the user's threshold
+            // and the manual-override map), then stamped onto the enriched
+            // session after construction. The constructor defaults it to "shown".
+            resting: false,
+            resting_reason: None,
         }
     }
 }
@@ -752,6 +794,10 @@ fn format_source_name(source: Option<&str>) -> String {
         Some("tmux") => "tmux".to_string(),
         Some("screen") => "screen".to_string(),
         Some("hyper") => "Hyper".to_string(),
+        // Claude Code launched from the Claude desktop app: the hook detects the
+        // app via process ancestry and tags it "claude-desktop". Shown as
+        // "Claude" so the card reads "Launched from Claude" (cf. VSCode/iTerm).
+        Some("claude-desktop") => "Claude".to_string(),
         Some("unknown") | None => "\u{2014}".to_string(), // em dash
         Some(other) => {
             // Capitalize first letter for unknown sources
@@ -961,12 +1007,41 @@ pub struct Settings {
     /// Beta: show config counts (CLAUDE.md, hooks, MCP) in detail mode
     #[serde(default)]
     pub show_config_counts: bool,
+    /// Show the per-session usage line (est. cost, lifetime tokens, cache
+    /// efficiency) in the expanded card's deep-telemetry section. Defaults true.
+    #[serde(default = "default_true")]
+    pub show_usage: bool,
+    /// Show the account-level usage-limit meters (the 5-hour + weekly rate-limit
+    /// bars) in the tray popover and the dashboard header strip. This is a
+    /// DIFFERENT feature from `show_usage` (the per-session cost line above) —
+    /// it surfaces the global Claude rate limits the statusline bridge captures.
+    /// Defaults true.
+    #[serde(default = "default_true")]
+    pub show_limit_status: bool,
     /// Show comet tracers across the strings on every tool call. Off by default.
     #[serde(default)]
     pub show_tool_call_comets: bool,
     /// Timer display mode: "minutes" (HH:MM), "seconds" (HH:MM:SS), or "off"
     #[serde(default = "default_timer_display")]
     pub timer_display: String,
+    /// Auto-fit the dashboard window height to the session list. Default true;
+    /// when off, the window keeps whatever size the user set.
+    #[serde(default = "default_true")]
+    pub auto_fit_window: bool,
+    /// Dashboard session layout: "flow" (responsive grid) or "grouped" (cluster
+    /// a project's agents side-by-side under a project header). Missing = flow.
+    #[serde(default)]
+    pub dashboard_layout: String,
+    /// Dashboard visual "Look": "instrument" (the default signal/waveform skin),
+    /// "almanac", "studio", or "night". Missing/"" = instrument. This is an
+    /// independent axis from `dashboard_layout` (flow/grouped) and the color
+    /// theme — each non-instrument look ships its own palette + typography.
+    #[serde(default)]
+    pub dashboard_view: String,
+    /// Tint each card's left edge by project so same-project cards are easy to
+    /// spot at a glance. Defaults to true.
+    #[serde(default = "default_true")]
+    pub project_accents_enabled: bool,
     /// Show the system tray (menu bar) icon. Defaults to true.
     #[serde(default = "default_true")]
     pub show_in_menu_bar: bool,
@@ -997,6 +1072,55 @@ pub struct Settings {
     /// migrations on load when the stored value is below `CURRENT_SETTINGS_VERSION`.
     #[serde(default)]
     pub settings_version: u32,
+    /// Master switch for native notifications. When false, no state-transition
+    /// ping fires regardless of the per-event toggles below. Defaults true.
+    #[serde(default = "default_true")]
+    pub notifications_enabled: bool,
+    /// Fire a notification when a session becomes blocked on your input
+    /// (transition into `waiting` — an AskUserQuestion / ExitPlanMode / gated
+    /// permission). Defaults true.
+    #[serde(default = "default_true")]
+    pub notify_waiting: bool,
+    /// Fire a notification when a session enters the `error` state. Defaults true.
+    #[serde(default = "default_true")]
+    pub notify_error: bool,
+    /// Fire a notification when a session finishes a turn (transition from an
+    /// active state into `done`/`idle`), gated by `notify_done_min_secs` so
+    /// trivial few-second turns stay silent. Defaults true.
+    #[serde(default = "default_true")]
+    pub notify_done: bool,
+    /// Minimum active turn length, in seconds, before a "finished" notification
+    /// fires. Only gates the done ping; waiting/error are immediate. Defaults 30.
+    #[serde(default = "default_notify_done_min_secs")]
+    pub notify_done_min_secs: f64,
+    /// Auto-hide a session that has sat `idle` this many seconds — it moves to
+    /// the recoverable "Resting" group (hidden from the dashboard grid and the
+    /// tray, restorable in one click, and re-surfaced automatically the moment
+    /// it becomes active again). `0` disables auto-hide entirely — that's the
+    /// off switch for this automatic behavior. Defaults 900 (15 min). Only the
+    /// `idle` state is auto-hidden; `error` (a needs-me state) and pending
+    /// permissions (which sit in `waiting`) are never touched.
+    #[serde(default = "default_auto_hide_idle_secs")]
+    pub auto_hide_idle_secs: f64,
+    /// User override for Claude Code's config directory — the `.claude`
+    /// equivalent that holds `projects/` (the JSONL transcripts Cue reads).
+    /// Empty = auto-detect (`$CLAUDE_CONFIG_DIR`, else `~/.claude`). This is the
+    /// escape hatch for a Dock/Finder launch, which doesn't inherit the shell
+    /// environment and so can't see a `CLAUDE_CONFIG_DIR` exported in a shell
+    /// rc; when set it beats both the env var and the default. A leading `~` is
+    /// expanded. See `paths::claude_projects_path_from_override`.
+    #[serde(default)]
+    pub claude_config_dir: String,
+    /// Suppress the "finished" notification while the dashboard window is
+    /// focused — if you're already watching Cue, a card flipping to done is
+    /// visible, so the banner is noise. Only affects the done ping; "needs you"
+    /// and "error" still fire when focused. Defaults true.
+    #[serde(default = "default_true")]
+    pub suppress_done_when_focused: bool,
+    /// Fire a notification when a usage rate limit that had been reached clears,
+    /// so you know paused sessions can resume. Defaults true.
+    #[serde(default = "default_true")]
+    pub notify_rate_limit_reset: bool,
 }
 
 /// Appearance fields saved when a user customizes a theme.
@@ -1156,6 +1280,14 @@ fn default_tray_shortcut() -> String {
     "CmdOrCtrl+Shift+C".to_string()
 }
 
+fn default_notify_done_min_secs() -> f64 {
+    30.0
+}
+
+fn default_auto_hide_idle_secs() -> f64 {
+    900.0 // 15 minutes
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -1223,8 +1355,14 @@ impl Default for Settings {
             show_tool_pills: false,
             show_current_tool: false,
             show_config_counts: false,
+            show_usage: true,
+            show_limit_status: true,
             show_tool_call_comets: false,
             timer_display: "seconds".to_string(),
+            auto_fit_window: true,
+            dashboard_layout: "flow".to_string(),
+            dashboard_view: "instrument".to_string(),
+            project_accents_enabled: true,
             show_in_menu_bar: true,
             menu_bar_style: "bars".to_string(),
             show_in_dock: true,
@@ -1233,6 +1371,15 @@ impl Default for Settings {
             tray_shortcut: "CmdOrCtrl+Shift+C".to_string(),
             theme_customizations: HashMap::new(),
             settings_version: crate::settings::CURRENT_SETTINGS_VERSION,
+            notifications_enabled: true,
+            notify_waiting: true,
+            notify_error: true,
+            notify_done: true,
+            notify_done_min_secs: 30.0,
+            auto_hide_idle_secs: 900.0,
+            claude_config_dir: String::new(),
+            suppress_done_when_focused: true,
+            notify_rate_limit_reset: true,
         }
     }
 }
@@ -1314,6 +1461,19 @@ mod tests {
         assert_eq!(format_model_name("claude-opus-4-6"), "Opus 4.6");
         assert_eq!(format_model_name("unknown"), "\u{2014}");
         assert_eq!(format_model_name(""), "\u{2014}");
+    }
+
+    #[test]
+    fn test_format_source_name() {
+        // Editors / terminals keep their proper-cased labels.
+        assert_eq!(format_source_name(Some("vscode")), "VSCode");
+        assert_eq!(format_source_name(Some("iterm")), "iTerm");
+        // The Claude desktop app reads as "Claude" (→ "Launched from Claude").
+        assert_eq!(format_source_name(Some("claude-desktop")), "Claude");
+        // Unidentified / legacy launchers render as an em dash, which every
+        // skin treats as "hide the source chip" — so it must stay the em dash.
+        assert_eq!(format_source_name(Some("unknown")), "\u{2014}");
+        assert_eq!(format_source_name(None), "\u{2014}");
     }
 
     #[test]
@@ -1722,6 +1882,9 @@ mod tests {
             is_active: false,
             started_at: None,
             ended_at,
+            running_tool_name: None,
+            running_tool_target: None,
+            last_assistant_text: None,
         }
     }
 

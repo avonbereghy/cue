@@ -1,12 +1,32 @@
 #!/usr/bin/env python3
-"""Round 2: robust submission; capture AskUserQuestion, subagent, deny, interrupt."""
-import json, os, threading, time
+"""Round 2: robust submission; capture AskUserQuestion, subagent, deny, interrupt.
+
+Manual harness — see tests/manual/README.md for the scratch-project + capture-hook
+setup. Two coupling / shared-host caveats:
+
+- CAPTURE and PROJ MUST match the paths the README's capture hook writes to and
+  the scratch project you created; they are intentionally the fixed
+  `/tmp/cue-hook-capture.jsonl` and `/tmp/cue-audit-proj` the README documents,
+  not per-run temp paths — the driver only READS what the external hook wrote.
+- Because those paths are fixed and world-writable under /tmp, run only ONE
+  instance at a time on a shared/multi-user host: two concurrent runs would
+  interleave into the same capture/timeline/log files and cross-contaminate
+  results. Edit the constants below (and the README hook config) if you need
+  isolation.
+
+The `claude` binary is resolved from PATH (shutil.which), falling back to the
+original author's hardcoded location only if PATH lookup fails.
+"""
+import json, os, shutil, threading, time
 import pexpect
 
 CAPTURE = '/tmp/cue-hook-capture.jsonl'
 TIMELINE = '/tmp/cue-state-timeline.jsonl'
 SESSIONS = os.path.expanduser('~/Library/Application Support/Cue/sessions.json')
 PROJ = '/tmp/cue-audit-proj'
+# Resolve the Claude Code CLI from PATH so this runs on any machine; the old
+# hardcoded /Users/dev/... path failed everywhere but the original author's box.
+CLAUDE_BIN = shutil.which('claude') or '/Users/dev/.local/bin/claude'
 stop_poller = False
 SID = {'v': None}  # session id of THIS run, set from SessionStart
 
@@ -91,7 +111,7 @@ def main():
     spawn_t = time.time()
     mark('spawn2')
     child = pexpect.spawn(
-        '/Users/dev/.local/bin/claude',
+        CLAUDE_BIN,
         ['--permission-mode', 'default', '--model', 'haiku',
          '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}'],
         cwd=PROJ, env=env, dimensions=(40, 140), encoding='utf-8', timeout=10)

@@ -4,7 +4,8 @@
 //! - Windows: %LOCALAPPDATA%
 //! - Linux: XDG directories
 
-use std::path::PathBuf;
+use std::env;
+use std::path::{Path, PathBuf};
 
 /// Path to sessions.json — the hook-written status file.
 pub fn sessions_json_path() -> PathBuf {
@@ -28,11 +29,13 @@ pub fn sessions_lock_path() -> PathBuf {
 }
 
 /// Path to permission-token — a per-launch shared secret the Python hook
-/// must present in the `X-Cue-Token` header on POSTs to the localhost
-/// permission server. Co-located with sessions.json under the user's
-/// 0700 status directory and itself written 0600, so only the same OS
-/// user can read it. Without this header any local process could win
-/// the loopback bind race and forge {"behavior":"allow"} responses.
+/// uses as the HMAC key when authenticating POSTs to the localhost
+/// permission server (the raw token is never sent on the wire; see the
+/// mutual-HMAC handshake in permission_server). Co-located with
+/// sessions.json under the user's 0700 status directory and itself written
+/// 0600, so only the same OS user can read it. Without the token a local
+/// process that wins the loopback bind race can neither authenticate a
+/// forged request nor forge a response the hook trusts.
 pub fn permission_token_path() -> PathBuf {
     sessions_json_path().with_file_name("permission-token")
 }
@@ -60,9 +63,44 @@ pub fn settings_path() -> PathBuf {
     }
 }
 
-/// Path to ~/.claude/projects — where Claude Code stores JSONL conversation logs.
+/// Claude Code's config directory. Honors the `CLAUDE_CONFIG_DIR` environment
+/// variable — Claude Code's own mechanism for relocating `~/.claude` — and
+/// falls back to `~/.claude`. Kept in lockstep with `_claude_config_dir()` in
+/// the Python hook (`hooks/cue-hook`) so the hook and the desktop app agree on
+/// where JSONL transcripts live; if they diverge, the hook records sessions the
+/// app can't read.
+///
+/// Caveat: a GUI launch from the Dock/Finder does not inherit the shell
+/// environment, so a `CLAUDE_CONFIG_DIR` exported in a shell rc is only visible
+/// here when Cue is launched from a terminal (or the variable is set
+/// machine-wide). A persisted settings override is the planned escape hatch for
+/// that case; the hook — spawned by Claude Code itself — always sees the var.
+pub fn claude_config_dir() -> PathBuf {
+    claude_config_dir_for(&home_dir())
+}
+
+/// Like [`claude_config_dir`] but resolves against an explicit `home`, for
+/// callers that have already obtained it and must degrade gracefully when
+/// there is no home directory rather than panic (e.g. the config-count and
+/// default-effort readers). Honors `CLAUDE_CONFIG_DIR` identically.
+pub fn claude_config_dir_for(home: &Path) -> PathBuf {
+    resolve_claude_config_dir(env::var("CLAUDE_CONFIG_DIR").ok().as_deref(), home)
+}
+
+/// Path to `<claude-config-dir>/projects` — where Claude Code stores JSONL
+/// conversation logs (default `~/.claude/projects`).
 pub fn claude_projects_path() -> PathBuf {
-    home_dir().join(".claude").join("projects")
+    claude_config_dir().join("projects")
+}
+
+/// Resolve the projects directory from an explicit user-provided config-dir
+/// override (the persisted `claudeConfigDir` setting). The override is treated
+/// as a `.claude`-equivalent directory, so the result is `<override>/projects`;
+/// a leading `~` is expanded. Callers must only invoke this for a non-empty
+/// override — an empty/whitespace value means "auto-detect", which is
+/// [`claude_projects_path`].
+pub fn claude_projects_path_from_override(config_dir: &str) -> PathBuf {
+    expand_tilde(config_dir.trim(), &home_dir()).join("projects")
 }
 
 /// Directory for saved signal presets (extracted frequency envelopes).
@@ -122,8 +160,57 @@ pub fn ensure_dirs() -> std::io::Result<()> {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/// Pure resolver for [`claude_config_dir`], split out so the override logic is
+/// unit-testable without mutating process-global env or depending on the real
+/// home directory. An unset, empty, or whitespace-only override falls back to
+/// `<home>/.claude`; a leading `~` is expanded against `home` to mirror the
+/// Python hook's `os.path.expanduser`.
+fn resolve_claude_config_dir(env_override: Option<&str>, home: &Path) -> PathBuf {
+    if let Some(raw) = env_override {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return expand_tilde(trimmed, home);
+        }
+    }
+    home.join(".claude")
+}
+
+/// Expand a leading `~` / `~/` against `home`, mirroring `os.path.expanduser`.
+/// Any other path (absolute or relative) is taken verbatim.
+fn expand_tilde(path: &str, home: &Path) -> PathBuf {
+    if path == "~" {
+        return home.to_path_buf();
+    }
+    if let Some(rest) = path.strip_prefix("~/") {
+        return home.join(rest);
+    }
+    PathBuf::from(path)
+}
+
+/// Resolve the user's home directory, or terminate with a clear startup error.
+///
+/// Cue anchors every data file (sessions.json, the 0600 permission token,
+/// settings, the audit log) under the user's home. If neither `$HOME` (Unix)
+/// nor `%USERPROFILE%` (Windows) is set, there is nowhere safe to place them:
+/// falling back to `/tmp` would put a same-uid-only secret in a
+/// world-traversable directory, so that fallback is deliberately refused.
+///
+/// This previously `.expect()`-panicked, which the privacy panic hook in
+/// `run()` then rendered as an opaque "application error (details suppressed)"
+/// crash — useless to the user. Instead we log an explicit, actionable message
+/// and exit non-zero: a controlled, clearly-explained stop rather than a
+/// mystery panic, and never a silent write to the wrong place.
 fn home_dir() -> PathBuf {
-    dirs::home_dir().expect("Cannot determine home directory — refusing to use /tmp fallback")
+    match dirs::home_dir() {
+        Some(home) => home,
+        None => {
+            const MSG: &str = "Cue cannot start: unable to determine your home directory. \
+                 Set HOME (macOS/Linux) or %USERPROFILE% (Windows) and relaunch.";
+            log::error!("{MSG}");
+            eprintln!("{MSG}");
+            std::process::exit(1);
+        }
+    }
 }
 
 fn appdata_local() -> PathBuf {
@@ -161,8 +248,83 @@ mod tests {
 
     #[test]
     fn test_claude_projects_path() {
+        // Always ends in `projects`, regardless of any CLAUDE_CONFIG_DIR set in
+        // the ambient environment (asserting `.claude/projects` here would make
+        // the test depend on the dev's own env). The default `.claude` base is
+        // covered deterministically by `resolve_claude_config_dir_*` below.
         let p = claude_projects_path();
-        assert!(p.to_str().unwrap().contains(".claude/projects"));
+        assert!(p.ends_with("projects"));
+    }
+
+    #[test]
+    fn resolve_claude_config_dir_defaults_to_dot_claude() {
+        let home = Path::new("/home/jane");
+        assert_eq!(
+            resolve_claude_config_dir(None, home),
+            PathBuf::from("/home/jane/.claude")
+        );
+    }
+
+    #[test]
+    fn resolve_claude_config_dir_blank_override_falls_back() {
+        let home = Path::new("/home/jane");
+        // Empty and whitespace-only overrides are treated as unset.
+        assert_eq!(
+            resolve_claude_config_dir(Some(""), home),
+            PathBuf::from("/home/jane/.claude")
+        );
+        assert_eq!(
+            resolve_claude_config_dir(Some("   "), home),
+            PathBuf::from("/home/jane/.claude")
+        );
+    }
+
+    #[test]
+    fn resolve_claude_config_dir_honors_absolute_override() {
+        let home = Path::new("/home/jane");
+        assert_eq!(
+            resolve_claude_config_dir(Some("/custom/claude-home"), home),
+            PathBuf::from("/custom/claude-home")
+        );
+    }
+
+    #[test]
+    fn resolve_claude_config_dir_expands_leading_tilde() {
+        let home = Path::new("/home/jane");
+        assert_eq!(
+            resolve_claude_config_dir(Some("~/alt-claude"), home),
+            PathBuf::from("/home/jane/alt-claude")
+        );
+        assert_eq!(
+            resolve_claude_config_dir(Some("~"), home),
+            PathBuf::from("/home/jane")
+        );
+    }
+
+    #[test]
+    fn claude_projects_path_from_override_appends_projects() {
+        // An absolute override is taken verbatim with `/projects` appended;
+        // surrounding whitespace is trimmed.
+        assert_eq!(
+            claude_projects_path_from_override("/custom/cfg"),
+            PathBuf::from("/custom/cfg/projects")
+        );
+        assert_eq!(
+            claude_projects_path_from_override("  /custom/cfg  "),
+            PathBuf::from("/custom/cfg/projects")
+        );
+    }
+
+    #[test]
+    fn expand_tilde_passes_through_non_tilde_paths() {
+        let home = Path::new("/home/jane");
+        assert_eq!(expand_tilde("/abs/path", home), PathBuf::from("/abs/path"));
+        assert_eq!(
+            expand_tilde("relative/x", home),
+            PathBuf::from("relative/x")
+        );
+        // A bare `~user` form is NOT expanded (matches our `~`/`~/` only rule).
+        assert_eq!(expand_tilde("~bob/x", home), PathBuf::from("~bob/x"));
     }
 
     #[test]

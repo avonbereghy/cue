@@ -1,20 +1,25 @@
-import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, Fragment } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import { useSnapAlignment } from "@/hooks/useSnapAlignment";
 import type { EnrichedSession, Settings, SignalPreset } from "@/lib/types";
 import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, setGate as setGateEngine } from "@/lib/presetEngine";
 import { DEFAULT_PRESET } from "@/lib/defaultPreset";
 import { SessionCard } from "./SessionCard";
 import { BranchView } from "./BranchView";
+import { AlmanacView } from "./views/AlmanacView";
+import { NightView } from "./views/NightView";
+import { StudioView } from "./views/StudioView";
+import { RestingDisclosure } from "./views/RestingDisclosure";
+import { useTheme } from "@/hooks/useIsDark";
+import { getProjectAccent } from "@/lib/format";
 import {
   isAnyTransitionInFlight,
   subscribeTransitions,
 } from "@/lib/transitionRegistry";
 import type { CardSettings } from "./BranchView";
-import { PermissionPrompt } from "./PermissionPrompt";
 import { PermissionHistory } from "./PermissionHistory";
+import { DecisionBar } from "./views/DecisionBar";
 import { usePermissions } from "@/hooks/usePermissions";
 
 const REVIVED_STORAGE_KEY = "cue-revived-sessions";
@@ -118,6 +123,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [showToolPills, setShowToolPills] = useState(false);
   const [showCurrentTool, setShowCurrentTool] = useState(false);
   const [showConfigCounts, setShowConfigCounts] = useState(false);
+  const [showUsage, setShowUsage] = useState(true);
   const [showToolCallComets, setShowToolCallComets] = useState(false);
   const [timerDisplay, setTimerDisplay] = useState("seconds");
   const [keyPressSpeed, setKeyPressSpeed] = useState(0.35);
@@ -126,6 +132,10 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // Per-session expand level in compact mode: 0=compact, 1=slim, 2=full. Undefined = follow global.
   const [expandOverrides, setExpandOverrides] = useState<Record<string, number>>({});
   const [autoReorder, setAutoReorder] = useState(false);
+  const [dashboardLayout, setDashboardLayout] = useState("flow");
+  const [dashboardView, setDashboardView] = useState("instrument");
+  const [projectAccentsEnabled, setProjectAccentsEnabled] = useState(true);
+  const { isDark } = useTheme();
   // Branch view: horizontal tree layout when window is wide (>60% of screen)
   const [branchView, setBranchView] = useState(false);
   useEffect(() => {
@@ -139,14 +149,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   sessionsRef.current = sessions;
   const cardPositions = useRef<Map<string, DOMRect>>(new Map());
   const listRef = useRef<HTMLDivElement>(null);
-  // Card column hugs whichever screen half the window is snapped to (right
-  // half → right-align, left half → left-align). No-op below the column's
-  // max-width, where the column is already full-width.
-  const snapAlignment = useSnapAlignment();
-  const listAlignClass = snapAlignment === "right" ? "ml-auto" : "mr-auto";
-  const [collapsedSessions, setCollapsedSessions] = useState<Set<string>>(
-    new Set(),
-  );
   const [revivedSessions, setRevivedSessions] = useState<RevivedSession[]>(loadRevivedSessions);
   const [reviveClicks, setReviveClicks] = useState<Record<string, number>>({});
   const prevSessionIdsRef = useRef<Set<string>>(new Set());
@@ -177,17 +179,25 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         const dpr = window.devicePixelRatio || 1;
         preCompactSizeRef.current = { width: phys.width / dpr, height: phys.height / dpr };
 
-        // Deterministic sizing: fixed card height * session count + chrome
+        // Deterministic sizing: fixed card height * session count + chrome.
+        // Generous values + a real floor so the window never clips the last
+        // card or collapses to an unusable sliver — the toolbar plus one card
+        // need genuine room (the previous 44/52 constants left zero buffer once
+        // the toolbar grew, and a 60px min height let it shrink to nothing).
         const activeCount = sessions.filter(s => s.info.state !== "ended").length;
-        const CARD_H = 52;     // compact card height (py-1.5 + content + border)
+        const CARD_H = 60;     // compact card height incl. border + breathing room
         const CARD_GAP = 6;    // space-y-1.5 = 6px
-        const TAB_BAR = 44;    // tab bar height
+        const TOOLBAR = 48;    // toolbar row height
         const LIST_PAD = 16;   // p-2 top + bottom
-        const compactWidth = 420;
-        const totalHeight = TAB_BAR + LIST_PAD + activeCount * CARD_H + Math.max(0, activeCount - 1) * CARD_GAP;
+        const BUFFER = 12;     // bottom breathing room so the last card isn't flush
+        const compactWidth = 440;
+        const totalHeight = Math.max(
+          200,
+          TOOLBAR + LIST_PAD + BUFFER + activeCount * CARD_H + Math.max(0, activeCount - 1) * CARD_GAP,
+        );
 
         win.setSize(new LogicalSize(compactWidth, totalHeight));
-        win.setMinSize(new LogicalSize(200, 60));
+        win.setMinSize(new LogicalSize(360, 160));
       });
     }
   }, [compactMode]);
@@ -288,6 +298,24 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     saveRevivedSessions([]);
   }, [revivedSessions]);
 
+  // Manual "X" on a card → tuck the session into the Resting group. The backend
+  // keeps it resting until it next does something, then it reappears. The card
+  // leaves the grid on the next poll (≤1s); we don't optimistically hide so the
+  // two surfaces (dashboard + tray) stay driven by one source of truth.
+  const handleDismiss = useCallback((sessionId: string) => {
+    invoke("dismiss_session", { sessionId }).catch((err) =>
+      console.error("Failed to dismiss session:", err),
+    );
+  }, []);
+
+  // "Restore" in the Resting disclosure → bring a resting session back. Overrides
+  // the idle auto-hide rule until the session next transitions.
+  const handleRestore = useCallback((sessionId: string) => {
+    invoke("restore_session", { sessionId }).catch((err) =>
+      console.error("Failed to restore session:", err),
+    );
+  }, []);
+
   const {
     pendingBySession,
     permissionHistory,
@@ -349,6 +377,9 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setKeyPressSpeed(s.keyPressSpeed ?? 0.35);
     setKeyReleaseSpeed(s.keyReleaseSpeed ?? 0.4);
     setAutoReorder(s.autoReorder ?? false);
+    setDashboardLayout(s.dashboardLayout ?? "flow");
+    setDashboardView(s.dashboardView || "instrument");
+    setProjectAccentsEnabled(s.projectAccentsEnabled ?? true);
     document.documentElement.style.setProperty("--font-scale", String(s.fontScale ?? 1.0));
     setTestMode(s.testMode ?? false);
     setCompactMode(s.compactMode ?? false);
@@ -360,6 +391,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     setShowToolPills(s.showToolPills ?? false);
     setShowCurrentTool(s.showCurrentTool ?? false);
     setShowConfigCounts(s.showConfigCounts ?? false);
+    setShowUsage(s.showUsage ?? true);
     setShowToolCallComets(s.showToolCallComets ?? false);
     setTimerDisplay(s.timerDisplay ?? "seconds");
     if (s.lowPower) document.documentElement.setAttribute("data-low-power", "");
@@ -443,18 +475,6 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       .then((preset) => loadPresetEngine(preset))
       .catch(() => loadPresetEngine(DEFAULT_PRESET));
   }, [signalMode, activePresetId, presetBootAttempted]);
-
-  const toggleSessionCollapse = (sessionId: string) => {
-    setCollapsedSessions((prev) => {
-      const next = new Set(prev);
-      if (next.has(sessionId)) {
-        next.delete(sessionId);
-      } else {
-        next.add(sessionId);
-      }
-      return next;
-    });
-  };
 
   // ---------------------------------------------------------------------------
   // Sandbox mode — full keyboard-driven session designer for screenshots
@@ -595,7 +615,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           if (!sandboxActiveStartRef.current.has(s.info.id)) {
             sandboxActiveStartRef.current.set(s.info.id, now);
           }
-          const startMs = sandboxActiveStartRef.current.get(s.info.id)!;
+          const startMs = sandboxActiveStartRef.current.get(s.info.id) ?? now;
           const elapsedSec = (now - startMs) / 1000;
           const dt = TICK_MS / 1000;
 
@@ -1404,11 +1424,21 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     });
   }, [effectiveState]);
 
-  // Build the active (non-ended) session list.
+  // Resting sessions (auto-hidden after sitting idle, or manually dismissed via
+  // the card X) are tucked out of the main grid into the recoverable "Resting"
+  // disclosure below. Excluding them here keeps both the instrument view and the
+  // skins (which derive from `allActiveSessions`/`sortedWithChildren`) free of
+  // resting cards in one place. The backend re-derives `resting` every poll, so
+  // a session reappears here the moment it becomes active again.
+  const restingSessions = sessions.filter((s) => s.resting);
+
+  // Build the active (non-ended, non-resting) session list.
   // Team children (spawned via TeamCreate) are separated so they don't
   // participate in the sort algorithm — they follow their parent's position
   // and are spliced back in after sorting.
-  const allActiveSessions = sessions.filter((s) => s.info.state !== "ended");
+  const allActiveSessions = sessions.filter(
+    (s) => s.info.state !== "ended" && !s.resting,
+  );
   const isTeamChild = useCallback(
     (s: EnrichedSession) => !!(s.info.teamName || s.metrics.teamName),
     [],
@@ -1785,6 +1815,20 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     const list = listRef.current;
     if (!list || !autoReorder) return;
 
+    // The FLIP choreography below assumes a single vertical column (it animates
+    // translateY only and derives gaps from vertical sibling spacing). In the
+    // multi-column grid a reorder can move a card across columns, which that
+    // can't express — so skip the animation and let cards reposition instantly,
+    // keeping the snapshot current so single-column reorders still animate.
+    if (getComputedStyle(list).gridTemplateColumns.split(" ").filter(Boolean).length > 1) {
+      const snap = new Map<string, DOMRect>();
+      list.querySelectorAll<HTMLElement>("[data-session-id]").forEach((el) => {
+        snap.set(el.dataset.sessionId!, el.getBoundingClientRect());
+      });
+      cardPositions.current = snap;
+      return;
+    }
+
     // Don't start a new animation while one is in flight — the current
     // animation owns cardPositions. Flag the pending re-run so the in-flight
     // run's finally retriggers this effect; without that, a reorder that
@@ -1801,7 +1845,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       const cards = list.querySelectorAll<HTMLElement>("[data-session-id]");
       const positions = new Map<string, DOMRect>();
       cards.forEach((el) => {
-        const id = el.dataset.sessionId!;
+        const id = el.dataset.sessionId;
+        if (!id) return;
         positions.set(id, el.getBoundingClientRect());
       });
       cardPositions.current = positions;
@@ -1823,7 +1868,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     const newCards: { el: HTMLElement; height: number }[] = [];
 
     cards.forEach((el, idx) => {
-      const id = el.dataset.sessionId!;
+      const id = el.dataset.sessionId;
+      if (!id) return;
       const oldRect = prev.get(id);
       const newRect = el.getBoundingClientRect();
       if (!oldRect) {
@@ -1862,7 +1908,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       const allCards = list.querySelectorAll<HTMLElement>("[data-session-id]");
       const positions = new Map<string, DOMRect>();
       allCards.forEach((el) => {
-        const id = el.dataset.sessionId!;
+        const id = el.dataset.sessionId;
+        if (!id) return;
         positions.set(id, el.getBoundingClientRect());
       });
       cardPositions.current = positions;
@@ -1896,7 +1943,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     const nextRectById = new Map<string, DOMRect>();
     const nextOrderAll: string[] = [];
     cards.forEach((el) => {
-      const id = el.dataset.sessionId!;
+      const id = el.dataset.sessionId;
+      if (!id) return;
       elById.set(id, el);
       nextRectById.set(id, el.getBoundingClientRect());
       nextOrderAll.push(id);
@@ -1941,9 +1989,11 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     // the two cards pass through each other symmetrically.
     let gap = 0;
     if (nextOrderAll.length >= 2) {
-      const r0 = nextRectById.get(nextOrderAll[0])!;
-      const r1 = nextRectById.get(nextOrderAll[1])!;
-      gap = Math.max(0, r1.top - (r0.top + r0.height));
+      const r0 = nextRectById.get(nextOrderAll[0]);
+      const r1 = nextRectById.get(nextOrderAll[1]);
+      if (r0 && r1) {
+        gap = Math.max(0, r1.top - (r0.top + r0.height));
+      }
     }
 
     // Pre-paint: hold every existing card at its prev visual position via
@@ -1951,7 +2001,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     // there would be one paint at the final slots before swaps begin. Pure
     // transform, compositor-only — child canvases keep rendering.
     for (const id of prevOrder) {
-      const el = elById.get(id)!;
+      const el = elById.get(id);
+      if (!el) continue;
       el.style.willChange = "transform";
       el.style.transform = `translateY(${dyById.get(id) ?? 0}px)`;
     }
@@ -2210,7 +2261,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         const positions = new Map<string, DOMRect>();
         const ids: string[] = [];
         allCards.forEach((c) => {
-          const cid = c.dataset.sessionId!;
+          const cid = c.dataset.sessionId;
+          if (!cid) return;
           positions.set(cid, c.getBoundingClientRect());
           ids.push(cid);
         });
@@ -2410,8 +2462,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     cordRetractDelay, cordDeployForce,
     cordRetractForce, stringSpread, stringDeployAngle, keyPressSpeed, keyReleaseSpeed,
     compactMode, slimMode, contextThreshold, contextDisplay,
-    showToolPills, showCurrentTool, showConfigCounts, showToolCallComets, timerDisplay,
-    lowPower,
+    showToolPills, showCurrentTool, showConfigCounts, showUsage, showToolCallComets, timerDisplay,
+    lowPower, projectAccentsEnabled,
   }), [
     titleAnimation, animationSpeed, randomAnimation,
     signalString, signalFrequency, signalMode, signalAlpha, signalAmplitude, signalEcho,
@@ -2424,8 +2476,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     cordRetractDelay, cordDeployForce, cordRetractForce, stringSpread, stringDeployAngle,
     keyPressSpeed, keyReleaseSpeed,
     compactMode, slimMode, contextThreshold, contextDisplay,
-    showToolPills, showCurrentTool, showConfigCounts, showToolCallComets, timerDisplay,
-    lowPower,
+    showToolPills, showCurrentTool, showConfigCounts, showUsage, showToolCallComets, timerDisplay,
+    lowPower, projectAccentsEnabled,
   ]);
 
   // Per-session expand-cycle handlers cached by id so SessionCard's React.memo
@@ -2706,7 +2758,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             </div>
           </div>
         ) : (
-          <div ref={listRef} className={`flex-1 w-full max-w-5xl ${listAlignClass} ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 pb-12 space-y-3"}`}>
+          <div ref={listRef} className={`flex-1 w-full max-w-5xl mx-auto ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 space-y-3"}`}>
             {sortedSandbox.map((session) => {
               // Apply keyboard state override if active
               const overrideState = stateOverrides[session.info.id];
@@ -2822,6 +2874,39 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // returned early, throwing "Rendered fewer hooks than expected" (black screen).
 
   // ---------------------------------------------------------------------------
+  // Alternative "Look" skins (Almanac, …). Detailed-only — they replace the
+  // instrument grid entirely but reuse all the prepared session/permission data
+  // and the .sessions-scroll container so window auto-fit keeps working.
+  // ---------------------------------------------------------------------------
+  if (!compactMode && dashboardView !== "instrument") {
+    const skinProps = {
+      sessions: sortedWithChildren,
+      revivedSessions,
+      restingSessions,
+      permissionsEnabled,
+      pendingBySession,
+      approvePermission,
+      denyPermission,
+      timerDisplay,
+      showConfigCounts,
+      showUsage,
+      grouped: dashboardLayout === "grouped",
+      reviveClicks,
+      reviveClicksRequired: REVIVE_CLICKS_REQUIRED,
+      onReviveClick: handleReviveClick,
+      onDismissRevived: handleDismissRevived,
+      onClearAllRevived: handleClearAllRevived,
+      onDismiss: handleDismiss,
+      onRestore: handleRestore,
+      formatReviveElapsed,
+    };
+    if (dashboardView === "almanac") return <AlmanacView {...skinProps} />;
+    if (dashboardView === "night") return <NightView {...skinProps} />;
+    if (dashboardView === "studio") return <StudioView {...skinProps} />;
+    // Unknown view id falls through to the instrument render below.
+  }
+
+  // ---------------------------------------------------------------------------
   // Normal mode render
   // ---------------------------------------------------------------------------
   return (
@@ -2834,10 +2919,20 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           <span className="text-sm text-white/40">Sessions will appear here when Claude Code is running</span>
         </div>
       ) : (
-        <div ref={listRef} className={`flex-1 w-full max-w-5xl ${listAlignClass} ${compactMode ? "overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 pb-12 space-y-3"}`}>
+        // Responsive grid: cards flow into 1/2/3 columns by width. The 400px min
+        // track is deliberately paired with SessionCard's isNarrow=600 cutoff —
+        // any multi-column track stays < 600px (3 cols engage before a 2-col card
+        // reaches 600), so multi-column cards always tier down to essentials.
+        // If you change this 400, the gap, p-4, or the window maxWidth, re-check
+        // that pairing (SessionCard.tsx `isNarrow`).
+        <div
+          ref={listRef}
+          style={compactMode ? undefined : { gridTemplateColumns: "repeat(auto-fill, minmax(400px, 1fr))" }}
+          className={`flex-1 w-full ${compactMode ? "max-w-5xl mx-auto overflow-visible p-2 space-y-1.5" : "overflow-y-auto sessions-scroll p-4 grid gap-3 content-start items-start"}`}
+        >
           {/* Empty active sessions message */}
           {sessions.length === 0 && revivedSessions.length > 0 && (
-            <div className="flex flex-col items-center justify-center text-white/60 gap-2 py-12">
+            <div className="col-span-full flex flex-col items-center justify-center text-white/60 gap-2 py-12">
               <span className="text-4xl">○</span>
               <span className="text-lg font-medium">No Active Sessions</span>
               <span className="text-sm text-white/40">Sessions will appear here when Claude Code is running</span>
@@ -2845,13 +2940,16 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
           )}
           {/* Active sessions — branch view or vertical stack */}
           {showBranchView ? (
-            <BranchView
-              sessions={sortedWithChildren}
-              cardSettings={cardSettings}
-              compactMode={compactMode}
-              expandOverrides={expandOverrides}
-              onExpandCycle={cycleExpandById}
-            />
+            <div style={{ gridColumn: "1 / -1" }}>
+              <BranchView
+                sessions={sortedWithChildren}
+                cardSettings={cardSettings}
+                compactMode={compactMode}
+                expandOverrides={expandOverrides}
+                onExpandCycle={cycleExpandById}
+                onDismiss={handleDismiss}
+              />
+            </div>
           ) : (() => {
             // Compute which displayTitles appear more than once
             const titleCounts = new Map<string, number>();
@@ -2861,6 +2959,23 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             const duplicateTitles = new Set(
               [...titleCounts.entries()].filter(([, count]) => count > 1).map(([title]) => title)
             );
+            // "Group by project": reorder so a workspace's agents are contiguous;
+            // a full-width header before each group breaks the grid to a new row,
+            // so a project's cards flow side-by-side and single-agent projects sit
+            // on their own line.
+            const grouped = dashboardLayout === "grouped" && !compactMode;
+            let displaySessions = sortedWithChildren;
+            const groupCounts = new Map<string, number>();
+            if (grouped) {
+              const byWs = new Map<string, EnrichedSession[]>();
+              for (const s of sortedWithChildren) {
+                const arr = byWs.get(s.info.workspace);
+                if (arr) arr.push(s);
+                else byWs.set(s.info.workspace, [s]);
+              }
+              displaySessions = Array.from(byWs.values()).flat();
+              for (const [ws, arr] of byWs) groupCounts.set(ws, arr.length);
+            }
             // Drop expand-cycle handlers for sessions that no longer exist so
             // the ref'd Map doesn't accumulate one closure per session id ever
             // observed during a long Cue lifetime.
@@ -2872,11 +2987,9 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
               }
               for (const id of stale) expandCyclersRef.current.delete(id);
             }
-            return sortedWithChildren.map((session, idx) => {
+            return displaySessions.map((session, idx) => {
             const pending = pendingBySession[session.info.id] ?? [];
             const history = permissionHistory[session.info.id] ?? [];
-            const hasPermissionActivity = pending.length > 0 || history.length > 0;
-            const isCollapsed = collapsedSessions.has(session.info.id);
 
             // Apply keyboard state override if active
             const overrideState = stateOverrides[session.info.id];
@@ -2884,68 +2997,88 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
               ? { ...session, info: { ...session.info, state: overrideState } }
               : session;
 
+            const firstOfGroup =
+              grouped && (idx === 0 || displaySessions[idx - 1].info.workspace !== session.info.workspace);
             return (
-              <div key={session.info.id} data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="relative space-y-2" style={{ zIndex: idx + 1 }}>
+              <Fragment key={session.info.id}>
+                {firstOfGroup && (
+                  <div className="col-span-full flex items-center gap-2 pt-2">
+                    {projectAccentsEnabled && (
+                      <span
+                        aria-hidden
+                        style={{ width: 8, height: 8, borderRadius: 9999, background: getProjectAccent(session.info.workspace, isDark), flex: "0 0 auto" }}
+                      />
+                    )}
+                    <span className="text-xs font-medium text-white/55 truncate" title={session.info.workspace}>
+                      {session.workspaceName}
+                    </span>
+                    {(groupCounts.get(session.info.workspace) ?? 1) > 1 && (
+                      <span className="text-[0.625rem] text-white/35 tabular-nums whitespace-nowrap">
+                        {groupCounts.get(session.info.workspace)} agents
+                      </span>
+                    )}
+                    <div className="flex-1 border-t border-white/10" />
+                  </div>
+                )}
+                <div data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="relative space-y-2" style={{ zIndex: idx + 1 }}>
+                {/* The action this session is blocked on, pinned ABOVE the card so
+                    long context/todos/subagents can't push it out of reach.
+                    Approve/Deny for a pending permission; "answer in your editor"
+                    for a question/plan Cue can't answer. */}
+                <DecisionBar
+                  session={effectiveSession}
+                  pending={permissionsEnabled ? pending : []}
+                  onApprove={approvePermission}
+                  onDeny={denyPermission}
+                />
                 <SessionCard
                   {...cardSettings}
                   session={effectiveSession}
                   isDuplicate={duplicateTitles.has(session.displayTitle)}
                   expandOverride={compactMode ? expandOverrides[session.info.id] : undefined}
                   onExpandCycle={compactMode ? getExpandCycle(session.info.id) : undefined}
+                  onDismiss={handleDismiss}
                 />
 
-                {/* Permission section (when enabled and has activity) */}
-                {!compactMode && permissionsEnabled && hasPermissionActivity && (
-                  <div className="ml-3 border-l-2 border-yellow-400/20 pl-3 space-y-2">
-                    {pending.length > 0 && (
-                      <button
-                        onClick={() => toggleSessionCollapse(session.info.id)}
-                        className="flex items-center gap-1.5 text-xs text-yellow-400/60 hover:text-yellow-400 transition-colors select-none"
-                      >
-                        <span>{isCollapsed ? "▸" : "▾"}</span>
-                        <span>
-                          {pending.length} pending permission{pending.length !== 1 ? "s" : ""}
-                        </span>
-                      </button>
-                    )}
-
-                    {!isCollapsed &&
-                      pending.map((req) => (
-                        <PermissionPrompt
-                          key={req.requestId}
-                          request={req}
-                          onApprove={() => approvePermission(session.info.id, req.requestId)}
-                          onDeny={() => denyPermission(session.info.id, req.requestId)}
-                        />
-                      ))}
-
-                    {hasPermissionActivity && (
-                      <details
-                        className="text-xs"
-                        onToggle={(e) => {
-                          if ((e.target as HTMLDetailsElement).open) {
-                            refreshHistory(session.info.id);
-                          }
-                        }}
-                      >
-                        <summary className="cursor-pointer text-white/30 hover:text-white/50 transition-colors py-1 select-none">
-                          Permission history
-                        </summary>
-                        <div className="mt-1 pl-2 border-l border-white/10">
-                          <PermissionHistory entries={history} />
-                        </div>
-                      </details>
-                    )}
-                  </div>
+                {/* Cold permission history (non-actionable) stays below the card,
+                    non-compact only. The actionable pending prompt is in the
+                    DecisionBar above. */}
+                {permissionsEnabled && !compactMode && history.length > 0 && (
+                  <details
+                    className="text-xs ml-3 border-l-2 border-yellow-400/10 pl-3"
+                    onToggle={(e) => {
+                      if ((e.target as HTMLDetailsElement).open) {
+                        refreshHistory(session.info.id);
+                      }
+                    }}
+                  >
+                    <summary className="cursor-pointer text-white/30 hover:text-white/50 transition-colors py-1 select-none">
+                      Permission history
+                    </summary>
+                    <div className="mt-1 pl-2 border-l border-white/10">
+                      <PermissionHistory entries={history} />
+                    </div>
+                  </details>
                 )}
               </div>
+              </Fragment>
             );
           });
           })()}
 
+          {/* Resting sessions — auto-hidden idles + manual dismissals, one click
+              to restore. Re-surface on their own when active again. Rendered in
+              every mode (incl. compact/slim) since the X and idle auto-hide are
+              reachable there too — recovery must be too. Returns null when empty. */}
+          <RestingDisclosure
+            sessions={restingSessions}
+            onRestore={handleRestore}
+            className="col-span-full"
+          />
+
           {/* Revived (ended) sessions — collapsible, collapsed by default */}
           {!compactMode && !slimMode && revivedSessions.length > 0 && (
-            <details className="pt-4 group/revive">
+            <details className="col-span-full pt-4 group/revive">
               <summary className="flex items-center gap-3 pb-1 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden rounded-lg px-3 py-2 -mx-3 hover:bg-red-500/8 transition-colors">
                 <div className="flex-1 border-t border-red-500/20" />
                 <span className="text-xs text-red-400/60 group-hover/revive:text-red-400/90 uppercase tracking-wider font-medium flex items-center gap-1.5 transition-colors">

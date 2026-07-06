@@ -1,0 +1,3 @@
+# Test dependency for the cue-hook Python test suite (tests/hooks).
+# Pinned for reproducible CI; bump deliberately. Verified green on 3.11–3.14.
+pytest==9.1.1

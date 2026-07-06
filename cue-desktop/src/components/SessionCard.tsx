@@ -1,8 +1,10 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { createPortal } from "react-dom";
 import { usePageVisible } from "@/hooks/usePageVisible";
 import { useTheme } from "@/hooks/useIsDark";
+import { openSession } from "@/lib/openSession";
+import { DismissButton } from "./views/DismissButton";
+import { SubagentDetail } from "./views/SubagentDetail";
 
 /** Deterministic per-character hash for stable animation randomness */
 function charHash(i: number, title: string): number {
@@ -33,7 +35,8 @@ function effortTextClass(level: string): string {
 }
 import type { EnrichedSession } from "@/lib/types";
 import { STATE_HEX, STATE_HEX_LIGHT, STATE_DOT_HEX, STATE_DOT_HEX_LIGHT, STATE_BADGE_HEX, STATE_BADGE_HEX_LIGHT } from "@/lib/types";
-import { formatTokens, formatDuration, formatClockTime, formatElapsedCompact, cleanPromptText } from "@/lib/format";
+import { formatTokens, formatDuration, formatClockTime, formatElapsedCompact, cleanPromptText, errorReason, getProjectAccent, formatModelName } from "@/lib/format";
+import { usageSummary, usageDisplayStrings } from "@/lib/sessionCardModel";
 import { SignalString } from "./SignalString";
 import type { StrikePulse, CometPulse } from "./SignalString";
 import { FluxEffect } from "./FluxEffect";
@@ -126,6 +129,9 @@ export interface SessionCardProps {
   showCurrentTool?: boolean;
   /** Beta: show config counts row */
   showConfigCounts?: boolean;
+  /** Show the per-session usage line (est. cost · tokens · cache efficiency) in
+   *  the deep-telemetry section. Default on. */
+  showUsage?: boolean;
   /** Fire white comet tracers across the strings on every tool call. Off by default. */
   showToolCallComets?: boolean;
   /** Timer display: "minutes" (HH:MM), "seconds" (HH:MM:SS), or "off" */
@@ -137,6 +143,11 @@ export interface SessionCardProps {
   isDuplicate?: boolean;
   /** Low-power mode — skip mounting heavy effects (WebGL aurora, etc.) */
   lowPower?: boolean;
+  /** Tint the card's left edge by project (auto-derived from the workspace). */
+  projectAccentsEnabled?: boolean;
+  /** When provided, render an "X" that tucks this session into the Resting
+   *  group. Omitted for revived/ended cards (which have their own controls). */
+  onDismiss?: (id: string) => void;
 }
 
 function PromptPopup({ text, onClose, isDark }: {
@@ -182,6 +193,12 @@ function PromptPopup({ text, onClose, isDark }: {
             : "0 24px 48px rgba(0,0,0,0.18), 0 4px 12px rgba(0,0,0,0.10)",
           animation: "prompt-popup-in 0.15s cubic-bezier(0.34, 1.4, 0.64, 1) forwards",
         }}
+        // Stop mousedown (not just click) from reaching the document-level
+        // outside-close handler: without this, starting a text selection of the
+        // prompt or grabbing the scrollbar fires a mousedown inside the content
+        // that bubbles to document and instantly dismisses the popup. A genuine
+        // mousedown on the backdrop still bubbles through and closes it.
+        onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{
@@ -213,7 +230,7 @@ function PromptPopup({ text, onClose, isDark }: {
   );
 }
 
-function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", stringsEnabled = false, sandEnabled = true, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, fluxEnabled = true, fluxAlpha = 0.9, fluxIntensity = 1.5, fluxDensity = 1.0, fluxSpeed = 1.0, fluxLineLength = 0.55, fluxTurbulence = 1.0, auroraEnabled = false, auroraAlpha = 0.75, auroraSpeed = 0.55, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, stringSpread = 0.15, stringDeployAngle = -16, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "compact", showToolPills = false, showCurrentTool = false, showConfigCounts = false, showToolCallComets = false, timerDisplay = "seconds", expandOverride, onExpandCycle, isDuplicate = false, lowPower = false }: SessionCardProps) {
+function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.2, randomAnimation = false, signalString = false, signalFrequency = 1.0, signalMode = "simulated", signalAlpha = 0.25, signalAmplitude = 0.25, signalEcho = 1.0, signalBass = true, signalMids = true, signalTreble = true, signalColorDark = "#ffffff", signalColorLight = "#000000", signalOffset = 0, signalEffect = "string", stringsEnabled = false, sandEnabled = true, sandIntensity = 1.0, sandDirection = 0, sandDensity = 1.0, sandSpeed = 1.0, sandGrainSize = 1.0, sandTurbulence = 0.5, sandAlpha = 0.7, fluxEnabled = true, fluxAlpha = 0.9, fluxIntensity = 1.5, fluxDensity = 1.0, fluxSpeed = 1.0, fluxLineLength = 0.55, fluxTurbulence = 1.0, auroraEnabled = false, auroraAlpha = 0.75, auroraSpeed = 0.55, cordRetractDelay = 2.0, cordDeployForce = 1.1, cordRetractForce = 1.25, stringSpread = 0.15, stringDeployAngle = -16, revived = false, keyPressSpeed = 0.35, keyReleaseSpeed = 0.4, compactMode = false, slimMode = false, contextThreshold = "always", contextDisplay = "compact", showToolPills = false, showCurrentTool = false, showConfigCounts = false, showUsage = true, showToolCallComets = false, timerDisplay = "seconds", expandOverride, onExpandCycle, isDuplicate = false, lowPower = false, projectAccentsEnabled = true, onDismiss }: SessionCardProps) {
   // Effective display mode: expandOverride takes precedence over global compact/slim
   const effectiveCompact = expandOverride !== undefined ? expandOverride === 0 : compactMode;
   const effectiveSlim = expandOverride !== undefined ? expandOverride <= 1 : slimMode;
@@ -222,6 +239,12 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   const contextMeetsThreshold = contextThreshold !== "after200k" || metrics.lastInputTokens >= contextTokenThreshold;
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  // Which child-agent row is expanded to its inline quick-report (one per card).
+  const [openAgentId, setOpenAgentId] = useState<string | null>(null);
+  // Optional "show even more" for the wide instrument strip. Deliberately a
+  // SEPARATE per-card boolean from expandOverride — it never touches the global
+  // slim/compact density, so it can't leak across the Cmd+D toggle.
+  const [wideExpanded, setWideExpanded] = useState(false);
   const [promptPopupOpen, setPromptPopupOpen] = useState(false);
   const pageVisible = usePageVisible();
 
@@ -657,6 +680,12 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   const isNarrow = cardWidth < 600;
   const hidePromptPill = cardWidth < 420;
   const hideTimer = cardWidth < 340;
+  // A slim card handed a wide grid track (~520-605px for a 2-up side-by-side):
+  // swap the tall-narrow slim layout for a horizontal "instrument strip" that
+  // fills the width and recovers the data slim normally hides. 520 catches the
+  // 2-up case (a 2-col card caps ~605px before a 3rd column engages); see the
+  // 400/600 grid pairing comment in SessionsTab.
+  const isWideSlim = cardWidth >= 520;
 
   useEffect(() => {
     const el = cardRef.current;
@@ -782,6 +811,17 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   const displayStateName = labelState === "subagent" && activeSubs > 0
     ? `Subagents(${activeSubs})`
     : STATE_DISPLAY_NAME[labelState] ?? session.stateDisplayName;
+
+  // Per-project left-edge accent (auto-derived from the workspace path). A
+  // separate visual channel from state color — see getProjectAccent.
+  const projectAccent = projectAccentsEnabled ? getProjectAccent(info.workspace, isDark) : null;
+
+  // Wide-slim "instrument strip": a slim card that's been handed a wide track
+  // recovers the high-value secondary data (todos, in/out·tools·msgs, branch)
+  // that slim normally hides — and, when the user clicks the hover caret, the
+  // deep telemetry too. Normal/compact modes are unchanged by these.
+  const showStripData = !effectiveCompact && (!effectiveSlim || isWideSlim);
+  const showDeepTelemetry = !effectiveCompact && (!effectiveSlim || (isWideSlim && wideExpanded));
 
   // ─── Subagent string lines — staggered handoff ──────────────────────────
   // Two phases to avoid the base-band retract and subagent-band deploy
@@ -1081,16 +1121,13 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   // Open this session's project in the editor that launched it (falling back to
   // the OS file manager) — same action as a tray-popover row.
   const openWorkspace = useCallback(() => {
-    invoke("open_session_workspace", {
-      workspace: info.workspace,
-      source: info.source ?? null,
-    }).catch((err) => { console.error("open_session_workspace failed", err); });
-  }, [info.workspace, info.source]);
+    openSession(session);
+  }, [session]);
 
   const handleCardClick = (e: React.MouseEvent) => {
     if (compactMode && onExpandCycle) { onExpandCycle(); return; }
     // Leave the card's own controls (copy-id, expanders, links, inputs) alone.
-    if ((e.target as HTMLElement).closest('button, a, input, textarea, select, [role="button"], [contenteditable="true"]')) {
+    if ((e.target as HTMLElement).closest('button, a, input, textarea, select, summary, details, [role="button"], [contenteditable="true"]')) {
       return;
     }
     openWorkspace();
@@ -1101,7 +1138,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       {/* Vine border — rendered OUTSIDE the card's overflow-hidden so vines can overflow */}
     <div
       ref={cardRef}
-      className={`overflow-hidden rounded-lg border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 session-card ${
+      className={`overflow-hidden rounded-lg border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 session-card group/card ${
         effectiveCompact ? "session-card--compact" : ""
       } ${
         isWorking ? "session-card--pressed" : "session-card--floating"
@@ -1132,9 +1169,15 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
         "--anim-speed": `${animationSpeed}s`,
         "--key-press-speed": `${keyPressSpeed}s`,
         "--key-release-speed": `${keyReleaseSpeed}s`,
-        ...(effectiveSlim && !effectiveCompact ? { minHeight: "120px" } : {}),
+        ...(effectiveSlim && !effectiveCompact && !isWideSlim ? { minHeight: "120px" } : {}),
       } as React.CSSProperties}
     >
+
+      {/* Dismiss ("X") — tucks the session into the recoverable Resting group.
+          Only on the live card, never the revived/ended overlay. */}
+      {onDismiss && !revived && (
+        <DismissButton sessionId={info.id} title={session.displayTitle} onDismiss={onDismiss} />
+      )}
 
       {/* Aurora wash — done-state ambient background. Slow FBM flow; mounts
           on done, fades out via AURORA_EXIT_MS when state leaves. */}
@@ -1177,7 +1220,29 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
         />
       )}
 
-      <div ref={contentRef} className={`${effectiveCompact ? "space-y-0 flex flex-col justify-center min-h-full" : "space-y-2.5"} ${effectiveSlim && !effectiveCompact ? "flex flex-col flex-1" : ""}`} style={{ position: "relative", zIndex: 10 }}>
+      {/* Per-project left-edge accent. An inner absolute span (not border-left,
+          not box-shadow) so the border-box width is unchanged (no grid reflow)
+          and it never collides with the state inset-shadows. zIndex 5 sits above
+          the effect canvases (behind) and below the content (z-10). */}
+      {projectAccent && (
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 3,
+            background: projectAccent,
+            opacity: isDark ? 0.55 : 0.7,
+            borderTopLeftRadius: 8,
+            borderBottomLeftRadius: 8,
+            zIndex: 5,
+            pointerEvents: "none",
+          }}
+        />
+      )}
+      <div ref={contentRef} className={`${effectiveCompact ? "space-y-0 flex flex-col justify-center min-h-full" : "space-y-2.5"} ${effectiveSlim && !effectiveCompact && !isWideSlim ? "flex flex-col flex-1" : ""}`} style={{ position: "relative", zIndex: 10 }}>
           {/* Row 1: Status dot + state badge + title + prompt pill + duration
               Shrink priority: prompt pill first (shrinks → hides), timer second, title last */}
           <div className="relative flex items-center gap-2 min-w-0 overflow-hidden">
@@ -1192,7 +1257,6 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 background: `linear-gradient(${badgeHex.bg}, ${badgeHex.bg}), ${isDark ? "#0e0e0e" : "#f5f5f5"}`,
                 color: badgeHex.text,
                 transition: stateTransition,
-                minWidth: "8.5em",
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -1203,7 +1267,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             {(info.state === "working" || info.state === "thinking" || info.state === "subagent") && titleAnimation !== "none" ? (
               <span
                 ref={titleContainerRef}
-                className={`font-semibold anim-${titleAnimation} whitespace-nowrap overflow-hidden shrink-0 leading-none`}
+                className={`font-semibold anim-${titleAnimation} whitespace-nowrap overflow-hidden min-w-0 leading-none`}
                 style={{
                   color: titleHex,
                   transition: stateTransition,
@@ -1236,7 +1300,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
               </span>
             ) : (
               <span
-                className="font-semibold whitespace-nowrap shrink-0 leading-none"
+                className="font-semibold truncate min-w-0 leading-none"
                 style={{
                   color: titleHex,
                   transition: stateTransition,
@@ -1339,7 +1403,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 {shortPath}
               </span>
             )}
-            {!isNarrow && !effectiveCompact && !effectiveSlim && metrics.gitBranch && (
+            {((!isNarrow && !effectiveCompact && !effectiveSlim) || (isWideSlim && effectiveSlim && !effectiveCompact)) && metrics.gitBranch && (
               <span className="text-[0.625rem] text-white/40 truncate shrink-0 flex items-center gap-1">
                 <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" className="shrink-0 opacity-50"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5z" /></svg>
                 {metrics.gitBranch}
@@ -1372,10 +1436,15 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 // driving the terminal — in other states the user can shift+tab
                 // to cycle modes silently and the value would lag, so we hide
                 // rather than misreport.
-                const ACTIVE = new Set(["working", "thinking", "subagent", "compacting", "clearing"]);
-                if (!ACTIVE.has(info.state)) return null;
                 const mode = info.permissionMode;
                 if (!mode || mode === "default") return null;
+                // BYPASS is the single highest-stakes fact about a session
+                // (every tool auto-approves), so keep it visible even at rest —
+                // a stale "still bypassing?" warning is far safer than hiding a
+                // live one. The other modes can lag when the user silently
+                // shift-tab cycles them, so those still hide outside active states.
+                const ACTIVE = new Set(["working", "thinking", "subagent", "compacting", "clearing"]);
+                if (mode !== "bypassPermissions" && !ACTIVE.has(info.state)) return null;
                 // Symbols + labels mirror Claude Code's own terminal indicators
                 // (e.g. "▮▮ plan mode on", "▶▶ auto mode on"). Colors trend from
                 // safe → risky: teal (read-only) → amber/yellow (auto-approve
@@ -1391,7 +1460,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 if (!m) return null;
                 return (
                   <span
-                    className={`text-[0.5625rem] font-semibold tracking-wider px-1.5 py-0.5 rounded leading-none inline-flex items-center gap-1 ${m.cls}`}
+                    className={`text-[0.625rem] font-semibold tracking-wider px-1.5 py-0.5 rounded leading-none inline-flex items-center gap-1 ${m.cls}`}
                     title={m.title}
                   >
                     <span aria-hidden className="opacity-90">{m.symbol}</span>
@@ -1410,6 +1479,35 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             )}
           </div>
 
+
+          {/* Error reason — when a session failed, surface *why* (the real
+              message from the transcript's isApiErrorMessage entry, falling back
+              to the error category) so the card explains itself instead of just
+              saying "Error". Two-line clamp with the full text on hover. */}
+          {isError && !effectiveCompact && (() => {
+            const reason = errorReason(info.errorType, metrics.lastErrorMessage);
+            if (!reason) return null;
+            return (
+              <div
+                style={{ position: "relative", paddingLeft: "calc(20px + 0.5rem)", marginTop: "-0.125rem", lineHeight: 1.3 }}
+                title={reason}
+              >
+                <span
+                  style={{
+                    fontSize: "0.7rem",
+                    color: "#f87171",
+                    fontWeight: 500,
+                    display: "-webkit-box",
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: "vertical",
+                    overflow: "hidden",
+                  }}
+                >
+                  {"⚠"} {reason}
+                </span>
+              </div>
+            );
+          })()}
 
           {/* Agent subtitle — team agents (from JSONL or hook), branched sessions,
               or sessions with a custom title. customTitle passes through
@@ -1469,70 +1567,73 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             );
           })()}
 
-          {/* Rows 2-3 hidden in compact and slim mode */}
-          {!effectiveCompact && !effectiveSlim && (<>
-          {/* Row 2: Metrics */}
+          {/* Row 2: Metrics — recovered in the wide-slim instrument strip */}
+          {showStripData && (
           <div className="relative flex items-center gap-1.5 flex-wrap text-xs text-white/50">
-            {truncatedId && (
-              <button
-                onClick={copySessionId}
-                className="flex items-center gap-1 font-mono text-[0.625rem] px-1.5 py-0.5 rounded-full bg-white/10 text-white/30 hover:text-white/60 transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                title={`Copy session ID: ${info.id}`}
-                aria-label={`Copy session ID ${info.id}`}
-              >
-                {truncatedId}&hellip;
-                {copied && <span>{"\u2713"}</span>}
-              </button>
+            {/* Act-on metrics first, anchored as pills: progress + liveness. */}
+            {session.todoTotal > 0 && (
+              <span className="flex items-center gap-1.5 text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/70 whitespace-nowrap" title={session.todoCurrent ? `Current todo: ${session.todoCurrent}` : `${session.todoCompleted} of ${session.todoTotal} todos done`}>
+                <span className="inline-block w-6 h-1 rounded-full bg-white/15 overflow-hidden align-middle">
+                  <span className="block h-full rounded-full bg-white/70" style={{ width: `${Math.round((session.todoCompleted / session.todoTotal) * 100)}%` }} />
+                </span>
+                {session.todoCompleted}/{session.todoTotal} todos
+              </span>
             )}
-            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap" title="User / Total messages">
-              &#128172; {metrics.userMessageCount}/{metrics.messageCount}
-            </span>
-            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
-              &#8595; {formatTokens(aggregatedInputTokens)} in
-            </span>
-            <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
-              &#8593; {formatTokens(aggregatedOutputTokens)} out
-            </span>
-            {aggregatedToolUses > 0 && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
-                &#128295; {aggregatedToolUses} tools
+            {session.outputTokensPerSec > 0 && (info.state === "working" || info.state === "thinking" || info.state === "subagent") && (
+              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/60 whitespace-nowrap" title="Output speed \u2014 tokens per second">
+                {session.outputTokensPerSec.toFixed(1)} tok/s
               </span>
             )}
             {hasSubagents && (
               <button
-                onClick={() => setExpanded(!expanded)}
+                onClick={() => {
+                  const next = !expanded;
+                  setExpanded(next);
+                  // Collapsing the team hides the rows; drop any open detail so
+                  // it doesn't silently reappear when the team is expanded again.
+                  if (!next) setOpenAgentId(null);
+                }}
                 className="flex items-center gap-1 text-blue-600 hover:text-blue-500 transition-colors cursor-pointer text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full border border-blue-600/40 hover:border-blue-500/50 whitespace-nowrap"
                 aria-label={expanded ? "Collapse agent team" : "Expand agent team"}
                 aria-expanded={expanded}
+                title={`${subagents.length} active subagent${subagents.length === 1 ? "" : "s"}`}
               >
                 <span>{expanded ? "\u25BE" : "\u25B8"}</span>
                 <span>{subagents.length} agents</span>
               </button>
             )}
-            {session.todoTotal > 0 && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap" title={session.todoCurrent || undefined}>
-                {"\u2610"} {session.todoCompleted}/{session.todoTotal}
-              </span>
-            )}
-            {session.totalDurationSecs > 0 && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap" title="Total session time">
-                &#9201; {formatDuration(session.totalDurationSecs)}
-              </span>
-            )}
-            {session.outputTokensPerSec > 0 && (info.state === "working" || info.state === "thinking" || info.state === "subagent") && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
-                {session.outputTokensPerSec.toFixed(1)} tok/s
-              </span>
-            )}
-            {!isNarrow && session.sourceDisplay !== "\u2014" && (
-              <span className="text-[0.625rem] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 whitespace-nowrap">
-                {session.sourceDisplay}
-              </span>
+            {/* Reference metrics: present but visually quiet \u2014 no pill chrome,
+                dimmed, dot-separated. Tooltips still carry the exact values. */}
+            <div className={`flex items-center gap-1.5 flex-wrap text-[0.625rem] font-mono text-white/30 min-w-0 ${isNarrow && !isWideSlim ? "hidden" : ""}`}>
+              <span title={`Input: ${aggregatedInputTokens.toLocaleString()} tokens`}>{formatTokens(aggregatedInputTokens)} in</span>
+              <span aria-hidden className="text-white/15">{"\u00B7"}</span>
+              <span title={`Output: ${aggregatedOutputTokens.toLocaleString()} tokens`}>{formatTokens(aggregatedOutputTokens)} out</span>
+              {aggregatedToolUses > 0 && (<><span aria-hidden className="text-white/15">{"\u00B7"}</span><span title={`${aggregatedToolUses.toLocaleString()} tool calls`}>{aggregatedToolUses} tools</span></>)}
+              <span aria-hidden className="text-white/15">{"\u00B7"}</span>
+              <span title={`${metrics.userMessageCount} of your messages \u00B7 ${metrics.messageCount} total messages`}>{metrics.userMessageCount}/{metrics.messageCount} msgs</span>
+              {session.totalDurationSecs > 0 && (<><span aria-hidden className="text-white/15">{"\u00B7"}</span><span title="Active session time">{formatDuration(session.totalDurationSecs)}</span></>)}
+              {!isNarrow && session.sourceDisplay !== "\u2014" && (<><span aria-hidden className="text-white/15">{"\u00B7"}</span><span title={`Launched from ${session.sourceDisplay}`}>{session.sourceDisplay}</span></>)}
+              {truncatedId && (<><span aria-hidden className="text-white/15">{"\u00B7"}</span><button onClick={copySessionId} className="font-mono hover:text-white/60 transition-colors cursor-pointer" title={`Session ID \u2014 click to copy: ${info.id}`} aria-label={`Copy session ID ${info.id}`}>{truncatedId}&hellip;{copied && <span>{"\u2713"}</span>}</button></>)}
+            </div>
+            {isWideSlim && effectiveSlim && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setWideExpanded((v) => !v); }}
+                className="ml-auto shrink-0 flex items-center justify-center w-4 h-4 rounded text-white/25 opacity-0 group-hover/card:opacity-100 focus-visible:opacity-100 hover:text-white/70 transition-opacity"
+                aria-label={wideExpanded ? "Hide extra details" : "Show more details"}
+                aria-expanded={wideExpanded}
+                title={wideExpanded ? "Hide extra details" : "Show more details"}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ transform: wideExpanded ? "rotate(180deg)" : "none", transition: "transform 150ms" }}>
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
             )}
           </div>
+          )}
 
-          {/* Row 3: Tool chips (beta) */}
-          {showToolPills && topTools.length > 0 && (
+          {/* Row 3: Tool chips (beta) — deep telemetry (hover-expand in wide-slim) */}
+          {showDeepTelemetry && showToolPills && topTools.length > 0 && (
             <div className="relative flex items-center gap-1.5 flex-wrap">
               {topTools.map(([name, count]) => (
                 <span
@@ -1548,10 +1649,11 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
               <span className="ml-auto" />
             </div>
           )}
-          </>)}
 
-          {/* Spacer pushes context bar to bottom in slim mode */}
-          {effectiveSlim && !effectiveCompact && <div className="flex-1" />}
+          {/* Spacer pushes context bar to bottom in narrow slim mode. In a wide
+              slim card the band fills the width, so the spacer (and the gap it
+              created) is dropped. */}
+          {effectiveSlim && !effectiveCompact && !isWideSlim && <div className="flex-1" />}
 
           {/* Context bar */}
           {!effectiveCompact && (() => {
@@ -1698,12 +1800,12 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           })()}
 
           {/* Token breakdown — detail mode only, when context >= 85% */}
-          {!effectiveCompact && !effectiveSlim && session.contextUsagePercent >= 0.85 && (
+          {showDeepTelemetry && session.contextUsagePercent >= 0.85 && (
             metrics.cacheReadTokens > 0 || metrics.cacheCreationTokens > 0
           ) && (
             <div className="relative flex items-center gap-1.5 text-[0.625rem] text-white/30 mono-nums">
               <span className="text-white/40 shrink-0">Tokens</span>
-              <span>{formatTokens(metrics.inputTokens - metrics.cacheReadTokens - metrics.cacheCreationTokens)} input</span>
+              <span>{formatTokens(metrics.inputTokens)} input</span>
               {metrics.cacheReadTokens > 0 && (
                 <span>{"\u00B7"} <span className="text-blue-400/60">{formatTokens(metrics.cacheReadTokens)}</span> cache read</span>
               )}
@@ -1713,39 +1815,24 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
             </div>
           )}
 
-          {/* Rate limits (from statusline bridge) */}
-          {!effectiveCompact && !effectiveSlim && session.rateLimits && (session.rateLimits.fiveHourPercent > 0 || session.rateLimits.sevenDayPercent > 0) && (
-            <div className="relative flex items-center gap-2 flex-wrap">
-              <span className="text-[0.625rem] text-white/40 shrink-0 w-6">5h</span>
-              <div className="flex-1 relative h-1 rounded-full bg-white/8 overflow-hidden min-w-[40px]">
-                <div className="absolute left-0 top-0 bottom-0 rounded-full" style={{
-                  transition: "width 500ms cubic-bezier(0.33, 1, 0.68, 1), background-color 300ms cubic-bezier(0.33, 1, 0.68, 1)",
-                  width: `${Math.min(session.rateLimits.fiveHourPercent, 100)}%`,
-                  background: session.rateLimits.fiveHourPercent >= 90 ? "#ef4444" : session.rateLimits.fiveHourPercent >= 75 ? "#d946ef" : "#3b82f6",
-                  opacity: 0.4,
-                }} />
+          {/* Usage — per-session economics: est. cost · lifetime tokens · cache
+              efficiency. Sits with the cache tokens it summarizes. */}
+          {showDeepTelemetry && showUsage && (() => {
+            const u = usageSummary(session);
+            if (!u.hasData) return null;
+            const d = usageDisplayStrings(u);
+            return (
+              <div className="relative flex items-center gap-1.5 text-[0.625rem] text-white/30 mono-nums" title={d.tooltip}>
+                <span className="text-white/40 shrink-0">Usage</span>
+                <span>{d.cost}</span>
+                <span>{"·"} {d.tokens}</span>
+                {d.cached && <span>{"·"} {d.cached}</span>}
               </div>
-              <span className="text-[0.625rem] text-white/40 mono-nums shrink-0">{Math.round(session.rateLimits.fiveHourPercent)}%</span>
-              {session.rateLimits.sevenDayPercent > 0 && (<>
-                <span className="text-[0.625rem] text-white/40 shrink-0 w-6">7d</span>
-                <div className="flex-1 relative h-1 rounded-full bg-white/8 overflow-hidden min-w-[40px]">
-                  <div className="absolute left-0 top-0 bottom-0 rounded-full" style={{
-                  transition: "width 500ms cubic-bezier(0.33, 1, 0.68, 1), background-color 300ms cubic-bezier(0.33, 1, 0.68, 1)",
-                    width: `${Math.min(session.rateLimits.sevenDayPercent, 100)}%`,
-                    background: session.rateLimits.sevenDayPercent >= 90 ? "#ef4444" : session.rateLimits.sevenDayPercent >= 75 ? "#d946ef" : "#3b82f6",
-                    opacity: 0.4,
-                  }} />
-                </div>
-                <span className="text-[0.625rem] text-white/40 mono-nums shrink-0">{Math.round(session.rateLimits.sevenDayPercent)}%</span>
-              </>)}
-              {session.rateLimits.limitReached && (
-                <span className="text-[0.625rem] text-red-400 font-medium">Limit reached</span>
-              )}
-            </div>
-          )}
+            );
+          })()}
 
           {/* Config counts (beta) */}
-          {showConfigCounts && !effectiveCompact && !effectiveSlim && session.configCounts && (
+          {showConfigCounts && showDeepTelemetry && session.configCounts && (
             (session.configCounts.claudeMdCount + session.configCounts.rulesCount + session.configCounts.mcpServers + session.configCounts.hooksCount) > 0
           ) && (
             <div className="relative flex items-center gap-1.5 text-[0.625rem] text-white/30">
@@ -1757,8 +1844,9 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           )}
       </div>
 
-      {/* Row 5: Expanded agent team */}
-      {!effectiveCompact && !effectiveSlim && expanded && hasSubagents && (() => {
+      {/* Row 5: Expanded agent team — toggled by the "N agents" button in the
+          strip, so it follows the same visibility (showStripData). */}
+      {showStripData && expanded && hasSubagents && (() => {
         const activeAgents = subagents.filter(a => a.isActive);
         const completedAgents = subagents.filter(a => !a.isActive);
 
@@ -1768,12 +1856,34 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           const isLast = i === list.length - 1;
           const prefix = isLast ? "\u2514\u2500" : "\u251C\u2500";
           const label = agent.slug || agent.agentId.slice(0, 8);
+          const agentKey = agent.agentId || `${list === activeAgents ? "a" : "d"}-${i}`;
+          const open = openAgentId === agentKey;
+          const toggleAgent = (e: React.SyntheticEvent) => {
+            e.stopPropagation();
+            setOpenAgentId(open ? null : agentKey);
+          };
+          const onAgentKey = (e: React.KeyboardEvent) => {
+            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleAgent(e); }
+          };
           return (
-            <div key={agent.agentId || i} className="flex items-center gap-2 text-xs text-white/50">
+            <React.Fragment key={agentKey}>
+            <div
+              role="button"
+              tabIndex={0}
+              aria-expanded={open}
+              onClick={toggleAgent}
+              onKeyDown={onAgentKey}
+              className="flex items-center gap-2 text-xs text-white/50 cursor-pointer rounded hover:bg-white/5 transition-colors"
+            >
               <span className="font-mono text-white/30 shrink-0">{prefix}</span>
               <span className={`shrink-0 ${agent.isActive ? "text-[#7CC5FF]" : "text-white/30"}`}>
                 @{label}
               </span>
+              {formatModelName(agent.model) !== "—" && (
+                <span className="shrink-0 text-[0.5625rem] text-white/30 mono-nums" title={agent.model}>
+                  {formatModelName(agent.model)}
+                </span>
+              )}
               {agent.description && (
                 <span className="text-white/30 truncate text-[0.625rem]" title={agent.description}>
                   {agent.description}
@@ -1811,8 +1921,23 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                   <span className="text-[0.625rem]">{agentToolUses} tools</span>
                 )}
                 <span className="text-[0.625rem]">{formatTokens(agentTotalTokens)} tokens</span>
+                <span aria-hidden className="text-[0.625rem] text-white/30">{open ? "▾" : "▸"}</span>
               </span>
             </div>
+            {open && (
+              <SubagentDetail
+                agent={agent}
+                palette={{
+                  text: "rgba(255,255,255,0.72)",
+                  muted: "rgba(255,255,255,0.5)",
+                  faint: "rgba(255,255,255,0.32)",
+                  rule: "rgba(255,255,255,0.14)",
+                  mono: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                  accent: "#7CC5FF",
+                }}
+              />
+            )}
+            </React.Fragment>
           );
         };
 

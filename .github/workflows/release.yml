@@ -1,18 +1,20 @@
 # Release pipeline: builds Cue for macOS (Apple Silicon + Intel), Windows,
-# and Linux on every `v*` tag push, signs/notarizes per platform, generates
-# Tauri updater artifacts, and uploads everything to a GitHub Release.
+# and Linux on every `v*` tag push, generates signed Tauri updater artifacts,
+# and uploads everything to a draft GitHub Release.
+#
+# App binaries currently ship UNSIGNED — there is no Apple/Windows code
+# signing or notarization wired up (see the tauri-action env block below and
+# RELEASE_CHECKLIST.md, which forbids describing binaries as signed). Only the
+# Tauri UPDATER artifacts are signed, with the updater key.
 #
 # Required repository secrets (configure in GitHub Settings → Secrets):
-#   APPLE_CERTIFICATE              — base64 of Developer ID Application .p12
-#   APPLE_CERTIFICATE_PASSWORD     — password for the .p12
-#   APPLE_SIGNING_IDENTITY         — e.g. "Developer ID Application: Foo Bar (TEAMID)"
-#   APPLE_ID                       — Apple ID email
-#   APPLE_PASSWORD                 — app-specific password (notarytool)
-#   APPLE_TEAM_ID                  — 10-char team id
-#   WINDOWS_CERTIFICATE            — base64 of code-signing .pfx
-#   WINDOWS_CERTIFICATE_PASSWORD   — password for the .pfx
 #   TAURI_SIGNING_PRIVATE_KEY      — Tauri updater private key (`tauri signer generate`)
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD — password for the Tauri signing key
+#
+# If platform code signing is enabled later, it will additionally need the
+# APPLE_* (.p12 cert, identity, notarytool Apple ID/password/team) and
+# WINDOWS_* (.pfx cert + password) secrets, plus the matching env vars
+# restored on the tauri-action step — none of that exists today.
 #
 # Trigger: push a tag `vX.Y.Z` (must match package.json/Cargo.toml/tauri.conf.json
 # version). The workflow creates a draft release; review it, then publish manually.
@@ -158,10 +160,17 @@ jobs:
         run: |
           tag="$TAG"
           tmp="$(mktemp -d)"; cd "$tmp"
-          gh release download "$tag" -R "${{ github.repository }}" --pattern '*' --skip-existing || true
-          if [ -n "$(ls -A .)" ]; then
-            sha256sum * > SHA256SUMS
-            gh release upload "$tag" SHA256SUMS -R "${{ github.repository }}" --clobber
-          else
-            echo "No assets found to checksum (draft may be empty)"
+          # No `|| true`: a failed download (transient API/network error) must
+          # fail the job, not silently produce a green "no assets" run — the
+          # release checklist's "SHA256SUMS attached?" gate depends on red
+          # meaning something went wrong.
+          gh release download "$tag" -R "${{ github.repository }}" --pattern '*'
+          # On a re-run, the previous SHA256SUMS is itself an asset; drop it so
+          # the fresh file doesn't contain a stale self-referencing entry.
+          rm -f SHA256SUMS
+          if [ -z "$(ls -A .)" ]; then
+            echo "::error::Release $tag has no assets to checksum — refusing to upload an empty SHA256SUMS."
+            exit 1
           fi
+          sha256sum * > SHA256SUMS
+          gh release upload "$tag" SHA256SUMS -R "${{ github.repository }}" --clobber
