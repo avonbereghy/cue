@@ -2637,13 +2637,16 @@ fn render_tray_icon(
     tick: u32,
     size: u32,
 ) -> Vec<u8> {
-    // No sessions to draw → fall back to the dot-grid's hollow-ring "no active
-    // sessions" placeholder for every style, so the menu bar never shows blank
-    // tool space. This is hit at startup (zero sessions) and, with the tray
-    // idle timeout, whenever every session has idled out of the icon — the
-    // bars/clock renderers draw nothing for an empty list.
+    // No sessions to draw → show a quiet placeholder so the menu bar never
+    // shows blank tool space. Hit at startup (zero sessions) and, with the tray
+    // idle timeout, whenever every session has idled out of the icon. The bars
+    // style gets a single empty white-outlined pill (matching its chip look);
+    // the other styles keep the dot-grid's hollow ring.
     if sessions.is_empty() {
-        return tray::render_dot_grid(sessions, blink_on, size);
+        return match style {
+            "bars" => tray::render_empty_pill(size),
+            _ => tray::render_dot_grid(sessions, blink_on, size),
+        };
     }
     match style {
         "clock" => tray::render_clock(sessions, blink_on, size),

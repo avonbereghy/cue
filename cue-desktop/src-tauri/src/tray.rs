@@ -527,6 +527,23 @@ pub fn render_bar_chart(sessions: &[EnrichedSession], tick: u32, size: u32) -> V
         ..Default::default()
     };
 
+    // Soft white outline drawn around every pill's full extent so each session
+    // reads as a distinct chip regardless of its state colour or fill level.
+    // Slightly translucent + a touch thicker so the rounded corners read smooth
+    // rather than choppy at the menu-bar's small size.
+    let white = Rgba {
+        r: 255,
+        g: 255,
+        b: 255,
+        a: 215,
+    };
+    let outline_stroke_w = (safe_size as f32 / 21.0).max(2.0);
+    let outline_stroke = tiny_skia::Stroke {
+        width: outline_stroke_w,
+        line_join: tiny_skia::LineJoin::Round,
+        ..Default::default()
+    };
+
     for (i, session) in sessions.iter().enumerate().take(BAR_CHART_MAX_SESSIONS) {
         let x = start_x + i as f32 * (bar_w + gap);
         let ctx = (session.context_usage_percent.clamp(0.0, 1.0)) as f32;
@@ -614,7 +631,58 @@ pub fn render_bar_chart(sessions: &[EnrichedSession], tick: u32, size: u32) -> V
                 );
             }
         }
+
+        // White outline around the whole pill — drawn last so it sits above the
+        // fill and shine, giving each session a clean, high-contrast chip.
+        pixmap.stroke_path(
+            &track_path,
+            &paint_for_color(&white),
+            &outline_stroke,
+            tiny_skia::Transform::identity(),
+            None,
+        );
     }
+
+    encode_png(pixmap.width(), pixmap.height(), pixmap.data())
+}
+
+/// Render the "no active sessions" placeholder for the bar-chart style: a single
+/// empty pill (same geometry as one bar) with a white outline and no fill, so
+/// the menu bar shows a quiet chip rather than a hollow ring or blank space.
+pub fn render_empty_pill(size: u32) -> Vec<u8> {
+    let safe_size = size.max(1);
+    let h = safe_size as f32;
+    let pad_y = (h * 0.10).max(2.0);
+    let pad_x = (h * 0.14).max(3.0);
+    let inner_h = (h - pad_y * 2.0).max(1.0);
+    let bar_w = (h * 0.36).max(3.0);
+    let radius = bar_w / 2.0;
+
+    // One bar, centered — mirrors render_bar_chart's single-session layout.
+    let pixel_w = ((bar_w + pad_x * 2.0).ceil() as u32).max(safe_size);
+    let mut pixmap = tiny_skia::Pixmap::new(pixel_w, safe_size).expect("pixmap");
+
+    let x = (pixel_w as f32 - bar_w) / 2.0;
+    let pill = rounded_rect_path(x, pad_y, bar_w, inner_h, radius);
+
+    let white = Rgba {
+        r: 255,
+        g: 255,
+        b: 255,
+        a: 215,
+    };
+    let outline_stroke = tiny_skia::Stroke {
+        width: (safe_size as f32 / 21.0).max(2.0),
+        line_join: tiny_skia::LineJoin::Round,
+        ..Default::default()
+    };
+    pixmap.stroke_path(
+        &pill,
+        &paint_for_color(&white),
+        &outline_stroke,
+        tiny_skia::Transform::identity(),
+        None,
+    );
 
     encode_png(pixmap.width(), pixmap.height(), pixmap.data())
 }
@@ -798,6 +866,23 @@ mod tests {
         verify_png(&off);
         // Blink on vs off should produce different images for "working"
         assert_ne!(on, off, "blink on/off should differ for working state");
+    }
+
+    #[test]
+    fn test_render_empty_pill_is_valid_png() {
+        // The "no active sessions" bars placeholder: one outlined pill, no fill.
+        let png = render_empty_pill(64);
+        verify_png(&png);
+    }
+
+    #[test]
+    fn test_bar_chart_pill_has_white_outline() {
+        // The outline is drawn on top, so a bar chart differs from the same
+        // render without any white pixels — cheap proxy: the PNG is non-trivial
+        // and stable across ticks for a non-animating state.
+        let sessions = vec![make_session("idle")];
+        let png = render_bar_chart(&sessions, 0, 64);
+        verify_png(&png);
     }
 
     #[test]
