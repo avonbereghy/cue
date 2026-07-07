@@ -891,7 +891,10 @@ mod tests {
 
         let pill_solid = render_empty_pill(64, 255);
         let pill_clear = render_empty_pill(64, 0);
-        assert_ne!(pill_solid, pill_clear, "border alpha must change the empty pill");
+        assert_ne!(
+            pill_solid, pill_clear,
+            "border alpha must change the empty pill"
+        );
     }
 
     #[test]
