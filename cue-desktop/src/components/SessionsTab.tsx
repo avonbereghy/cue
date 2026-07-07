@@ -2987,6 +2987,14 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     // Unknown view id falls through to the instrument render below.
   }
 
+  // Instrument keeps the original essence of Cue: one full-width column where
+  // each card spans the whole horizontal space, so the signal string + thinking
+  // effects render at full size and cards never tier down to the narrow-grid
+  // essentials. Drew's responsive multi-column grid is reserved for his Looks
+  // (which render via their own skin components above) — Instrument stays
+  // single-column. Compact mode is unaffected (its own slim stack below).
+  const isInstrumentColumn = dashboardView === "instrument" && !compactMode;
+
   // ---------------------------------------------------------------------------
   // Normal mode render
   // ---------------------------------------------------------------------------
@@ -3008,8 +3016,14 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         // that pairing (SessionCard.tsx `isNarrow`).
         <div
           ref={listRef}
-          style={compactMode ? undefined : { gridTemplateColumns: "repeat(auto-fill, minmax(400px, 1fr))" }}
-          className={`flex-1 w-full ${compactMode ? `max-w-5xl ${listAlignClass} overflow-visible p-2 space-y-1.5` : "overflow-y-auto sessions-scroll p-4 grid gap-3 content-start items-start"}`}
+          style={compactMode || isInstrumentColumn ? undefined : { gridTemplateColumns: "repeat(auto-fill, minmax(400px, 1fr))" }}
+          className={`flex-1 w-full ${
+            compactMode
+              ? `max-w-5xl ${listAlignClass} overflow-visible p-2 space-y-1.5`
+              : isInstrumentColumn
+                ? "overflow-y-auto sessions-scroll p-4 space-y-3"
+                : "overflow-y-auto sessions-scroll p-4 grid gap-3 content-start items-start"
+          }`}
         >
           {/* Empty active sessions message */}
           {sessions.length === 0 && revivedSessions.length > 0 && (
