@@ -404,7 +404,9 @@ const SETTINGS_JSON_MAX_BYTES: u64 = 4 * 1024 * 1024;
 fn write_hook_settings_at(settings_path: &Path, command_prefix: &str) -> Result<(), String> {
     let existing = if settings_path.exists() {
         Some(
-            security::read_to_string_bounded(settings_path, SETTINGS_JSON_MAX_BYTES)
+            // User's own ~/.claude/settings.json — follow a symlink (dotfile
+            // managers), otherwise O_NOFOLLOW hard-fails hook install for them.
+            security::read_to_string_bounded_follow(settings_path, SETTINGS_JSON_MAX_BYTES)
                 .map_err(|e| format!("Failed to read settings: {}", e))?,
         )
     } else {
@@ -441,7 +443,17 @@ fn write_hook_settings_at(settings_path: &Path, command_prefix: &str) -> Result<
             .map_err(|e| format!("Failed to create directory: {}", e))?;
     }
 
-    security::atomic_write(settings_path, content.as_bytes())
+    // Write THROUGH a dotfile-manager symlink instead of clobbering it: resolve
+    // to the real target so atomic_write's temp+rename replaces the target file
+    // and leaves the symlink intact. Without this, following the symlink on read
+    // (above) but renaming over it here would convert the user's stow/chezmoi
+    // symlink into a detached regular file and silently drop the hooks from
+    // their managed source. Falls back to the path as-is on a fresh install
+    // (canonicalize fails when the file doesn't exist yet).
+    let write_target = settings_path
+        .canonicalize()
+        .unwrap_or_else(|_| settings_path.to_path_buf());
+    security::atomic_write(&write_target, content.as_bytes())
         .map_err(|e| format!("Failed to write settings: {}", e))?;
 
     Ok(())
@@ -512,7 +524,8 @@ fn uninstall_hooks_at(settings_path: &Path) -> Result<(), String> {
         return Ok(()); // Nothing to uninstall
     }
 
-    let content = security::read_to_string_bounded(settings_path, SETTINGS_JSON_MAX_BYTES)
+    // User-owned config (may be symlinked by a dotfile manager) → follow.
+    let content = security::read_to_string_bounded_follow(settings_path, SETTINGS_JSON_MAX_BYTES)
         .map_err(|e| format!("Failed to read settings: {}", e))?;
     let mut settings: serde_json::Value =
         serde_json::from_str(&content).map_err(|e| format!("Failed to parse settings: {}", e))?;
@@ -549,7 +562,13 @@ fn uninstall_hooks_at(settings_path: &Path) -> Result<(), String> {
     let out = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
 
-    security::atomic_write(settings_path, out.as_bytes())
+    // Write through a dotfile-manager symlink instead of clobbering it (see
+    // write_hook_settings_at). The exists() guard above means canonicalize
+    // resolves; fall back to the path as-is defensively.
+    let write_target = settings_path
+        .canonicalize()
+        .unwrap_or_else(|_| settings_path.to_path_buf());
+    security::atomic_write(&write_target, out.as_bytes())
         .map_err(|e| format!("Failed to write settings: {}", e))?;
 
     // Remove the backup Cue wrote. The live settings are now cue-free, so the
@@ -810,6 +829,44 @@ mod tests {
                 .any(|e| e["hooks"][0]["command"] == "/opt/other-tool/run"),
             "user's non-cue hook was dropped"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_write_hook_settings_preserves_dotfile_symlink() {
+        // Regression: a dotfile manager symlinks ~/.claude/settings.json into a
+        // managed repo. The write must land THROUGH the symlink (updating the
+        // target) and leave the symlink intact — not clobber it with a regular
+        // file, which would silently drop the hooks from the managed source.
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join("cue_test_write_hooks_symlink");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("dotfiles")).unwrap();
+        std::fs::create_dir_all(dir.join(".claude")).unwrap();
+        let target = dir.join("dotfiles").join("settings.json");
+        std::fs::write(&target, "{\"model\":\"claude-sonnet-4-6\"}").unwrap();
+        let link = dir.join(".claude").join("settings.json");
+        symlink(&target, &link).unwrap();
+
+        write_hook_settings_at(&link, "python3 /home/u/.claude/hooks/cue-hook").unwrap();
+
+        // The symlink must SURVIVE (not be replaced by a regular file)…
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "write replaced the dotfile-manager symlink with a regular file"
+        );
+        // …and the hooks must have landed in the managed TARGET file.
+        let target_content = std::fs::read_to_string(&target).unwrap();
+        assert!(
+            target_content.contains("cue-hook"),
+            "hooks were not written through the symlink into the target"
+        );
+        let out: serde_json::Value = serde_json::from_str(&target_content).unwrap();
+        assert_eq!(out["model"].as_str(), Some("claude-sonnet-4-6"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

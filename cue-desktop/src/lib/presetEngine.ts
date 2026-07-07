@@ -32,6 +32,43 @@ let fluxAvgBass = 0, fluxAvgMids = 0, fluxAvgTreble = 0;
 const FLUX_SMOOTH = 0.92; // EMA for running average
 const FLUX_THRESHOLD_MULT = 2.5; // onset = flux > avg * this
 
+// ── Once-per-frame gate for getFrequencyData ────────────────────────────────
+// getFrequencyData() advances the attack/release smoothing and spectral-flux
+// onset state on EVERY call, but it's called once per rAF frame PER consumer
+// (each on-screen FluxEffect canvas + the audio-mode SignalString). With N live
+// consumers the smoothing constants would apply N× per frame and the flux diff
+// between consecutive intra-frame calls would collapse to ~0 — silently killing
+// onset detection whenever 2+ effect canvases are on screen. To fix this we
+// advance the analyser AT MOST ONCE PER ANIMATION FRAME: a rAF ticker (live only
+// while a preset plays) reopens `frameAdvanceAvailable` once per real frame; the
+// first consumer to read consumes it and advances the state, and every later
+// consumer in the same frame gets the cached buffer. A boolean reset exactly
+// once per frame makes this strictly once-per-frame regardless of the order the
+// ticker and consumer rAF callbacks happen to run in — and, being driven by rAF
+// rather than a wall-clock read, stays refresh-rate-agnostic and free of
+// Date.now()/Math.random().
+let frameAdvanceAvailable = true;
+let frameTickerHandle: number | null = null;
+
+/** Start the once-per-frame ticker (idempotent; no-op without requestAnimationFrame). */
+function startFrameTicker(): void {
+  if (frameTickerHandle !== null) return;
+  if (typeof requestAnimationFrame === "undefined") return;
+  const tick = () => {
+    frameAdvanceAvailable = true; // reopen the single per-frame advance
+    frameTickerHandle = requestAnimationFrame(tick);
+  };
+  frameTickerHandle = requestAnimationFrame(tick);
+}
+
+/** Stop the once-per-frame ticker. */
+function stopFrameTicker(): void {
+  if (frameTickerHandle !== null && typeof cancelAnimationFrame !== "undefined") {
+    cancelAnimationFrame(frameTickerHandle);
+  }
+  frameTickerHandle = null;
+}
+
 /** Load a preset and auto-start playback. */
 export function loadPreset(p: SignalPreset): void {
   stop();
@@ -46,6 +83,8 @@ export function play(): void {
   startTime = performance.now();
   playing = true;
   paused = false;
+  frameAdvanceAvailable = true; // let the next frame compute immediately
+  startFrameTicker();
 }
 
 /** Pause playback — retains position. */
@@ -54,6 +93,7 @@ export function pause(): void {
   pauseOffset = getCurrentTime();
   playing = false;
   paused = true;
+  stopFrameTicker();
 }
 
 /** Resume from paused position. */
@@ -62,6 +102,8 @@ export function resume(): void {
   startTime = performance.now();
   playing = true;
   paused = false;
+  frameAdvanceAvailable = true; // let the next frame compute immediately
+  startFrameTicker();
 }
 
 /** Toggle play/pause. */
@@ -82,6 +124,8 @@ export function stop(): void {
   prevBass = prevMids = prevTreble = 0;
   fluxBass = fluxMids = fluxTreble = 0;
   fluxAvgBass = fluxAvgMids = fluxAvgTreble = 0;
+  stopFrameTicker();
+  frameAdvanceAvailable = true;
 }
 
 /** Current playback position in seconds (accounts for looping). */
@@ -139,6 +183,18 @@ export function seek(time: number): void {
  */
 export function getFrequencyData(): Uint8Array {
   if (!preset || !playing) return frequencyData;
+
+  // Advance-and-cache once per animation frame. When the rAF ticker is live
+  // (normal playback) only the first consumer each frame consumes the advance;
+  // any further consumers in the same frame get the cached buffer — so
+  // smoothing/flux advance exactly once per frame regardless of consumer count.
+  // When the ticker is absent (no requestAnimationFrame, e.g. node tests) the
+  // flag never reopens, so we skip the gate and advance on every call (original
+  // behavior).
+  if (frameTickerHandle !== null) {
+    if (!frameAdvanceAvailable) return frequencyData;
+    frameAdvanceAvailable = false;
+  }
 
   const t = getCurrentTime();
   const samplePos = t * preset.sampleRate;

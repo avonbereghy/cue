@@ -1,0 +1,215 @@
+/* ───────────────────────────────────────────────────────────────────────────
+   Almanac Look — a naturalist's field log on warm paper.
+   All selectors are scoped under `.almanac-view` so nothing leaks into the
+   instrument card (which keys off `.session-card`). Ported from the approved
+   prototype; data is wired in AlmanacView.tsx.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+.almanac-view {
+  /* Warm almanac paper palette */
+  --paper:       #f4ecd8;
+  --paper-2:     #efe6cf;
+  --paper-edge:  #e6d9bb;
+  --rule:        #d8c79f;
+  --rule-soft:   #e3d4ad;
+  --margin-line: #c98b7a;
+  --ink:         #2b2118;
+  --ink-soft:    #5c4a37;
+  --ink-faint:   #8a7758;
+  --ink-ghost:   #ab9974;
+
+  --ink-green:  #4e6b3a;
+  --ink-amber:  #b07a1e;
+  --ink-red:    #a23a2e;
+  --ink-blue:   #3a5b73;
+  --ink-violet: #6a4a6e;
+  --ink-teal:   #2f6b63;
+  --stamp-red:  #b1463a;
+
+  --shadow:      rgba(67, 49, 28, 0.18);
+  --shadow-soft: rgba(67, 49, 28, 0.10);
+
+  --serif: "Spectral", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --slab:  "Zilla Slab", "Rockwell", "Roboto Slab", Georgia, serif;
+  --mono:  "IBM Plex Mono", "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  color: var(--ink);
+  background-color: var(--paper);
+  background-image:
+    radial-gradient(ellipse 120% 90% at 50% -10%, rgba(255, 250, 235, 0.55), transparent 60%),
+    radial-gradient(ellipse 140% 120% at 50% 120%, rgba(120, 90, 50, 0.10), transparent 55%),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='160' height='160' filter='url(%23n)' opacity='0.04'/></svg>");
+  background-attachment: fixed;
+  font-family: var(--serif);
+  font-feature-settings: "onum" 1, "liga" 1, "kern" 1;
+  line-height: 1.45;
+}
+
+.almanac-view .almanac-scroll { background: transparent; }
+.almanac-view .almanac-inner { max-width: 1240px; margin: 0 auto; padding: 22px 24px 60px; }
+
+/* ── Masthead (compact — the app toolbar already shows the live count) ── */
+.almanac-view .masthead { position: relative; border-bottom: 3px double var(--ink-soft); padding-bottom: 14px; margin-bottom: 4px; }
+.almanac-view .masthead .eyebrow { font-family: var(--mono); font-size: 10px; letter-spacing: .38em; text-transform: uppercase; color: var(--ink-faint); margin: 0 0 4px; }
+.almanac-view .masthead h1 { font-family: var(--slab); font-weight: 700; font-size: clamp(26px, 3.4vw, 36px); line-height: .95; letter-spacing: -.01em; margin: 0; color: var(--ink); text-shadow: 0 1px 0 rgba(255, 250, 235, .6); }
+.almanac-view .masthead h1 .amp { font-family: var(--serif); font-style: italic; font-weight: 500; color: var(--ink-soft); }
+.almanac-view .masthead .subline { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin-top: 8px; font-family: var(--serif); font-style: italic; font-size: 14px; color: var(--ink-soft); }
+.almanac-view .masthead .subline .sep { color: var(--ink-ghost); font-style: normal; }
+.almanac-view .tally { font-family: var(--mono); font-style: normal; font-size: 12px; color: var(--ink); }
+.almanac-view .tally b { font-weight: 700; }
+.almanac-view .tally .live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-green); margin-right: 5px; vertical-align: middle; animation: alm-beat 2.6s ease-in-out infinite; }
+
+.almanac-view .datestamp { position: absolute; top: 0; right: 0; transform: rotate(-6.5deg); border: 2.5px solid var(--stamp-red); border-radius: 7px; padding: 5px 10px 4px; color: var(--stamp-red); font-family: var(--mono); text-align: center; line-height: 1.05; opacity: .82; mix-blend-mode: multiply; box-shadow: inset 0 0 0 1.5px rgba(177, 70, 58, .25); }
+.almanac-view .datestamp .k { font-size: 8px; letter-spacing: .32em; display: block; margin-bottom: 2px; }
+.almanac-view .datestamp .d { font-size: 14px; font-weight: 700; letter-spacing: .06em; }
+@media (max-width: 560px) { .almanac-view .datestamp { position: static; display: inline-block; transform: rotate(-3deg); margin-top: 12px; } }
+
+/* ── Ledger grid ── */
+.almanac-view .ledger { margin-top: 22px; display: grid; grid-template-columns: 1fr; gap: 22px; }
+@media (min-width: 720px)  { .almanac-view .ledger { grid-template-columns: repeat(2, 1fr); } }
+@media (min-width: 1080px) { .almanac-view .ledger { grid-template-columns: repeat(3, 1fr); } }
+
+/* ── Card — a logbook entry ── */
+.almanac-view .entry {
+  position: relative;
+  background-color: var(--paper-2);
+  background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 27px, var(--rule-soft) 27px, var(--rule-soft) 28px);
+  background-position: 0 64px;
+  border: 1px solid var(--paper-edge);
+  border-radius: 3px;
+  padding: 16px 18px 16px 30px;
+  box-shadow: 0 1px 0 rgba(255, 250, 235, .7) inset, 0 8px 18px -10px var(--shadow), 0 2px 4px -2px var(--shadow-soft);
+  opacity: 0;
+  transform: translateY(10px) rotate(var(--tilt, 0deg));
+  animation: alm-settle .7s cubic-bezier(.22, .61, .36, 1) forwards;
+  animation-delay: var(--delay, 0s);
+}
+.almanac-view .entry::before { content: ""; position: absolute; left: 20px; top: 0; bottom: 0; width: 1px; background: var(--margin-line); opacity: .55; }
+.almanac-view .entry::after { content: ""; position: absolute; inset: 0; border-radius: 3px; pointer-events: none; box-shadow: inset 0 0 40px rgba(120, 90, 50, .05); }
+
+.almanac-view .entry-no { position: absolute; left: -1px; top: -1px; font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: .06em; color: var(--paper-2); background: var(--ink-soft); padding: 3px 6px 2px; border-radius: 3px 0 6px 0; }
+
+.almanac-view .entry-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px; position: relative; z-index: 1; }
+.almanac-view .glyph { flex: 0 0 auto; width: 34px; height: 34px; display: grid; place-items: center; margin-top: 1px; }
+.almanac-view .glyph svg { width: 30px; height: 30px; display: block; }
+.almanac-view .head-text { flex: 1 1 auto; min-width: 0; }
+.almanac-view .entry-title { font-family: var(--slab); font-weight: 600; font-size: 18px; line-height: 1.12; letter-spacing: -.005em; color: var(--ink); margin: 0 0 3px; overflow-wrap: anywhere; }
+.almanac-view .entry-where { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.almanac-view .entry-where .proj { color: var(--ink-soft); font-weight: 700; }
+.almanac-view .entry-where .branch { color: var(--ink-soft); display: inline-flex; align-items: center; gap: 3px; }
+.almanac-view .entry-where .branch svg { width: 10px; height: 10px; opacity: .7; }
+.almanac-view .entry-where .dirty { color: var(--ink-amber); font-weight: 700; }
+.almanac-view .entry-where .ahead { color: var(--ink-green); font-weight: 700; }
+.almanac-view .entry-where .behind { color: var(--ink-red); font-weight: 700; }
+
+.almanac-view .entry-sub { position: relative; z-index: 1; margin: -2px 0 4px; font-family: var(--serif); font-style: italic; font-size: 12px; color: var(--ink-faint); }
+
+.almanac-view .state-stamp { flex: 0 0 auto; font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; padding: 3px 7px 2px; border: 1.5px solid currentColor; border-radius: 3px; transform: rotate(-2deg); opacity: .9; mix-blend-mode: multiply; white-space: nowrap; }
+
+/* ── Meta ledger row ── */
+.almanac-view .meta-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; font-family: var(--mono); font-size: 11px; color: var(--ink-soft); padding: 6px 0 8px; border-bottom: 1px solid var(--rule); position: relative; z-index: 1; }
+.almanac-view .meta-row .lab { color: var(--ink-faint); }
+.almanac-view .meta-row .timer { margin-left: auto; font-weight: 700; color: var(--ink); display: inline-flex; align-items: center; gap: 3px; }
+.almanac-view .meta-row .timer svg { width: 11px; height: 11px; opacity: .6; }
+.almanac-view .effort-pips { display: inline-flex; gap: 2px; }
+.almanac-view .effort-pips i { width: 5px; height: 5px; border-radius: 1px; background: var(--ink-ghost); display: inline-block; }
+.almanac-view .effort-pips i.on { background: var(--ink-soft); }
+.almanac-view .perm-pill { font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: .14em; padding: 1px 5px; border-radius: 3px; border: 1px solid currentColor; }
+.almanac-view .perm-pill.read   { color: var(--ink-teal); }
+.almanac-view .perm-pill.auto   { color: var(--ink-amber); }
+.almanac-view .perm-pill.danger { color: var(--ink-red); background: rgba(162, 58, 46, .08); }
+.almanac-view .perm-pill.locked { color: var(--ink-faint); }
+
+/* ── Callouts (error only; the wait/note conversation moved to the foot .convo) ── */
+.almanac-view .callout { position: relative; z-index: 1; margin: 10px 0 4px; padding: 9px 11px; border-radius: 3px; font-size: 13px; line-height: 1.36; }
+.almanac-view .callout .ttl { font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: .2em; text-transform: uppercase; display: block; margin-bottom: 3px; }
+.almanac-view .callout--error { background: rgba(162, 58, 46, .08); border: 1px solid rgba(162, 58, 46, .32); color: var(--ink-red); font-family: var(--mono); font-size: 11.5px; line-height: 1.4; }
+.almanac-view .callout--error .ttl { color: var(--ink-red); }
+
+/* ── Subagents ── */
+.almanac-view .subs { position: relative; z-index: 1; margin: 10px 0 2px; }
+.almanac-view .subs-h { font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: .2em; text-transform: uppercase; color: var(--ink-teal); margin-bottom: 5px; }
+.almanac-view .sub { display: grid; grid-template-columns: auto 1fr auto; align-items: baseline; gap: 8px; padding: 5px 0; border-top: 1px dotted var(--rule); font-size: 12.5px; }
+.almanac-view .sub .slug { font-family: var(--mono); font-weight: 700; font-size: 11px; color: var(--ink-teal); white-space: nowrap; }
+.almanac-view .sub .slug.muted { color: var(--ink-ghost); }
+.almanac-view .sub .livedot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ink-teal); margin-right: 5px; animation: alm-beat 1.8s ease-in-out infinite; }
+.almanac-view .sub .desc { font-family: var(--serif); font-style: italic; color: var(--ink-soft); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.almanac-view .sub .nums { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); white-space: nowrap; }
+.almanac-view .subs-more { font-family: var(--serif); font-style: italic; font-size: 11px; color: var(--ink-faint); padding-top: 5px; }
+
+/* ── Context meter ── */
+.almanac-view .ctx { position: relative; z-index: 1; margin: 12px 0 8px; }
+.almanac-view .ctx-top { display: flex; align-items: baseline; justify-content: space-between; font-family: var(--mono); font-size: 10px; color: var(--ink-faint); letter-spacing: .06em; text-transform: uppercase; margin-bottom: 4px; }
+.almanac-view .ctx-top .pct { font-weight: 700; font-size: 12px; color: var(--ink); letter-spacing: 0; }
+.almanac-view .ctx-top .frac { text-transform: none; letter-spacing: 0; font-size: 11px; }
+.almanac-view .ctx-bar { height: 9px; border-radius: 5px; background: repeating-linear-gradient(90deg, rgba(120, 90, 50, .08) 0 4px, transparent 4px 8px), var(--paper); border: 1px solid var(--rule); overflow: hidden; box-shadow: inset 0 1px 2px rgba(67, 49, 28, .10); }
+.almanac-view .ctx-fill { height: 100%; border-radius: 5px 3px 3px 5px; transform-origin: left center; transform: scaleX(var(--w, 0)); transition: transform .9s cubic-bezier(.22, .61, .36, 1); }
+
+/* ── Quiet footer ledger metrics ── */
+.almanac-view .stats { position: relative; z-index: 1; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--rule); display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 14px; font-family: var(--mono); }
+.almanac-view .stat { line-height: 1.15; }
+.almanac-view .stat .k { display: block; font-size: 8.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-ghost); margin-bottom: 2px; }
+.almanac-view .stat .v { font-size: 13px; font-weight: 500; color: var(--ink); }
+.almanac-view .stat .v small { font-size: 9px; color: var(--ink-faint); font-weight: 400; }
+.almanac-view .stat.alive .v { color: var(--ink-blue); }
+
+.almanac-view .entry-foot { position: relative; z-index: 1; margin-top: 11px; padding-top: 8px; border-top: 1px dashed var(--rule); display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
+.almanac-view .entry-foot .src { display: inline-flex; align-items: center; gap: 4px; }
+.almanac-view .entry-foot .src svg { width: 11px; height: 11px; opacity: .7; }
+.almanac-view .entry-foot .id { letter-spacing: .08em; background: none; border: 0; padding: 0; color: var(--ink-faint); cursor: pointer; font: inherit; }
+.almanac-view .entry-foot .id b { color: var(--ink-soft); }
+.almanac-view .entry-foot .id:hover b { color: var(--ink); }
+.almanac-view .entry-foot .todos { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; color: var(--ink-soft); }
+.almanac-view .todo-track { display: inline-flex; gap: 2px; }
+.almanac-view .todo-track i { width: 7px; height: 4px; border-radius: 1px; background: var(--rule); display: inline-block; }
+.almanac-view .todo-track i.done { background: var(--ink-green); }
+.almanac-view .todo-cur { font-family: var(--serif); font-style: italic; font-size: 11px; color: var(--ink-faint); flex-basis: 100%; margin-top: 2px; }
+
+/* ── State-colored left edge ── */
+.almanac-view .entry[data-state="working"]  { box-shadow: 0 1px 0 rgba(255,250,235,.7) inset, 0 8px 18px -10px var(--shadow), 0 2px 4px -2px var(--shadow-soft), inset 4px 0 0 -2px var(--ink-blue); }
+.almanac-view .entry[data-state="subagent"] { box-shadow: 0 1px 0 rgba(255,250,235,.7) inset, 0 8px 18px -10px var(--shadow), 0 2px 4px -2px var(--shadow-soft), inset 4px 0 0 -2px var(--ink-teal); }
+.almanac-view .entry[data-state="thinking"] { box-shadow: 0 1px 0 rgba(255,250,235,.7) inset, 0 8px 18px -10px var(--shadow), 0 2px 4px -2px var(--shadow-soft), inset 4px 0 0 -2px var(--ink-violet); }
+.almanac-view .entry[data-state="waiting"]  { box-shadow: 0 1px 0 rgba(255,250,235,.7) inset, 0 10px 22px -10px rgba(176,122,30,.4), 0 2px 4px -2px var(--shadow-soft), inset 4px 0 0 -2px var(--ink-amber); }
+.almanac-view .entry[data-state="error"]    { box-shadow: 0 1px 0 rgba(255,250,235,.7) inset, 0 8px 18px -10px rgba(162,58,46,.4), 0 2px 4px -2px var(--shadow-soft), inset 4px 0 0 -2px var(--ink-red); }
+.almanac-view .entry[data-state="compacting"], .almanac-view .entry[data-state="clearing"] { box-shadow: 0 1px 0 rgba(255,250,235,.7) inset, 0 8px 18px -10px var(--shadow), 0 2px 4px -2px var(--shadow-soft), inset 4px 0 0 -2px var(--ink-violet); }
+.almanac-view .entry[data-state="done"]     { box-shadow: 0 1px 0 rgba(255,250,235,.7) inset, 0 8px 18px -10px var(--shadow), 0 2px 4px -2px var(--shadow-soft), inset 4px 0 0 -2px var(--ink-green); }
+.almanac-view .entry[data-state="idle"] .entry-title { color: var(--ink-soft); }
+.almanac-view .entry.alive .glyph svg .pulse { animation: alm-gpulse 3s ease-in-out infinite; transform-origin: center; }
+
+
+/* ── Empty state ── */
+.almanac-view .alm-empty { grid-column: 1 / -1; text-align: center; padding: 56px 16px; color: var(--ink-faint); }
+.almanac-view .alm-empty .mark { font-family: var(--slab); font-size: 30px; color: var(--ink-ghost); }
+.almanac-view .alm-empty .h { font-family: var(--slab); font-weight: 600; font-size: 18px; color: var(--ink-soft); margin-top: 6px; }
+.almanac-view .alm-empty .p { font-style: italic; font-size: 13px; margin-top: 2px; }
+
+/* ── Ended / revived register ── */
+.almanac-view .alm-ended { margin-top: 30px; }
+.almanac-view .alm-ended-head { display: flex; align-items: center; gap: 12px; font-family: var(--mono); font-size: 10px; letter-spacing: .2em; text-transform: uppercase; color: var(--ink-red); padding-bottom: 10px; }
+.almanac-view .alm-ended-head .rule { flex: 1; border-top: 1px solid rgba(162, 58, 46, .3); }
+.almanac-view .alm-ended-head .clear { background: none; border: 0; cursor: pointer; font: inherit; color: var(--ink-faint); letter-spacing: .12em; }
+.almanac-view .alm-ended-head .clear:hover { color: var(--ink-red); }
+.almanac-view .alm-ended .entry { opacity: .75; }
+.almanac-view .alm-revive-row { position: relative; z-index: 2; margin-top: 10px; padding-top: 8px; border-top: 1px dashed rgba(162, 58, 46, .3); display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 11px; }
+.almanac-view .alm-revive-row .age { color: var(--ink-faint); }
+.almanac-view .alm-revive-row button { font: inherit; font-size: 11px; cursor: pointer; border-radius: 4px; padding: 4px 12px; border: 1px solid; }
+.almanac-view .alm-revive-row .revive { color: #fff; background: var(--ink-red); border-color: var(--ink-red); }
+.almanac-view .alm-revive-row .dismiss { color: var(--ink-faint); background: transparent; border-color: var(--rule); margin-left: auto; }
+.almanac-view .alm-revive-row .dismiss:hover { color: var(--ink); }
+
+/* ── Footer colophon ── */
+.almanac-view .colophon { margin-top: 38px; padding-top: 16px; border-top: 3px double var(--ink-soft); text-align: center; font-family: var(--serif); font-style: italic; color: var(--ink-faint); font-size: 13px; }
+.almanac-view .colophon .orn { color: var(--ink-ghost); font-style: normal; letter-spacing: .4em; display: block; margin-bottom: 8px; }
+
+/* ── Animations ── */
+@keyframes alm-settle { to { opacity: 1; transform: translateY(0) rotate(var(--tilt, 0deg)); } }
+@keyframes alm-beat { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+@keyframes alm-gpulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .almanac-view .entry { animation: none; opacity: 1; transform: none; }
+  .almanac-view .ctx-fill { transition: none; }
+  .almanac-view .tally .live-dot,
+  .almanac-view .sub .livedot,
+  .almanac-view .entry.alive .glyph svg .pulse { animation: none; }
+}

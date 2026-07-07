@@ -67,22 +67,34 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Option<Vec<u8>> {
 }
 
 /// Run `git <args>` in `workspace` with the module timeout, returning stdout on success.
+///
+/// Every invocation is hardened against a hostile checkout turning a read-only
+/// `git` call into arbitrary code execution: `core.fsmonitor` and hook paths in
+/// a repo-local `.git/config` are programs git will spawn during `status`/
+/// `rev-list`. We pin `core.fsmonitor=false` and `core.hooksPath=/dev/null` via
+/// leading `-c` flags (repo config can't override flags given on the command
+/// line) so no repo-controlled program runs, and set `GIT_OPTIONAL_LOCKS=0` so
+/// a status read never takes a lock / mutates the repo. The `-c` flags MUST
+/// precede the subcommand, hence the prepend.
 fn run_git(workspace: &str, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new("git");
     // Hardening (F-security-002): Cue polls git in every tracked workspace on a
     // timer with no user action. A workspace that carries an attacker-planted
     // `.git/config` (e.g. an archive/shared folder that includes `.git`) would
-    // otherwise let `git status`/`rev-list` execute config-driven commands —
-    // most notably `core.fsmonitor`, which git spawns as a subprocess. A `-c`
-    // on the git command line overrides both repo-local and global config, so
-    // force `core.fsmonitor` empty. `core.alternateRefsCommand` is the other
-    // repo-config value that `rev-list` can execute as a subprocess (higher
-    // preconditions, but zero-cost to neutralize), so empty it too.
+    // otherwise let `git status`/`rev-list` execute config-driven commands.
+    // A `-c` on the git command line overrides both repo-local and global config,
+    // so we neutralize every repo-config value git can spawn as a subprocess:
+    //   - `core.fsmonitor` — spawned during `status`; pin false.
+    //   - `core.hooksPath` — where git looks for hooks; point at /dev/null.
+    //   - `core.alternateRefsCommand` — `rev-list` can execute it (higher
+    //     preconditions, but zero-cost to neutralize); empty it.
     // `GIT_OPTIONAL_LOCKS=0` additionally stops status from taking/refreshing
     // the index lock, so background polling has no write side effects on the
     // user's repos.
     cmd.arg("-c")
-        .arg("core.fsmonitor=")
+        .arg("core.fsmonitor=false")
+        .arg("-c")
+        .arg("core.hooksPath=/dev/null")
         .arg("-c")
         .arg("core.alternateRefsCommand=")
         .args(args)

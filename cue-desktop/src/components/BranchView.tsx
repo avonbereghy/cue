@@ -11,6 +11,8 @@ interface BranchViewProps {
   compactMode: boolean;
   expandOverrides: Record<string, number>;
   onExpandCycle: (id: string) => void;
+  /** Tuck a session into the Resting group (card "X") — matches the grid. */
+  onDismiss: (id: string) => void;
 }
 
 interface SessionFamily {
@@ -133,7 +135,7 @@ function parentSortKey(s: EnrichedSession): number {
   return 2_000_000; // idle, ended, clearing
 }
 
-export function BranchView({ sessions, cardSettings, compactMode, expandOverrides, onExpandCycle }: BranchViewProps) {
+export function BranchView({ sessions, cardSettings, compactMode, expandOverrides, onExpandCycle, onDismiss }: BranchViewProps) {
   // Families + duplicate-title set depend only on `sessions`. Recomputing
   // them on every tick (sessions update frequently) walks the list twice
   // and allocates maps/sets unnecessarily — memoize on the sessions ref.
@@ -156,6 +158,7 @@ export function BranchView({ sessions, cardSettings, compactMode, expandOverride
     <SessionCard
       {...cardSettings}
       session={session}
+      onDismiss={onDismiss}
       isDuplicate={duplicateTitles.has(session.displayTitle)}
       // Force compact rendering for children — each team agent gets one
       // short row in the column instead of a full card. Override cycling

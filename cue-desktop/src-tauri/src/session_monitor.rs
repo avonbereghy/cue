@@ -125,6 +125,25 @@ pub struct SessionMonitorState {
     /// Cue's launch timestamp (seconds since UNIX epoch) — only sessions
     /// with activity after this are shown. Starts empty, reads forwards only.
     launched_at: f64,
+    /// User's idle auto-hide threshold in seconds (0 = disabled). Cached here —
+    /// refreshed by `set_auto_hide_idle_secs` from `update_settings` and at
+    /// startup — so the 1 Hz poll never reads settings.json, mirroring how the
+    /// notifier caches its projection. Default 900 (15 min).
+    auto_hide_idle_secs: Mutex<f64>,
+    /// User's Claude config-dir override (the persisted `claudeConfigDir`
+    /// setting); `None` = auto-detect. Cached here — refreshed by
+    /// `set_claude_projects_override` from `update_settings` and at startup — so
+    /// the 1 Hz poll resolves the projects dir without reading settings.json,
+    /// mirroring `auto_hide_idle_secs`.
+    claude_projects_override: Mutex<Option<String>>,
+    /// Manual visibility overrides from the card "X" / Resting "restore" — the
+    /// machine must yield to the human. id → (hidden, anchor): `hidden=true`
+    /// keeps a session resting (dismissed); `hidden=false` forces a session that
+    /// the idle rule would hide to stay shown (restored). `anchor` is the action
+    /// timestamp; once the session's transition marker advances past it (the
+    /// session did something), the override is evicted and automatic behavior
+    /// resumes. Re-derived/pruned every poll.
+    manual_visibility: Mutex<HashMap<String, (bool, f64)>>,
 }
 
 impl Default for SessionMonitorState {
@@ -151,6 +170,9 @@ impl Default for SessionMonitorState {
             compacting_floor: Mutex::new(HashMap::new()),
             consecutive_parse_failures: Mutex::new(0),
             launched_at,
+            auto_hide_idle_secs: Mutex::new(900.0),
+            claude_projects_override: Mutex::new(None),
+            manual_visibility: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -161,8 +183,73 @@ impl SessionMonitorState {
     }
 
     /// Poll sessions.json for current session states (called every ~1s).
+    /// Cache the user's idle auto-hide threshold (seconds; 0 disables). Called
+    /// from `update_settings` and once at startup so the poll loop reads it
+    /// without touching disk.
+    pub fn set_auto_hide_idle_secs(&self, secs: f64) {
+        *self.auto_hide_idle_secs.lock_safe() = secs.max(0.0);
+    }
+
+    /// Cache the user's Claude config-dir override (the `claudeConfigDir`
+    /// setting). An empty/whitespace value normalizes to `None` (auto-detect),
+    /// so `effective_projects_path` never feeds a blank to
+    /// `paths::claude_projects_path_from_override`. Called from `update_settings`
+    /// and once at startup so the poll loop never touches settings.json.
+    pub fn set_claude_projects_override(&self, dir: Option<String>) {
+        let normalized = dir.map(|d| d.trim().to_string()).filter(|d| !d.is_empty());
+        *self.claude_projects_override.lock_safe() = normalized;
+    }
+
+    /// The projects directory the poll loop should read. Applies the persisted
+    /// override (highest precedence) over the env/default resolution in
+    /// `paths::claude_projects_path`.
+    fn effective_projects_path(&self) -> std::path::PathBuf {
+        match &*self.claude_projects_override.lock_safe() {
+            Some(dir) => paths::claude_projects_path_from_override(dir),
+            None => paths::claude_projects_path(),
+        }
+    }
+
+    /// Manually tuck a session away ("X" on a card). It stays resting — even if
+    /// it isn't idle — until it next transitions (does something), at which point
+    /// the override self-evicts and it reappears. Anchored to the session's
+    /// CURRENT transition marker (its `state_changed_at`), so eviction compares
+    /// two values from the same clock (the hook's) — a wall-clock jump can't wedge
+    /// it the way an action-time anchor could.
+    pub fn dismiss_session(&self, session_id: &str) {
+        let anchor = self.transition_marker_for(session_id);
+        self.manual_visibility
+            .lock_safe()
+            .insert(session_id.to_string(), (true, anchor));
+    }
+
+    /// Manually bring a resting session back ("restore" in the Resting group).
+    /// Records a force-shown override so the idle rule can't immediately re-hide
+    /// it (the machine yields to the human); like dismiss, it self-evicts once
+    /// the session's transition marker next changes.
+    pub fn restore_session(&self, session_id: &str) {
+        let anchor = self.transition_marker_for(session_id);
+        self.manual_visibility
+            .lock_safe()
+            .insert(session_id.to_string(), (false, anchor));
+    }
+
+    /// The session's current transition marker, read from the latest enriched
+    /// snapshot. Locks `enriched_sessions` briefly and releases it before the
+    /// caller takes `manual_visibility`, so the two locks are never nested.
+    /// Falls back to `now` for a session not in the snapshot (it isn't visible,
+    /// so dismissing it is a no-op in practice).
+    fn transition_marker_for(&self, session_id: &str) -> f64 {
+        self.enriched_sessions
+            .lock_safe()
+            .iter()
+            .find(|s| s.info.id == session_id)
+            .map(|s| transition_marker(&s.info))
+            .unwrap_or_else(now_secs)
+    }
+
     pub fn poll_status(&self) {
-        self.poll_status_with(paths::sessions_json_path(), paths::claude_projects_path());
+        self.poll_status_with(paths::sessions_json_path(), self.effective_projects_path());
     }
 
     /// Path-injected core of `poll_status`. Extracted so tests can drive the
@@ -212,36 +299,58 @@ impl SessionMonitorState {
                         );
                         return;
                     }
-                    // Persistent corruption — rename the file aside and seed
-                    // a clean empty container. The next hook write will
-                    // repopulate it. Best-effort; if the rename itself fails
-                    // we just keep returning prior state.
+                    // Persistent corruption — rename the file aside and seed a
+                    // clean empty container. The next hook write repopulates it.
+                    //
+                    // The rename + seed race the Python hook's own
+                    // read-modify-rename of sessions.json, so do the whole repair
+                    // inside the SAME cross-process advisory lock the hook takes
+                    // (security::with_sessions_lock). Bare std::fs calls outside
+                    // it could clobber a hook write that lands between our rename
+                    // and our seed (or resurrect the corrupt file). We also
+                    // re-check under the lock: if a hook already replaced the
+                    // file with a valid one while we waited to acquire the lock,
+                    // we must NOT rename that good file aside. Best-effort — a
+                    // contended lock or a failing fs step just keeps prior state
+                    // and retries next poll.
                     let timestamp = SystemTime::now()
                         .duration_since(SystemTime::UNIX_EPOCH)
                         .map(|d| d.as_secs())
                         .unwrap_or(0);
                     let corrupt_path = format!("{}.corrupt-{}", status_path.display(), timestamp);
-                    if let Err(rename_err) = std::fs::rename(&status_path, &corrupt_path) {
-                        log::warn!(
-                            "sessions.json self-repair: rename aside failed: {}",
-                            rename_err
-                        );
-                        return;
+                    let lock_path = status_path.with_file_name("sessions.lock");
+                    let repair = security::with_sessions_lock(&lock_path, || {
+                        // Re-validate under the lock so a concurrent hook fix
+                        // isn't clobbered: only rename aside + seed if the file
+                        // is STILL unparseable.
+                        if let Ok(content) =
+                            security::read_to_string_bounded(&status_path, SESSIONS_JSON_MAX_BYTES)
+                        {
+                            if serde_json::from_str::<StatusData>(&content).is_ok() {
+                                return Ok(false); // already recovered — nothing to do
+                            }
+                        }
+                        std::fs::rename(&status_path, &corrupt_path)?;
+                        security::atomic_write(&status_path, b"{\"sessions\":{}}")?;
+                        Ok(true)
+                    });
+                    match repair {
+                        Ok(true) => log::warn!(
+                            "sessions.json self-repaired after {} parse failures (corrupt copy at {})",
+                            *failures,
+                            corrupt_path
+                        ),
+                        Ok(false) => log::info!(
+                            "sessions.json self-repair: file already recovered under lock; skipping"
+                        ),
+                        Err(repair_err) => {
+                            log::warn!(
+                                "sessions.json self-repair failed (rename/seed under lock): {}",
+                                repair_err
+                            );
+                            return;
+                        }
                     }
-                    if let Err(write_err) =
-                        security::atomic_write(&status_path, b"{\"sessions\":{}}")
-                    {
-                        log::warn!(
-                            "sessions.json self-repair: seed write failed: {}",
-                            write_err
-                        );
-                        return;
-                    }
-                    log::warn!(
-                        "sessions.json self-repaired after {} parse failures (corrupt copy at {})",
-                        *failures,
-                        corrupt_path
-                    );
                     *failures = 0;
                     return;
                 }
@@ -302,7 +411,13 @@ impl SessionMonitorState {
         let active = sort_sessions(status.sessions.into_values().filter(|s| {
             security::validate_session_id(&s.id).is_ok()
                 && security::sanitize_workspace_path(&s.workspace).is_ok()
-                && admit_session(&s.state, s.started_at, s.last_activity, launched_at)
+                && admit_session(
+                    &s.state,
+                    s.started_at,
+                    s.last_activity,
+                    launched_at,
+                    s.pid.is_some(),
+                )
         }));
 
         // Deduplicate sessions sharing the same workspace that started within
@@ -381,8 +496,9 @@ impl SessionMonitorState {
         // signal that Claude Code dropped that session id; no timer needed.
         //
         // Exception: launchers that never write a transcript here. Claude Code
-        // sessions started from the desktop app fire hooks (so they appear in
-        // sessions.json as source="unknown") but write no JSONL under
+        // sessions started from the Claude desktop app fire hooks (so they reach
+        // sessions.json as source="claude-desktop", or "unknown" on a launch the
+        // hook couldn't positively identify) but write no JSONL under
         // ~/.claude/projects — the file is absent by design, not because the id
         // was dropped. Force-demoting those would pin every desktop session on
         // idle even mid-turn. `launcher_writes_transcript` gates the demote so
@@ -425,12 +541,15 @@ impl SessionMonitorState {
         // session stuck in "working" forever. The hook writes `pid` = parent
         // pid on every event; we verify the process still exists, comparing
         // start_time to the cached value so a recycled PID doesn't look alive.
+        // Active sessions whose process is gone demote to idle; idle/done ones
+        // whose window is actually closed are retired (ended) so the list shows
+        // only chats that are still open.
         let active: Vec<_> = {
             let active_ids: std::collections::HashSet<String> =
                 active.iter().map(|s| s.id.clone()).collect();
             let pids_to_check: Vec<sysinfo::Pid> = active
                 .iter()
-                .filter(|s| is_liveness_sensitive(&s.state))
+                .filter(|s| liveness_checkable(&s.state))
                 .filter_map(|s| s.pid.map(sysinfo::Pid::from_u32))
                 .collect();
             let mut sys = self.sysinfo_system.lock_safe();
@@ -457,7 +576,7 @@ impl SessionMonitorState {
             active
                 .into_iter()
                 .map(|mut s| {
-                    if !is_liveness_sensitive(&s.state) {
+                    if !liveness_checkable(&s.state) {
                         return s;
                     }
                     let Some(pid) = s.pid else {
@@ -476,8 +595,9 @@ impl SessionMonitorState {
                         }
                         LivenessOutcome::Dead => {
                             identity.remove(&s.id);
-                            log::debug!(target: "cue::state", "id={} {}->idle pass=liveness_dead pid={}", s.id, s.state, pid);
-                            s.state = "idle".to_string();
+                            let next = dead_state_for(&s.state);
+                            log::debug!(target: "cue::state", "id={} {}->{} pass=liveness_dead pid={}", s.id, s.state, next, pid);
+                            s.state = next.to_string();
                             s.active_subagents = 0;
                         }
                     }
@@ -642,7 +762,15 @@ impl SessionMonitorState {
         // turn-ended) would surface as a stale idle entry from a prior run.
         let active: Vec<SessionInfo> = active
             .into_iter()
-            .filter(|s| admit_session(&s.state, s.started_at, s.last_activity, launched_at))
+            .filter(|s| {
+                admit_session(
+                    &s.state,
+                    s.started_at,
+                    s.last_activity,
+                    launched_at,
+                    s.pid.is_some(),
+                )
+            })
             .collect();
 
         // Latched promotions/rescues/floors. Each transform reads + writes
@@ -847,6 +975,49 @@ impl SessionMonitorState {
             active_since.clone()
         };
 
+        // Resting resolution: decide which sessions are "resting" — tucked out of
+        // the main view but recoverable. Two inputs, and a manual action always
+        // wins over the automatic rule:
+        //   * a manual override (card "X" → dismissed, Resting "restore" →
+        //     force-shown), sticky until the session's transition marker advances
+        //     past the action (it did something), then self-evicted; or
+        //   * the idle auto-hide rule (idle past the threshold).
+        // Re-derived every poll, so a resting session re-surfaces the instant it
+        // becomes active again. `error`/`waiting`/active states are never
+        // auto-hidden (see `idle_resting`).
+        let resting_snapshot: HashMap<String, &'static str> = {
+            let threshold = *self.auto_hide_idle_secs.lock_safe();
+            let mut overrides = self.manual_visibility.lock_safe();
+            let current_ids: std::collections::HashSet<&str> =
+                active.iter().map(|s| s.id.as_str()).collect();
+            // Drop overrides for sessions that no longer exist so the map can't
+            // grow unbounded (same hygiene as active_since above).
+            overrides.retain(|id, _| current_ids.contains(id.as_str()));
+            let mut out: HashMap<String, &'static str> = HashMap::new();
+            for s in &active {
+                let marker = transition_marker(s);
+                let (new_override, reason) = resolve_resting(
+                    &s.state,
+                    marker,
+                    now_secs,
+                    threshold,
+                    overrides.get(&s.id).copied(),
+                );
+                match new_override {
+                    Some(ov) => {
+                        overrides.insert(s.id.clone(), ov);
+                    }
+                    None => {
+                        overrides.remove(&s.id);
+                    }
+                }
+                if let Some(r) = reason {
+                    out.insert(s.id.clone(), r);
+                }
+            }
+            out
+        };
+
         let enriched: Vec<_> = {
             let cache = self.metrics_cache.lock_safe();
             let supp = self.supplemental.lock_safe().clone();
@@ -861,6 +1032,7 @@ impl SessionMonitorState {
                     let (prev_output, prev_ts) =
                         speed_cache.get(&session.id).cloned().unwrap_or((0, 0.0));
                     let active_since_ts = active_since_snapshot.get(&session.id).copied();
+                    let resting_reason = resting_snapshot.get(&session.id).copied();
                     let supplemental = SupplementalData {
                         git_status: git_cache.get(&session.workspace).map(|(s, _)| s.clone()),
                         config_counts: config_cache.get(&session.workspace).map(|(c, _)| c.clone()),
@@ -873,7 +1045,11 @@ impl SessionMonitorState {
                         prev_timestamp: prev_ts,
                         active_since: active_since_ts,
                     };
-                    EnrichedSession::from_info_and_metrics(session, metrics, &supplemental)
+                    let mut es =
+                        EnrichedSession::from_info_and_metrics(session, metrics, &supplemental);
+                    es.resting = resting_reason.is_some();
+                    es.resting_reason = resting_reason.map(str::to_string);
+                    es
                 })
                 .collect()
         }; // all locks dropped before acquiring enriched_sessions lock
@@ -900,7 +1076,7 @@ impl SessionMonitorState {
                 })
                 .collect()
         };
-        let projects_path = paths::claude_projects_path();
+        let projects_path = self.effective_projects_path();
 
         for (id, workspace, state) in &session_keys {
             let path = self.jsonl_path(id, workspace, &projects_path);
@@ -1243,13 +1419,92 @@ fn is_liveness_sensitive(state: &str) -> bool {
 }
 
 /// True if the launcher that started this session writes a JSONL transcript
-/// under ~/.claude/projects (terminal, VS Code, Cursor, …). The desktop app
-/// fires hooks but writes no transcript there, so its sessions report
-/// source="unknown" (or None on legacy entries) — for those, a missing
-/// transcript is expected, not a "Claude Code dropped this id" signal, so the
+/// under ~/.claude/projects (terminal, VS Code, Cursor, …). The Claude desktop
+/// app fires hooks but writes no transcript there, so its sessions report
+/// source="claude-desktop" (or "unknown"/None on a launch the hook couldn't
+/// positively identify, or on legacy entries) — for those, a missing transcript
+/// is expected, not a "Claude Code dropped this id" signal, so the
 /// JSONL-presence demotion must not fire. See the call site in `poll_status_with`.
 fn launcher_writes_transcript(source: Option<&str>) -> bool {
-    !matches!(source, None | Some("unknown"))
+    !matches!(source, None | Some("unknown") | Some("claude-desktop"))
+}
+
+/// Whether the per-poll PID liveness check should run for this state: the active
+/// states above PLUS the quiescent `idle`/`done`. An interactive Claude Code
+/// chat keeps its `claude` process alive the whole time the window is open, so a
+/// dead PID on an idle/done session means the window was actually closed and the
+/// session should be retired rather than linger as a phantom card.
+fn liveness_checkable(state: &str) -> bool {
+    is_liveness_sensitive(state) || matches!(state, "idle" | "done")
+}
+
+/// Where a `liveness_checkable` session goes when its owning process is found
+/// dead. Active states demote to `idle` (a window caught between polls shouldn't
+/// be yanked; the next poll retires it if it's truly closed); `idle`/`done`
+/// whose window is actually gone are retired to `ended`.
+fn dead_state_for(state: &str) -> &'static str {
+    if is_liveness_sensitive(state) {
+        "idle"
+    } else {
+        "ended"
+    }
+}
+
+/// Seconds since the UNIX epoch as an `f64` — the clock used throughout the
+/// poll for state-age math and the manual-override anchor.
+fn now_secs() -> f64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+}
+
+/// The timestamp we treat as "when this session last transitioned" — the hook's
+/// authoritative `state_changed_at`, falling back to `last_activity` for entries
+/// written by older hooks that don't supply it. Used both to age out idle
+/// sessions and to evict a manual override once the session has done something
+/// since the user acted.
+fn transition_marker(info: &SessionInfo) -> f64 {
+    info.state_changed_at.unwrap_or(info.last_activity)
+}
+
+/// Whether a session should auto-hide ("rest") purely from sitting idle.
+/// Gated on the `idle` state and a positive threshold (`0` disables). `done`,
+/// `error`, and active states are intentionally excluded: `error` is a needs-me
+/// state, and a session blocked on a permission sits in `waiting`, not `idle` —
+/// so "never auto-hide an actionable decision" falls out for free. Manual
+/// overrides are resolved separately (and win) in the poll.
+fn idle_resting(state: &str, marker: f64, now: f64, threshold_secs: f64) -> bool {
+    threshold_secs > 0.0 && state == "idle" && (now - marker) >= threshold_secs
+}
+
+/// Resolve one session's resting status. Pure so the whole policy — manual wins,
+/// self-eviction on the next transition, idle auto-hide — is unit-testable
+/// without the poll loop. Given the current `(hidden, anchor)` override (if any),
+/// returns the override to persist (`None` ⇒ evict it) and the resting reason
+/// (`None` ⇒ shown). A manual action wins until the session's `marker` *changes*
+/// from the `anchor` captured at action time (it transitioned — did something),
+/// at which point the override is dropped and the automatic idle rule takes over
+/// again. Comparing for change (not `>`) keeps both values on the hook's clock,
+/// so a backward wall-clock jump can't wedge an override.
+fn resolve_resting(
+    state: &str,
+    marker: f64,
+    now: f64,
+    threshold_secs: f64,
+    override_: Option<(bool, f64)>,
+) -> (Option<(bool, f64)>, Option<&'static str>) {
+    // The session transitioned since the user acted ⇒ the override is stale.
+    let ov = match override_ {
+        Some((_, anchor)) if marker != anchor => None,
+        other => other,
+    };
+    match ov {
+        Some((true, anchor)) => (Some((true, anchor)), Some("dismissed")),
+        Some((false, anchor)) => (Some((false, anchor)), None), // force-shown
+        None if idle_resting(state, marker, now, threshold_secs) => (None, Some("idle")),
+        None => (None, None),
+    }
 }
 
 /// States that deserve to bypass the `launched_at` admission gate.
@@ -1260,16 +1515,32 @@ fn launcher_writes_transcript(source: Option<&str>) -> bool {
 /// states should never be hidden — the user has to respond. Terminal states
 /// (`idle`, `done`, `error`, `ended`) keep the launched_at gate to avoid
 /// resurfacing ghosts from prior Cue runs.
-fn bypasses_launch_gate(state: &str) -> bool {
-    is_liveness_sensitive(state) || state == "waiting"
+///
+/// `has_pid` gates the bypass: the whole justification for skipping the
+/// launched_at filter is that the PID/JSONL liveness pass will demote the entry
+/// if its process is gone — but those checks key on the recorded pid, so a
+/// pidless "active" entry is undemotable and would pin a phantom card forever.
+/// Deny the bypass when pid is absent; the entry then falls through to the
+/// launched_at gate and is retired like any other prior-run ghost. The real
+/// hook writes `pid` on every event, so this only affects legacy/corrupt
+/// entries — legitimate launcher-gated sessions always carry a pid.
+fn bypasses_launch_gate(state: &str, has_pid: bool) -> bool {
+    has_pid && (is_liveness_sensitive(state) || state == "waiting")
 }
 
 /// Decide whether a session should be admitted to the active list.
-/// Active/waiting states bypass the launched_at gate; quiescent states
-/// keep it so prior-run entries don't pile up. Used both at entry and
-/// after demotions to clean up sessions that fell out of bypass states.
-fn admit_session(state: &str, started_at: f64, last_activity: f64, launched_at: f64) -> bool {
-    if bypasses_launch_gate(state) {
+/// Active/waiting states with a live pid bypass the launched_at gate; quiescent
+/// or pidless states keep it so prior-run entries (and undemotable phantoms)
+/// don't pile up. Used both at entry and after demotions to clean up sessions
+/// that fell out of bypass states.
+fn admit_session(
+    state: &str,
+    started_at: f64,
+    last_activity: f64,
+    launched_at: f64,
+    has_pid: bool,
+) -> bool {
+    if bypasses_launch_gate(state, has_pid) {
         return true;
     }
     last_activity >= launched_at || started_at >= launched_at
@@ -1825,6 +2096,24 @@ mod tests {
     }
 
     #[test]
+    fn effective_projects_path_applies_and_normalizes_override() {
+        let m = SessionMonitorState::new();
+        // Default: auto-detect, identical to the env/default resolution.
+        assert_eq!(m.effective_projects_path(), paths::claude_projects_path());
+        // A set override wins over auto-detect.
+        m.set_claude_projects_override(Some("/tmp/x/claude".to_string()));
+        assert_eq!(
+            m.effective_projects_path(),
+            paths::claude_projects_path_from_override("/tmp/x/claude")
+        );
+        // Whitespace-only and None both normalize back to auto-detect.
+        m.set_claude_projects_override(Some("   ".to_string()));
+        assert_eq!(m.effective_projects_path(), paths::claude_projects_path());
+        m.set_claude_projects_override(None);
+        assert_eq!(m.effective_projects_path(), paths::claude_projects_path());
+    }
+
+    #[test]
     fn test_encode_workspace_path_deep() {
         assert_eq!(
             encode_workspace_path("/Users/dev/Projects/MyOrg/WebApp"),
@@ -1927,6 +2216,130 @@ mod tests {
     }
 
     #[test]
+    fn test_liveness_checkable_covers_idle_and_done() {
+        for s in [
+            "working",
+            "thinking",
+            "subagent",
+            "compacting",
+            "waiting",
+            "idle",
+            "done",
+        ] {
+            assert!(liveness_checkable(s), "{s} should be liveness-checkable");
+        }
+        // `ended` is already gone; `error` is a needs-me state left for the user
+        // to dismiss — neither is liveness-checked.
+        for s in ["ended", "error"] {
+            assert!(
+                !liveness_checkable(s),
+                "{s} should NOT be liveness-checkable"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dead_state_target() {
+        // Active session whose process died -> idle (not yanked mid-poll).
+        assert_eq!(dead_state_for("working"), "idle");
+        assert_eq!(dead_state_for("waiting"), "idle");
+        // Idle/done whose window is actually closed -> retired (ended).
+        assert_eq!(dead_state_for("idle"), "ended");
+        assert_eq!(dead_state_for("done"), "ended");
+    }
+
+    // --- idle auto-hide ("resting") --------------------------------------
+
+    #[test]
+    fn test_idle_resting_fires_only_past_threshold_and_only_when_idle() {
+        let now = 10_000.0;
+        let thr = 900.0; // 15 min
+                         // Idle long enough -> rest.
+        assert!(idle_resting("idle", now - 901.0, now, thr));
+        // Idle, exactly at the threshold -> rest (>=).
+        assert!(idle_resting("idle", now - 900.0, now, thr));
+        // Idle but still fresh -> stay shown.
+        assert!(!idle_resting("idle", now - 899.0, now, thr));
+        // Non-idle states are never auto-hidden, however stale — `error` is a
+        // needs-me state and a pending permission sits in `waiting`.
+        for state in [
+            "working", "thinking", "waiting", "error", "subagent", "done",
+        ] {
+            assert!(
+                !idle_resting(state, now - 5_000.0, now, thr),
+                "{state} must never auto-hide"
+            );
+        }
+    }
+
+    #[test]
+    fn test_idle_resting_disabled_when_threshold_zero() {
+        let now = 10_000.0;
+        // 0 is the off switch — even an ancient idle session stays shown.
+        assert!(!idle_resting("idle", 0.0, now, 0.0));
+    }
+
+    #[test]
+    fn test_transition_marker_prefers_state_changed_at_falls_back_to_last_activity() {
+        let mut info = make_session("s1", "idle", 100.0, 0.0);
+        info.state_changed_at = Some(500.0);
+        assert_eq!(transition_marker(&info), 500.0);
+        info.state_changed_at = None; // older hook with no stateChangedAt
+        assert_eq!(transition_marker(&info), 100.0);
+    }
+
+    #[test]
+    fn test_resolve_resting_idle_rule_with_no_override() {
+        let now = 10_000.0;
+        // Stale idle -> resting "idle", no override persisted.
+        assert_eq!(
+            resolve_resting("idle", now - 1000.0, now, 900.0, None),
+            (None, Some("idle"))
+        );
+        // Fresh idle -> shown.
+        assert_eq!(
+            resolve_resting("idle", now - 10.0, now, 900.0, None),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn test_resolve_resting_manual_dismiss_sticks_until_next_transition() {
+        let now = 10_000.0;
+        let anchor = 9_000.0; // dismissed at t=9000
+                              // Marker unchanged since dismiss (no transition) -> stays dismissed,
+                              // even though the session is `working` (not idle) — manual wins.
+        assert_eq!(
+            resolve_resting("working", anchor, now, 900.0, Some((true, anchor))),
+            (Some((true, anchor)), Some("dismissed"))
+        );
+        // The session then transitions (marker advances past the anchor) ->
+        // override self-evicts and it reappears.
+        assert_eq!(
+            resolve_resting("working", anchor + 1.0, now, 900.0, Some((true, anchor))),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn test_resolve_resting_manual_show_overrides_idle_timeout() {
+        let now = 10_000.0;
+        let anchor = 9_500.0;
+        // Session is idle well past threshold, but the user restored it: stays
+        // shown (the machine yields to the human) while the marker is unchanged.
+        assert_eq!(
+            resolve_resting("idle", anchor, now, 900.0, Some((false, anchor))),
+            (Some((false, anchor)), None)
+        );
+        // Once it transitions, the force-show override evicts; the idle rule can
+        // apply again on later polls.
+        assert_eq!(
+            resolve_resting("idle", anchor + 1.0, now, 900.0, Some((false, anchor))),
+            (None, None)
+        );
+    }
+
+    #[test]
     fn test_liveness_pid_reuse_different_start_time_is_dead() {
         // Same pid, but a different process now holds it (different start time).
         assert!(matches!(
@@ -1964,8 +2377,11 @@ mod tests {
         assert!(launcher_writes_transcript(Some("terminal")));
         assert!(launcher_writes_transcript(Some("vscode")));
         assert!(launcher_writes_transcript(Some("cursor")));
-        // Desktop app fires hooks but writes no transcript → source="unknown"
-        // (or None on legacy entries). A missing JSONL is expected, not a drop.
+        // The Claude desktop app fires hooks but writes no transcript →
+        // source="claude-desktop" (or "unknown"/None when the hook couldn't
+        // positively identify it, or on legacy entries). A missing JSONL is
+        // expected for these, not a drop.
+        assert!(!launcher_writes_transcript(Some("claude-desktop")));
         assert!(!launcher_writes_transcript(Some("unknown")));
         assert!(!launcher_writes_transcript(None));
     }
@@ -1983,51 +2399,85 @@ mod tests {
 
     #[test]
     fn test_bypasses_launch_gate_active_states() {
+        // With a live pid, active/waiting states bypass the launch gate.
         for s in ["working", "thinking", "subagent", "compacting", "waiting"] {
-            assert!(bypasses_launch_gate(s), "state {} should bypass", s);
+            assert!(bypasses_launch_gate(s, true), "state {} should bypass", s);
         }
     }
 
     #[test]
     fn test_bypasses_launch_gate_terminal_states() {
         for s in ["idle", "done", "error", "ended"] {
-            assert!(!bypasses_launch_gate(s), "state {} should not bypass", s);
+            assert!(
+                !bypasses_launch_gate(s, true),
+                "state {} should not bypass",
+                s
+            );
+        }
+    }
+
+    #[test]
+    fn test_bypasses_launch_gate_denied_without_pid() {
+        // No pid → nothing for the liveness pass to demote → the bypass is
+        // denied so the entry falls through to the launched_at gate instead of
+        // pinning a phantom card forever (FIX #7 / undemotable-active).
+        for s in ["working", "thinking", "subagent", "compacting", "waiting"] {
+            assert!(
+                !bypasses_launch_gate(s, false),
+                "state {} must NOT bypass without a pid",
+                s
+            );
         }
     }
 
     #[test]
     fn test_admit_active_session_with_old_timestamps() {
         // Working session that started before Cue launched and hasn't fired
-        // a hook event since (mid-generation) must still be admitted.
+        // a hook event since (mid-generation) must still be admitted — it has
+        // a live pid, so the liveness pass can demote it if the process dies.
         let launched = 1000.0;
-        assert!(admit_session("working", 500.0, 600.0, launched));
-        assert!(admit_session("thinking", 500.0, 600.0, launched));
-        assert!(admit_session("subagent", 0.0, 0.0, launched));
+        assert!(admit_session("working", 500.0, 600.0, launched, true));
+        assert!(admit_session("thinking", 500.0, 600.0, launched, true));
+        assert!(admit_session("subagent", 0.0, 0.0, launched, true));
+    }
+
+    #[test]
+    fn test_reject_pidless_active_ghost_before_launch() {
+        // Active state, stale pre-launch timestamps, and NO pid: undemotable,
+        // so it must be filtered at admission rather than pinned forever.
+        let launched = 1000.0;
+        assert!(!admit_session("working", 500.0, 600.0, launched, false));
+        assert!(!admit_session("subagent", 500.0, 600.0, launched, false));
+        assert!(!admit_session("waiting", 500.0, 600.0, launched, false));
     }
 
     #[test]
     fn test_admit_waiting_session_with_old_timestamps() {
-        // User-attention state — must surface regardless of launch time.
-        assert!(admit_session("waiting", 100.0, 100.0, 9999.0));
+        // User-attention state — must surface regardless of launch time, given
+        // a live pid backing it.
+        assert!(admit_session("waiting", 100.0, 100.0, 9999.0, true));
     }
 
     #[test]
     fn test_filter_terminal_session_before_launch() {
         // Stale idle/done/error from a prior run must stay hidden.
         let launched = 1000.0;
-        assert!(!admit_session("idle", 500.0, 600.0, launched));
-        assert!(!admit_session("done", 500.0, 600.0, launched));
-        assert!(!admit_session("error", 500.0, 600.0, launched));
-        assert!(!admit_session("ended", 500.0, 600.0, launched));
+        assert!(!admit_session("idle", 500.0, 600.0, launched, true));
+        assert!(!admit_session("done", 500.0, 600.0, launched, true));
+        assert!(!admit_session("error", 500.0, 600.0, launched, true));
+        assert!(!admit_session("ended", 500.0, 600.0, launched, true));
     }
 
     #[test]
     fn test_admit_terminal_session_with_recent_activity() {
         // Idle/done sessions whose last hook event is post-launch should
-        // surface — their activity proves they're still relevant.
+        // surface — their activity proves they're still relevant. (A pidless
+        // entry with post-launch activity is still admitted via the timestamp
+        // gate; the point of the pid check is only to deny the active-state
+        // BYPASS, not to hide fresh work.)
         let launched = 1000.0;
-        assert!(admit_session("idle", 500.0, 1500.0, launched));
-        assert!(admit_session("done", 1100.0, 1100.0, launched));
+        assert!(admit_session("idle", 500.0, 1500.0, launched, true));
+        assert!(admit_session("done", 1100.0, 1100.0, launched, true));
     }
 
     // ── promote_decision: thinking→working latch ────────────────────────
@@ -2596,6 +3046,9 @@ mod tests {
             is_active,
             started_at: None,
             ended_at: None,
+            running_tool_name: None,
+            running_tool_target: None,
+            last_assistant_text: None,
         }
     }
 
@@ -3531,16 +3984,40 @@ mod tests {
 
         let m = SessionMonitorState::new();
         // Pre-launch timestamps: the session was mid-generation when Cue
-        // started, so its last hook event predates launch. "working" bypasses
-        // the launch gate on admission, but once demoted to idle it fails the
-        // sweep — exactly the population the user hit ESC on.
+        // started, so its last hook event predates launch. A "working" session
+        // WITH a live pid bypasses the launch gate on admission (a real
+        // ESC-interrupted session is still owned by a live Claude process);
+        // once demoted to idle it then fails the sweep — exactly the population
+        // the user hit ESC on. The pid is required by `bypasses_launch_gate`.
         let started = m.launched_at - 1000.0;
+        let my_pid = std::process::id();
         let sessions = format!(
-            r#"{{"sessions":{{"sess-esc":{{"id":"sess-esc","workspace":"/Users/dev/App","state":"working","lastActivity":{},"startedAt":{},"stateChangedAt":{}}}}}}}"#,
-            started, started, started
+            r#"{{"sessions":{{"sess-esc":{{"id":"sess-esc","workspace":"/Users/dev/App","state":"working","lastActivity":{},"startedAt":{},"stateChangedAt":{},"pid":{}}}}}}}"#,
+            started, started, started, my_pid
         );
         let status_path = dir.join("sessions.json");
         std::fs::write(&status_path, &sessions).unwrap();
+
+        // Seed process_identity with this test process's own (pid, start_time)
+        // so the liveness pass treats the session as ALIVE and does NOT demote
+        // it — leaving the transcript INTERRUPT marker as the demoter, which is
+        // the exact path the metrics-retention fix protects. (If the start_time
+        // fails to match, liveness demotes instead; the session still filters
+        // out with its metrics retained, so the assertions below hold either
+        // way — the pid is what makes it admissible under the launch gate.)
+        let my_start = {
+            let mut sys = sysinfo::System::new();
+            sys.refresh_processes(
+                sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(my_pid)]),
+                true,
+            );
+            sys.process(sysinfo::Pid::from_u32(my_pid))
+                .map(|p| p.start_time())
+                .unwrap_or(0)
+        };
+        m.process_identity
+            .lock_safe()
+            .insert("sess-esc".to_string(), (my_pid, my_start));
 
         // Metrics as refresh_metrics would produce them after ESC: a
         // "[Request interrupted by user]" marker newer than stateChangedAt.
@@ -3725,14 +4202,14 @@ mod tests {
     }
 
     #[test]
-    fn test_poll_no_jsonl_keeps_working_for_unknown_source() {
-        // Desktop-app sessions fire hooks (so they reach sessions.json as
-        // source="unknown") but write no transcript under ~/.claude/projects.
-        // The JSONL-presence demotion must NOT fire for them — a missing
-        // transcript is expected, not a dropped id. With no pid recorded, the
-        // pid-liveness pass can't act either, so the JSONL skip is exercised in
-        // isolation and the `working` state must survive.
-        let dir = std::env::temp_dir().join("cue_test_poll_unknown_no_jsonl");
+    fn test_poll_no_jsonl_keeps_working_for_claude_desktop_source() {
+        // Claude-desktop sessions fire hooks (so they reach sessions.json as
+        // source="claude-desktop") but write no transcript under
+        // ~/.claude/projects. The JSONL-presence demotion must NOT fire for them
+        // — a missing transcript is expected, not a dropped id. With no pid
+        // recorded, the pid-liveness pass can't act either, so the JSONL skip is
+        // exercised in isolation and the `working` state must survive.
+        let dir = std::env::temp_dir().join("cue_test_poll_claude_desktop_no_jsonl");
         let _ = std::fs::remove_dir_all(&dir);
         let projects = dir.join("projects");
         std::fs::create_dir_all(&projects).unwrap();
@@ -3745,7 +4222,7 @@ mod tests {
             .as_secs_f64();
         let ts = now + 5.0;
         let sessions = format!(
-            r#"{{"sessions":{{"sess-desktop":{{"id":"sess-desktop","workspace":"/Users/dev/App","state":"working","source":"unknown","lastActivity":{},"startedAt":{}}}}}}}"#,
+            r#"{{"sessions":{{"sess-desktop":{{"id":"sess-desktop","workspace":"/Users/dev/App","state":"working","source":"claude-desktop","lastActivity":{},"startedAt":{}}}}}}}"#,
             ts, ts
         );
         std::fs::write(&status_path, sessions).unwrap();
@@ -3758,6 +4235,46 @@ mod tests {
                 .iter()
                 .find(|s| s.info.id == "sess-desktop")
                 .expect("desktop session present");
+            assert_eq!(
+                s.info.state, "working",
+                "transcript-less claude-desktop session must not be demoted on missing JSONL"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_poll_no_jsonl_keeps_working_for_unknown_source() {
+        // Fallback guard: a launch the hook couldn't positively identify reaches
+        // sessions.json as source="unknown". Like claude-desktop it may write no
+        // transcript, so the JSONL-presence demotion must not fire — err toward
+        // keeping the card alive rather than pinning it to idle mid-turn.
+        let dir = std::env::temp_dir().join("cue_test_poll_unknown_no_jsonl");
+        let _ = std::fs::remove_dir_all(&dir);
+        let projects = dir.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        // Deliberately do NOT create a <id>.jsonl.
+
+        let status_path = dir.join("sessions.json");
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        let ts = now + 5.0;
+        let sessions = format!(
+            r#"{{"sessions":{{"sess-unknown":{{"id":"sess-unknown","workspace":"/Users/dev/App","state":"working","source":"unknown","lastActivity":{},"startedAt":{}}}}}}}"#,
+            ts, ts
+        );
+        std::fs::write(&status_path, sessions).unwrap();
+
+        let m = SessionMonitorState::new();
+        m.poll_status_with(status_path.clone(), projects.clone());
+        {
+            let e = m.enriched_sessions.lock_safe();
+            let s = e
+                .iter()
+                .find(|s| s.info.id == "sess-unknown")
+                .expect("unknown-source session present");
             assert_eq!(
                 s.info.state, "working",
                 "transcript-less unknown-source session must not be demoted on missing JSONL"

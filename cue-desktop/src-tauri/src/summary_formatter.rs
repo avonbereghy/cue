@@ -77,6 +77,47 @@ pub(crate) fn truncate(s: &str, max_len: usize) -> String {
     }
 }
 
+/// Flatten Markdown to plain prose for a one-line notification body: drop
+/// bold/italic/strike markers and code backticks, strip leading heading/quote
+/// markers, and collapse all whitespace (incl. newlines) to single spaces.
+/// Conservative — it won't mangle `snake_case` identifiers (only the doubled
+/// `**`/`__` and backticks are removed, not lone `_`/`*`).
+pub(crate) fn strip_markdown(s: &str) -> String {
+    let flattened = s
+        .replace("**", "")
+        .replace("__", "")
+        .replace("~~", "")
+        .replace('`', "");
+    let collapsed = flattened.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapsed
+        .trim_start_matches(['#', '>', ' '])
+        .trim()
+        .to_string()
+}
+
+/// The last question in `s` — the trailing sentence ending in `?` — or `None`.
+/// "Needs you" bodies want the assistant's actual question, not the opening.
+pub(crate) fn last_question(s: &str) -> Option<String> {
+    let s = s.trim();
+    let qpos = s.rfind('?')?;
+    let start = s[..qpos]
+        .rfind(['.', '!', '?', '\n'])
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let q = s[start..=qpos].trim();
+    (!q.is_empty()).then(|| q.to_string())
+}
+
+/// The last non-empty (trimmed) line of `s` — usually the conclusion of a
+/// multi-line message. Used for the "finished" outcome line.
+pub(crate) fn last_line(s: &str) -> Option<String> {
+    s.lines()
+        .rev()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(str::to_string)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -221,6 +262,55 @@ mod tests {
         assert_eq!(
             format_tool_summary("Grep", &input),
             "Search for: `(unknown pattern)`"
+        );
+    }
+
+    // --- notification body helpers ----------------------------------------
+
+    #[test]
+    fn strip_markdown_removes_bold_code_and_headings() {
+        assert_eq!(
+            strip_markdown("**Appearance** is exactly where you `set` it."),
+            "Appearance is exactly where you set it."
+        );
+        assert_eq!(strip_markdown("## Done\n- shipped"), "Done - shipped");
+        assert_eq!(strip_markdown("> a quote"), "a quote");
+    }
+
+    #[test]
+    fn strip_markdown_keeps_snake_case_and_lone_punct() {
+        // Lone underscores (identifiers) and single asterisks are preserved.
+        assert_eq!(
+            strip_markdown("ran build_event in 5*x time"),
+            "ran build_event in 5*x time"
+        );
+    }
+
+    #[test]
+    fn strip_markdown_collapses_whitespace() {
+        assert_eq!(strip_markdown("a\n\n  b   c"), "a b c");
+    }
+
+    #[test]
+    fn last_question_extracts_trailing_question() {
+        let s = "I looked at the schema. There are two paths here. Which migration approach should I take?";
+        assert_eq!(
+            last_question(s).as_deref(),
+            Some("Which migration approach should I take?")
+        );
+    }
+
+    #[test]
+    fn last_question_is_none_without_a_question() {
+        assert_eq!(last_question("All done. Pushed the fix."), None);
+    }
+
+    #[test]
+    fn last_line_returns_the_conclusion() {
+        let s = "Working through it.\nRan the suite.\nAll 214 tests green, ready for review.\n";
+        assert_eq!(
+            last_line(s).as_deref(),
+            Some("All 214 tests green, ready for review.")
         );
     }
 }

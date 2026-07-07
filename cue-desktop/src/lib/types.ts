@@ -1,5 +1,14 @@
 // TypeScript interfaces mirroring Rust models (camelCase via serde)
 
+declare global {
+  interface Window {
+    /** Imperative theme applier installed by main.tsx — applies a theme preset
+     *  ("auto" | "light" | "dark") without a settings round-trip. Used by the
+     *  Settings theme control and its reset. */
+    __applyTheme?: (preset: string) => void;
+  }
+}
+
 export interface SessionInfo {
   id: string;
   workspace: string;
@@ -22,6 +31,10 @@ export interface SessionInfo {
   /** Most recent Claude Code permission mode seen by the hook.
    *  "default" | "plan" | "acceptEdits" | "bypassPermissions". */
   permissionMode?: string;
+  /** Error category from the StopFailure hook, set only when state === "error"
+   *  and the failure was API-level (e.g. "rate_limit", "billing_error",
+   *  "authentication_failed"). Distinguishes API failures from tool failures. */
+  errorType?: string;
 }
 
 export interface SubagentMetrics {
@@ -42,6 +55,14 @@ export interface SubagentMetrics {
   /** Unix timestamp (seconds) of the last JSONL entry. For active agents this
    *  is the most recent activity; for completed agents it's the end time. */
   endedAt?: number | null;
+  /** Name of the tool the agent is currently running (last pending tool_use).
+   *  Only set while the agent is mid-turn. */
+  runningToolName?: string | null;
+  /** Target of the running tool (file path, command, pattern). */
+  runningToolTarget?: string | null;
+  /** First non-empty text block from the agent's most recent assistant message.
+   *  In-flight prose while active; the final result once finished. */
+  lastAssistantText?: string | null;
 }
 
 export interface TodoItem {
@@ -103,6 +124,10 @@ export interface SessionMetrics {
   /** First non-empty text block from the most recent assistant message.
    *  Used as a pill cue on idle/done cards that share a workspace. */
   lastAssistantText?: string | null;
+  /** Human-readable API-error reason for an error-state session, extracted from
+   *  an `isApiErrorMessage` transcript entry (e.g. model unavailable, rate
+   *  limit). The UI shows it only while the session is in the error state. */
+  lastErrorMessage?: string | null;
   /** Team name from JSONL (team agent sessions) */
   teamName?: string | null;
   /** Agent name from JSONL (team agent sessions) */
@@ -110,6 +135,11 @@ export interface SessionMetrics {
   /** Parent session ID when this session was forked via Claude Code's branch/fork feature.
    *  When set, UI renders "Branch from <id>" as the subtitle. */
   branchedFromSessionId?: string | null;
+  /** True when the session is blocked on an AskUserQuestion / ExitPlanMode — a
+   *  decision Cue can see but can't answer (those flow through a channel with no
+   *  response path). Distinguishes a question/plan wait from a tool-permission
+   *  wait, so the UI routes to the editor only for the former. */
+  awaitingUserPrompt?: boolean;
 }
 
 /** Pre-computed by Rust backend (EnrichedSession includes derived fields) */
@@ -158,6 +188,13 @@ export interface EnrichedSession {
   /** Current effort level ("low" | "medium" | "high" | "xhigh" | "max" | "auto" | future values).
    *  Passed through verbatim from Claude Code so new level names surface without a Cue update. */
   effortLevel?: string;
+  /** True when the backend has tucked this session into the recoverable "Resting"
+   *  group — hidden from the main grid and the tray, surfaced in the dashboard's
+   *  Resting disclosure, one click to restore. Computed fresh each poll. */
+  resting?: boolean;
+  /** Why it's resting: "idle" (auto-hidden past the threshold) or "dismissed"
+   *  (manual X). Undefined when not resting. */
+  restingReason?: string;
 }
 
 export interface Settings {
@@ -231,14 +268,36 @@ export interface Settings {
   showCurrentTool: boolean;
   /** Beta: show config counts (CLAUDE.md, hooks, MCP) in detail mode */
   showConfigCounts: boolean;
+  /** Show the per-session usage line (est. cost, lifetime tokens, cache
+   *  efficiency) in the expanded card's deep-telemetry section. Default: true. */
+  showUsage: boolean;
+  /** Show the account-level usage-limit meters (5-hour + weekly rate-limit bars)
+   *  in the tray popover and the dashboard header strip. A DIFFERENT feature
+   *  from showUsage (the per-session cost line) — this surfaces the global
+   *  Claude rate limits the statusline bridge captures. Default: true. */
+  showLimitStatus: boolean;
   /** Show comet tracers on the strings whenever a tool call fires. Off by default. */
   showToolCallComets: boolean;
   /** Timer display: "minutes" (HH:MM), "seconds" (HH:MM:SS), or "off" */
   timerDisplay: string;
+  /** Auto-fit the dashboard window height to the session list. Default: true. */
+  autoFitWindow: boolean;
+  /** Dashboard layout: "flow" (responsive grid) or "grouped" (a project's agents
+   *  cluster side-by-side under a project header). Default: "flow". */
+  dashboardLayout: string;
+  /** Dashboard visual "Look": "instrument" (default signal/waveform skin),
+   *  "almanac", "studio", or "night". Empty/missing = instrument. Independent of
+   *  dashboardLayout and the color theme — each look ships its own palette/type. */
+  dashboardView: string;
+  /** Tint each card's left edge by project so same-project cards stand out.
+   *  Default: true. */
+  projectAccentsEnabled: boolean;
   /** Show the system tray icon in the menu bar. Default: true. */
   showInMenuBar: boolean;
   /** Menu bar icon style: "default" (dot grid) or "clock" (12-wedge clock). */
   menuBarStyle: string;
+  /** Bars-style pill border white level, 0–100 (100 = full white, 0 = hidden). */
+  menuBarPillBorder: number;
   /** Show the app in the macOS Dock / OS taskbar. Default: true. */
   showInDock: boolean;
   /** Launch Cue automatically at login. Default: true. */
@@ -247,6 +306,35 @@ export interface Settings {
   trayShortcutEnabled: boolean;
   /** Tauri-format global shortcut, e.g. "CmdOrCtrl+Shift+C". */
   trayShortcut: string;
+  /** Master switch for native notifications. When false, no state-transition
+   *  ping fires regardless of the per-event toggles. Default: true. */
+  notificationsEnabled: boolean;
+  /** Notify when a session becomes blocked on your input (→ waiting). Default: true. */
+  notifyWaiting: boolean;
+  /** Notify when a session enters the error state. Default: true. */
+  notifyError: boolean;
+  /** Notify when a session finishes a turn (→ done/idle), gated by
+   *  notifyDoneMinSecs. Default: true. */
+  notifyDone: boolean;
+  /** Minimum active turn length (seconds) before a "finished" notification
+   *  fires. Only gates the done ping. Default: 30. */
+  notifyDoneMinSecs: number;
+  /** Auto-hide a session that has sat idle this many seconds into the recoverable
+   *  "Resting" group. 0 disables (the off switch). Default: 900 (15 min). */
+  autoHideIdleSecs: number;
+  /** Override for Claude Code's config directory (the `.claude` equivalent that
+   *  holds `projects/`). Empty = auto-detect ($CLAUDE_CONFIG_DIR, else ~/.claude).
+   *  Set this if Cue shows no sessions while Claude Code is running — e.g. you
+   *  relocated ~/.claude and launch Cue from the Dock (which can't see the env
+   *  var). A leading ~ is expanded. Default: "" (auto-detect). */
+  claudeConfigDir: string;
+  /** Suppress the "finished" ping while the dashboard window is focused — if
+   *  you're already watching Cue, a card flipping to done is visible. Only gates
+   *  the done ping; needs-you/error still fire when focused. Default: true. */
+  suppressDoneWhenFocused: boolean;
+  /** Notify when a usage rate limit that had been reached clears, so you know
+   *  paused sessions can resume. Default: true. */
+  notifyRateLimitReset: boolean;
   /** Per-theme appearance customizations saved by the user, keyed by theme ID */
   themeCustomizations: Record<string, ThemeCustomization>;
 }

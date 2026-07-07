@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Settings, TITLE_ANIMATIONS, ANIMATION_SPEEDS, SIGNAL_THEMES, applyThemeCssVars } from "@/lib/types";
+import { Settings, TITLE_ANIMATIONS, ANIMATION_SPEEDS, SIGNAL_THEMES } from "@/lib/types";
 import type { PresetSummary, SignalPreset } from "@/lib/types";
 import { extractPreset } from "@/lib/audioExtractor";
-import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, getCurrentTime as getPresetTime, seek as presetSeek, setGate as setGateEngine } from "@/lib/presetEngine";
+import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, getCurrentTime as getPresetTime, isPlaying as isPresetPlaying, seek as presetSeek, setGate as setGateEngine } from "@/lib/presetEngine";
 import { DEFAULT_PRESET } from "@/lib/defaultPreset";
 import { debounce } from "@/lib/debounce";
+import { usePageVisible } from "@/hooks/usePageVisible";
 
 function Toggle({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) {
   return (
@@ -233,11 +234,16 @@ function BandWaveform({ presetId, signalBass, signalMids, signalTreble, signalGa
   const presetRef = useRef<SignalPreset | null>(null);
   const animRef = useRef<number>(0);
   const dragging = useRef(false);
+  // Exposes the effect's single-frame paint so the mouse-down handler (a React
+  // event, outside the effect closure) can repaint a scrub even while the rAF
+  // loop is parked.
+  const drawRef = useRef<(() => void) | null>(null);
+  const pageVisible = usePageVisible();
 
   useEffect(() => {
     if (!presetId) return;
     invoke<SignalPreset>("load_preset", { id: presetId })
-      .then((p) => { presetRef.current = p; })
+      .then((p) => { presetRef.current = p; drawRef.current?.(); })
       .catch(() => {});
   }, [presetId]);
 
@@ -246,6 +252,14 @@ function BandWaveform({ presetId, signalBass, signalMids, signalTreble, signalGa
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    // Don't animate while the settings window is hidden/backgrounded.
+    if (!pageVisible) return;
+
+    const draw = () => {
+      const rect = canvas.getBoundingClientRect();
+      drawBandEnvelopes(ctx, rect.width, rect.height, presetRef.current, { bass: signalBass, mids: signalMids, treble: signalTreble }, undefined, signalGate);
+    };
+    drawRef.current = draw;
 
     const dpr = window.devicePixelRatio || 1;
     const resize = () => {
@@ -253,41 +267,64 @@ function BandWaveform({ presetId, signalBass, signalMids, signalTreble, signalGa
       canvas.width = rect.width * dpr;
       canvas.height = rect.height * dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      draw(); // resizing the backing store clears it — repaint at the new size
     };
+
+    // The only moving element is the playhead, which advances only while the
+    // preset is playing. Redraw at ~10fps while playing; when paused the frame
+    // is static, so park the rAF loop entirely (the poll below wakes it if
+    // playback resumes, and scrubbing repaints directly).
+    const FRAME_MS = 100; // ~10fps
+    let lastDraw = 0;
+    const tick = (now: number) => {
+      if (!isPresetPlaying()) { animRef.current = 0; return; } // paused → stop
+      animRef.current = requestAnimationFrame(tick);
+      if (now - lastDraw < FRAME_MS) return;
+      lastDraw = now;
+      draw();
+    };
+    const kick = () => {
+      if (animRef.current === 0) { lastDraw = 0; animRef.current = requestAnimationFrame(tick); }
+    };
+
     resize();
     const obs = new ResizeObserver(resize);
     obs.observe(canvas);
-
-    const draw = () => {
-      const rect = canvas.getBoundingClientRect();
-      drawBandEnvelopes(ctx, rect.width, rect.height, presetRef.current, { bass: signalBass, mids: signalMids, treble: signalTreble }, undefined, signalGate);
-      animRef.current = requestAnimationFrame(draw);
-    };
-    animRef.current = requestAnimationFrame(draw);
+    // Cheap 4Hz poll to restart the parked loop if playback (re)starts — the
+    // preset auto-plays/loops, so this normally kicks the loop right after mount.
+    const pollId = window.setInterval(() => { if (isPresetPlaying()) kick(); }, 250);
+    kick();
 
     // Drag-to-scrub
     const onMove = (e: MouseEvent) => {
       if (!dragging.current || !presetRef.current) return;
       seekFromCanvas(e, canvas, presetRef.current.durationSecs);
+      draw(); // track the cursor immediately even if the loop is parked (paused)
     };
     const onUp = () => { dragging.current = false; };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
 
     return () => {
-      cancelAnimationFrame(animRef.current);
+      if (animRef.current) cancelAnimationFrame(animRef.current);
+      animRef.current = 0;
+      drawRef.current = null;
       obs.disconnect();
+      window.clearInterval(pollId);
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [presetId, signalBass, signalMids, signalTreble, signalGate]);
+  }, [presetId, signalBass, signalMids, signalTreble, signalGate, pageVisible]);
 
   if (!presetId) return null;
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     dragging.current = true;
     const canvas = canvasRef.current;
-    if (canvas && presetRef.current) seekFromCanvas(e, canvas, presetRef.current.durationSecs);
+    if (canvas && presetRef.current) {
+      seekFromCanvas(e, canvas, presetRef.current.durationSecs);
+      drawRef.current?.(); // repaint the moved playhead even while paused
+    }
   };
 
   return (
@@ -297,6 +334,69 @@ function BandWaveform({ presetId, signalBass, signalMids, signalTreble, signalGa
       style={{ height: "80px" }}
       onMouseDown={handleMouseDown}
     />
+  );
+}
+
+interface ClaudeDirProbe {
+  projectsPath: string;
+  exists: boolean;
+  sessionCount: number;
+  capped: boolean;
+  autoDetected: string;
+}
+
+/** Override for Claude Code's config directory, with live validation. Lets a
+ *  user point Cue at a relocated ~/.claude — the escape hatch for a Dock launch
+ *  that can't see a shell-exported $CLAUDE_CONFIG_DIR. */
+function ClaudeDirSetting({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [probe, setProbe] = useState<ClaudeDirProbe | null>(null);
+
+  // Probe on mount and whenever the typed value settles (debounced 300ms) so we
+  // don't walk the directory on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      invoke<ClaudeDirProbe>("probe_claude_dir", { dir: value })
+        .then(setProbe)
+        .catch((err) => console.error("probe_claude_dir failed:", err));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [value]);
+
+  const found = probe !== null && probe.exists && probe.sessionCount > 0;
+  const countLabel = probe ? `${probe.sessionCount}${probe.capped ? "+" : ""}` : "";
+
+  return (
+    <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1">
+      <SettingRow
+        label="Sessions Directory"
+        description="Where Claude Code stores transcripts. Leave blank to auto-detect ($CLAUDE_CONFIG_DIR, else ~/.claude). Set this if Cue shows no sessions while Claude Code is running."
+        onReset={value !== "" ? () => onChange("") : undefined}
+      >
+        <input
+          type="text"
+          value={value}
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          aria-label="Claude sessions directory"
+          placeholder={probe?.autoDetected ?? "~/.claude"}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-56 px-2 py-1 rounded text-[0.6875rem] bg-black/30 border border-white/10 text-white/80 placeholder:text-white/25 focus:outline-none focus:border-white/25"
+        />
+      </SettingRow>
+      {probe && (
+        <div className="flex items-center gap-2 pb-1.5">
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${found ? "bg-green-400/80" : "bg-amber-400/80"}`} />
+          <span className={`text-[0.625rem] truncate ${found ? "text-white/40" : "text-amber-400/70"}`}>
+            {found
+              ? `Found ${countLabel} session${probe.sessionCount === 1 ? "" : "s"} in ${probe.projectsPath}`
+              : probe.exists
+                ? `No sessions found in ${probe.projectsPath}`
+                : `Not found: ${probe.projectsPath}`}
+          </span>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -770,22 +870,35 @@ export function SettingsView() {
       showToolPills: false,
       showCurrentTool: false,
       showConfigCounts: false,
+      showUsage: true,
+      showLimitStatus: true,
       showToolCallComets: false,
       timerDisplay: "seconds",
       showInMenuBar: true,
       menuBarStyle: "bars",
+      menuBarPillBorder: 84,
       showInDock: true,
       startAtLogin: true,
+      autoFitWindow: true,
+      dashboardLayout: "flow",
+      dashboardView: "instrument",
+      projectAccentsEnabled: true,
       trayShortcutEnabled: false,
       trayShortcut: "CmdOrCtrl+Shift+C",
+      notificationsEnabled: true,
+      notifyWaiting: true,
+      notifyError: true,
+      notifyDone: true,
+      notifyDoneMinSecs: 30,
+      autoHideIdleSecs: 900,
+      claudeConfigDir: "",
+      suppressDoneWhenFocused: true,
+      notifyRateLimitReset: true,
       themeCustomizations: settings.themeCustomizations ?? {},
     };
     setSettings(defaults);
     // Apply theme immediately
-    const win = window as unknown as Record<string, unknown>;
-    if (typeof win.__applyTheme === "function") {
-      (win.__applyTheme as (p: string) => void)("auto");
-    }
+    window.__applyTheme?.("auto");
   };
 
   if (!settings) {
@@ -798,6 +911,12 @@ export function SettingsView() {
 
   const signalMode = settings.signalMode ?? "simulated";
   const isPresetMode = signalMode === "preset";
+  // Appearance: the active Look decides which appearance controls are live.
+  // Instrument is the only Look that honours Light/Dark and the signal palette;
+  // the warm Looks (Almanac/Night/Studio) ship fixed, hand-made palettes.
+  const dashboardView = settings.dashboardView || "instrument";
+  const isInstrument = dashboardView === "instrument";
+  const activePalette = SIGNAL_THEMES.find((t) => t.id === (settings.activeThemeId ?? "default")) ?? SIGNAL_THEMES[0];
 
   return (
     <div className="p-4 space-y-4">
@@ -813,52 +932,79 @@ export function SettingsView() {
         </button>
       </div>
 
-      {/* Theme */}
-      <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1">
-        <SettingRow label="Theme" description="Light, Dark, or follow system" onReset={(settings.theme ?? "auto") !== "auto" ? () => { setSettings({ ...settings, theme: "auto" }); const win = window as unknown as Record<string, unknown>; if (typeof win.__applyTheme === "function") (win.__applyTheme as (p: string) => void)("auto"); } : undefined}>
-          <Select
-            value={settings.theme ?? "auto"}
-            options={[{ id: "auto", label: "Auto" }, { id: "light", label: "Light" }, { id: "dark", label: "Dark" }]}
-            onChange={(v) => {
-              setSettings({ ...settings, theme: v });
-              // Apply immediately without needing save
-              const win = window as unknown as Record<string, unknown>;
-              if (typeof win.__applyTheme === "function") {
-                (win.__applyTheme as (p: string) => void)(v);
-              }
-            }}
-          />
+      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Appearance</h3>
+      <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
+        {/* Look — the dashboard skin; the primary visual choice. */}
+        <SettingRow label="Look" description="The dashboard's visual style. Instrument is the original signal cards; the others are warm, hand-made alternatives — each ships its own palette and type." onReset={dashboardView !== "instrument" ? () => setSettings({ ...settings, dashboardView: "instrument" }) : undefined}>
+          <Select value={dashboardView} options={[
+            { id: "instrument", label: "Instrument (signal)" },
+            { id: "almanac", label: "Almanac (field log)" },
+            { id: "night", label: "Night Study (dark)" },
+            { id: "studio", label: "Studio Paper (light)" },
+          ]} onChange={(v) => setSettings({ ...settings, dashboardView: v })} />
         </SettingRow>
+
+        {/* Card density — how much each session card shows. Detailed is the full
+            card; Standard hides metrics/tool chips (keeps title, timer, context
+            bar); Compact strips to title + status + animation. Maps onto the
+            compactMode/slimMode pair the cards already honour. */}
+        <SettingRow label="Card density" description="How much each session card shows: Detailed (everything), Standard (no metrics/tool chips), or Compact (title + status only)." onReset={(settings.compactMode || settings.slimMode) ? () => setSettings({ ...settings, compactMode: false, slimMode: false }) : undefined}>
+          <Select value={settings.compactMode ? "compact" : settings.slimMode ? "standard" : "detailed"} options={[
+            { id: "detailed", label: "Detailed" },
+            { id: "standard", label: "Standard" },
+            { id: "compact", label: "Compact" },
+          ]} onChange={(v) => setSettings({ ...settings, compactMode: v === "compact", slimMode: v === "standard" })} />
+        </SettingRow>
+
+        {/* Light / Dark — only Instrument honours it; hidden for the fixed-palette Looks.
+            Glass is a dark-only palette, so it's shown as locked rather than a live control. */}
+        {isInstrument && (activePalette.id === "glass" ? (
+          <SettingRow label="Light / Dark" description="The Glass palette is always dark — switch palette to choose a mode.">
+            <span className="text-xs text-white/35">Dark · set by Glass</span>
+          </SettingRow>
+        ) : (
+          <SettingRow label="Light / Dark" description="Light, Dark, or follow the system." onReset={(settings.theme ?? "auto") !== "auto" ? () => { setSettings({ ...settings, theme: "auto" }); window.__applyTheme?.("auto"); } : undefined}>
+            <Select
+              value={settings.theme ?? "auto"}
+              options={[{ id: "auto", label: "Auto" }, { id: "light", label: "Light" }, { id: "dark", label: "Dark" }]}
+              onChange={(v) => { setSettings({ ...settings, theme: v }); window.__applyTheme?.(v); }}
+            />
+          </SettingRow>
+        ))}
+
+        {/* Palette — signal colours (Instrument) / lamplight accent (Night). The
+            warm paper Looks ship fixed palettes, so it's hidden for them. Deep
+            colour + effect editing lives in the dedicated Appearance window. */}
+        {(isInstrument || dashboardView === "night") && (
+          <SettingRow label="Palette" description={dashboardView === "night" ? "Accent colour for the Night Study lamplight." : "Signal-string colours and feel — fine-tune in the Appearance window."}>
+            <span className="inline-flex items-center gap-1.5 text-xs text-white/70">
+              <span className="w-2.5 h-2.5 rounded-full border border-white/20" style={{ background: activePalette.accent }} aria-hidden />
+              {activePalette.label}
+            </span>
+            <button onClick={() => invoke("open_theme_picker").catch(() => {})} className="text-[0.625rem] px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-white/60 transition-colors">
+              Customize…
+            </button>
+          </SettingRow>
+        )}
       </section>
 
+      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Performance</h3>
       {/* Low Power */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
-        <SettingRow label="Low Power Mode" description="Force default theme, disable signal strings, sand, and blur effects">
+        <SettingRow label="Low Power Mode" description="Suppress blur, signal strings, sand, and animations to save power — your Look and palette are kept.">
           <Toggle checked={settings.lowPower ?? false} onChange={() => {
             const next = !(settings.lowPower ?? false);
-            if (next) {
-              // Force default theme
-              const defaultTheme = SIGNAL_THEMES[0];
-              applyThemeCssVars(defaultTheme);
-              setSettings({
-                ...settings,
-                lowPower: true,
-                activeThemeId: "default",
-                signalColorDark: defaultTheme.colorDark,
-                signalColorLight: defaultTheme.colorLight,
-                signalAlpha: defaultTheme.alpha,
-                signalAmplitude: defaultTheme.amplitude,
-                signalEcho: defaultTheme.echo,
-              });
-              document.documentElement.setAttribute("data-low-power", "");
-            } else {
-              setSettings({ ...settings, lowPower: false });
-              document.documentElement.removeAttribute("data-low-power");
-            }
+            // Visual suppression is driven entirely by the data-low-power CSS, so
+            // we no longer overwrite the active palette / signal settings —
+            // toggling back off restores the exact look the user had before.
+            setSettings({ ...settings, lowPower: next });
+            if (next) document.documentElement.setAttribute("data-low-power", "");
+            else document.documentElement.removeAttribute("data-low-power");
           }} label="Low power mode" />
         </SettingRow>
       </section>
 
+      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Animation</h3>
       {/* Animation */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
         <SettingRow label="Title Animation" description="Effect on working session titles" onReset={settings.titleAnimation !== "ripple" ? () => setSettings({ ...settings, titleAnimation: "ripple" }) : undefined}>
@@ -886,13 +1032,11 @@ export function SettingsView() {
         </SettingRow>
       </section>
 
+      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Display</h3>
       {/* Display */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
         <SettingRow label="Font Scale" description="Adjust text size across the entire app">
           <Slider value={settings.fontScale ?? 1.0} min={0.75} max={1.5} step={0.05} defaultValue={1.0} format={(v) => `${v.toFixed(2)}x`} onChange={(v) => { setSettings({ ...settings, fontScale: v }); document.documentElement.style.setProperty("--font-scale", String(v)); }} />
-        </SettingRow>
-        <SettingRow label="Compact Mode" description="Mini cards with just title, status, and animation" onReset={settings.compactMode ? () => setSettings({ ...settings, compactMode: false }) : undefined}>
-          <Toggle checked={settings.compactMode ?? false} onChange={() => setSettings({ ...settings, compactMode: !(settings.compactMode ?? false) })} label="Compact mode" />
         </SettingRow>
         <SettingRow label="Context Bar" description="When to show the context usage bar" onReset={(settings.contextThreshold ?? "always") !== "always" ? () => setSettings({ ...settings, contextThreshold: "always" }) : undefined}>
           <Select value={settings.contextThreshold ?? "always"} options={[
@@ -920,6 +1064,11 @@ export function SettingsView() {
       </section>
 
 
+      {/* Special Effects + Audio Input drive the Instrument card's signal overlays
+          only; the warm Looks ship their own static aesthetics, so the whole block
+          is hidden when a non-Instrument Look is active. */}
+      {isInstrument && (<>
+      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Special Effects</h3>
       {/* Special Effects */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
         <SettingRow label="Special Effects" description="Strings on working, sand on idle, flux streamlines on thinking" onReset={settings.signalString ? () => setSettings({ ...settings, signalString: false }) : undefined}>
@@ -1254,7 +1403,9 @@ export function SettingsView() {
               )}
       </section>
       )}
+      </>)}
 
+      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Connection</h3>
       {/* App Behavior */}
       <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
         <SettingRow label="Show in menu bar" description="Display the Cue tray icon in the menu bar" onReset={!(settings.showInMenuBar ?? true) ? () => setSettings({ ...settings, showInMenuBar: true }) : undefined}>
@@ -1275,6 +1426,11 @@ export function SettingsView() {
             onChange={(v) => setSettings({ ...settings, menuBarStyle: v })}
           />
         </SettingRow>
+        {(settings.menuBarStyle ?? "bars") === "bars" && (
+          <SettingRow label="Pill border" description="White level of the menu-bar pill outline. 100% is solid white; 0% hides the border." onReset={(settings.menuBarPillBorder ?? 84) !== 84 ? () => setSettings({ ...settings, menuBarPillBorder: 84 }) : undefined}>
+            <Slider value={settings.menuBarPillBorder ?? 84} min={0} max={100} step={1} defaultValue={84} format={(v) => `${Math.round(v)}%`} onChange={(v) => setSettings({ ...settings, menuBarPillBorder: Math.round(v) })} />
+          </SettingRow>
+        )}
         <SettingRow label="Show in Dock" description="Display the Cue icon in the macOS Dock" onReset={!(settings.showInDock ?? true) ? () => setSettings({ ...settings, showInDock: true }) : undefined}>
           <Toggle
             checked={settings.showInDock ?? true}
@@ -1287,6 +1443,35 @@ export function SettingsView() {
             checked={settings.startAtLogin ?? true}
             onChange={() => setSettings({ ...settings, startAtLogin: !(settings.startAtLogin ?? true) })}
             label="Start at login"
+          />
+        </SettingRow>
+        <SettingRow label="Auto-fit window" description="Size the dashboard window to the number of sessions (you can still resize it yourself)" onReset={!(settings.autoFitWindow ?? true) ? () => setSettings({ ...settings, autoFitWindow: true }) : undefined}>
+          <Toggle
+            checked={settings.autoFitWindow ?? true}
+            onChange={() => setSettings({ ...settings, autoFitWindow: !(settings.autoFitWindow ?? true) })}
+            label="Auto-fit window"
+          />
+        </SettingRow>
+        <SettingRow label="Auto-hide idle sessions" description="Tuck a session into the recoverable Resting group after it sits idle this long, clearing both the dashboard and the menu-bar popover. Off keeps every idle session in view. Restore any in one click — and a session reappears on its own the moment it's active again." onReset={(settings.autoHideIdleSecs ?? 900) !== 900 ? () => setSettings({ ...settings, autoHideIdleSecs: 900 }) : undefined}>
+          <Select value={String(settings.autoHideIdleSecs ?? 900)} options={[
+            { id: "0", label: "Off" },
+            { id: "300", label: "After 5 min" },
+            { id: "900", label: "After 15 min" },
+            { id: "1800", label: "After 30 min" },
+            { id: "3600", label: "After 1 hour" },
+          ]} onChange={(v) => setSettings({ ...settings, autoHideIdleSecs: Number(v) })} />
+        </SettingRow>
+        <SettingRow label="Dashboard layout" description="Flow packs cards side-by-side; Group by project clusters a project's agents together" onReset={(settings.dashboardLayout ?? "flow") !== "flow" ? () => setSettings({ ...settings, dashboardLayout: "flow" }) : undefined}>
+          <Select value={settings.dashboardLayout ?? "flow"} options={[
+            { id: "flow", label: "Flow" },
+            { id: "grouped", label: "Group by project" },
+          ]} onChange={(v) => setSettings({ ...settings, dashboardLayout: v })} />
+        </SettingRow>
+        <SettingRow label="Project color accents" description="Tint each card's left edge by project so same-project cards are easy to spot" onReset={!(settings.projectAccentsEnabled ?? true) ? () => setSettings({ ...settings, projectAccentsEnabled: true }) : undefined}>
+          <Toggle
+            checked={settings.projectAccentsEnabled ?? true}
+            onChange={() => setSettings({ ...settings, projectAccentsEnabled: !(settings.projectAccentsEnabled ?? true) })}
+            label="Project color accents"
           />
         </SettingRow>
         <SettingRow label="Tray toggle shortcut" description="Open or close the tray popover with a global keyboard shortcut" onReset={(settings.trayShortcutEnabled ?? false) ? () => setSettings({ ...settings, trayShortcutEnabled: false }) : undefined}>
@@ -1309,6 +1494,70 @@ export function SettingsView() {
               placeholder="CmdOrCtrl+Shift+C"
             />
           </SettingRow>
+        )}
+      </section>
+
+      {/* Notifications */}
+      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Notifications</h3>
+      <section className="rounded-lg bg-white/5 border border-white/10 px-3 py-1 divide-y divide-white/5">
+        <SettingRow label="Notifications" description="Send a macOS notification when a session needs you, hits an error, or finishes a long run" onReset={!(settings.notificationsEnabled ?? true) ? () => setSettings({ ...settings, notificationsEnabled: true }) : undefined}>
+          <Toggle
+            checked={settings.notificationsEnabled ?? true}
+            onChange={() => setSettings({ ...settings, notificationsEnabled: !(settings.notificationsEnabled ?? true) })}
+            label="Notifications"
+          />
+        </SettingRow>
+        {(settings.notificationsEnabled ?? true) && (
+          <>
+            <SettingRow label="Needs input" description="When a session blocks on a question, plan approval, or permission" onReset={!(settings.notifyWaiting ?? true) ? () => setSettings({ ...settings, notifyWaiting: true }) : undefined}>
+              <Toggle
+                checked={settings.notifyWaiting ?? true}
+                onChange={() => setSettings({ ...settings, notifyWaiting: !(settings.notifyWaiting ?? true) })}
+                label="Needs input"
+              />
+            </SettingRow>
+            <SettingRow label="Errors" description="When a session hits an error or gets rate limited" onReset={!(settings.notifyError ?? true) ? () => setSettings({ ...settings, notifyError: true }) : undefined}>
+              <Toggle
+                checked={settings.notifyError ?? true}
+                onChange={() => setSettings({ ...settings, notifyError: !(settings.notifyError ?? true) })}
+                label="Errors"
+              />
+            </SettingRow>
+            <SettingRow label="Rate limit cleared" description="When a usage limit you hit resets, so you know paused sessions can resume" onReset={!(settings.notifyRateLimitReset ?? true) ? () => setSettings({ ...settings, notifyRateLimitReset: true }) : undefined}>
+              <Toggle
+                checked={settings.notifyRateLimitReset ?? true}
+                onChange={() => setSettings({ ...settings, notifyRateLimitReset: !(settings.notifyRateLimitReset ?? true) })}
+                label="Rate limit cleared"
+              />
+            </SettingRow>
+            <SettingRow label="Finished" description="When a session wraps up a turn that ran long enough to be worth a ping" onReset={!(settings.notifyDone ?? true) ? () => setSettings({ ...settings, notifyDone: true }) : undefined}>
+              <Toggle
+                checked={settings.notifyDone ?? true}
+                onChange={() => setSettings({ ...settings, notifyDone: !(settings.notifyDone ?? true) })}
+                label="Finished"
+              />
+            </SettingRow>
+            {(settings.notifyDone ?? true) && (
+              <SettingRow label="Finished threshold" description="Only notify when the finished turn ran at least this long, so quick replies stay quiet" onReset={(settings.notifyDoneMinSecs ?? 30) !== 30 ? () => setSettings({ ...settings, notifyDoneMinSecs: 30 }) : undefined}>
+                <Select value={String(settings.notifyDoneMinSecs ?? 30)} options={[
+                  { id: "15", label: "15 seconds" },
+                  { id: "30", label: "30 seconds" },
+                  { id: "60", label: "1 minute" },
+                  { id: "120", label: "2 minutes" },
+                  { id: "300", label: "5 minutes" },
+                ]} onChange={(v) => setSettings({ ...settings, notifyDoneMinSecs: Number(v) })} />
+              </SettingRow>
+            )}
+            {(settings.notifyDone ?? true) && (
+              <SettingRow label="Quiet finished while watching" description="Skip the finished ping when Cue is focused — you can already see the card flip. Needs-you and errors still ping." onReset={!(settings.suppressDoneWhenFocused ?? true) ? () => setSettings({ ...settings, suppressDoneWhenFocused: true }) : undefined}>
+                <Toggle
+                  checked={settings.suppressDoneWhenFocused ?? true}
+                  onChange={() => setSettings({ ...settings, suppressDoneWhenFocused: !(settings.suppressDoneWhenFocused ?? true) })}
+                  label="Quiet finished while watching"
+                />
+              </SettingRow>
+            )}
+          </>
         )}
       </section>
 
@@ -1357,6 +1606,20 @@ export function SettingsView() {
             label="Config counts"
           />
         </SettingRow>
+        <SettingRow label="Usage" description="Show estimated cost, total tokens, and cache efficiency per session in detail mode (cost is approximate)" onReset={(settings.showUsage ?? true) ? undefined : () => setSettings({ ...settings, showUsage: true })}>
+          <Toggle
+            checked={settings.showUsage ?? true}
+            onChange={() => setSettings({ ...settings, showUsage: !(settings.showUsage ?? true) })}
+            label="Usage"
+          />
+        </SettingRow>
+        <SettingRow label="Usage Limits" description="Show the account-level limit meters (5-hour and weekly rate limits) in the tray popover and the dashboard header. Needs the Cue statusline installed." onReset={(settings.showLimitStatus ?? true) ? undefined : () => setSettings({ ...settings, showLimitStatus: true })}>
+          <Toggle
+            checked={settings.showLimitStatus ?? true}
+            onChange={() => setSettings({ ...settings, showLimitStatus: !(settings.showLimitStatus ?? true) })}
+            label="Limit meters"
+          />
+        </SettingRow>
         <SettingRow label="Tool Call Comets" description="Fire a thin white tracer across the strings on each tool call" onReset={(settings.showToolCallComets ?? false) ? () => setSettings({ ...settings, showToolCallComets: false }) : undefined}>
           <Toggle
             checked={settings.showToolCallComets ?? false}
@@ -1365,6 +1628,12 @@ export function SettingsView() {
           />
         </SettingRow>
       </section>
+
+      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Claude Code</h3>
+      <ClaudeDirSetting
+        value={settings.claudeConfigDir ?? ""}
+        onChange={(v) => setSettings({ ...settings, claudeConfigDir: v })}
+      />
 
       {/* Hook Status */}
       <HookStatus />

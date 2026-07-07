@@ -195,8 +195,9 @@ export function AuroraEffect({
     if (!gl) return;
     glRef.current = gl;
 
-    const compile = (src: string, kind: number) => {
-      const s = gl.createShader(kind)!;
+    const compile = (src: string, kind: number): WebGLShader | null => {
+      const s = gl.createShader(kind);
+      if (!s) return null;
       gl.shaderSource(s, src);
       gl.compileShader(s);
       if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
@@ -207,7 +208,8 @@ export function AuroraEffect({
     };
     const vs = compile(VERT, gl.VERTEX_SHADER);
     const fs = compile(FRAG, gl.FRAGMENT_SHADER);
-    const prog = gl.createProgram()!;
+    const prog = gl.createProgram();
+    if (!vs || !fs || !prog) return;
     gl.attachShader(prog, vs);
     gl.attachShader(prog, fs);
     gl.linkProgram(prog);

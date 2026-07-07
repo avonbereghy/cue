@@ -404,7 +404,7 @@
             <div class="faq-answer">
               <p>Because Cue is built from source and not notarized with Apple, macOS Gatekeeper will block it on first launch.</p>
               <p><strong>Option A (GUI):</strong> Right-click the .app in Finder, select Open, then click Open in the dialog. You only need to do this once.</p>
-              <p><strong>Option B (Terminal):</strong> Run <code>xattr -cr ~/Applications/Claude\ Cue.app</code> then launch normally. This removes the quarantine attribute without disabling Gatekeeper globally.</p>
+              <p><strong>Option B (Terminal):</strong> Run <code>xattr -cr /Applications/Cue.app</code> then launch normally. This removes the quarantine attribute without disabling Gatekeeper globally.</p>
             </div>
           </details>
 

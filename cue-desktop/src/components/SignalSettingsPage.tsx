@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { usePageVisible } from "@/hooks/usePageVisible";
 import type { SignalPreset, Settings } from "@/lib/types";
 import { loadPreset as loadPresetEngine, isPlaying as isPresetPlaying, getCurrentTime as getPresetTime, getDuration as getPresetDuration, togglePlayPause, seek as presetSeek, isLoaded as isPresetLoaded, setGate } from "@/lib/presetEngine";
 import { DEFAULT_PRESET } from "@/lib/defaultPreset";
@@ -15,11 +16,16 @@ function formatTime(secs: number): string {
 
 export function SignalSettingsPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animRef = useRef<number>(0);
   const presetRef = useRef<SignalPreset | null>(null);
   const dragging = useRef(false);
   const [loaded, setLoaded] = useState(false);
+  // Bumped only on discrete transport events (play/pause) to reconcile the
+  // play/pause icon + duration. The continuously-advancing time label is
+  // updated out-of-band via currentTimeRef so playback no longer forces a
+  // full-tree re-render every animation frame.
   const [, setTick] = useState(0);
+  const currentTimeRef = useRef<HTMLSpanElement>(null);
+  const pageVisible = usePageVisible();
 
   // Settings state
   const [mode, setMode] = useState("preset");
@@ -94,13 +100,21 @@ export function SignalSettingsPage() {
     });
   }, []);
 
-  // Tick for transport
+  // Transport time label — advanced via direct textContent instead of a
+  // per-frame React re-render of the whole settings window. The label is m:ss,
+  // so ~4fps is more than enough; gated on playback + page visibility so it
+  // costs nothing while paused or backgrounded.
+  const playing = isPresetPlaying();
   useEffect(() => {
-    let id: number;
-    const tick = () => { setTick(t => t + 1); id = requestAnimationFrame(tick); };
-    id = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(id);
-  }, []);
+    if (!playing || !pageVisible) return;
+    const update = () => {
+      const el = currentTimeRef.current;
+      if (el) el.textContent = formatTime(getPresetTime());
+    };
+    update();
+    const id = window.setInterval(update, 250);
+    return () => window.clearInterval(id);
+  }, [playing, pageVisible]);
 
   const handleSourceFile = useCallback(async (file: File) => {
     setDecoding(true);
@@ -189,16 +203,11 @@ export function SignalSettingsPage() {
     if (!ctx) return;
 
     const dpr = window.devicePixelRatio || 1;
-    const resize = () => {
-      const rect = canvas.getBoundingClientRect();
-      canvas.width = rect.width * dpr;
-      canvas.height = rect.height * dpr;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    resize();
-    const obs = new ResizeObserver(resize);
-    obs.observe(canvas);
 
+    // This canvas is static — it renders the band envelopes + fixed time
+    // gridlines, with no moving playhead. So it only needs to repaint on
+    // resize and on the state changes in this effect's deps, NOT every
+    // animation frame. Drawing it in a permanent rAF loop was pure waste.
     const draw = () => {
       const preset = editingPreset ?? presetRef.current;
       const rect = canvas.getBoundingClientRect();
@@ -224,10 +233,19 @@ export function SignalSettingsPage() {
           ctx.stroke();
         }
       }
-
-      animRef.current = requestAnimationFrame(draw);
     };
-    animRef.current = requestAnimationFrame(draw);
+
+    const resize = () => {
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      // Resizing the backing store clears it — repaint at the new size.
+      draw();
+    };
+    resize();
+    const obs = new ResizeObserver(resize);
+    obs.observe(canvas);
 
     const seekAt = (e: MouseEvent) => {
       if (!presetRef.current) return;
@@ -241,7 +259,6 @@ export function SignalSettingsPage() {
     window.addEventListener("mouseup", onUp);
 
     return () => {
-      cancelAnimationFrame(animRef.current);
       obs.disconnect();
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
@@ -252,15 +269,14 @@ export function SignalSettingsPage() {
     if (editingPreset) return; // no playback engine for live previews
     dragging.current = true;
     if (presetRef.current) {
-      const canvas = canvasRef.current!;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
       const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
       presetSeek(ratio * presetRef.current.durationSecs);
     }
   };
 
-  const playing = isPresetPlaying();
-  const time = getPresetTime();
   const duration = getPresetDuration();
 
   const sliderClass = "flex-1 h-1 rounded appearance-none cursor-pointer bg-white/10 accent-blue-500";
@@ -398,13 +414,13 @@ export function SignalSettingsPage() {
       {/* Transport */}
       <div className="flex items-center gap-3 px-4 py-2 border-t border-white/10 shrink-0">
         <button
-          onClick={togglePlayPause}
+          onClick={() => { togglePlayPause(); setTick(t => t + 1); }}
           className="w-6 h-6 flex items-center justify-center rounded bg-white/10 hover:bg-white/20 text-white/60 hover:text-white transition-colors text-xs"
           title={playing ? "Pause" : "Play"}
         >
           {playing ? "⏸" : "▶"}
         </button>
-        <span className="text-[0.625rem] text-white/40 font-mono w-10 shrink-0">{formatTime(time)}</span>
+        <span ref={currentTimeRef} className="text-[0.625rem] text-white/40 font-mono w-10 shrink-0">{formatTime(getPresetTime())}</span>
         <span className="text-[0.625rem] text-white/20">/</span>
         <span className="text-[0.625rem] text-white/40 font-mono w-10 shrink-0">{formatTime(duration)}</span>
       </div>
