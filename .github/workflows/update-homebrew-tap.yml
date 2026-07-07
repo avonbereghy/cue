@@ -33,12 +33,12 @@ jobs:
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Check out cue (render script)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: cue
 
       - name: Check out homebrew-cue tap
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: avonbereghy/homebrew-cue
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
