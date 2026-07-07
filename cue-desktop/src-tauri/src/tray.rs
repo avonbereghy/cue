@@ -474,7 +474,12 @@ fn rounded_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> tiny_skia::Path 
 /// pill (when context usage is 100%). Bars in active states sweep a lighter
 /// "shine" band upward instead of blinking. `tick` is a monotonic counter
 /// driven by the tray timer; `BAR_SHINE_CYCLE` ticks complete one sweep.
-pub fn render_bar_chart(sessions: &[EnrichedSession], tick: u32, size: u32) -> Vec<u8> {
+pub fn render_bar_chart(
+    sessions: &[EnrichedSession],
+    tick: u32,
+    size: u32,
+    border_alpha: u8,
+) -> Vec<u8> {
     let safe_size = size.max(1);
 
     if sessions.is_empty() || sessions.len() > BAR_CHART_MAX_SESSIONS {
@@ -529,13 +534,13 @@ pub fn render_bar_chart(sessions: &[EnrichedSession], tick: u32, size: u32) -> V
 
     // Soft white outline drawn around every pill's full extent so each session
     // reads as a distinct chip regardless of its state colour or fill level.
-    // Slightly translucent + a touch thicker so the rounded corners read smooth
-    // rather than choppy at the menu-bar's small size.
+    // A touch thicker so the rounded corners read smooth rather than choppy at
+    // the menu-bar's small size; the alpha is user-tunable (0 hides it).
     let white = Rgba {
         r: 255,
         g: 255,
         b: 255,
-        a: 215,
+        a: border_alpha,
     };
     let outline_stroke_w = (safe_size as f32 / 21.0).max(2.0);
     let outline_stroke = tiny_skia::Stroke {
@@ -649,7 +654,7 @@ pub fn render_bar_chart(sessions: &[EnrichedSession], tick: u32, size: u32) -> V
 /// Render the "no active sessions" placeholder for the bar-chart style: a single
 /// empty pill (same geometry as one bar) with a white outline and no fill, so
 /// the menu bar shows a quiet chip rather than a hollow ring or blank space.
-pub fn render_empty_pill(size: u32) -> Vec<u8> {
+pub fn render_empty_pill(size: u32, border_alpha: u8) -> Vec<u8> {
     let safe_size = size.max(1);
     let h = safe_size as f32;
     let pad_y = (h * 0.10).max(2.0);
@@ -669,7 +674,7 @@ pub fn render_empty_pill(size: u32) -> Vec<u8> {
         r: 255,
         g: 255,
         b: 255,
-        a: 215,
+        a: border_alpha,
     };
     let outline_stroke = tiny_skia::Stroke {
         width: (safe_size as f32 / 21.0).max(2.0),
@@ -871,8 +876,22 @@ mod tests {
     #[test]
     fn test_render_empty_pill_is_valid_png() {
         // The "no active sessions" bars placeholder: one outlined pill, no fill.
-        let png = render_empty_pill(64);
+        let png = render_empty_pill(64, 215);
         verify_png(&png);
+    }
+
+    #[test]
+    fn test_border_alpha_changes_output() {
+        // The pill-border slider (0–100 → 0–255 alpha) must actually affect the
+        // rendered icon: a transparent outline differs from a solid one.
+        let sessions = vec![make_session("idle")];
+        let solid = render_bar_chart(&sessions, 0, 64, 255);
+        let clear = render_bar_chart(&sessions, 0, 64, 0);
+        assert_ne!(solid, clear, "border alpha must change the bar-chart icon");
+
+        let pill_solid = render_empty_pill(64, 255);
+        let pill_clear = render_empty_pill(64, 0);
+        assert_ne!(pill_solid, pill_clear, "border alpha must change the empty pill");
     }
 
     #[test]
@@ -881,7 +900,7 @@ mod tests {
         // render without any white pixels — cheap proxy: the PNG is non-trivial
         // and stable across ticks for a non-animating state.
         let sessions = vec![make_session("idle")];
-        let png = render_bar_chart(&sessions, 0, 64);
+        let png = render_bar_chart(&sessions, 0, 64, 215);
         verify_png(&png);
     }
 
@@ -985,7 +1004,7 @@ mod tests {
 
     #[test]
     fn test_render_bars_zero_sessions() {
-        let png = render_bar_chart(&[], 0, 44);
+        let png = render_bar_chart(&[], 0, 44, 215);
         verify_png(&png);
     }
 
@@ -994,12 +1013,12 @@ mod tests {
         let sessions: Vec<_> = (0..13)
             .map(|_| make_session_with_context("working", 0.5))
             .collect();
-        let overflow = render_bar_chart(&sessions, 0, 44);
+        let overflow = render_bar_chart(&sessions, 0, 44, 215);
         verify_png(&overflow);
         let twelve: Vec<_> = (0..12)
             .map(|_| make_session_with_context("working", 0.5))
             .collect();
-        let twelve_png = render_bar_chart(&twelve, 0, 44);
+        let twelve_png = render_bar_chart(&twelve, 0, 44, 215);
         assert_ne!(
             overflow, twelve_png,
             "13+ sessions must blank the bar chart"
@@ -1011,8 +1030,8 @@ mod tests {
         // A 0%-context bar should render differently than a 75%-context bar.
         let low = vec![make_session_with_context("idle", 0.0)];
         let high = vec![make_session_with_context("idle", 0.75)];
-        let low_png = render_bar_chart(&low, 0, 44);
-        let high_png = render_bar_chart(&high, 0, 44);
+        let low_png = render_bar_chart(&low, 0, 44, 215);
+        let high_png = render_bar_chart(&high, 0, 44, 215);
         verify_png(&low_png);
         verify_png(&high_png);
         assert_ne!(
@@ -1034,16 +1053,16 @@ mod tests {
             // Low-context attention must look different from low-context idle
             // (filled vs nearly-empty).
             assert_ne!(
-                render_bar_chart(&attention, 0, 44),
-                render_bar_chart(&idle, 0, 44),
+                render_bar_chart(&attention, 0, 44, 215),
+                render_bar_chart(&idle, 0, 44, 215),
                 "{} should fill pillar regardless of context",
                 state
             );
             // 5% and 100% context for an attention state should be identical
             // — both fill the pillar.
             assert_eq!(
-                render_bar_chart(&attention, 0, 44),
-                render_bar_chart(&attention_full, 0, 44),
+                render_bar_chart(&attention, 0, 44, 215),
+                render_bar_chart(&attention_full, 0, 44, 215),
                 "{} should ignore context entirely",
                 state
             );
@@ -1057,8 +1076,8 @@ mod tests {
         // percentages produce visibly different pixmaps now.
         let a = vec![make_session_with_context("idle", 0.14)];
         let b = vec![make_session_with_context("idle", 0.23)];
-        let png_a = render_bar_chart(&a, 0, 44);
-        let png_b = render_bar_chart(&b, 0, 44);
+        let png_a = render_bar_chart(&a, 0, 44, 215);
+        let png_b = render_bar_chart(&b, 0, 44, 215);
         verify_png(&png_a);
         verify_png(&png_b);
         assert_ne!(
@@ -1071,8 +1090,8 @@ mod tests {
     fn test_render_bars_shine_animates() {
         // Active state should produce different pixels at different ticks.
         let sessions = vec![make_session_with_context("working", 0.6)];
-        let frame_a = render_bar_chart(&sessions, 0, 44);
-        let frame_b = render_bar_chart(&sessions, BAR_SHINE_CYCLE / 2, 44);
+        let frame_a = render_bar_chart(&sessions, 0, 44, 215);
+        let frame_b = render_bar_chart(&sessions, BAR_SHINE_CYCLE / 2, 44, 215);
         verify_png(&frame_a);
         verify_png(&frame_b);
         assert_ne!(
@@ -1085,8 +1104,8 @@ mod tests {
     fn test_render_bars_static_state_ignores_tick() {
         // Idle is a static state — tick should NOT change the pixels.
         let sessions = vec![make_session_with_context("idle", 0.4)];
-        let frame_a = render_bar_chart(&sessions, 0, 44);
-        let frame_b = render_bar_chart(&sessions, BAR_SHINE_CYCLE / 2, 44);
+        let frame_a = render_bar_chart(&sessions, 0, 44, 215);
+        let frame_b = render_bar_chart(&sessions, BAR_SHINE_CYCLE / 2, 44, 215);
         assert_eq!(
             frame_a, frame_b,
             "static states must be tick-invariant in bar chart"

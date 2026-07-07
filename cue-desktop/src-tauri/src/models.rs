@@ -1050,6 +1050,10 @@ pub struct Settings {
     /// Menu bar icon style: "default" (dot grid) or "clock" (12-wedge clock).
     #[serde(default = "default_menu_bar_style")]
     pub menu_bar_style: String,
+    /// White level (0–100) of the bars-style pill border. 100 = full white,
+    /// 0 = fully transparent (no visible outline). Maps to the outline alpha.
+    #[serde(default = "default_menu_bar_pill_border")]
+    pub menu_bar_pill_border: u8,
     /// Show the app in the macOS Dock / OS taskbar. Defaults to true.
     /// On macOS this toggles NSApplication's activation policy between
     /// `.regular` (Dock + main menu) and `.accessory` (menu-bar-only).
@@ -1278,6 +1282,10 @@ fn default_menu_bar_style() -> String {
     "bars".to_string()
 }
 
+fn default_menu_bar_pill_border() -> u8 {
+    84
+}
+
 fn default_tray_shortcut() -> String {
     "CmdOrCtrl+Shift+C".to_string()
 }
@@ -1367,6 +1375,7 @@ impl Default for Settings {
             project_accents_enabled: true,
             show_in_menu_bar: true,
             menu_bar_style: "bars".to_string(),
+            menu_bar_pill_border: 84,
             show_in_dock: true,
             start_at_login: true,
             tray_shortcut_enabled: false,

@@ -876,6 +876,7 @@ export function SettingsView() {
       timerDisplay: "seconds",
       showInMenuBar: true,
       menuBarStyle: "bars",
+      menuBarPillBorder: 84,
       showInDock: true,
       startAtLogin: true,
       autoFitWindow: true,
@@ -1425,6 +1426,11 @@ export function SettingsView() {
             onChange={(v) => setSettings({ ...settings, menuBarStyle: v })}
           />
         </SettingRow>
+        {(settings.menuBarStyle ?? "bars") === "bars" && (
+          <SettingRow label="Pill border" description="White level of the menu-bar pill outline. 100% is solid white; 0% hides the border." onReset={(settings.menuBarPillBorder ?? 84) !== 84 ? () => setSettings({ ...settings, menuBarPillBorder: 84 }) : undefined}>
+            <Slider value={settings.menuBarPillBorder ?? 84} min={0} max={100} step={1} defaultValue={84} format={(v) => `${Math.round(v)}%`} onChange={(v) => setSettings({ ...settings, menuBarPillBorder: Math.round(v) })} />
+          </SettingRow>
+        )}
         <SettingRow label="Show in Dock" description="Display the Cue icon in the macOS Dock" onReset={!(settings.showInDock ?? true) ? () => setSettings({ ...settings, showInDock: true }) : undefined}>
           <Toggle
             checked={settings.showInDock ?? true}

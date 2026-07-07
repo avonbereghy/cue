@@ -296,6 +296,8 @@ export interface Settings {
   showInMenuBar: boolean;
   /** Menu bar icon style: "default" (dot grid) or "clock" (12-wedge clock). */
   menuBarStyle: string;
+  /** Bars-style pill border white level, 0–100 (100 = full white, 0 = hidden). */
+  menuBarPillBorder: number;
   /** Show the app in the macOS Dock / OS taskbar. Default: true. */
   showInDock: boolean;
   /** Launch Cue automatically at login. Default: true. */

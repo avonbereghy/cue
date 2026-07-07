@@ -2630,12 +2630,19 @@ async fn handle_permission_connection(
 // ---------------------------------------------------------------------------
 
 /// Dispatch to the configured menu bar icon renderer.
+/// Map the 0–100 "menu bar pill border" setting to an 0–255 outline alpha.
+/// 100 → fully white, 0 → fully transparent (no visible outline).
+fn pill_border_alpha(border_0_100: u8) -> u8 {
+    ((border_0_100.min(100) as u16 * 255) / 100) as u8
+}
+
 fn render_tray_icon(
     style: &str,
     sessions: &[EnrichedSession],
     blink_on: bool,
     tick: u32,
     size: u32,
+    border_alpha: u8,
 ) -> Vec<u8> {
     // No sessions to draw → show a quiet placeholder so the menu bar never
     // shows blank tool space. Hit at startup (zero sessions) and, with the tray
@@ -2644,13 +2651,13 @@ fn render_tray_icon(
     // the other styles keep the dot-grid's hollow ring.
     if sessions.is_empty() {
         return match style {
-            "bars" => tray::render_empty_pill(size),
+            "bars" => tray::render_empty_pill(size, border_alpha),
             _ => tray::render_dot_grid(sessions, blink_on, size),
         };
     }
     match style {
         "clock" => tray::render_clock(sessions, blink_on, size),
-        "bars" => tray::render_bar_chart(sessions, tick, size),
+        "bars" => tray::render_bar_chart(sessions, tick, size, border_alpha),
         _ => tray::render_dot_grid(sessions, blink_on, size),
     }
 }
@@ -2750,8 +2757,10 @@ fn setup_tray(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let all_sessions = monitor.enriched_sessions.lock_safe().clone();
     let sessions = tray_active_sessions(&all_sessions);
-    let style = settings::load_settings().menu_bar_style;
-    let png_bytes = render_tray_icon(&style, &sessions, true, 0, 44);
+    let startup_cfg = settings::load_settings();
+    let style = startup_cfg.menu_bar_style;
+    let border_alpha = pill_border_alpha(startup_cfg.menu_bar_pill_border);
+    let png_bytes = render_tray_icon(&style, &sessions, true, 0, 44, border_alpha);
     let icon = tauri::image::Image::from_bytes(&png_bytes)?;
 
     let menu = build_tray_menu(handle, &sessions)?;
@@ -3264,7 +3273,9 @@ fn update_tray(
     last_icon_key: &Arc<Mutex<String>>,
 ) {
     let menu_key = menu_cache_key(sessions);
-    let style = settings::load_settings().menu_bar_style;
+    let tray_cfg = settings::load_settings();
+    let style = tray_cfg.menu_bar_style;
+    let border_alpha = pill_border_alpha(tray_cfg.menu_bar_pill_border);
     // Preserve historical 500ms blink cadence under the 250ms tick.
     let blink_on = (tick / 2).is_multiple_of(2);
 
@@ -3291,7 +3302,13 @@ fn update_tray(
             }
         }
     };
-    let icon_key = format!("{}:{}:{}", icon_cache_key(&icon_sessions), phase_key, style);
+    let icon_key = format!(
+        "{}:{}:{}:{}",
+        icon_cache_key(&icon_sessions),
+        phase_key,
+        style,
+        border_alpha
+    );
 
     let icon_changed = {
         let last = last_icon_key.lock_safe();
@@ -3301,7 +3318,8 @@ fn update_tray(
     if let Some(tray) = handle.tray_by_id("cue-tray") {
         // Only render + push a new PNG when the visual state actually changed
         if icon_changed {
-            let png_bytes = render_tray_icon(&style, &icon_sessions, blink_on, tick, 44);
+            let png_bytes =
+                render_tray_icon(&style, &icon_sessions, blink_on, tick, 44, border_alpha);
             if let Ok(icon) = tauri::image::Image::from_bytes(&png_bytes) {
                 let _ = tray.set_icon(Some(icon));
             }
@@ -3484,18 +3502,28 @@ mod tests {
     }
 
     #[test]
-    fn test_render_tray_icon_empty_uses_ring_placeholder_not_blank() {
-        // When every session has idled out (or there are none), the bars/clock
-        // renderers draw a blank icon. render_tray_icon must instead fall back
-        // to the dot-grid hollow-ring placeholder so the tray is never blank.
+    fn test_render_tray_icon_empty_uses_placeholder_not_blank() {
+        // When every session has idled out (or there are none), the raw bars/
+        // clock renderers would draw blank. render_tray_icon must instead show a
+        // placeholder so the tray is never blank: the bars style renders a
+        // single empty white-outlined pill; the other styles fall back to the
+        // dot-grid hollow ring.
         let empty: Vec<EnrichedSession> = Vec::new();
         let ring = tray::render_dot_grid(&empty, true, 44);
-        let bars_blank = tray::render_bar_chart(&empty, 0, 44);
+        let pill = tray::render_empty_pill(44, 215);
+        let bars_blank = tray::render_bar_chart(&empty, 0, 44, 215);
 
-        for style in ["bars", "clock", "dots"] {
-            let got = render_tray_icon(style, &empty, true, 0, 44);
+        // Bars → empty pill.
+        assert_eq!(
+            render_tray_icon("bars", &empty, true, 0, 44, 215),
+            pill,
+            "empty bars icon must render the single empty pill"
+        );
+        // Other styles → hollow ring.
+        for style in ["clock", "dots"] {
             assert_eq!(
-                got, ring,
+                render_tray_icon(style, &empty, true, 0, 44, 215),
+                ring,
                 "empty {style} icon must render the hollow-ring placeholder"
             );
         }
@@ -3503,6 +3531,7 @@ mod tests {
             ring, bars_blank,
             "sanity: the ring placeholder differs from the blank bar-chart icon"
         );
+        assert_ne!(pill, ring, "the empty pill differs from the hollow ring");
     }
 
     #[test]
