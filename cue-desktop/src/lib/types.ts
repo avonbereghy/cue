@@ -87,6 +87,8 @@ export interface GitStatusInfo {
   added: number;
   deleted: number;
   untracked: number;
+  /** Live current branch from the workspace HEAD; null on detached HEAD. */
+  branch?: string | null;
 }
 
 export interface ConfigCounts {
