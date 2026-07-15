@@ -1899,8 +1899,11 @@ mod tests {
         // `gitBranch`, since Claude Code does not always re-stamp it after an
         // in-directory `git checkout`.
         let info = make_test_info("t", "/test", "working");
-        let mut metrics = SessionMetrics::default();
-        metrics.git_branch = Some("main".to_string()); // stale transcript value
+        // stale transcript value
+        let metrics = SessionMetrics {
+            git_branch: Some("main".to_string()),
+            ..Default::default()
+        };
         let supplemental = SupplementalData {
             git_status: Some(GitStatus {
                 branch: Some("feat/live-branch".to_string()),
@@ -1917,8 +1920,10 @@ mod tests {
         // Detached HEAD / non-repo → git_status.branch is None; the transcript
         // value must be preserved rather than blanked.
         let info = make_test_info("t", "/test", "working");
-        let mut metrics = SessionMetrics::default();
-        metrics.git_branch = Some("main".to_string());
+        let metrics = SessionMetrics {
+            git_branch: Some("main".to_string()),
+            ..Default::default()
+        };
         let supplemental = SupplementalData {
             git_status: Some(GitStatus {
                 branch: None,
