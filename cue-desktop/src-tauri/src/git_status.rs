@@ -127,6 +127,20 @@ pub fn get_git_status(workspace: &str) -> Option<GitStatus> {
 
     let mut status = GitStatus::default();
 
+    // Current branch, read live from HEAD. We prefer this over the transcript's
+    // cached `gitBranch` because Claude Code stamps `gitBranch` per JSONL entry
+    // from the launch dir and does not always re-stamp after an in-directory
+    // `git checkout`, so the transcript value can go stale. `symbolic-ref -q`
+    // prints the short branch name and exits 0 on a branch; on a detached HEAD
+    // it exits non-zero (run_git → None), leaving branch = None so the
+    // transcript value, if any, still shows. Works from a subdir or worktree.
+    if let Some(stdout) = run_git(workspace, &["symbolic-ref", "--quiet", "--short", "HEAD"]) {
+        let name = stdout.trim();
+        if !name.is_empty() {
+            status.branch = Some(name.to_string());
+        }
+    }
+
     // git status --porcelain for file stats
     if let Some(stdout) = run_git(workspace, &["status", "--porcelain"]) {
         parse_porcelain(&stdout, &mut status);
@@ -272,6 +286,74 @@ mod tests {
         let cmd = Command::new("false");
         let out = run_with_timeout(cmd, Duration::from_secs(5));
         assert!(out.is_none(), "non-zero exit yields None even when fast");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_get_git_status_reads_live_branch() {
+        // The branch must come from the live HEAD, not any cached transcript
+        // value. Build a real repo, check out a distinctively-named branch, and
+        // assert get_git_status surfaces it. Also covers detached HEAD → None.
+        use std::process::Command;
+        if Command::new("git")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| !s.success())
+            .unwrap_or(true)
+        {
+            return;
+        }
+
+        let dir = std::env::temp_dir().join(format!("cue_test_branch_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ws = dir.to_string_lossy().into_owned();
+
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        };
+        assert!(git(&["init", "-q"]));
+        let _ = git(&["config", "user.email", "t@t"]);
+        let _ = git(&["config", "user.name", "t"]);
+        std::fs::write(dir.join("f.txt"), "x").unwrap();
+        let _ = git(&["add", "f.txt"]);
+        let _ = git(&["commit", "-q", "-m", "init"]);
+        assert!(git(&["checkout", "-q", "-b", "feat/live-branch"]));
+
+        let status = get_git_status(&ws).expect("repo should yield a status");
+        assert_eq!(
+            status.branch.as_deref(),
+            Some("feat/live-branch"),
+            "branch must reflect the live checkout, not a cached value"
+        );
+
+        // Detached HEAD → symbolic-ref exits non-zero → branch is None.
+        let head = String::from_utf8(
+            Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&dir)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+        assert!(git(&["checkout", "-q", head.trim()]));
+        let detached = get_git_status(&ws).expect("repo should yield a status");
+        assert_eq!(
+            detached.branch, None,
+            "detached HEAD must leave branch = None"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]

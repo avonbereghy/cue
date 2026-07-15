@@ -169,6 +169,12 @@ pub struct GitStatus {
     pub added: i64,
     pub deleted: i64,
     pub untracked: i64,
+    /// Live current branch, read from the workspace HEAD via
+    /// `git symbolic-ref --short HEAD` (None on a detached HEAD or non-repo).
+    /// Preferred over the transcript's cached `gitBranch` when present, since
+    /// Claude Code does not always re-stamp `gitBranch` after an in-directory
+    /// `git checkout`.
+    pub branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -551,7 +557,7 @@ fn resolve_effort_level(session: Option<String>, global: Option<String>) -> Stri
 impl EnrichedSession {
     pub fn from_info_and_metrics(
         info: SessionInfo,
-        metrics: SessionMetrics,
+        mut metrics: SessionMetrics,
         supplemental: &SupplementalData,
     ) -> Self {
         let now = std::time::SystemTime::now()
@@ -566,6 +572,21 @@ impl EnrichedSession {
         }
         if info.agent_name.is_none() {
             info.agent_name = metrics.agent_name.clone();
+        }
+
+        // Prefer the live git branch (read from the workspace HEAD by
+        // `git_status`) over the transcript's cached `gitBranch`. Claude Code
+        // stamps `gitBranch` per JSONL entry from the launch dir and does not
+        // always re-stamp after an in-directory `git checkout`, so the
+        // transcript value can lag the real checkout. The live read wins when
+        // present; a detached HEAD leaves it None and the transcript value (if
+        // any) still shows. The frontend keeps reading `metrics.gitBranch`.
+        if let Some(branch) = supplemental
+            .git_status
+            .as_ref()
+            .and_then(|g| g.branch.clone())
+        {
+            metrics.git_branch = Some(branch);
         }
 
         // Note: thinking→working promotion and done/idle→subagent rescue
@@ -1870,6 +1891,48 @@ mod tests {
         assert!(es.git_status.as_ref().unwrap().dirty);
         assert_eq!(es.git_status.as_ref().unwrap().ahead, 2);
         assert_eq!(es.claude_version.as_deref(), Some("CC v2.1.6"));
+    }
+
+    #[test]
+    fn test_live_git_branch_overrides_transcript_branch() {
+        // A live branch from git_status must win over the transcript's cached
+        // `gitBranch`, since Claude Code does not always re-stamp it after an
+        // in-directory `git checkout`.
+        let info = make_test_info("t", "/test", "working");
+        // stale transcript value
+        let metrics = SessionMetrics {
+            git_branch: Some("main".to_string()),
+            ..Default::default()
+        };
+        let supplemental = SupplementalData {
+            git_status: Some(GitStatus {
+                branch: Some("feat/live-branch".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let es = EnrichedSession::from_info_and_metrics(info, metrics, &supplemental);
+        assert_eq!(es.metrics.git_branch.as_deref(), Some("feat/live-branch"));
+    }
+
+    #[test]
+    fn test_transcript_branch_kept_when_no_live_branch() {
+        // Detached HEAD / non-repo → git_status.branch is None; the transcript
+        // value must be preserved rather than blanked.
+        let info = make_test_info("t", "/test", "working");
+        let metrics = SessionMetrics {
+            git_branch: Some("main".to_string()),
+            ..Default::default()
+        };
+        let supplemental = SupplementalData {
+            git_status: Some(GitStatus {
+                branch: None,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let es = EnrichedSession::from_info_and_metrics(info, metrics, &supplemental);
+        assert_eq!(es.metrics.git_branch.as_deref(), Some("main"));
     }
 
     // ── SubagentMetrics::is_recently_live ──────────────────────────────

@@ -834,7 +834,8 @@ fn extract_user_prompt_text(obj: &serde_json::Map<String, Value>) -> Option<Stri
             return None;
         }
         s.to_string()
-    } else if let Some(arr) = content.as_array() {
+    } else {
+        let arr = content.as_array()?;
         // Find the first text block
         arr.iter().find_map(|block| {
             let obj = block.as_object()?;
@@ -844,8 +845,6 @@ fn extract_user_prompt_text(obj: &serde_json::Map<String, Value>) -> Option<Stri
                 None
             }
         })?
-    } else {
-        return None;
     };
 
     // Strip ANSI escape sequences (e.g. \x1b[2m for dim text)
@@ -878,7 +877,8 @@ fn extract_effort_command(obj: &serde_json::Map<String, Value>) -> Option<String
 
     let raw = if let Some(s) = content.as_str() {
         s.to_string()
-    } else if let Some(arr) = content.as_array() {
+    } else {
+        let arr = content.as_array()?;
         arr.iter().find_map(|block| {
             let obj = block.as_object()?;
             if obj.get("type")?.as_str()? == "text" {
@@ -887,8 +887,6 @@ fn extract_effort_command(obj: &serde_json::Map<String, Value>) -> Option<String
                 None
             }
         })?
-    } else {
-        return None;
     };
 
     if !raw.contains("<command-name>/effort</command-name>") {
