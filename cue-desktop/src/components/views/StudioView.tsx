@@ -309,7 +309,7 @@ export function StudioView(props: SkinViewProps) {
                   const remaining = props.reviveClicksRequired - clicks;
                   const label = clicks === 0 ? "Revive" : remaining === 1 ? "Confirm!" : `Revive (${clicks}/${props.reviveClicksRequired})`;
                   return (
-                    <div key={session.info.id} style={{ position: "relative" }}>
+                    <div key={session.info.id} style={{ position: "relative", minWidth: 0 }}>
                       <StudioCard {...cardProps(session, false)} />
                       <div className="revive-row">
                         <span className="age">ended {props.formatReviveElapsed(revivedAt)} ago</span>
