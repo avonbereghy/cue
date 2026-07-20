@@ -1363,7 +1363,9 @@ html.tray-popover-root body {
    item with the default min-width:auto, so without this it would expand to the
    message's full intrinsic width instead of truncating — making the card balloon
    sideways. min-width:0 lets the card shrink to its track so .convo-text (and the
-   title/metrics) ellipsize within it instead. */
+   title/metrics) ellipsize within it instead. The Ended Sessions grids wrap each
+   card in a position:relative div — there the wrapper is the grid item, so it
+   carries the same min-width:0 inline in each Look's view. */
 .studio-view .card,
 .night-view .card,
 .almanac-view .entry { min-width: 0; }
