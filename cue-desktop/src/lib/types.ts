@@ -126,6 +126,8 @@ export interface SessionMetrics {
   cacheReadTokens: number;
   model: string;
   lastInputTokens: number;
+  /** Usable context window reported by the harness; currently populated by Codex rollouts. */
+  modelContextWindow?: number;
   customTitle: string | null;
   gitBranch: string | null;
   toolCounts: Record<string, number>;

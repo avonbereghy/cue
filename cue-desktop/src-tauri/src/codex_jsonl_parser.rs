@@ -272,10 +272,14 @@ fn apply_response_item(payload: &Value, timestamp: Option<f64>, cache: &mut Code
 
 fn apply_event(payload: &Value, timestamp: Option<f64>, cache: &mut CodexJsonlCache) {
     match payload.get("type").and_then(Value::as_str) {
+        Some("task_started") => {
+            update_context_window(payload, &mut cache.metrics);
+        }
         Some("token_count") => {
             let Some(info) = payload.get("info") else {
                 return;
             };
+            update_context_window(info, &mut cache.metrics);
             if let Some(total) = info.get("total_token_usage") {
                 cache.metrics.input_tokens = token(total, "input_tokens");
                 cache.metrics.output_tokens = token(total, "output_tokens");
@@ -325,6 +329,16 @@ fn apply_event(payload: &Value, timestamp: Option<f64>, cache: &mut CodexJsonlCa
             }
         }
         _ => {}
+    }
+}
+
+fn update_context_window(value: &Value, metrics: &mut SessionMetrics) {
+    if let Some(window) = value
+        .get("model_context_window")
+        .and_then(Value::as_i64)
+        .filter(|window| *window > 0)
+    {
+        metrics.model_context_window = window;
     }
 }
 
@@ -440,6 +454,7 @@ mod tests {
         let first = concat!(
             "{\"timestamp\":\"2026-08-26T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"same-id\",\"git\":{\"branch\":\"feature\"}}}\n",
             "{\"timestamp\":\"2026-08-26T10:00:01Z\",\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.6\",\"effort\":\"high\"}}\n",
+            "{\"timestamp\":\"2026-08-26T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"model_context_window\":258400}}\n",
             "{\"timestamp\":\"2026-08-26T10:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"Build the parser\"}]}}\n",
             "{\"timestamp\":\"2026-08-26T10:00:03Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"call_id\":\"c1\",\"name\":\"exec\",\"input\":\"{\\\"cmd\\\":\\\"cargo test\\\"}\"}}\n"
         );
@@ -452,6 +467,7 @@ mod tests {
             Some("same-id")
         );
         assert_eq!(first_metrics.model, "gpt-5.6");
+        assert_eq!(first_metrics.model_context_window, 258_400);
         assert_eq!(first_metrics.effort_level.as_deref(), Some("high"));
         assert_eq!(
             first_metrics.last_prompt.as_deref(),
@@ -463,7 +479,7 @@ mod tests {
 
         let tail = concat!(
             "{\"timestamp\":\"2026-08-26T10:00:04Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"c1\",\"output\":\"ok\"}}\n",
-            "{\"timestamp\":\"2026-08-26T10:00:05Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":100,\"cached_input_tokens\":40,\"cache_write_input_tokens\":2,\"output_tokens\":25},\"last_token_usage\":{\"total_tokens\":77}}}}\n",
+            "{\"timestamp\":\"2026-08-26T10:00:05Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":100,\"cached_input_tokens\":40,\"cache_write_input_tokens\":2,\"output_tokens\":25},\"last_token_usage\":{\"total_tokens\":77},\"model_context_window\":121600}}}\n",
             "{\"timestamp\":\"2026-08-26T10:00:06Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"completed_at_ms\":1787757606000.0,\"item\":{\"id\":\"final-1\",\"type\":\"AgentMessage\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"Parser complete\"}]}}}\n"
         );
         use std::io::Write;
@@ -479,6 +495,7 @@ mod tests {
         assert_eq!(metrics.cache_read_tokens, 40);
         assert_eq!(metrics.output_tokens, 25);
         assert_eq!(metrics.last_input_tokens, 77);
+        assert_eq!(metrics.model_context_window, 121_600);
         assert!(metrics.last_end_turn_ts.is_some());
         assert_eq!(
             metrics.last_assistant_text.as_deref(),

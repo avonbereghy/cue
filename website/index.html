@@ -424,7 +424,7 @@
               <svg class="faq-chevron" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 7l5 5 5-5"/></svg>
             </summary>
             <div class="faq-answer">
-              <p>Cue reads the session files Claude Code generates, so it works with whatever version of Claude Code you have installed. The model name displayed (e.g. <code>claude-opus-4-5</code>) is read directly from the session data &mdash; no hardcoded model list. Context limits are auto-detected: 1M for Opus/Sonnet 4.6, 200K for older models.</p>
+              <p>Cue reads the session files Claude Code and Codex generate, so it tracks the model each session is actually using. Claude context limits are auto-detected from Claude Code, while Codex's exact usable context window is read directly from each rollout.</p>
             </div>
           </details>
 
