@@ -172,7 +172,7 @@ function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pendi
     openSession(session);
   }, [session]);
   const onCardClick = (e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest("button, a, input, [role=button]")) return;
+    if ((e.target as HTMLElement).closest("button, a, input, summary, details, [role=button]")) return;
     openWorkspace();
   };
 

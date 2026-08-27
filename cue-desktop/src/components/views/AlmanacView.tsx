@@ -154,7 +154,7 @@ function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pen
   }, [session]);
 
   const onCardClick = (e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest("button, a, input, [role=button]")) return;
+    if ((e.target as HTMLElement).closest("button, a, input, summary, details, [role=button]")) return;
     openWorkspace();
   };
 
