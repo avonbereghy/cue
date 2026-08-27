@@ -1,6 +1,6 @@
 import React, { useCallback, useState } from "react";
 import { openSession } from "@/lib/openSession";
-import type { EnrichedSession, PermissionRequest, SubagentMetrics } from "@/lib/types";
+import { getSessionKey, type EnrichedSession, type PermissionRequest, type SubagentMetrics } from "@/lib/types";
 import {
   isActiveState, STATE_DISPLAY_NAME, contextRampRgb, rgbCss,
   permissionModeMeta, aggregateMetrics, branchStatus, contextDisplay, splitSubagents,
@@ -189,13 +189,13 @@ function AlmanacCardBase({ session, index, timerDisplay, permissionsEnabled, pen
       onClick={onCardClick}
       aria-label={`${meta.word}: ${session.displayTitle}`}
     >
-      {onDismiss && <DismissButton sessionId={info.id} title={session.displayTitle} onDismiss={onDismiss} />}
+      {onDismiss && <DismissButton sessionId={getSessionKey(info)} title={session.displayTitle} onDismiss={onDismiss} />}
       <span className="entry-no">No. {revived ? "—" : roman(index + 1)}</span>
 
       <div className="entry-head">
         <span className="glyph" style={{ color: meta.ink }}><StateGlyph state={state} /></span>
         <div className="head-text">
-          <h2 className="entry-title">{session.displayTitle}</h2>
+          <h2 className="entry-title">{session.displayTitle} <small>{(info.harness ?? "claude").toUpperCase()}</small></h2>
           <div className="entry-where">
             <span className="proj">{session.workspaceName}</span>
             {branch && (
@@ -330,18 +330,18 @@ export function AlmanacView(props: SkinViewProps) {
               <div className="alm-empty">
                 <div className="mark">❧</div>
                 <div className="h">The register is empty</div>
-                <div className="p">Entries appear here as Claude Code sessions begin.</div>
+                <div className="p">Entries appear here as Claude Code or Codex sessions begin.</div>
               </div>
             )}
 
             {ordered.map((session, idx) => (
               <AlmanacCard
-                key={session.info.id}
+                key={getSessionKey(session.info)}
                 session={session}
                 index={idx}
                 timerDisplay={timerDisplay}
                 permissionsEnabled={permissionsEnabled}
-                pending={pendingBySession[session.info.id] ?? []}
+                pending={pendingBySession[getSessionKey(session.info)] ?? []}
                 onApprove={approvePermission}
                 onDeny={denyPermission}
                 isDuplicate={dupSet.has(session.displayTitle)}
@@ -364,11 +364,12 @@ export function AlmanacView(props: SkinViewProps) {
               </div>
               <div className="ledger">
                 {revivedSessions.map(({ session, revivedAt }) => {
-                  const clicks = props.reviveClicks[session.info.id] ?? 0;
+                  const sessionKey = getSessionKey(session.info);
+                  const clicks = props.reviveClicks[sessionKey] ?? 0;
                   const remaining = props.reviveClicksRequired - clicks;
                   const label = clicks === 0 ? "Revive" : remaining === 1 ? "Confirm!" : `Revive (${clicks}/${props.reviveClicksRequired})`;
                   return (
-                    <div key={session.info.id} style={{ position: "relative", minWidth: 0 }}>
+                    <div key={sessionKey} style={{ position: "relative", minWidth: 0 }}>
                       <AlmanacCard
                         session={session}
                         index={0}
@@ -384,7 +385,7 @@ export function AlmanacView(props: SkinViewProps) {
                       <div className="alm-revive-row">
                         <span className="age">ended {props.formatReviveElapsed(revivedAt)} ago</span>
                         <button className="revive" onClick={() => props.onReviveClick(session)}>{label}</button>
-                        <button className="dismiss" onClick={() => props.onDismissRevived(session.info.id)}>Dismiss</button>
+                        <button className="dismiss" onClick={() => props.onDismissRevived(sessionKey)}>Dismiss</button>
                       </div>
                     </div>
                   );

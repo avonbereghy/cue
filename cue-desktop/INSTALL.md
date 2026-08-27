@@ -1,11 +1,11 @@
 # Installing Cue
 
-Cue is a cross-platform desktop app that monitors your Claude Code sessions and shows their status in the system tray. Pre-built installers are available for Windows and Linux from the [Releases](https://github.com/avonbereghy/cue/releases) page.
+Cue is a cross-platform desktop app that monitors Claude Code and Codex sessions together and shows their status in the system tray. Pre-built installers are available for Windows and Linux from the [Releases](https://github.com/avonbereghy/cue/releases) page.
 
 ## Prerequisites
 
 - **Python 3** (3.9 or later) — required for the session-monitoring hook script
-- **Claude Code** — the CLI tool whose sessions Cue monitors
+- **Claude Code and/or Codex** — each integration is independently opt-in
 
 ## macOS
 
@@ -37,7 +37,7 @@ open ~/Applications/Cue.app
 
 Local builds are ad-hoc-signed. macOS will show a Gatekeeper warning on first launch — right-click the app and choose **Open**, or run `xattr -dr com.apple.quarantine ~/Applications/Cue.app`.
 
-The onboarding wizard configures the Claude Code hooks automatically on first launch.
+The onboarding wizard offers independent Claude Code and Codex hook setup on first launch. Open Codex root sessions are discovered from `$CODEX_HOME/sessions` and its thread-writer locks even when the client was already running; hooks add precise event states. Restart Codex after installing or changing its hooks, then review/trust Cue with `/hooks`.
 
 To start on login: **System Settings > General > Login Items > add "Cue"**
 
@@ -47,7 +47,7 @@ To start on login: **System Settings > General > Login Items > add "Cue"**
 rm -rf ~/Applications/Cue.app
 ```
 
-Then remove the hook entries from `~/.claude/settings.json` (search for `cue-hook`).
+Then remove Cue's hook entries from `~/.claude/settings.json` and/or `$CODEX_HOME/hooks.json` (search for `cue-hook`).
 
 ## Windows
 
@@ -57,7 +57,7 @@ Then remove the hook entries from `~/.claude/settings.json` (search for `cue-hoo
 2. Double-click the `.msi` to run the installer.
 3. Follow the on-screen prompts. The app installs per-user by default (no admin required).
 4. Launch **Cue** from the Start Menu.
-5. The onboarding wizard will guide you through configuring the Claude Code hook.
+5. The onboarding wizard will guide you through configuring either provider's hooks.
 
 ### NSIS installer (alternative)
 
@@ -100,20 +100,20 @@ Then log out and back in, and enable the extension in GNOME Extensions.
 
 ## Post-install setup
 
-On first launch, Cue presents an onboarding wizard that:
+On first launch, Cue presents an onboarding wizard that detects both harnesses and lets you enable either one without modifying the other:
 
-1. Detects your Claude Code installation and confirms Python 3 is available.
-2. Copies the bundled `cue-hook` script to `~/.claude/hooks/cue-hook`.
-3. Registers it for every lifecycle event in `~/.claude/settings.json`, invoking
-   it as `<python3> ~/.claude/hooks/cue-hook <state>`. Your original, pre-Cue
-   settings are backed up to `settings.json.bak` on the first install and
-   preserved across reinstalls (uninstalling removes the backup).
+1. Detects Claude Code, Codex, and Python 3.
+2. For Claude Code, copies `cue-hook` to `~/.claude/hooks/cue-hook` and merges Cue's events into `~/.claude/settings.json`.
+3. For Codex, copies the same writer to `$CODEX_HOME/hooks/cue-hook` (normally `~/.codex/hooks/cue-hook`) and merges supported events into `$CODEX_HOME/hooks.json` using `--harness codex`.
+4. Makes a one-time `.bak` copy of an existing provider config. Reinstall is idempotent and preserves every unrelated setting and hook.
+
+Cue discovers already-open Codex root sessions independently from Codex rollout files and thread-writer locks. After enabling or changing hooks in Cue, restart the Codex client, open a trusted project, and run `/hooks`, then explicitly enable/trust Cue's command hooks. This is a required Codex trust boundary; Cue does not use the dangerous trust-bypass flag. Codex timeouts are configured in **seconds**, whereas Claude Code hook timeouts are **milliseconds**.
 
 The hook is run through the Python interpreter rather than executed directly, so
 it needs no execute bit and the exact same mechanism works on macOS, Linux, and
 Windows. No manual editing is required, and the install does not depend on any
 pre-existing files outside the app bundle. You can re-run it any time from
-**Settings → Installation Status → Reinstall**.
+the provider-specific **Settings → Hooks → Reinstall** control.
 
 If Python 3 is not on your `PATH`, setup fails with a clear message — install
 Python 3 and click **Configure Hooks** again.
@@ -132,8 +132,9 @@ Python 3 and click **Configure Hooks** again.
 
 ### Hook cleanup
 
-The Claude Code hook file is located at:
-- Linux: `~/.claude/hooks/cue-hook`
-- Windows: `%USERPROFILE%\.claude\hooks\cue-hook`
+Cue's provider-specific hook files are located at:
 
-You can safely delete this directory after uninstalling Cue. Claude Code will continue to work normally without the hook.
+- Claude Code: `~/.claude/hooks/cue-hook` (Windows: `%USERPROFILE%\.claude\hooks\cue-hook`)
+- Codex: `$CODEX_HOME/hooks/cue-hook` (normally `~/.codex/hooks/cue-hook`; Windows: `%USERPROFILE%\.codex\hooks\cue-hook`)
+
+Prefer Cue's independent Uninstall buttons, which surgically remove only Cue-owned entries. Both providers continue to work normally without Cue's hooks.

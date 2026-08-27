@@ -45,7 +45,7 @@ describe("DecisionBar", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /approve/i }));
-    expect(onApprove).toHaveBeenCalledWith("s1", "r1");
+    expect(onApprove).toHaveBeenCalledWith("claude:s1", "r1");
   });
 
   it("routes Deny with the session + request id", () => {
@@ -61,7 +61,7 @@ describe("DecisionBar", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /deny/i }));
-    expect(onDeny).toHaveBeenCalledWith("s1", "r1");
+    expect(onDeny).toHaveBeenCalledWith("claude:s1", "r1");
   });
 
   it("shows 'answer in your editor' for an AskUserQuestion/ExitPlanMode wait, routing to the editor (not a fake answer)", () => {

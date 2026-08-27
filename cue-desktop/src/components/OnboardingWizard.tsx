@@ -7,16 +7,28 @@ interface OnboardingWizardProps {
 }
 
 const STEPS = ["Welcome", "Hooks", "Done"] as const;
+type Harness = "claude" | "codex";
+type HookSetup = {
+  configuring: boolean;
+  result: "success" | "error" | null;
+  error: string | null;
+  path: string | null;
+};
+
+const EMPTY_HOOK_SETUP: HookSetup = {
+  configuring: false,
+  result: null,
+  error: null,
+  path: null,
+};
 
 export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const [step, setStep] = useState(0);
   const [envInfo, setEnvInfo] = useState<EnvironmentInfo | null>(null);
-  const [hookConfiguring, setHookConfiguring] = useState(false);
-  const [hookResult, setHookResult] = useState<"success" | "error" | null>(
-    null,
-  );
-  const [hookError, setHookError] = useState<string | null>(null);
-  const [hookPath, setHookPath] = useState<string | null>(null);
+  const [hookSetup, setHookSetup] = useState<Record<Harness, HookSetup>>({
+    claude: { ...EMPTY_HOOK_SETUP },
+    codex: { ...EMPTY_HOOK_SETUP },
+  });
   const [showManual, setShowManual] = useState(false);
 
   const loadEnv = useCallback(async () => {
@@ -32,22 +44,31 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
     loadEnv();
   }, [loadEnv]);
 
-  const handleConfigureHooks = async () => {
-    setHookConfiguring(true);
-    setHookResult(null);
-    setHookError(null);
+  const handleConfigureHooks = async (harness: Harness) => {
+    setHookSetup((current) => ({
+      ...current,
+      [harness]: { ...EMPTY_HOOK_SETUP, configuring: true },
+    }));
 
     try {
-      // Deploys the bundled cue-hook to ~/.claude/hooks/cue-hook and wires it
-      // into ~/.claude/settings.json. Returns the deployed script path.
-      const path = await invoke<string>("configure_hooks");
-      setHookPath(path);
-      setHookResult("success");
+      const command = harness === "claude"
+        ? "configure_hooks"
+        : "install_cue_codex_hooks";
+      const path = await invoke<string>(command);
+      setHookSetup((current) => ({
+        ...current,
+        [harness]: { configuring: false, result: "success", error: null, path },
+      }));
     } catch (err) {
-      setHookResult("error");
-      setHookError(String(err));
-    } finally {
-      setHookConfiguring(false);
+      setHookSetup((current) => ({
+        ...current,
+        [harness]: {
+          configuring: false,
+          result: "error",
+          error: String(err),
+          path: null,
+        },
+      }));
     }
   };
 
@@ -146,10 +167,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         )}
         {step === 1 && (
           <StepHooks
-            configuring={hookConfiguring}
-            result={hookResult}
-            error={hookError}
-            hookPath={hookPath}
+            setups={hookSetup}
             showManual={showManual}
             onConfigure={handleConfigureHooks}
             onToggleManual={() => setShowManual(!showManual)}
@@ -206,8 +224,8 @@ function StepWelcome({
         Welcome to Cue
       </h2>
       <p className="text-sm text-white/60 mb-6">
-        Monitor your Claude Code sessions with real-time status indicators and
-        usage tracking.
+        Monitor Claude Code and Codex sessions together with real-time status
+        indicators and usage tracking.
       </p>
 
       {!envInfo ? (
@@ -254,6 +272,18 @@ function StepWelcome({
                 : "Not yet created"
             }
             ok={envInfo.claudeSettingsExists}
+          />
+
+          <EnvRow
+            label="Codex"
+            value={envInfo.codexFound ? "Installed (Codex home found)" : "Not found"}
+            ok={envInfo.codexFound}
+          />
+
+          <EnvRow
+            label="Codex Hooks"
+            value={envInfo.codexHooksExists ? "Found (hooks.json)" : "Not yet configured"}
+            ok={envInfo.codexHooksExists}
           />
 
           {envInfo.wslDistros.length > 0 && (
@@ -323,20 +353,14 @@ function EnvRow({
 // ---------------------------------------------------------------------------
 
 interface StepHooksProps {
-  configuring: boolean;
-  result: "success" | "error" | null;
-  error: string | null;
-  hookPath: string | null;
+  setups: Record<Harness, HookSetup>;
   showManual: boolean;
-  onConfigure: () => void;
+  onConfigure: (harness: Harness) => void;
   onToggleManual: () => void;
 }
 
 function StepHooks({
-  configuring,
-  result,
-  error,
-  hookPath,
+  setups,
   showManual,
   onConfigure,
   onToggleManual,
@@ -347,43 +371,15 @@ function StepHooks({
         Configure Hooks
       </h2>
       <p className="text-sm text-white/60 mb-6">
-        Cue uses Claude Code hooks to track session states. This installs the
-        hook script to <code className="bg-white/10 px-1 rounded">~/.claude/hooks/cue-hook</code> and
-        registers it in your <code className="bg-white/10 px-1 rounded">~/.claude/settings.json</code>.
+        Enable either harness independently. Cue merges only its own hook
+        entries into each provider's config and leaves unrelated settings in place.
         Requires Python 3 on your PATH.
       </p>
 
-      <button
-        onClick={onConfigure}
-        disabled={configuring}
-        className={`w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors ${
-          result === "success"
-            ? "bg-green-500/20 text-green-400"
-            : result === "error"
-              ? "bg-red-500/20 text-red-400"
-              : "bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
-        } disabled:opacity-50`}
-      >
-        {configuring
-          ? "Configuring..."
-          : result === "success"
-            ? "Hooks Configured Successfully"
-            : result === "error"
-              ? "Configuration Failed -- Try Manual Setup"
-              : "Configure Hooks Automatically"}
-      </button>
-
-      {result === "error" && error && (
-        <p className="mt-2 text-xs text-red-400/70">{error}</p>
-      )}
-
-      {result === "success" && (
-        <p className="mt-2 text-xs text-green-400/70">
-          Hook installed{hookPath ? <> to <code className="bg-white/10 px-1 rounded">{hookPath}</code></> : null} and
-          registered. Existing settings were backed up to{" "}
-          <code className="bg-white/10 px-1 rounded">settings.json.bak</code>.
-        </p>
-      )}
+      <div className="space-y-3">
+        <HarnessSetupCard harness="claude" setup={setups.claude} onConfigure={onConfigure} />
+        <HarnessSetupCard harness="codex" setup={setups.codex} onConfigure={onConfigure} />
+      </div>
 
       {/* Manual Instructions */}
       <div className="mt-4">
@@ -397,11 +393,8 @@ function StepHooks({
         {showManual && (
           <div className="mt-3 p-4 rounded-lg bg-white/5 border border-white/10">
             <p className="text-xs text-white/60 mb-2">
-              Add these entries to your{" "}
-              <code className="bg-white/10 px-1 rounded">
-                ~/.claude/settings.json
-              </code>{" "}
-              under the <code className="bg-white/10 px-1 rounded">"hooks"</code> key:
+              Claude hooks live in <code className="bg-white/10 px-1 rounded">~/.claude/settings.json</code>;
+              run the shared script as <code className="bg-white/10 px-1 rounded">python3 ~/.claude/hooks/cue-hook &lt;state&gt;</code>.
             </p>
             <pre className="text-xs text-white/50 overflow-x-auto whitespace-pre-wrap">
 {`"hooks": {
@@ -427,9 +420,57 @@ function StepHooks({
               <code className="bg-white/10 px-1 rounded">python3 ~/.claude/hooks/cue-hook</code> (the
               interpreter path plus the full path to the cue-hook script).
             </p>
+            <p className="text-xs text-white/50 mt-4">
+              Codex hooks live in <code className="bg-white/10 px-1 rounded">$CODEX_HOME/hooks.json</code>
+              (normally <code className="bg-white/10 px-1 rounded">~/.codex/hooks.json</code>). Codex timeout
+              values are seconds, and commands use <code className="bg-white/10 px-1 rounded">--harness codex</code>.
+              Cue discovers open root sessions independently. Restart Codex after changing hooks, open a trusted project,
+              run <code className="bg-white/10 px-1 rounded">/hooks</code>, then enable and trust Cue's command hooks.
+              Cue never bypasses this opt-in step.
+            </p>
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function HarnessSetupCard({
+  harness,
+  setup,
+  onConfigure,
+}: {
+  harness: Harness;
+  setup: HookSetup;
+  onConfigure: (harness: Harness) => void;
+}) {
+  const label = harness === "claude" ? "Claude Code" : "Codex";
+  const config = harness === "claude" ? "~/.claude/settings.json" : "$CODEX_HOME/hooks.json";
+  return (
+    <div className="rounded-lg bg-white/5 border border-white/10 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm text-white/80">{label}</div>
+          <div className="text-xs text-white/35">{config}</div>
+        </div>
+        <button
+          onClick={() => onConfigure(harness)}
+          disabled={setup.configuring}
+          className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+            setup.result === "success"
+              ? "bg-green-500/20 text-green-400"
+              : setup.result === "error"
+                ? "bg-red-500/20 text-red-400"
+                : "bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
+          } disabled:opacity-50`}
+        >
+          {setup.configuring ? "Configuring..." : setup.result === "success" ? "Configured" : "Enable"}
+        </button>
+      </div>
+      {setup.error && <p className="mt-2 text-xs text-red-400/70">{setup.error}</p>}
+      {setup.result === "success" && setup.path && (
+        <p className="mt-2 text-xs text-green-400/60 truncate">Installed to {setup.path}</p>
+      )}
     </div>
   );
 }

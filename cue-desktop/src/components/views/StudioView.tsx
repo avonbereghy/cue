@@ -1,6 +1,6 @@
 import React, { useCallback, useState } from "react";
 import { openSession } from "@/lib/openSession";
-import type { EnrichedSession, PermissionRequest, SubagentMetrics } from "@/lib/types";
+import { getSessionKey, type EnrichedSession, type PermissionRequest, type SubagentMetrics } from "@/lib/types";
 import {
   isActiveState, contextRampRgb, rgbCss, permissionModeMeta,
   aggregateMetrics, branchStatus, contextDisplay, splitSubagents,
@@ -156,8 +156,8 @@ function StudioCardBase({ session, timerDisplay, permissionsEnabled, pending, on
   };
 
   return (
-    <article className={`card s-${state}`} style={{ "--rot": rot(info.id) } as React.CSSProperties} onClick={onCardClick} aria-label={`${STATE_LABEL[state] ?? state}: ${session.displayTitle}`}>
-      {onDismiss && <DismissButton sessionId={info.id} title={session.displayTitle} onDismiss={onDismiss} />}
+    <article className={`card s-${state}`} style={{ "--rot": rot(getSessionKey(info)) } as React.CSSProperties} onClick={onCardClick} aria-label={`${STATE_LABEL[state] ?? state}: ${session.displayTitle}`}>
+      {onDismiss && <DismissButton sessionId={getSessionKey(info)} title={session.displayTitle} onDismiss={onDismiss} />}
       <span className="spine" />
       {state === "waiting" && <div className="needtab"><span className="ping" />Needs you</div>}
       {state === "done" && <WaxSeal />}
@@ -169,7 +169,7 @@ function StudioCardBase({ session, timerDisplay, permissionsEnabled, pending, on
 
       <DecisionBar session={session} pending={permissionsEnabled ? pending : []} onApprove={onApprove} onDeny={onDeny} />
 
-      <h2 className="title">{session.displayTitle}</h2>
+      <h2 className="title">{session.displayTitle} <small>{(info.harness ?? "claude").toUpperCase()}</small></h2>
       {subtitle && <div className="csub">{subtitle}</div>}
 
       <div className="loc">
@@ -259,7 +259,7 @@ export function StudioView(props: SkinViewProps) {
     session,
     timerDisplay,
     permissionsEnabled: withPerms && permissionsEnabled,
-    pending: withPerms ? (pendingBySession[session.info.id] ?? []) : [],
+    pending: withPerms ? (pendingBySession[getSessionKey(session.info)] ?? []) : [],
     onApprove: approvePermission,
     onDeny: denyPermission,
     isDuplicate: withPerms ? dupSet.has(session.displayTitle) : false,
@@ -287,11 +287,11 @@ export function StudioView(props: SkinViewProps) {
             {total === 0 && revivedSessions.length === 0 && props.restingSessions.length === 0 && (
               <div className="studio-empty">
                 <div className="h">A clear desk</div>
-                <div className="p">Cards are laid out here as Claude Code sessions begin.</div>
+                <div className="p">Cards are laid out here as Claude Code or Codex sessions begin.</div>
               </div>
             )}
             {ordered.map((session) => (
-              <StudioCard key={session.info.id} {...cardProps(session, true)} />
+              <StudioCard key={getSessionKey(session.info)} {...cardProps(session, true)} />
             ))}
           </main>
 
@@ -305,16 +305,17 @@ export function StudioView(props: SkinViewProps) {
               </div>
               <div className="board">
                 {revivedSessions.map(({ session, revivedAt }) => {
-                  const clicks = props.reviveClicks[session.info.id] ?? 0;
+                  const sessionKey = getSessionKey(session.info);
+                  const clicks = props.reviveClicks[sessionKey] ?? 0;
                   const remaining = props.reviveClicksRequired - clicks;
                   const label = clicks === 0 ? "Revive" : remaining === 1 ? "Confirm!" : `Revive (${clicks}/${props.reviveClicksRequired})`;
                   return (
-                    <div key={session.info.id} style={{ position: "relative", minWidth: 0 }}>
+                    <div key={sessionKey} style={{ position: "relative", minWidth: 0 }}>
                       <StudioCard {...cardProps(session, false)} />
                       <div className="revive-row">
                         <span className="age">ended {props.formatReviveElapsed(revivedAt)} ago</span>
                         <button className="revive" onClick={() => props.onReviveClick(session)}>{label}</button>
-                        <button className="dismiss" onClick={() => props.onDismissRevived(session.info.id)}>Dismiss</button>
+                        <button className="dismiss" onClick={() => props.onDismissRevived(sessionKey)}>Dismiss</button>
                       </div>
                     </div>
                   );

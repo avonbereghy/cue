@@ -103,6 +103,27 @@ pub fn claude_projects_path_from_override(config_dir: &str) -> PathBuf {
     expand_tilde(config_dir.trim(), &home_dir()).join("projects")
 }
 
+/// Codex's configuration directory. `CODEX_HOME` is the documented override;
+/// blank values fall back to `~/.codex`, matching the Codex CLI and cue-hook.
+pub fn codex_config_dir() -> PathBuf {
+    codex_config_dir_for(&home_dir())
+}
+
+pub fn codex_config_dir_for(home: &Path) -> PathBuf {
+    resolve_codex_config_dir(env::var("CODEX_HOME").ok().as_deref(), home)
+}
+
+/// Date-sharded Codex rollout directory (`$CODEX_HOME/sessions`).
+pub fn codex_sessions_path() -> PathBuf {
+    codex_config_dir().join("sessions")
+}
+
+/// Codex's per-thread writer-lock directory. A held lock identifies an open
+/// thread even when Cue hooks were installed after the Codex client started.
+pub fn codex_thread_writer_locks_path() -> PathBuf {
+    codex_config_dir().join("thread-writer-locks")
+}
+
 /// Directory for saved signal presets (extracted frequency envelopes).
 pub fn presets_dir() -> PathBuf {
     if cfg!(target_os = "macos") {
@@ -173,6 +194,16 @@ fn resolve_claude_config_dir(env_override: Option<&str>, home: &Path) -> PathBuf
         }
     }
     home.join(".claude")
+}
+
+fn resolve_codex_config_dir(env_override: Option<&str>, home: &Path) -> PathBuf {
+    match env_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => expand_tilde(value, home),
+        None => home.join(".codex"),
+    }
 }
 
 /// Expand a leading `~` / `~/` against `home`, mirroring `os.path.expanduser`.

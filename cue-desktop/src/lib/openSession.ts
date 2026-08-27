@@ -3,7 +3,7 @@ import type { EnrichedSession } from "./types";
 
 /**
  * Open a session from a click. Tries to focus the *exact* terminal tab running
- * that session's Claude process (iTerm2 / Apple Terminal, matched by the
+ * that session's harness process (iTerm2 / Apple Terminal, matched by the
  * process TTY) so that, when several sessions share one project, clicking a card
  * lands on the right one. Falls back to opening the project in its editor / the
  * file manager when the terminal can't be targeted (VS Code, Cursor, unknown

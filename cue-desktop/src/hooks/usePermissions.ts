@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import type { PermissionRequest, PermissionLogEntry, EnrichedSession } from "@/lib/types";
+import { getSessionKey, type PermissionRequest, type PermissionLogEntry, type EnrichedSession } from "@/lib/types";
 
 export function usePermissions() {
   const [pendingBySession, setPendingBySession] = useState<
@@ -130,7 +130,7 @@ export function usePermissions() {
       const waitingIds = new Set(
         event.payload
           .filter((s) => s.info.state === "waiting")
-          .map((s) => s.info.id),
+          .map((s) => getSessionKey(s.info)),
       );
       const wouldRemove = Object.keys(pendingRef.current).some(
         (sessionId) => !waitingIds.has(sessionId),

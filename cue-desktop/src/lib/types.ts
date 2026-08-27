@@ -10,7 +10,14 @@ declare global {
 }
 
 export interface SessionInfo {
+  /** Native session/thread id assigned by the harness; use for copy/resume. */
   id: string;
+  /** Agent harness that owns this session. Legacy entries deserialize as Claude. */
+  harness?: "claude" | "codex";
+  /** Collision-free Cue identity used for React keys, routing, and caches. */
+  sessionKey?: string;
+  /** Harness-reported transcript path (validated by Rust before reading). */
+  transcriptPath?: string;
   workspace: string;
   /** One of: "working", "waiting", "error", "subagent", "idle", "done" */
   state: string;
@@ -26,15 +33,21 @@ export interface SessionInfo {
   teamName?: string;
   /** Agent name within the team (e.g. "code-reviewer"). */
   agentName?: string;
-  /** PID of the owning Claude Code process — used by backend liveness check. */
+  /** PID of the owning harness process — used by backend liveness checks. */
   pid?: number;
-  /** Most recent Claude Code permission mode seen by the hook.
+  /** Most recent harness permission mode seen by the hook (Claude values shown).
    *  "default" | "plan" | "acceptEdits" | "bypassPermissions". */
   permissionMode?: string;
   /** Error category from the StopFailure hook, set only when state === "error"
    *  and the failure was API-level (e.g. "rate_limit", "billing_error",
    *  "authentication_failed"). Distinguishes API failures from tool failures. */
   errorType?: string;
+}
+
+/** Collision-free identity for routing and React state. The fallback keeps
+ * pre-multi-harness test fixtures and older backend IPC snapshots readable. */
+export function getSessionKey(info: Pick<SessionInfo, "id" | "harness" | "sessionKey">): string {
+  return info.sessionKey || `${info.harness || "claude"}:${info.id}`;
 }
 
 export interface SubagentMetrics {
@@ -636,6 +649,8 @@ export interface EnvironmentInfo {
   wslDistros: string[];
   claudeCodeFound: boolean;
   claudeSettingsExists: boolean;
+  codexFound: boolean;
+  codexHooksExists: boolean;
 }
 
 /** State colors matching macOS app */

@@ -781,6 +781,9 @@ mod tests {
             .as_secs_f64();
         let info = SessionInfo {
             id: "test".to_string(),
+            harness: "claude".to_string(),
+            session_key: "claude:test".to_string(),
+            transcript_path: None,
             workspace: "/tmp/test-project".to_string(),
             state: state.to_string(),
             last_activity: now,

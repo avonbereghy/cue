@@ -1,6 +1,6 @@
 import React, { useCallback, useState } from "react";
 import { openSession } from "@/lib/openSession";
-import type { EnrichedSession, PermissionRequest, SubagentMetrics } from "@/lib/types";
+import { getSessionKey, type EnrichedSession, type PermissionRequest, type SubagentMetrics } from "@/lib/types";
 import {
   isActiveState, contextRampRgb, rgbCss, permissionModeMeta,
   aggregateMetrics, branchStatus, contextDisplay, shortPath, splitSubagents,
@@ -205,12 +205,12 @@ function NightCardBase({ session, index, timerDisplay, permissionsEnabled, pendi
 
   return (
     <article className={`card s-${state} ${alive ? "alive" : ""} ${dim ? "dim" : ""}`} style={{ animationDelay: `${Math.min(index, 12) * 0.07}s` }} onClick={onCardClick} aria-label={`${STATE_WORD[state] ?? state}: ${session.displayTitle}`}>
-      {onDismiss && <DismissButton sessionId={info.id} title={session.displayTitle} onDismiss={onDismiss} />}
+      {onDismiss && <DismissButton sessionId={getSessionKey(info)} title={session.displayTitle} onDismiss={onDismiss} />}
       <span className="spine" />
       <div className="chead">
         <StateMark state={state} />
         <div className="titleblock">
-          <h2 className="ctitle">{session.displayTitle}</h2>
+          <h2 className="ctitle">{session.displayTitle} <small>{(info.harness ?? "claude").toUpperCase()}</small></h2>
           <span className="statelabel">{STATE_WORD[state] ?? state}</span>
           {subtitle && <div className="csub">{subtitle}</div>}
         </div>
@@ -331,17 +331,17 @@ export function NightView(props: SkinViewProps) {
               <div className="night-empty">
                 <LampMark />
                 <div className="h">The study is quiet</div>
-                <div className="p">Sessions light up here as Claude Code begins working.</div>
+                <div className="p">Sessions light up here as Claude Code or Codex begins working.</div>
               </div>
             )}
             {ordered.map((session, idx) => (
               <NightCard
-                key={session.info.id}
+                key={getSessionKey(session.info)}
                 session={session}
                 index={idx}
                 timerDisplay={timerDisplay}
                 permissionsEnabled={permissionsEnabled}
-                pending={pendingBySession[session.info.id] ?? []}
+                pending={pendingBySession[getSessionKey(session.info)] ?? []}
                 onApprove={approvePermission}
                 onDeny={denyPermission}
                 isDuplicate={dupSet.has(session.displayTitle)}
@@ -362,16 +362,17 @@ export function NightView(props: SkinViewProps) {
               </div>
               <div className="grid">
                 {revivedSessions.map(({ session, revivedAt }) => {
-                  const clicks = props.reviveClicks[session.info.id] ?? 0;
+                  const sessionKey = getSessionKey(session.info);
+                  const clicks = props.reviveClicks[sessionKey] ?? 0;
                   const remaining = props.reviveClicksRequired - clicks;
                   const label = clicks === 0 ? "Revive" : remaining === 1 ? "Confirm!" : `Revive (${clicks}/${props.reviveClicksRequired})`;
                   return (
-                    <div key={session.info.id} style={{ position: "relative", minWidth: 0 }}>
+                    <div key={sessionKey} style={{ position: "relative", minWidth: 0 }}>
                       <NightCard session={session} index={0} timerDisplay={timerDisplay} permissionsEnabled={false} pending={[]} onApprove={approvePermission} onDeny={denyPermission} showConfigCounts={showConfigCounts} showUsage={showUsage} />
                       <div className="revive-row">
                         <span className="age">ended {props.formatReviveElapsed(revivedAt)} ago</span>
                         <button className="revive" onClick={() => props.onReviveClick(session)}>{label}</button>
-                        <button className="dismiss" onClick={() => props.onDismissRevived(session.info.id)}>Dismiss</button>
+                        <button className="dismiss" onClick={() => props.onDismissRevived(sessionKey)}>Dismiss</button>
                       </div>
                     </div>
                   );

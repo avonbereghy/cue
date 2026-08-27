@@ -409,6 +409,49 @@ pub fn validate_session_id(id: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Validate Cue's collision-free `<harness>:<native-id>` identity. The key is
+/// never used as a path component, but it crosses the untrusted sessions.json
+/// and frontend IPC boundaries and indexes permission/resting/session maps.
+/// Keeping the grammar exact prevents ambiguous aliases (`claude:x:y`) and
+/// ensures callers cannot smuggle an unsupported harness into provider actions.
+pub fn validate_session_key(key: &str) -> io::Result<()> {
+    let (harness, native_id) = key.split_once(':').ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "session key must be <harness>:<native-id>",
+        )
+    })?;
+    if !matches!(harness, "claude" | "codex") || native_id.contains(':') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "session key has an unsupported harness or ambiguous id",
+        ));
+    }
+    validate_session_id(native_id)
+}
+
+/// Validate a provider-reported transcript path against its config root.
+/// Canonicalizing both sides blocks traversal and directory/file symlink
+/// escapes before a provider parser sees the path.
+pub fn validate_transcript_path(raw: &str, provider_root: &Path) -> io::Result<PathBuf> {
+    let path = Path::new(raw);
+    if path.extension().and_then(|extension| extension.to_str()) != Some("jsonl") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "transcript must be a JSONL file",
+        ));
+    }
+    let root = provider_root.canonicalize()?;
+    let resolved = path.canonicalize()?;
+    if !resolved.starts_with(&root) || !resolved.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "transcript is outside the provider config directory",
+        ));
+    }
+    Ok(resolved)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -484,6 +527,35 @@ mod tests {
         ] {
             assert!(validate_session_id(bad).is_err(), "should reject {:?}", bad);
         }
+    }
+
+    #[test]
+    fn test_validate_session_key_requires_supported_harness_and_safe_native_id() {
+        assert!(validate_session_key("claude:abc-123").is_ok());
+        assert!(validate_session_key("codex:019d541e-a2c1-7452-9497-71e24b133d5f").is_ok());
+        assert!(validate_session_key("abc-123").is_err());
+        assert!(validate_session_key("aider:abc-123").is_err());
+        assert!(validate_session_key("codex:abc:123").is_err());
+        assert!(validate_session_key("codex:../escape").is_err());
+    }
+
+    #[test]
+    fn test_validate_transcript_path_requires_provider_containment() {
+        let dir = std::env::temp_dir().join(format!("cue_transcript_guard_{}", std::process::id()));
+        let root = dir.join("provider");
+        let outside = dir.join("outside.jsonl");
+        let inside = root.join("sessions/rollout.jsonl");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(inside.parent().unwrap()).unwrap();
+        fs::write(&inside, b"{}\n").unwrap();
+        fs::write(&outside, b"{}\n").unwrap();
+        assert_eq!(
+            validate_transcript_path(inside.to_str().unwrap(), &root).unwrap(),
+            inside.canonicalize().unwrap()
+        );
+        assert!(validate_transcript_path(outside.to_str().unwrap(), &root).is_err());
+        assert!(validate_transcript_path(root.join("not.txt").to_str().unwrap(), &root).is_err());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

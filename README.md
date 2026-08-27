@@ -1,6 +1,6 @@
 # Cue
 
-A simple, visually intuitive way to monitor all your Claude Code sessions at once (working, thinking, waiting, compacting, idle, done, and more), auto-sorted so whatever needs you surfaces first. Menu bar and full dashboard to easily check context. Cross-platform: macOS, Windows, and Linux.
+A simple, visually intuitive way to monitor Claude Code and Codex sessions together (working, thinking, waiting, compacting, idle, done, and more), auto-sorted so whatever needs you surfaces first. Menu bar and full dashboard to easily check context. Cross-platform: macOS, Windows, and Linux.
 
 This was a tech demo for some animations, but it became more useful than that.
 
@@ -21,12 +21,12 @@ This was a tech demo for some animations, but it became more useful than that.
 
 ## Status Indicators
 
-Each Claude Code session appears as a colored dot in your menu bar / system tray:
+Each coding-agent session appears as a colored dot in your menu bar / system tray:
 
 | Color | Meaning |
 |-------|---------|
-| Blinking white | Claude is working |
-| Blinking orange | Claude is thinking (prompt received, before tools run) |
+| Blinking white | The agent is working |
+| Blinking orange | The agent is thinking (prompt received, before tools run) |
 | Blinking cyan | Subagent(s) running |
 | Yellow | Waiting for your permission |
 | Blinking periwinkle | Compacting the context window |
@@ -42,6 +42,7 @@ Multiple sessions show as a grid of dots — see all your sessions at once. Clic
 ### Session Monitoring
 - **Real-time status** — polls every second, blink animation for active sessions
 - **Multi-session support** — tracks up to 8 concurrent sessions as a dot grid
+- **Multi-harness support** — Claude Code and Codex sessions share one dashboard while keeping provider-native IDs, permissions, caches, and resume actions isolated
 - **Subagent awareness** — tracks active subagent count per session, displays "Subagents(N)" badge with live count; parent sessions stay in subagent state while children are running (won't falsely drop to idle/error/waiting from subagent events)
 - **Session dashboard** — detailed view with workspace, duration, model, git branch, tool usage, context usage bar
 - **Token metrics** — incremental JSONL parsing for input/output/cache token counts per session, aggregated across parent and all subagents
@@ -64,7 +65,7 @@ Multiple sessions show as a grid of dots — see all your sessions at once. Clic
 - **Context display** — configurable context bar format: percent, token count, remaining, or both
 
 ### Permissions
-- **Permission approval** — approve/deny Claude Code permissions directly from the dashboard via HTTP hook
+- **Permission approval** — approve/deny Claude Code or Codex permissions directly from the dashboard via HTTP hook
 - **Smart summaries** — human-readable tool descriptions ("Run: `npm install`", "Edit: `src/main.rs`")
 - **Audit log** — every permission decision logged to JSONL with timestamp and tool details
 
@@ -92,7 +93,7 @@ Multiple sessions show as a grid of dots — see all your sessions at once. Clic
 
 ### Prerequisites
 
-- **Claude Code** installed (the `~/.claude` directory must exist).
+- **Claude Code and/or Codex** installed. Each integration is independently opt-in.
 - **Python 3** on your `PATH` — Cue's hook is a small Python 3 script. Verify with `python3 --version` (macOS/Linux) or `python --version` (Windows).
 - For building from source: **Node.js 18+** and the **Rust toolchain** (`rustup`).
 
@@ -110,7 +111,11 @@ Then clear the Gatekeeper quarantine once (Cue is unsigned — see the note belo
 
 **All platforms — direct download:**
 
-Download the installer for your platform from the [latest release](https://github.com/avonbereghy/cue/releases/latest), or build from source (below). On first launch, the **onboarding wizard** installs the hook for you: it copies the bundled `cue-hook` script to `~/.claude/hooks/cue-hook` and registers it in `~/.claude/settings.json` (your original settings are backed up once to `settings.json.bak`, preserved across reinstalls). No manual editing required — and no dependency on any pre-existing setup.
+Download the installer for your platform from the [latest release](https://github.com/avonbereghy/cue/releases/latest), or build from source (below). On first launch, the **onboarding wizard** offers separate enable buttons for Claude Code and Codex. Enabling one never modifies the other's configuration. Cue merges its entries into `~/.claude/settings.json` or `$CODEX_HOME/hooks.json` and makes a one-time `.bak` backup while preserving unrelated hooks and settings.
+
+Cue discovers open Codex root sessions from `$CODEX_HOME/sessions` and Codex's thread-writer locks, so already-running Codex clients appear even if Cue's hooks were installed later. Hooks add the precise event states (such as permission waiting and compaction). They require one additional, explicit trust step: restart the Codex client after installing or changing hooks, run `/hooks`, and enable/trust the Cue commands. Cue does not bypass this prompt. Codex hook timeouts are written in **seconds**, while Claude Code's settings use **milliseconds**.
+
+Maintainers can use the [Codex integration smoke test](docs/CODEX_SMOKE_TEST.md) for release validation against an installed Codex CLI.
 
 > **macOS — opening the app the first time.** Cue is a free, personal open-source project and its downloads are **not signed with an Apple Developer ID**, so on first launch macOS Gatekeeper will say Cue is "from an unidentified developer" or "cannot be opened." This is expected and only needs handling once — do any one of:
 > - **Right-click** (or Control-click) **Cue** in Finder → **Open**, then click **Open** in the dialog; or
@@ -147,7 +152,7 @@ npm run tauri dev
 
 ## How It Works
 
-Cue uses [Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) to track session state. A Python hook script writes session status to a platform-specific `sessions.json` on every lifecycle event:
+Cue uses native lifecycle hooks from Claude Code and Codex. A shared Python writer normalizes both providers into a platform-specific `sessions.json`; each entry carries a `harness`, the provider's native session ID, and a collision-free `sessionKey` such as `claude:abc` or `codex:abc`.
 
 ```
 SessionStart       → idle
@@ -167,7 +172,9 @@ Notification       → waiting      (permission / elicitation dialogs)
 SessionEnd         → remove
 ```
 
-The `waiting` and `done` states are refined by the Rust backend from the transcript (e.g. `waiting` is cleared once you answer, `done` is set on turn completion). The app reads `sessions.json` and renders the dot grid. Metrics are parsed incrementally from Claude's `.jsonl` conversation logs — only new bytes are read on each cycle, keeping CPU near 0%.
+Codex currently exposes `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`, `Stop`, and `SessionEnd`. Cue registers only those supported events; Claude-only events such as `Notification`, `TaskCompleted`, `PostToolUseFailure`, and `StopFailure` remain on the Claude adapter.
+
+The `waiting` and `done` states are refined by the Rust backend from the transcript. Claude conversation logs and Codex rollout JSONL are parsed by separate bounded, incremental parsers, so provider schemas and caches cannot contaminate one another. Only new bytes are read on each cycle, keeping CPU near 0%.
 
 ### Rate limits (optional statusline bridge)
 
@@ -191,19 +198,19 @@ The hook tracks an `activeSubagents` counter per session. While subagents are ru
 
 Sessions are never pruned by timeout (except `error` state after 10 minutes). Only the `SessionEnd` hook removes a session. This means `done` sessions (waiting at the prompt for the next input) remain visible until the terminal is closed.
 
-When a session disappears from the active list, it moves to the "Ended Sessions" section where it can be revived with a 3-click confirmation that opens a new terminal with `claude --resume <session_id>`.
+When a session disappears from the active list, it moves to the "Ended Sessions" section. A 3-click confirmation resumes it with the owning provider: `claude --resume <session_id>` or `codex resume <session_id>`.
 
 ## Permission Approval
 
-The desktop app includes a localhost HTTP server (`127.0.0.1:3002`) that integrates with Claude Code's `PermissionRequest` hook. When Claude Code needs permission to run a tool, the request appears inline under the relevant session in the dashboard:
+The desktop app includes an authenticated localhost HTTP server (`127.0.0.1:3002`) that integrates with both providers' `PermissionRequest` hooks. When an agent needs permission to run a tool, the request appears inline under the correct provider-qualified session:
 
 - **Smart summary** — "Run: `npm install`", "Read: `package.json`", "Edit: `src/main.rs`"
 - **Expandable details** — full `tool_input` JSON for review
-- **Approve / Deny buttons** — decision is sent back to Claude Code immediately
+- **Approve / Deny buttons** — decision is returned in the originating provider's native hook schema
 - **No auto-timeout** — requests stay pending until you explicitly decide
 - **Audit log** — every decision is recorded to `permission-log.jsonl`
 
-If the desktop app isn't running, Claude Code falls back to its normal terminal/VSCode permission flow.
+If the desktop app isn't running, the hook fails closed and the provider falls back to its normal permission flow.
 
 ## CLI Usage
 
@@ -227,12 +234,12 @@ The CLI displays the same data as the GUI dashboard: session ID, messages, input
 
 ## Uninstall
 
-1. In Cue: **Settings → Installation Status → Uninstall** strips the hook entries from `~/.claude/settings.json` automatically.
+1. In Cue Settings, uninstall Claude Code hooks and Codex hooks independently, or choose **Uninstall Cue** to remove both integrations.
 2. Remove the app (`rm -rf ~/Applications/Cue.app` on macOS; uninstall the MSI/`.deb` or delete the AppImage elsewhere).
-3. Optionally delete the deployed hook script: `rm ~/.claude/hooks/cue-hook`.
+3. If removing manually, delete only Cue's scripts: `~/.claude/hooks/cue-hook` and `$CODEX_HOME/hooks/cue-hook`.
 4. If you enabled the rate-limit bridge, clear the `statusLine` setting too.
 
-(You can also remove the hook entries by hand — search `~/.claude/settings.json` for `cue-hook`.)
+(You can also remove entries by hand — search `~/.claude/settings.json` and `$CODEX_HOME/hooks.json` for `cue-hook`. Cue's automatic uninstall leaves every unrelated hook untouched.)
 
 ## Architecture
 
@@ -242,6 +249,7 @@ cue-desktop/               # Cross-platform app (Tauri v2)
 │   ├── lib.rs                    # Tauri commands, timers, tray + permission server
 │   ├── session_monitor.rs        # Session polling + JSONL path resolution
 │   ├── jsonl_parser.rs           # Line-by-line JSONL parsing (tools, todos, tasks)
+│   ├── codex_jsonl_parser.rs     # Incremental Codex rollout parser
 │   ├── tray.rs                   # Dot grid icon rendering (tiny-skia)
 │   ├── cli.rs                    # CLI --status/--pretty/--compact with full JSONL enrichment
 │   ├── git_status.rs             # Per-workspace git dirty/ahead/behind detection
@@ -293,7 +301,7 @@ Directions I'm exploring — not commitments or timelines. Ideas and feedback we
 
 **Exploring**
 
-- **Beyond Claude Code — pluggable harness adapters.** Monitor other agent harnesses (Codex, Aider, opencode, …) through per-tool adapters that map each one's lifecycle into Cue's shared state model — turning Cue into a single pane of glass for all your agents. CLI agents are the tractable path; editor-based tools (e.g. Cursor) are harder and may need their own integration. This same adapter layer lets orchestrators and wrappers feed Cue custom session context (building on the `CUE_SUBPROCESS_LABEL` hook).
+- **More harness adapters.** Claude Code and Codex establish the provider boundary; Aider, opencode, and other CLI agents can follow with isolated lifecycle and transcript adapters.
 - **LAN multi-device monitoring** — one Cue watching sessions across machines on your local network. Strictly opt-in, authenticated, and LAN-only — no cloud, no telemetry.
 - **At-a-glance away from the desk** — a lightweight companion view, likely built on the same authenticated local-network layer as LAN monitoring.
 
@@ -305,7 +313,7 @@ Cue is free and open source. If it saves you time, you can support development:
 
 ## Disclaimer
 
-Cue is an independent, open-source project and is **not affiliated with, endorsed by, or sponsored by Anthropic**. "Claude" and "Claude Code" are trademarks of Anthropic, PBC, used here only to describe compatibility.
+Cue is an independent, open-source project and is **not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI**. "Claude", "Claude Code", "OpenAI", and "Codex" are trademarks of their respective owners, used here only to describe compatibility.
 
 ## License
 

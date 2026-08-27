@@ -1,6 +1,6 @@
-//! Localhost HTTP server for Claude Code PermissionRequest hooks.
+//! Localhost HTTP server for Claude Code and Codex PermissionRequest hooks.
 //!
-//! Listens on 127.0.0.1:{port} for POST /permission-request from Claude Code.
+//! Listens on 127.0.0.1:{port} for POST /permission-request from either harness.
 //! Holds the HTTP connection open until the user approves/denies via the dashboard.
 //! GET /health returns 200 for testing.
 
