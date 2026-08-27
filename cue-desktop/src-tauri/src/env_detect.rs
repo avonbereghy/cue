@@ -1,6 +1,6 @@
 //! Environment detection and hook configuration.
 //!
-//! Detects platform capabilities and configures Claude Code hooks.
+//! Detects platform capabilities and configures Claude Code / Codex hooks.
 //! No network calls or subprocess invocations — uses filesystem and
 //! environment variable inspection only.
 
@@ -22,6 +22,8 @@ pub struct EnvironmentInfo {
     pub wsl_distros: Vec<String>,
     pub claude_code_found: bool,
     pub claude_settings_exists: bool,
+    pub codex_found: bool,
+    pub codex_hooks_exists: bool,
 }
 
 /// Detect the current platform environment.
@@ -35,6 +37,8 @@ pub fn detect_environment() -> EnvironmentInfo {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let claude_dir = home.join(".claude");
     let claude_settings = claude_dir.join("settings.json");
+    let codex_dir = crate::paths::codex_config_dir_for(&home);
+    let codex_hooks = codex_dir.join("hooks.json");
 
     EnvironmentInfo {
         platform,
@@ -44,6 +48,8 @@ pub fn detect_environment() -> EnvironmentInfo {
         wsl_distros,
         claude_code_found: claude_dir.exists(),
         claude_settings_exists: claude_settings.exists(),
+        codex_found: codex_dir.exists(),
+        codex_hooks_exists: codex_hooks.exists(),
     }
 }
 
@@ -184,6 +190,23 @@ pub const HOOK_EVENTS: &[(&str, &str)] = &[
     ("SessionEnd", "remove"),
 ];
 
+/// Codex exposes this lifecycle subset today. Claude events without native
+/// equivalents (Notification, TaskCompleted, PostToolUseFailure, StopFailure) are omitted
+/// deliberately instead of being approximated with misleading state changes.
+pub const CODEX_HOOK_EVENTS: &[(&str, &str)] = &[
+    ("SessionStart", "idle"),
+    ("UserPromptSubmit", "thinking"),
+    ("PreToolUse", "working"),
+    ("PostToolUse", "working"),
+    ("PermissionRequest", "waiting"),
+    ("SubagentStart", "subagent"),
+    ("SubagentStop", "subagent_stop"),
+    ("PreCompact", "compacting"),
+    ("PostCompact", "working"),
+    ("Stop", "idle"),
+    ("SessionEnd", "remove"),
+];
+
 /// Shell metacharacters that must not appear in raw user-supplied hook
 /// path inputs (pre-expansion). The post-expansion check below uses a
 /// stricter allowlist, but at the raw stage we still need to permit `~`
@@ -296,6 +319,15 @@ pub fn deployed_hook_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".claude/hooks/cue-hook"))
 }
 
+/// Standard Codex install location, honoring `CODEX_HOME`.
+pub fn deployed_codex_hook_path() -> PathBuf {
+    codex_hook_path_for(&crate::paths::codex_config_dir())
+}
+
+fn codex_hook_path_for(codex_home: &Path) -> PathBuf {
+    codex_home.join("hooks/cue-hook")
+}
+
 /// Locate a Python 3 interpreter by scanning `PATH` (no subprocess spawn — this
 /// module stays side-effect free). Returns the absolute path to the first
 /// match. Claude Code invokes the hook as `<python> <hook> <state>`, so the
@@ -328,6 +360,33 @@ pub fn find_python() -> Option<PathBuf> {
 /// onboarding wizard and the Settings "reinstall" button — it does not depend
 /// on any pre-existing files outside the app bundle.
 pub fn deploy_bundled_hook(bundled_hook: &std::path::Path) -> Result<String, String> {
+    let dest = deployed_hook_path().ok_or("Cannot determine home directory")?;
+    deploy_hook_script(bundled_hook, &dest)?;
+    configure_hooks_via_interpreter(&dest)?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
+/// Deploy and register the same shared writer for Codex, independently from
+/// Claude. Neither install path nor configuration file is shared, so users can
+/// opt into either harness without changing the other.
+pub fn deploy_bundled_codex_hook(bundled_hook: &std::path::Path) -> Result<String, String> {
+    deploy_bundled_codex_hook_at(bundled_hook, &crate::paths::codex_config_dir())
+}
+
+fn deploy_bundled_codex_hook_at(
+    bundled_hook: &std::path::Path,
+    codex_home: &Path,
+) -> Result<String, String> {
+    let dest = codex_hook_path_for(codex_home);
+    deploy_hook_script(bundled_hook, &dest)?;
+    configure_codex_hooks_via_interpreter_at(&dest, &codex_home.join("hooks.json"))?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
+fn deploy_hook_script(
+    bundled_hook: &std::path::Path,
+    dest: &std::path::Path,
+) -> Result<(), String> {
     let bytes = std::fs::read(bundled_hook).map_err(|e| {
         format!(
             "Could not read the bundled cue-hook script at {}: {e}",
@@ -335,7 +394,6 @@ pub fn deploy_bundled_hook(bundled_hook: &std::path::Path) -> Result<String, Str
         )
     })?;
 
-    let dest = deployed_hook_path().ok_or("Cannot determine home directory")?;
     let hooks_dir = dest
         .parent()
         .ok_or("Invalid hook destination path")?
@@ -346,11 +404,10 @@ pub fn deploy_bundled_hook(bundled_hook: &std::path::Path) -> Result<String, Str
     // atomic_write lands the file at 0600. Because the hook is invoked via the
     // Python interpreter (not executed directly), 0600 is correct and the
     // least-privilege choice — no execute bit required.
-    security::atomic_write(&dest, &bytes)
+    security::atomic_write(dest, &bytes)
         .map_err(|e| format!("Failed to write cue-hook script: {e}"))?;
 
-    configure_hooks_via_interpreter(&dest)?;
-    Ok(dest.to_string_lossy().to_string())
+    Ok(())
 }
 
 /// Build the `<python> <hook>` command prefix and register hook entries.
@@ -362,6 +419,19 @@ pub fn deploy_bundled_hook(bundled_hook: &std::path::Path) -> Result<String, Str
 /// `C:\Program Files\Python\python.exe`) — which the command-safety allowlist
 /// would otherwise reject.
 fn configure_hooks_via_interpreter(hook: &std::path::Path) -> Result<(), String> {
+    let prefix = hook_command_prefix(hook)?;
+    write_hook_settings(&prefix)
+}
+
+fn configure_codex_hooks_via_interpreter_at(
+    hook: &std::path::Path,
+    hooks_path: &Path,
+) -> Result<(), String> {
+    let prefix = hook_command_prefix(hook)?;
+    write_codex_hook_settings_at(hooks_path, &prefix)
+}
+
+fn hook_command_prefix(hook: &std::path::Path) -> Result<String, String> {
     let hook_str = hook.to_string_lossy();
     assert_safe_for_command(&hook_str, "cue-hook")?;
 
@@ -377,8 +447,7 @@ fn configure_hooks_via_interpreter(hook: &std::path::Path) -> Result<(), String>
         .unwrap_or_else(|| "python3".to_string());
     assert_safe_for_command(&interpreter, "python")?;
 
-    let prefix = format!("{} {}", interpreter, hook_str);
-    write_hook_settings(&prefix)
+    Ok(format!("{} {}", interpreter, hook_str))
 }
 
 /// Write/refresh cue-hook entries in `~/.claude/settings.json`.
@@ -459,6 +528,118 @@ fn write_hook_settings_at(settings_path: &Path, command_prefix: &str) -> Result<
     Ok(())
 }
 
+/// Safe merge for Codex's dedicated hooks.json. Codex timeout values are in
+/// seconds (unlike Claude Code's millisecond settings), and SessionEnd has a
+/// documented three-second maximum, so Cue uses one second there.
+fn write_codex_hook_settings_at(hooks_path: &Path, command_prefix: &str) -> Result<(), String> {
+    let existing = if hooks_path.exists() {
+        Some(
+            security::read_to_string_bounded_follow(hooks_path, SETTINGS_JSON_MAX_BYTES)
+                .map_err(|e| format!("Failed to read Codex hooks: {e}"))?,
+        )
+    } else {
+        None
+    };
+    let mut settings: serde_json::Value = match existing {
+        Some(ref content) => serde_json::from_str(content)
+            .map_err(|e| format!("Failed to parse Codex hooks: {e}"))?,
+        None => serde_json::json!({}),
+    };
+
+    if let Some(ref content) = existing {
+        let backup_path = hooks_path.with_extension("json.bak");
+        if !backup_path.exists() {
+            security::atomic_write(&backup_path, content.as_bytes())
+                .map_err(|e| format!("Failed to back up Codex hooks: {e}"))?;
+        }
+    }
+
+    apply_codex_hook_entries(&mut settings, command_prefix)?;
+    let content = serde_json::to_string_pretty(&settings)
+        .map_err(|e| format!("Failed to serialize Codex hooks: {e}"))?;
+    if let Some(parent) = hooks_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+    }
+    let write_target = hooks_path
+        .canonicalize()
+        .unwrap_or_else(|_| hooks_path.to_path_buf());
+    security::atomic_write(&write_target, content.as_bytes())
+        .map_err(|e| format!("Failed to write Codex hooks: {e}"))
+}
+
+fn codex_hook_id(event: &str) -> String {
+    format!("cue-codex-{}", event.to_ascii_lowercase())
+}
+
+fn is_cue_codex_command(value: &serde_json::Value) -> bool {
+    value
+        .get("id")
+        .and_then(|id| id.as_str())
+        .is_some_and(|id| id.starts_with("cue-codex-"))
+        || value
+            .get("command")
+            .and_then(|command| command.as_str())
+            .is_some_and(|command| {
+                command.contains("cue-hook") && command.contains("--harness codex")
+            })
+}
+
+/// Remove Cue commands from nested matcher entries without deleting another
+/// tool's commands if a user placed both in the same matcher object.
+fn remove_codex_cue_commands(entries: &mut Vec<serde_json::Value>) {
+    for entry in entries.iter_mut() {
+        if let Some(commands) = entry.get_mut("hooks").and_then(|v| v.as_array_mut()) {
+            commands.retain(|command| !is_cue_codex_command(command));
+        }
+    }
+    entries.retain(|entry| {
+        !entry
+            .get("hooks")
+            .and_then(|v| v.as_array())
+            .is_some_and(|commands| commands.is_empty())
+    });
+}
+
+fn apply_codex_hook_entries(
+    settings: &mut serde_json::Value,
+    command_prefix: &str,
+) -> Result<(), String> {
+    if !settings.get("hooks").is_some_and(|hooks| hooks.is_object()) {
+        settings["hooks"] = serde_json::json!({});
+    }
+    let hooks = settings["hooks"].as_object_mut().unwrap();
+    for (event, state) in CODEX_HOOK_EVENTS {
+        let entries = hooks
+            .entry(event.to_string())
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .ok_or_else(|| format!("Codex hooks.{event} must be an array"))?;
+        remove_codex_cue_commands(entries);
+        let timeout_secs = match *event {
+            "PermissionRequest" => 300,
+            "SessionEnd" => 1,
+            _ => 3,
+        };
+        entries.insert(
+            0,
+            serde_json::json!({
+                "matcher": "",
+                "hooks": [{
+                    "id": codex_hook_id(event),
+                    "type": "command",
+                    "command": format!(
+                        "{} --harness codex {}",
+                        command_prefix, state
+                    ),
+                    "timeout": timeout_secs
+                }]
+            }),
+        );
+    }
+    Ok(())
+}
+
 /// Insert/refresh cue-hook entries for every `HOOK_EVENTS` event on `settings`.
 /// Pure JSON transform (no I/O) so it's directly unit-testable. Idempotent: any
 /// prior cue entry on an event is replaced and ours is inserted first (so state
@@ -506,15 +687,103 @@ fn apply_cue_hook_entries(
 pub fn uninstall_hooks() -> Result<(), String> {
     let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
     uninstall_hooks_at(&home.join(".claude/settings.json"))?;
-
-    // Clear sessions.json so the dashboard shows a clean state.
-    let sessions_path = crate::paths::sessions_json_path();
-    if sessions_path.exists() {
-        security::atomic_write(&sessions_path, b"{\"sessions\":{}}")
-            .map_err(|e| format!("Failed to clear sessions: {}", e))?;
+    if let Some(script) = deployed_hook_path() {
+        if script.exists() {
+            std::fs::remove_file(&script)
+                .map_err(|e| format!("Failed to remove Claude cue-hook: {e}"))?;
+        }
+        let _ = std::fs::remove_file(script.with_extension("disabled"));
     }
-
+    remove_harness_sessions("claude")?;
     Ok(())
+}
+
+/// Remove only Cue's Codex registrations, script, and Codex session entries.
+/// Other hooks and all Claude state remain untouched.
+pub fn uninstall_codex_hooks() -> Result<(), String> {
+    uninstall_codex_hook_artifacts_at(&crate::paths::codex_config_dir())?;
+    remove_harness_sessions("codex")
+}
+
+fn uninstall_codex_hook_artifacts_at(codex_home: &Path) -> Result<(), String> {
+    uninstall_codex_hooks_at(&codex_home.join("hooks.json"))?;
+    let script = codex_hook_path_for(codex_home);
+    if script.exists() {
+        std::fs::remove_file(&script)
+            .map_err(|e| format!("Failed to remove Codex cue-hook: {e}"))?;
+    }
+    Ok(())
+}
+
+fn remove_harness_sessions(harness: &str) -> Result<(), String> {
+    let sessions_path = crate::paths::sessions_json_path();
+    if !sessions_path.exists() {
+        return Ok(());
+    }
+    let content = security::read_to_string_bounded(&sessions_path, SETTINGS_JSON_MAX_BYTES)
+        .map_err(|e| format!("Failed to read sessions: {e}"))?;
+    let mut root: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse sessions: {e}"))?;
+    if let Some(sessions) = root
+        .get_mut("sessions")
+        .and_then(|value| value.as_object_mut())
+    {
+        sessions.retain(|key, entry| {
+            let entry_harness = entry
+                .get("harness")
+                .and_then(|value| value.as_str())
+                .unwrap_or("claude");
+            let key_harness = key.split_once(':').map(|(prefix, _)| prefix);
+            let belongs = entry_harness == harness
+                || key_harness == Some(harness)
+                || (harness == "claude" && key_harness.is_none());
+            !belongs
+        });
+    }
+    let output = serde_json::to_vec_pretty(&root)
+        .map_err(|e| format!("Failed to serialize sessions: {e}"))?;
+    security::atomic_write(&sessions_path, &output)
+        .map_err(|e| format!("Failed to update sessions: {e}"))
+}
+
+fn uninstall_codex_hooks_at(hooks_path: &Path) -> Result<(), String> {
+    if !hooks_path.exists() {
+        return Ok(());
+    }
+    let content = security::read_to_string_bounded_follow(hooks_path, SETTINGS_JSON_MAX_BYTES)
+        .map_err(|e| format!("Failed to read Codex hooks: {e}"))?;
+    let mut root: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse Codex hooks: {e}"))?;
+    if let Some(hooks) = root
+        .get_mut("hooks")
+        .and_then(|value| value.as_object_mut())
+    {
+        for entries in hooks.values_mut() {
+            if let Some(entries) = entries.as_array_mut() {
+                remove_codex_cue_commands(entries);
+            }
+        }
+        hooks.retain(|event, entries| {
+            let managed = CODEX_HOOK_EVENTS.iter().any(|(name, _)| name == event);
+            !(managed && entries.as_array().is_some_and(Vec::is_empty))
+        });
+    }
+    if root
+        .get("hooks")
+        .and_then(|value| value.as_object())
+        .is_some_and(|hooks| hooks.is_empty())
+    {
+        if let Some(object) = root.as_object_mut() {
+            object.remove("hooks");
+        }
+    }
+    let output = serde_json::to_vec_pretty(&root)
+        .map_err(|e| format!("Failed to serialize Codex hooks: {e}"))?;
+    let write_target = hooks_path
+        .canonicalize()
+        .unwrap_or_else(|_| hooks_path.to_path_buf());
+    security::atomic_write(&write_target, &output)
+        .map_err(|e| format!("Failed to write Codex hooks: {e}"))
 }
 
 /// Path-injected core of `uninstall_hooks` so the full-reversal behaviour is
@@ -643,6 +912,8 @@ mod tests {
             wsl_distros: vec![],
             claude_code_found: true,
             claude_settings_exists: false,
+            codex_found: true,
+            codex_hooks_exists: false,
         };
 
         let json = serde_json::to_string(&info).unwrap();
@@ -651,6 +922,7 @@ mod tests {
         assert!(json.contains("\"wayland\":true"));
         assert!(json.contains("\"hasAppindicator\":false"));
         assert!(json.contains("\"claudeCodeFound\":true"));
+        assert!(json.contains("\"codexFound\":true"));
         assert!(json.contains("\"claudeSettingsExists\":false"));
     }
 
@@ -664,6 +936,8 @@ mod tests {
             wsl_distros: vec![],
             claude_code_found: false,
             claude_settings_exists: false,
+            codex_found: false,
+            codex_hooks_exists: false,
         };
 
         let json = serde_json::to_string(&info).unwrap();
@@ -1154,5 +1428,122 @@ mod tests {
         // safely through arbitrary shells (different normalisation forms,
         // homoglyph confusion) — reject defensively.
         assert!(assert_safe_for_command("/tmp/cue-hökk", "x").is_err());
+    }
+
+    #[test]
+    fn test_codex_hook_merge_is_idempotent_and_preserves_other_hooks() {
+        let mut root = serde_json::json!({
+            "version": 1,
+            "hooks": {
+                "Stop": [{
+                    "matcher": "",
+                    "hooks": [{"id": "other-stop", "type": "command", "command": "other", "timeout": 9}]
+                }]
+            }
+        });
+        apply_codex_hook_entries(&mut root, "python3 /safe/cue-hook").unwrap();
+        let once = root.clone();
+        apply_codex_hook_entries(&mut root, "python3 /safe/cue-hook").unwrap();
+        assert_eq!(root, once);
+        assert_eq!(root["version"], 1);
+        let stop = root["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 2);
+        assert!(stop
+            .iter()
+            .any(|entry| { entry["hooks"][0]["id"] == "other-stop" }));
+        assert_eq!(stop[0]["hooks"][0]["timeout"], 3);
+        assert_eq!(root["hooks"]["SessionEnd"][0]["hooks"][0]["timeout"], 1);
+        assert_eq!(
+            root["hooks"]["PermissionRequest"][0]["hooks"][0]["timeout"],
+            300
+        );
+    }
+
+    #[test]
+    fn test_codex_uninstall_removes_only_cue_commands() {
+        let dir = std::env::temp_dir().join(format!("cue_codex_uninstall_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hooks.json");
+        let mut root = serde_json::json!({
+            "keep": true,
+            "hooks": {
+                "Stop": [{
+                    "matcher": "",
+                    "hooks": [
+                        {"id": "cue-codex-stop", "type": "command", "command": "python3 /safe/cue-hook --harness codex idle", "timeout": 3},
+                        {"id": "other", "type": "command", "command": "other", "timeout": 5}
+                    ]
+                }]
+            }
+        });
+        security::atomic_write(&path, serde_json::to_string(&root).unwrap().as_bytes()).unwrap();
+        uninstall_codex_hooks_at(&path).unwrap();
+        root = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(root["keep"], true);
+        let commands = root["hooks"]["Stop"][0]["hooks"].as_array().unwrap();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0]["id"], "other");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_codex_live_filesystem_install_uninstall_cycle() {
+        let dir = std::env::temp_dir().join(format!(
+            "cue_codex_lifecycle_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let bundled = dir.join("bundled-cue-hook");
+        std::fs::write(&bundled, b"#!/usr/bin/env python3\nprint('ok')\n").unwrap();
+        let codex_home = dir.join("codex-home");
+        std::fs::create_dir_all(&codex_home).unwrap();
+        let hooks_path = codex_home.join("hooks.json");
+        std::fs::write(
+            &hooks_path,
+            r#"{"keep":"untouched","hooks":{"Stop":[{"matcher":"","hooks":[{"id":"other","type":"command","command":"other","timeout":9}]}]}}"#,
+        )
+        .unwrap();
+
+        let installed = deploy_bundled_codex_hook_at(&bundled, &codex_home).unwrap();
+        let script = codex_hook_path_for(&codex_home);
+        assert_eq!(installed, script.to_string_lossy());
+        assert_eq!(
+            std::fs::read(&script).unwrap(),
+            std::fs::read(&bundled).unwrap()
+        );
+        assert!(hooks_path.with_extension("json.bak").exists());
+        let installed_config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&hooks_path).unwrap()).unwrap();
+        assert_eq!(installed_config["keep"], "untouched");
+        assert_eq!(
+            installed_config["hooks"]["SessionEnd"][0]["hooks"][0]["timeout"],
+            1
+        );
+
+        // Reinstall is byte-stable at the semantic JSON level and leaves the
+        // original backup untouched.
+        let backup_before = std::fs::read(hooks_path.with_extension("json.bak")).unwrap();
+        deploy_bundled_codex_hook_at(&bundled, &codex_home).unwrap();
+        assert_eq!(
+            std::fs::read(hooks_path.with_extension("json.bak")).unwrap(),
+            backup_before
+        );
+
+        uninstall_codex_hook_artifacts_at(&codex_home).unwrap();
+        assert!(!script.exists());
+        let uninstalled: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&hooks_path).unwrap()).unwrap();
+        assert_eq!(uninstalled["keep"], "untouched");
+        assert_eq!(uninstalled["hooks"]["Stop"][0]["hooks"][0]["id"], "other");
+        assert!(CODEX_HOOK_EVENTS
+            .iter()
+            .all(|(event, _)| { uninstalled["hooks"].get(*event).is_none() || *event == "Stop" }));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -69,6 +69,19 @@ def hook_env(tmp_path, monkeypatch, hook):
             status_file.write_text(json.dumps({"sessions": sessions_dict}))
 
         def read_sessions(self):
+            """Return the historical native-ID view used by the Claude tests.
+
+            Production storage is provider-qualified. Keeping this compatibility
+            view lets the pre-existing behavioral suite stay focused on state
+            transitions; identity/collision tests use read_sessions_raw().
+            """
+            raw = self.read_sessions_raw()
+            return {
+                key.removeprefix("claude:") if key.startswith("claude:") else key: value
+                for key, value in raw.items()
+            }
+
+        def read_sessions_raw(self):
             if not status_file.exists():
                 return {}
             return json.loads(status_file.read_text())["sessions"]
@@ -86,7 +99,7 @@ def invoke_hook(hook_env, monkeypatch, hook):
     `hook_env.read_sessions()` afterwards.
     """
 
-    def _invoke(action, payload):
+    def _invoke(action, payload, harness="claude"):
         raw = json.dumps(payload).encode("utf-8")
 
         class FakeStdin:
@@ -94,7 +107,10 @@ def invoke_hook(hook_env, monkeypatch, hook):
             # main() reads bytes via stdin.buffer.read; the BytesIO above
             # is enough for the read path. Other attributes are unused.
 
-        monkeypatch.setattr(sys, "argv", ["cue-hook", action])
+        argv = ["cue-hook", action]
+        if harness != "claude":
+            argv = ["cue-hook", "--harness", harness, action]
+        monkeypatch.setattr(sys, "argv", argv)
         monkeypatch.setattr(sys, "stdin", FakeStdin())
         # stdout is captured by pytest's capsys/capfd if needed; the
         # hook only writes to stdout for PermissionRequest forwarding,

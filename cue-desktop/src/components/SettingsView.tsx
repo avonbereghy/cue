@@ -406,21 +406,23 @@ interface HookStatusCheck {
   detail: string;
 }
 
-function HookStatus() {
+function HookStatus({ harness }: { harness: "claude" | "codex" }) {
   const [checks, setChecks] = useState<HookStatusCheck[]>([]);
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      const result = await invoke<HookStatusCheck[]>("get_hook_status");
+      const result = await invoke<HookStatusCheck[]>(
+        harness === "claude" ? "get_hook_status" : "get_codex_hook_status",
+      );
       setChecks(result);
     } catch (err) {
       console.error("Failed to get hook status:", err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [harness]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -430,7 +432,7 @@ function HookStatus() {
   const handleInstall = async () => {
     setActing(true);
     try {
-      await invoke("install_cue_hooks");
+      await invoke(harness === "claude" ? "install_cue_hooks" : "install_cue_codex_hooks");
       await refresh();
     } catch (err) {
       console.error("Install failed:", err);
@@ -442,7 +444,7 @@ function HookStatus() {
   const handleUninstall = async () => {
     setActing(true);
     try {
-      await invoke("uninstall_cue_hooks");
+      await invoke(harness === "claude" ? "uninstall_cue_hooks" : "uninstall_cue_codex_hooks");
       await refresh();
     } catch (err) {
       console.error("Uninstall failed:", err);
@@ -455,7 +457,9 @@ function HookStatus() {
     <details className="rounded-lg bg-white/5 border border-white/10 px-3 py-2" open={!allOk}>
       <summary className="flex items-center gap-2 text-xs cursor-pointer hover:text-white/60 transition-colors select-none">
         <span className={`w-2 h-2 rounded-full shrink-0 ${loading ? "bg-white/20" : allOk ? "bg-green-400" : "bg-red-400"}`} />
-        <span className="text-white/50">Installation Status</span>
+        <span className="text-white/50">
+          {harness === "claude" ? "Claude Code Hooks" : "Codex Integration"}
+        </span>
         {!loading && !allOk && (
           <span className="text-[0.625rem] text-red-400/70 ml-auto">
             {checks.filter((c) => !c.ok).length} issue{checks.filter((c) => !c.ok).length !== 1 ? "s" : ""}
@@ -505,6 +509,12 @@ function HookStatus() {
             Refresh
           </button>
         </div>
+        {harness === "codex" && (
+          <p className="text-[0.625rem] text-white/35 pt-1">
+            Session discovery works immediately, including for Codex clients that were already open. Hook events add precise states such as waiting and compacting; after installing or changing them, restart that Codex client and use{" "}
+            <code className="bg-white/10 px-1 rounded">/hooks</code> to review/trust Cue's commands.
+          </p>
+        )}
       </div>
     </details>
   );
@@ -521,7 +531,7 @@ interface UninstallReport {
   errors: string[];
 }
 
-/** Full uninstall: disconnect from Claude Code (hooks + hook script), disable
+/** Full uninstall: disconnect from both harnesses (hooks + hook scripts), disable
  *  autostart, wipe local data, and move the app to the Trash. Two-step confirm,
  *  then a report and a Quit button. */
 function UninstallCue() {
@@ -570,11 +580,9 @@ function UninstallCue() {
         {phase === "idle" && (
           <>
             <p className="text-[0.625rem] text-white/50 leading-relaxed mb-2">
-              Removes Cue's connection to Claude Code (hook entries in{" "}
-              <code className="bg-white/10 px-1 rounded">~/.claude/settings.json</code> and the{" "}
-              <code className="bg-white/10 px-1 rounded">~/.claude/hooks/cue-hook</code> script),
+              Removes Cue's Claude Code and Codex hook entries and scripts,
               disables start-at-login, deletes Cue's local data, and moves the app to the Trash.
-              Claude Code keeps working normally afterward.
+              Both coding agents keep working normally afterward.
             </p>
             <button
               onClick={() => setPhase("confirm")}
@@ -1571,7 +1579,7 @@ export function SettingsView() {
             label="Auto reorder"
           />
         </SettingRow>
-        <SettingRow label="Permission Requests" description="Respond to Claude Code prompts from this dashboard (requires restart)" onReset={settings.permissionsEnabled ? () => setSettings({ ...settings, permissionsEnabled: false }) : undefined}>
+        <SettingRow label="Permission Requests" description="Respond to Claude Code and Codex prompts from this dashboard (requires restart)" onReset={settings.permissionsEnabled ? () => setSettings({ ...settings, permissionsEnabled: false }) : undefined}>
           <Toggle
             checked={settings.permissionsEnabled}
             onChange={() => setSettings({ ...settings, permissionsEnabled: !settings.permissionsEnabled })}
@@ -1629,14 +1637,15 @@ export function SettingsView() {
         </SettingRow>
       </section>
 
-      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Claude Code</h3>
+      <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mt-2">Harness Integrations</h3>
       <ClaudeDirSetting
         value={settings.claudeConfigDir ?? ""}
         onChange={(v) => setSettings({ ...settings, claudeConfigDir: v })}
       />
 
-      {/* Hook Status */}
-      <HookStatus />
+      {/* Harness hook status and controls are deliberately independent. */}
+      <HookStatus harness="claude" />
+      <HookStatus harness="codex" />
 
       {/* Uninstall */}
       <UninstallCue />

@@ -30,7 +30,7 @@ import { usePermissions } from "./usePermissions";
 function req(overrides: Partial<PermissionRequest> = {}): PermissionRequest {
   return {
     requestId: "r1",
-    sessionId: "s1",
+    sessionId: "claude:s1",
     toolName: "Bash",
     toolInput: { command: "npm install" },
     summary: "Run: npm install",
@@ -53,6 +53,17 @@ beforeEach(() => {
 });
 
 describe("usePermissions — sessions-updated wipe tolerance", () => {
+  it("keeps same native IDs isolated across Claude and Codex", () => {
+    const { result } = renderHook(() => usePermissions());
+    act(() => {
+      emit("permission-request", req({ requestId: "claude-r", sessionId: "claude:same" }));
+      emit("permission-request", req({ requestId: "codex-r", sessionId: "codex:same" }));
+    });
+
+    expect(result.current.pendingBySession["claude:same"][0].requestId).toBe("claude-r");
+    expect(result.current.pendingBySession["codex:same"][0].requestId).toBe("codex-r");
+  });
+
   it("keeps a just-added prompt when a stale snapshot claims the session isn't waiting", async () => {
     // Backend ground truth: r1 is STILL pending (the snapshot was just stale).
     invokeMock.mockImplementation((cmd: string) => {
@@ -64,7 +75,7 @@ describe("usePermissions — sessions-updated wipe tolerance", () => {
 
     // Fast path adds the prompt.
     act(() => emit("permission-request", req()));
-    expect(result.current.pendingBySession.s1).toHaveLength(1);
+    expect(result.current.pendingBySession["claude:s1"]).toHaveLength(1);
 
     // Stale sessions-updated (session not "waiting" yet). The old code wiped
     // the prompt here; now it re-syncs and the backend confirms it's pending.
@@ -76,7 +87,7 @@ describe("usePermissions — sessions-updated wipe tolerance", () => {
       expect(invokeMock).toHaveBeenCalledWith("get_pending_permissions"),
     );
     await waitFor(() =>
-      expect(result.current.pendingBySession.s1).toHaveLength(1),
+      expect(result.current.pendingBySession["claude:s1"]).toHaveLength(1),
     );
   });
 
@@ -88,14 +99,14 @@ describe("usePermissions — sessions-updated wipe tolerance", () => {
 
     const { result } = renderHook(() => usePermissions());
     act(() => emit("permission-request", req()));
-    expect(result.current.pendingBySession.s1).toHaveLength(1);
+    expect(result.current.pendingBySession["claude:s1"]).toHaveLength(1);
 
     await act(async () => {
       emit("sessions-updated", [sess("s1", "working")]);
     });
 
     await waitFor(() =>
-      expect(result.current.pendingBySession.s1).toBeUndefined(),
+      expect(result.current.pendingBySession["claude:s1"]).toBeUndefined(),
     );
   });
 
@@ -110,6 +121,6 @@ describe("usePermissions — sessions-updated wipe tolerance", () => {
     });
 
     expect(invokeMock).not.toHaveBeenCalledWith("get_pending_permissions");
-    expect(result.current.pendingBySession.s1).toHaveLength(1);
+    expect(result.current.pendingBySession["claude:s1"]).toHaveLength(1);
   });
 });

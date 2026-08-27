@@ -26,6 +26,22 @@ pub struct SessionInfo {
     // every healthy session down with it.
     #[serde(default)]
     pub id: String,
+    /// Native session/thread id assigned by the owning harness. This remains
+    /// the user-facing id used by provider-specific resume commands. It is NOT
+    /// globally unique across harnesses; use `session_key` for all Cue-internal
+    /// maps, routing, reconciliation, and frontend keys.
+    #[serde(default = "default_harness")]
+    pub harness: String,
+    /// Stable Cue identity in `<harness>:<native-id>` form. Older hook writers
+    /// did not emit it, so the lenient deserializer derives it after parsing.
+    #[serde(default)]
+    pub session_key: String,
+    /// Harness-reported transcript path. Claude legacy entries omit this and
+    /// continue through the existing ~/.claude/projects resolver. Codex emits
+    /// it because rollout paths are date-sharded and cannot be reconstructed
+    /// from cwd + id. The monitor validates/canonicalizes it before every read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_path: Option<String>,
     #[serde(default)]
     pub workspace: String,
     /// One of: "working", "waiting", "error", "subagent", "idle", "done"
@@ -66,12 +82,12 @@ pub struct SessionInfo {
     /// Agent name within the team (e.g. "code-reviewer", "test-runner").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
-    /// PID of the Claude Code process that owns this session (parent pid of
+    /// PID of the harness process that owns this session (parent pid of
     /// the hook at write time). Used by the backend to detect stale sessions
     /// whose owning process has died.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
-    /// Most recent Claude Code permission mode seen by the hook. One of
+    /// Most recent harness permission mode seen by the hook. Claude values include
     /// "default", "plan", "acceptEdits", "bypassPermissions". The frontend
     /// only renders this while the session is in an actively-busy state —
     /// otherwise the user could have toggled it via shift+tab without our
@@ -92,6 +108,28 @@ pub struct SessionInfo {
     /// permission resolves via the main write path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_permission: Option<bool>,
+}
+
+fn default_harness() -> String {
+    "claude".to_string()
+}
+
+impl SessionInfo {
+    /// Fill identity fields omitted by pre-multi-harness `sessions.json`
+    /// writers. `id` intentionally stays the native provider id so existing
+    /// copy/resume behavior remains backward compatible.
+    pub fn normalize_identity(&mut self) {
+        if self.harness.trim().is_empty() {
+            self.harness = default_harness();
+        }
+        if self.session_key.is_empty() && !self.id.is_empty() {
+            self.session_key = format!("{}:{}", self.harness, self.id);
+        }
+    }
+
+    pub fn is_supported_harness(&self) -> bool {
+        matches!(self.harness.as_str(), "claude" | "codex")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,7 +162,8 @@ where
     let mut out = HashMap::with_capacity(raw.len());
     for (key, value) in raw {
         match serde_json::from_value::<SessionInfo>(value) {
-            Ok(info) => {
+            Ok(mut info) => {
+                info.normalize_identity();
                 out.insert(key, info);
             }
             Err(_) => {
@@ -679,7 +718,11 @@ impl EnrichedSession {
         let source_display = format_source_name(info.source.as_deref());
         let has_subagents = !metrics.subagents.is_empty();
 
-        let provider = detect_provider(&effective_model);
+        let provider = if info.harness == "codex" {
+            "OpenAI".to_string()
+        } else {
+            detect_provider(&effective_model)
+        };
 
         // Output speed: tokens/sec from delta between polls
         let output_tokens_per_sec =
@@ -1558,6 +1601,9 @@ mod tests {
             .as_secs_f64();
         SessionInfo {
             id: id.to_string(),
+            harness: "claude".to_string(),
+            session_key: format!("claude:{id}"),
+            transcript_path: None,
             workspace: workspace.to_string(),
             state: state.to_string(),
             last_activity: now,
@@ -1622,6 +1668,22 @@ mod tests {
         assert_eq!(s.active_subagents, 2);
         assert_eq!(s.permission_mode.as_deref(), Some("default"));
         assert_eq!(s.pid, Some(4242));
+        assert_eq!(s.harness, "claude");
+        assert_eq!(s.session_key, "claude:11111111-1111-1111-1111-111111111111");
+    }
+
+    #[test]
+    fn test_same_native_id_across_harnesses_deserializes_without_collision() {
+        let json = r#"{
+            "sessions": {
+                "claude:same": {"id":"same","harness":"claude","sessionKey":"claude:same","workspace":"/x","state":"working","lastActivity":1,"startedAt":1},
+                "codex:same": {"id":"same","harness":"codex","sessionKey":"codex:same","workspace":"/x","state":"waiting","lastActivity":1,"startedAt":1}
+            }
+        }"#;
+        let data: StatusData = serde_json::from_str(json).unwrap();
+        assert_eq!(data.sessions.len(), 2);
+        assert_eq!(data.sessions["claude:same"].state, "working");
+        assert_eq!(data.sessions["codex:same"].state, "waiting");
     }
 
     /// F-types-001: one malformed entry must NOT abort the whole parse. The hook

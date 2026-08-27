@@ -39,6 +39,6 @@ describe("RestingDisclosure", () => {
       <RestingDisclosure sessions={[restingSession("a", "Alpha", "idle")]} onRestore={onRestore} />,
     );
     fireEvent.click(screen.getByRole("button", { name: /restore alpha/i }));
-    expect(onRestore).toHaveBeenCalledWith("a");
+    expect(onRestore).toHaveBeenCalledWith("claude:a");
   });
 });

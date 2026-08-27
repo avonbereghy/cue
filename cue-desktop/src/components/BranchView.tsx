@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { SessionCard, type SessionCardProps } from "./SessionCard";
-import type { EnrichedSession } from "../lib/types";
+import { getSessionKey, type EnrichedSession } from "../lib/types";
 
 /** Props forwarded to every SessionCard (signal, sand, display settings). */
 export type CardSettings = Omit<SessionCardProps, "session" | "isDuplicate" | "expandOverride" | "onExpandCycle">;
@@ -82,7 +82,7 @@ function buildFamilies(sessions: EnrichedSession[]): SessionFamily[] {
     const candidates: EnrichedSession[] = [];
     for (const [pw, ps] of parentsByWs) {
       if (cw === pw || cw.startsWith(pw + "/")) {
-        candidates.push(...ps);
+        candidates.push(...ps.filter((parent) => parent.info.harness === child.info.harness));
       }
     }
     if (candidates.length === 0) continue;
@@ -106,20 +106,22 @@ function buildFamilies(sessions: EnrichedSession[]): SessionFamily[] {
       }
     }
 
-    claimedChildren.add(child.info.id);
-    const existing = familyMap.get(chosen.info.id) ?? [];
+    const childKey = getSessionKey(child.info);
+    const chosenKey = getSessionKey(chosen.info);
+    claimedChildren.add(childKey);
+    const existing = familyMap.get(chosenKey) ?? [];
     existing.push(child);
-    familyMap.set(chosen.info.id, existing);
+    familyMap.set(chosenKey, existing);
   }
 
   const families: SessionFamily[] = [];
   for (const parent of parents) {
-    families.push({ parent, children: familyMap.get(parent.info.id) ?? [] });
+    families.push({ parent, children: familyMap.get(getSessionKey(parent.info)) ?? [] });
   }
 
   // Orphaned children (ambiguous or no matching parent) — show standalone
   for (const c of children) {
-    if (!claimedChildren.has(c.info.id)) {
+    if (!claimedChildren.has(getSessionKey(c.info))) {
       families.push({ parent: c, children: [] });
     }
   }
@@ -165,8 +167,8 @@ export function BranchView({ sessions, cardSettings, compactMode, expandOverride
       // stays disabled; in branch view children are always compact.
       compactMode={childOverride ? true : cardSettings.compactMode}
       slimMode={childOverride ? false : cardSettings.slimMode}
-      expandOverride={!childOverride && compactMode ? expandOverrides[session.info.id] : undefined}
-      onExpandCycle={!childOverride && compactMode ? () => onExpandCycle(session.info.id) : undefined}
+      expandOverride={!childOverride && compactMode ? expandOverrides[getSessionKey(session.info)] : undefined}
+      onExpandCycle={!childOverride && compactMode ? () => onExpandCycle(getSessionKey(session.info)) : undefined}
     />
   );
 
@@ -177,7 +179,7 @@ export function BranchView({ sessions, cardSettings, compactMode, expandOverride
         if (n === 0) {
           // Standalone — full width
           return (
-            <div key={family.parent.info.id}>
+            <div key={getSessionKey(family.parent.info)}>
               {renderCard(family.parent)}
             </div>
           );
@@ -214,7 +216,7 @@ export function BranchView({ sessions, cardSettings, compactMode, expandOverride
         const familyMinHeight = Math.max(112, n * 60 + 24);
         return (
           <div
-            key={family.parent.info.id}
+            key={getSessionKey(family.parent.info)}
             className="flex items-stretch gap-2"
             style={{ minHeight: `${familyMinHeight}px` }}
           >
@@ -228,7 +230,7 @@ export function BranchView({ sessions, cardSettings, compactMode, expandOverride
             {/* Children stacked vertically, each compact */}
             <div className="flex-1 min-w-0 flex flex-col gap-2.5 justify-center">
               {family.children.map((child) => (
-                <div key={child.info.id} className="min-w-0">
+                <div key={getSessionKey(child.info)} className="min-w-0">
                   {renderCard(child, true)}
                 </div>
               ))}

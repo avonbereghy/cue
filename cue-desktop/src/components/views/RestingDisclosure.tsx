@@ -1,4 +1,4 @@
-import type { EnrichedSession } from "@/lib/types";
+import { getSessionKey, type EnrichedSession } from "@/lib/types";
 
 interface RestingDisclosureProps {
   sessions: EnrichedSession[];
@@ -33,7 +33,7 @@ export function RestingDisclosure({ sessions, onRestore, className = "" }: Resti
       </summary>
       <div className="resting-list">
         {sessions.map((s) => (
-          <div key={s.info.id} className="resting-row">
+          <div key={getSessionKey(s.info)} className="resting-row">
             <span aria-hidden className="resting-dot" />
             <span className="resting-title" title={s.displayTitle}>{s.displayTitle}</span>
             <span className="resting-reason">
@@ -43,7 +43,7 @@ export function RestingDisclosure({ sessions, onRestore, className = "" }: Resti
             <button
               type="button"
               className="resting-restore"
-              onClick={() => onRestore(s.info.id)}
+              onClick={() => onRestore(getSessionKey(s.info))}
               aria-label={`Restore ${s.displayTitle} to the active list`}
             >
               Restore

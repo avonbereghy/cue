@@ -30,15 +30,22 @@ window before any public write-up.
 
 Cue is a local desktop app with a deliberately small surface. It:
 
-- **reads local files only** — Claude Code session data (`sessions.json`,
-  `.jsonl` transcripts) and `settings.json`. It makes **no outbound network
-  calls** and consumes **no Claude API usage**;
+- **reads provider-local files** — shared `sessions.json`, Claude conversation
+  JSONL, and Codex rollout JSONL. Transcript paths are canonicalized and must
+  remain under the owning provider's config root;
 - runs a **localhost-only** HTTP server (`127.0.0.1:3002`) for the
   permission-approval hook — it is not reachable from off the machine;
-- installs a hook script into `~/.claude/` and registers it in
-  `~/.claude/settings.json` (your original settings are backed up once to
-  `settings.json.bak`).
+- installs provider-specific copies of the shared writer only after explicit
+  opt-in: `~/.claude/hooks/cue-hook` plus `~/.claude/settings.json`, and/or
+  `$CODEX_HOME/hooks/cue-hook` plus `$CODEX_HOME/hooks.json`. Merge and uninstall
+  operations touch only Cue-owned hook commands and preserve unrelated entries;
+- does not bypass Codex hook trust. Users must run `/hooks` in a trusted Codex
+  project and explicitly trust/enable Cue's commands.
 
 Existing hardening: atomic file writes, `0600` permissions on data files,
 path-traversal sanitization, bounded file reads, and rejection of shell
-metacharacters in hook paths.
+metacharacters in hook paths. Internal state uses provider-qualified keys
+(`claude:<id>` / `codex:<id>`) so equal native IDs cannot cross-wire permission,
+notification, cache, dismissal, or resume actions. The localhost permission
+channel authenticates requests and responses with a per-launch HMAC secret and
+fails closed to the provider's native prompt.

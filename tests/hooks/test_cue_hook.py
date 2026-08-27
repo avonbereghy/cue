@@ -2310,3 +2310,141 @@ class TestSessionStartColdStart:
             hook_event_name="SessionStart", source="startup", transcript=t))
         entry = hook_env.read_sessions()["abc123"]
         assert abs(entry["startedAt"] - old) < 2, "fresh SessionStart must preserve startedAt"
+
+
+class TestCodexHarness:
+    """Provider parity and collision safety for the explicit Codex adapter."""
+
+    def test_same_native_id_isolated_by_harness(self, hook_env, invoke_hook):
+        invoke_hook("thinking", make_payload(session_id="same-id"))
+        invoke_hook(
+            "thinking",
+            make_payload(session_id="same-id", model="gpt-5.6-codex"),
+            harness="codex",
+        )
+        sessions = hook_env.read_sessions_raw()
+        assert set(sessions) == {"claude:same-id", "codex:same-id"}
+        assert sessions["claude:same-id"]["harness"] == "claude"
+        assert sessions["codex:same-id"]["harness"] == "codex"
+        assert sessions["codex:same-id"]["model"] == "gpt-5.6-codex"
+
+    def test_codex_omits_ephemeral_hook_shell_pid(self, hook_env, invoke_hook):
+        invoke_hook("working", make_payload(session_id="codex-pid"), harness="codex")
+        codex_entry = hook_env.read_sessions_raw()["codex:codex-pid"]
+        assert "pid" not in codex_entry
+
+        invoke_hook("working", make_payload(session_id="claude-pid"))
+        claude_entry = hook_env.read_sessions_raw()["claude:claude-pid"]
+        assert isinstance(claude_entry["pid"], int)
+
+    @pytest.mark.parametrize(
+        ("action", "event", "expected"),
+        [
+            ("idle", "SessionStart", "idle"),
+            ("thinking", "UserPromptSubmit", "thinking"),
+            ("working", "PreToolUse", "working"),
+            ("waiting", "PermissionRequest", "waiting"),
+            ("compacting", "PreCompact", "compacting"),
+        ],
+    )
+    def test_codex_lifecycle_states(self, hook_env, invoke_hook, action, event, expected):
+        invoke_hook(
+            action,
+            make_payload(session_id="codex-state", hook_event_name=event),
+            harness="codex",
+        )
+        entry = hook_env.read_sessions_raw()["codex:codex-state"]
+        assert entry["state"] == expected
+        assert entry["sessionKey"] == "codex:codex-state"
+
+    def test_codex_subagent_count_and_stop(self, hook_env, invoke_hook):
+        payload = make_payload(session_id="codex-agent", hook_event_name="SubagentStart")
+        invoke_hook("subagent", payload, harness="codex")
+        invoke_hook("subagent", payload, harness="codex")
+        entry = hook_env.read_sessions_raw()["codex:codex-agent"]
+        assert entry["activeSubagents"] == 2
+        assert entry["state"] == "subagent"
+
+        invoke_hook(
+            "subagent_stop",
+            make_payload(session_id="codex-agent", hook_event_name="SubagentStop"),
+            harness="codex",
+        )
+        assert hook_env.read_sessions_raw()["codex:codex-agent"]["activeSubagents"] == 1
+
+    def test_codex_session_end_only_tombstones_codex(self, hook_env, invoke_hook):
+        invoke_hook("working", make_payload(session_id="shared"))
+        invoke_hook("working", make_payload(session_id="shared"), harness="codex")
+        invoke_hook(
+            "remove",
+            make_payload(session_id="shared", hook_event_name="SessionEnd"),
+            harness="codex",
+        )
+        sessions = hook_env.read_sessions_raw()
+        assert sessions["claude:shared"]["state"] == "working"
+        assert sessions["codex:shared"]["state"] == "ended"
+
+    def test_codex_never_walks_claude_desktop_ancestry(
+        self, hook, hook_env, invoke_hook, monkeypatch
+    ):
+        monkeypatch.delenv("TERM_PROGRAM", raising=False)
+        monkeypatch.setattr(
+            hook,
+            "_is_claude_desktop",
+            lambda: pytest.fail("Codex must not run Claude ancestry detection"),
+        )
+        invoke_hook("working", make_payload(session_id="codex-source"), harness="codex")
+        assert hook_env.read_sessions_raw()["codex:codex-source"]["source"] == "unknown"
+
+    def test_codex_permission_output_is_exact_native_shape(self, hook):
+        decision = hook._permission_decision_for_harness(
+            {
+                "hookSpecificOutput": {
+                    "decision": {
+                        "behavior": "allow",
+                        "message": "Approved in Cue",
+                        "untrusted": "drop me",
+                    }
+                },
+                "alsoUntrusted": True,
+            },
+            "codex",
+        )
+        assert decision == {
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": {"behavior": "allow", "message": "Approved in Cue"},
+            }
+        }
+
+    def test_codex_transcript_must_stay_under_codex_home(
+        self, hook, tmp_path, monkeypatch
+    ):
+        codex_home = tmp_path / "codex-home"
+        rollout = codex_home / "sessions" / "2026" / "rollout.jsonl"
+        rollout.parent.mkdir(parents=True)
+        rollout.write_text("{}\n")
+        outside = tmp_path / "outside.jsonl"
+        outside.write_text("{}\n")
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+        assert hook._validated_transcript_path(str(rollout), "codex") == str(rollout)
+        assert hook._validated_transcript_path(str(outside), "codex") == ""
+
+    def test_legacy_claude_entry_migrates_without_field_loss(self, hook_env, invoke_hook):
+        hook_env.write_sessions({
+            "legacy": {
+                "id": "legacy",
+                "workspace": "/original",
+                "state": "working",
+                "lastActivity": time.time(),
+                "startedAt": 123.0,
+                "activeSubagents": 0,
+                "permissionMode": "acceptEdits",
+            }
+        })
+        invoke_hook("idle", make_payload(session_id="legacy", cwd="/changed"))
+        sessions = hook_env.read_sessions_raw()
+        assert "legacy" not in sessions
+        assert sessions["claude:legacy"]["workspace"] == "/original"
+        assert sessions["claude:legacy"]["startedAt"] == 123.0
+        assert sessions["claude:legacy"]["permissionMode"] == "acceptEdits"

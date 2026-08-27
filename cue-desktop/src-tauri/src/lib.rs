@@ -5,6 +5,8 @@
 //! The React frontend is a pure rendering layer.
 
 pub mod cli;
+pub mod codex_jsonl_parser;
+pub mod codex_session_discovery;
 pub mod config_counter;
 pub mod env_detect;
 pub mod git_status;
@@ -628,6 +630,7 @@ fn record_permission_decision(
     decision: models::PermissionDecision,
     label: &str,
 ) -> Result<(), String> {
+    security::validate_session_key(session_id).map_err(|e| e.to_string())?;
     log::info!(
         "Permission {}: session={}, request={}",
         label.to_lowercase(),
@@ -684,9 +687,10 @@ fn deny_permission(
 }
 
 #[tauri::command]
-fn get_permission_history(session_id: String) -> Vec<models::PermissionLogEntry> {
+fn get_permission_history(session_id: String) -> Result<Vec<models::PermissionLogEntry>, String> {
+    security::validate_session_key(&session_id).map_err(|e| e.to_string())?;
     log::debug!("Getting permission history for session={}", session_id);
-    permission_log::read_permission_log(&session_id)
+    Ok(permission_log::read_permission_log(&session_id))
 }
 
 /// Build the `permission-request` frontend event payload from a stored request,
@@ -920,8 +924,16 @@ fn validate_alphanumeric_id(id: &str, label: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn revive_session(session_id: String, workspace: String) -> Result<(), String> {
-    validate_alphanumeric_id(&session_id, "session ID")?;
+fn revive_session(
+    session_id: String,
+    workspace: String,
+    harness: Option<String>,
+) -> Result<(), String> {
+    security::validate_session_id(&session_id).map_err(|e| e.to_string())?;
+    let harness = harness.unwrap_or_else(|| "claude".to_string());
+    if !matches!(harness.as_str(), "claude" | "codex") {
+        return Err("Unsupported session harness".into());
+    }
     // Use the canonicalised path returned by sanitize_workspace_path rather
     // than the raw frontend string. The sanitiser resolves symlinks and
     // strips traversal components; passing the raw `workspace` re-introduced
@@ -933,7 +945,7 @@ fn revive_session(session_id: String, workspace: String) -> Result<(), String> {
         .to_str()
         .map(|s| s.to_string())
         .unwrap_or(workspace);
-    spawn_terminal_with_resume(&session_id, &canonical_str)
+    spawn_terminal_with_resume(&harness, &session_id, &canonical_str)
 }
 
 /// Manually tuck a session into the recoverable "Resting" group (the card "X").
@@ -941,7 +953,7 @@ fn revive_session(session_id: String, workspace: String) -> Result<(), String> {
 /// effect on the next ~1s poll.
 #[tauri::command]
 fn dismiss_session(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
-    validate_alphanumeric_id(&session_id, "session ID")?;
+    security::validate_session_key(&session_id).map_err(|e| e.to_string())?;
     state.monitor.dismiss_session(&session_id);
     Ok(())
 }
@@ -950,7 +962,7 @@ fn dismiss_session(state: State<'_, AppState>, session_id: String) -> Result<(),
 /// group). Overrides the idle auto-hide rule until the session next transitions.
 #[tauri::command]
 fn restore_session(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
-    validate_alphanumeric_id(&session_id, "session ID")?;
+    security::validate_session_key(&session_id).map_err(|e| e.to_string())?;
     state.monitor.restore_session(&session_id);
     Ok(())
 }
@@ -1024,30 +1036,58 @@ fn rename_preset(id: String, name: String) -> Result<(), String> {
     security::atomic_write(&path, &updated).map_err(|e| format!("Failed to save preset: {}", e))
 }
 
+fn resume_program(harness: &str) -> (&'static str, &'static str) {
+    if harness == "codex" {
+        ("codex", "resume")
+    } else {
+        ("claude", "--resume")
+    }
+}
+
 #[cfg(target_os = "macos")]
-fn spawn_terminal_with_resume(session_id: &str, workspace: &str) -> Result<(), String> {
-    // Use osascript to open Terminal.app with the resume command.
-    // Pass session_id and workspace as separate arguments to avoid shell injection.
-    let script = format!(
-        "tell application \"Terminal\"\n\
-         activate\n\
-         do script \"cd \" & quoted form of \"{}\" & \" && claude --resume \" & quoted form of \"{}\"\n\
-         end tell",
-        workspace, session_id
-    );
+fn spawn_terminal_with_resume(
+    harness: &str,
+    session_id: &str,
+    workspace: &str,
+) -> Result<(), String> {
+    // Keep all untrusted values in argv. Interpolating even a canonical path
+    // into AppleScript source would let quotes in a legitimate directory name
+    // become AppleScript injection.
+    let (program, resume_arg) = resume_program(harness);
+    let script = "on run argv\n\
+                  set workdir to item 1 of argv\n\
+                  set providerProgram to item 2 of argv\n\
+                  set providerResumeArg to item 3 of argv\n\
+                  set nativeId to item 4 of argv\n\
+                  tell application \"Terminal\"\n\
+                  activate\n\
+                  do script \"cd \" & quoted form of workdir & \" && \" & quoted form of providerProgram & \" \" & quoted form of providerResumeArg & \" \" & quoted form of nativeId\n\
+                  end tell\n\
+                  end run";
     std::process::Command::new("osascript")
         .arg("-e")
-        .arg(&script)
+        .arg(script)
+        .arg(workspace)
+        .arg(program)
+        .arg(resume_arg)
+        .arg(session_id)
         .spawn()
         .map_err(|e| format!("Failed to open Terminal: {}", e))?;
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
-fn spawn_terminal_with_resume(session_id: &str, workspace: &str) -> Result<(), String> {
+fn spawn_terminal_with_resume(
+    harness: &str,
+    session_id: &str,
+    workspace: &str,
+) -> Result<(), String> {
+    let (program, resume_arg) = resume_program(harness);
     let cmd = format!(
-        "cd '{}' && claude --resume '{}'",
+        "cd '{}' && {} {} '{}'",
         workspace.replace('\'', "'\\''"),
+        program,
+        resume_arg,
         session_id.replace('\'', "'\\''")
     );
     // Try common terminal emulators in order of preference
@@ -1072,23 +1112,32 @@ fn spawn_terminal_with_resume(session_id: &str, workspace: &str) -> Result<(), S
 }
 
 #[cfg(target_os = "windows")]
-fn spawn_terminal_with_resume(session_id: &str, workspace: &str) -> Result<(), String> {
+fn spawn_terminal_with_resume(
+    harness: &str,
+    session_id: &str,
+    workspace: &str,
+) -> Result<(), String> {
     // session_id is validated as alphanumeric+dash by validate_alphanumeric_id,
     // so it can flow safely through cmd.exe's quoting. workspace is NOT placed
     // on the command line at all — cmd.exe metacharacter handling (^, %, <, >,
     // (, ), !) is too fragile to rely on a string deny-list. Instead we set
     // the working directory at the OS level via Command::current_dir, and
     // `start ""` opens a new console window inheriting that cwd.
+    let (program, resume_arg) = resume_program(harness);
     std::process::Command::new("cmd")
         .current_dir(workspace)
-        .args(["/c", "start", "", "claude", "--resume", session_id])
+        .args(["/c", "start", "", program, resume_arg, session_id])
         .spawn()
         .map_err(|e| format!("Failed to open terminal: {}", e))?;
     Ok(())
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-fn spawn_terminal_with_resume(_session_id: &str, _workspace: &str) -> Result<(), String> {
+fn spawn_terminal_with_resume(
+    _harness: &str,
+    _session_id: &str,
+    _workspace: &str,
+) -> Result<(), String> {
     Err("Revive is not supported on this platform".to_string())
 }
 
@@ -1194,7 +1243,7 @@ fn open_session_workspace(workspace: String, source: Option<String>) -> Result<(
     reveal_in_file_manager(path)
 }
 
-/// Try to focus the *exact* terminal tab running a session's Claude process, so
+/// Try to focus the *exact* terminal tab running a session's harness process, so
 /// clicking one of several cards for the same project lands on the right one.
 /// Works for native terminals that expose a per-tab tty over AppleScript
 /// (iTerm2, Apple Terminal); editors (VS Code/Cursor) have no such API, so this
@@ -1329,8 +1378,19 @@ fn install_cue_hooks(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn install_cue_codex_hooks(app: AppHandle) -> Result<String, String> {
+    let bundled = resolve_bundled_hook(&app)?;
+    env_detect::deploy_bundled_codex_hook(&bundled)
+}
+
+#[tauri::command]
 fn uninstall_cue_hooks() -> Result<(), String> {
     env_detect::uninstall_hooks()
+}
+
+#[tauri::command]
+fn uninstall_cue_codex_hooks() -> Result<(), String> {
+    env_detect::uninstall_codex_hooks()
 }
 
 /// Result of a full uninstall, surfaced to the UI so the user sees exactly
@@ -1348,8 +1408,8 @@ struct UninstallReport {
     errors: Vec<String>,
 }
 
-/// Fully uninstall Cue. Disconnects from Claude Code (strips the hook entries
-/// from `settings.json` and deletes the deployed hook script), disables login
+/// Fully uninstall Cue. Disconnects from Claude Code and Codex (strips only
+/// Cue's hook entries and deletes its deployed scripts), disables login
 /// autostart, removes Cue's local data, and moves the app bundle to the Trash
 /// on macOS (other platforms report the manual step for their package manager).
 ///
@@ -1361,11 +1421,22 @@ fn uninstall_cue(app: AppHandle) -> UninstallReport {
     let mut report = UninstallReport::default();
     let home = dirs::home_dir();
 
-    // 1. Remove hook entries from settings.json (also clears sessions.json).
-    match env_detect::uninstall_hooks() {
-        Ok(()) => report.hooks_removed = true,
-        Err(e) => report.errors.push(format!("Hook removal: {e}")),
-    }
+    // 1. Remove both providers' hook entries and their own session records.
+    let claude_removed = match env_detect::uninstall_hooks() {
+        Ok(()) => true,
+        Err(e) => {
+            report.errors.push(format!("Claude hook removal: {e}"));
+            false
+        }
+    };
+    let codex_removed = match env_detect::uninstall_codex_hooks() {
+        Ok(()) => true,
+        Err(e) => {
+            report.errors.push(format!("Codex hook removal: {e}"));
+            false
+        }
+    };
+    report.hooks_removed = claude_removed && codex_removed;
 
     // 2. Delete the deployed hook script and any .disabled marker.
     if let Some(hook) = env_detect::deployed_hook_path() {
@@ -1659,6 +1730,127 @@ fn get_hook_status() -> Vec<HookStatusCheck> {
     checks
 }
 
+#[tauri::command]
+fn get_codex_hook_status() -> Vec<HookStatusCheck> {
+    let codex_home = paths::codex_config_dir();
+    let mut checks = Vec::new();
+    checks.push(HookStatusCheck {
+        label: "Codex".into(),
+        ok: codex_home.exists(),
+        detail: if codex_home.exists() {
+            format!("{} found", codex_home.display())
+        } else {
+            format!("{} not found", codex_home.display())
+        },
+    });
+
+    let sessions_dir = paths::codex_sessions_path();
+    let locks_dir = paths::codex_thread_writer_locks_path();
+    let discovery_ok = sessions_dir.is_dir() && (locks_dir.is_dir() || !cfg!(unix));
+    checks.push(HookStatusCheck {
+        label: "Session Discovery".into(),
+        ok: discovery_ok,
+        detail: if discovery_ok {
+            format!("Watching open threads in {}", sessions_dir.display())
+        } else if !sessions_dir.is_dir() {
+            format!("{} not found", sessions_dir.display())
+        } else {
+            format!("{} not found", locks_dir.display())
+        },
+    });
+
+    let python = env_detect::find_python();
+    checks.push(HookStatusCheck {
+        label: "Python 3".into(),
+        ok: python.is_some(),
+        detail: python
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "python3 not found on PATH".into()),
+    });
+
+    let script = env_detect::deployed_codex_hook_path();
+    checks.push(HookStatusCheck {
+        label: "Cue Hook Script".into(),
+        ok: script.exists(),
+        detail: if script.exists() {
+            script.display().to_string()
+        } else {
+            "cue-hook not installed for Codex".into()
+        },
+    });
+
+    let hooks_path = codex_home.join("hooks.json");
+    let (registered, timed, total) = check_codex_hooks(&hooks_path);
+    checks.push(HookStatusCheck {
+        label: "Hook Events".into(),
+        ok: registered == total,
+        detail: format!("{registered}/{total} events registered"),
+    });
+    checks.push(HookStatusCheck {
+        label: "Hook Timeouts".into(),
+        ok: timed == registered,
+        detail: if timed == registered {
+            format!("All {timed} hooks use second-based timeouts")
+        } else {
+            format!("{timed}/{registered} hooks have valid timeouts")
+        },
+    });
+    checks
+}
+
+fn check_codex_hooks(hooks_path: &std::path::Path) -> (usize, usize, usize) {
+    let total = env_detect::CODEX_HOOK_EVENTS.len();
+    let root: serde_json::Value =
+        match security::read_to_string_bounded_follow(hooks_path, 4 * 1024 * 1024)
+            .ok()
+            .and_then(|content| serde_json::from_str(&content).ok())
+        {
+            Some(value) => value,
+            None => return (0, 0, total),
+        };
+    let Some(hooks) = root.get("hooks").and_then(|value| value.as_object()) else {
+        return (0, 0, total);
+    };
+    let mut registered = 0;
+    let mut timed = 0;
+    for (event, state) in env_detect::CODEX_HOOK_EVENTS {
+        let expected_id = format!("cue-codex-{}", event.to_ascii_lowercase());
+        let expected_suffix = format!("--harness codex {state}");
+        let commands = hooks
+            .get(*event)
+            .and_then(|value| value.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.get("hooks").and_then(|value| value.as_array()))
+            .flatten()
+            .filter(|command| {
+                command
+                    .get("id")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|id| id == expected_id)
+                    && command
+                        .get("command")
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|value| value.ends_with(&expected_suffix))
+            })
+            .collect::<Vec<_>>();
+        if !commands.is_empty() {
+            registered += 1;
+            let expected_timeout = match *event {
+                "PermissionRequest" => 300,
+                "SessionEnd" => 1,
+                _ => 3,
+            };
+            if commands.iter().any(|command| {
+                command.get("timeout").and_then(|value| value.as_u64()) == Some(expected_timeout)
+            }) {
+                timed += 1;
+            }
+        }
+    }
+    (registered, timed, total)
+}
+
 /// Check settings.json for cue-hook registration across all expected events.
 /// Returns (registered_count, with_timeout_count, total_expected).
 fn check_settings_hooks(settings_path: &std::path::Path) -> (usize, usize, usize) {
@@ -1779,6 +1971,11 @@ fn spawn_timers(
         tauri::async_runtime::spawn(async move {
             let m = monitor_prime.clone();
             let result = tokio::task::spawn_blocking(move || {
+                // Discover open Codex rollouts first so refresh_metrics has
+                // concrete transcript targets on a cold launch. Reconcile a
+                // second time after parsing to render the inferred turn state
+                // immediately instead of waiting for the 5s metrics timer.
+                m.poll_status();
                 m.refresh_metrics();
                 m.refresh_supplemental();
                 m.poll_status();
@@ -2009,8 +2206,11 @@ pub fn run() {
             clear_sandbox_sessions,
             take_window_screenshot,
             get_hook_status,
+            get_codex_hook_status,
             install_cue_hooks,
+            install_cue_codex_hooks,
             uninstall_cue_hooks,
+            uninstall_cue_codex_hooks,
             uninstall_cue,
             hide_tray_popover,
             resize_tray_popover,
@@ -2196,7 +2396,7 @@ pub fn run() {
             // --- Data polling timers ---
             spawn_timers(handle.clone(), monitor, app_notifier.clone());
 
-            // --- Permission server (localhost-only HTTP for Claude Code hooks) ---
+            // --- Permission server (localhost-only HTTP for harness hooks) ---
             // Only start if user has opted in via settings
             let perm_settings = settings::load_settings();
             if perm_settings.permissions_enabled {
@@ -2248,7 +2448,7 @@ pub fn run() {
 // ---------------------------------------------------------------------------
 
 /// Spawn a localhost TCP server on port 3002 to receive permission requests
-/// from Claude Code hooks. Each request blocks until the user approves/denies.
+/// from Claude Code or Codex hooks. Each request blocks until the user approves/denies.
 fn spawn_permission_server(
     app_handle: AppHandle,
     pending: Arc<permission_server::PendingRequests>,
@@ -2468,6 +2668,15 @@ async fn handle_permission_connection(
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
+            if let Err(error) = security::validate_session_key(&session_id) {
+                let body = format!("Invalid session key: {error}");
+                let response = format!(
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(), body
+                );
+                stream.write_all(response.as_bytes()).await?;
+                return Ok(());
+            }
             let tool_name = payload
                 .get("tool_name")
                 .or_else(|| payload.get("toolName"))
@@ -3129,7 +3338,7 @@ fn build_tray_menu(
     let mut builder = MenuBuilder::new(handle);
 
     // Header
-    builder = builder.text("header", "Claude Code Sessions");
+    builder = builder.text("header", "Coding Agent Sessions");
     builder = builder.separator();
 
     // Per-session items
@@ -3141,7 +3350,7 @@ fn build_tray_menu(
             s.state_icon, s.workspace_name, duration, tokens
         );
         builder = builder.item(
-            &MenuItemBuilder::with_id(format!("session-{}", s.info.id), &label)
+            &MenuItemBuilder::with_id(format!("session-{}", s.info.session_key), &label)
                 .enabled(false)
                 .build(handle)?,
         );
@@ -3227,7 +3436,7 @@ fn menu_cache_key(sessions: &[EnrichedSession]) -> String {
         if i > 0 {
             key.push(',');
         }
-        key.push_str(&s.info.id);
+        key.push_str(&s.info.session_key);
         key.push(':');
         key.push_str(&s.info.state);
         key.push(':');
@@ -3243,7 +3452,7 @@ fn menu_cache_key(sessions: &[EnrichedSession]) -> String {
 fn icon_cache_key(sessions: &[EnrichedSession]) -> String {
     let mut key = format!("n{};", sessions.len());
     for s in sessions.iter().take(tray::BAR_CHART_MAX_SESSIONS) {
-        key.push_str(&s.info.id);
+        key.push_str(&s.info.session_key);
         key.push(':');
         key.push_str(&s.info.state);
         key.push(',');
@@ -3355,6 +3564,12 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     #[test]
+    fn test_resume_program_routes_by_harness() {
+        assert_eq!(resume_program("claude"), ("claude", "--resume"));
+        assert_eq!(resume_program("codex"), ("codex", "resume"));
+    }
+
+    #[test]
     fn test_next_trash_name_no_collision() {
         // Nothing in the Trash → keep the original name.
         let got = next_trash_name(Path::new("/T"), "Cue.app", "Cue", |_| false).unwrap();
@@ -3429,6 +3644,9 @@ mod tests {
     fn mk_enriched(id: &str, state: &str, last_activity: f64) -> EnrichedSession {
         let info = crate::models::SessionInfo {
             id: id.to_string(),
+            harness: "claude".to_string(),
+            session_key: format!("claude:{id}"),
+            transcript_path: None,
             workspace: "/tmp/test-project".to_string(),
             state: state.to_string(),
             last_activity,

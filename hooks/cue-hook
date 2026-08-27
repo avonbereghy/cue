@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Claude Code hook — updates session status for the Cue menu bar app.
+"""Claude Code and Codex hook — updates session status for Cue.
 
-Called by Claude Code hooks with: cue-hook <idle|working|waiting|done|remove>
+Called by hooks with either:
+  cue-hook <idle|working|waiting|done|remove>                 (legacy Claude)
+  cue-hook --harness <claude|codex> <action>                 (explicit)
 Receives hook JSON on stdin (contains session_id, cwd, etc.)
 """
 import json
@@ -147,6 +149,13 @@ def _claude_config_dir():
     return os.path.realpath(os.path.expanduser(base))
 
 
+def _codex_config_dir():
+    """Resolve Codex's home, honoring its documented CODEX_HOME override."""
+    override = os.environ.get("CODEX_HOME", "").strip()
+    base = override if override else "~/.codex"
+    return os.path.realpath(os.path.expanduser(base))
+
+
 # --- Task 8: Use get_status_dir() instead of hardcoded path ---
 STATUS_DIR = get_status_dir()
 STATUS_FILE = os.path.join(STATUS_DIR, "sessions.json")
@@ -223,6 +232,7 @@ _SESSION_SCHEMA = {
 # Claude Code may emit later. Mirrors security::validate_session_id on
 # the Rust side — keep the two regexes synchronised.
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_SUPPORTED_HARNESSES = ("claude", "codex")
 
 
 def _is_valid_session_id(sid):
@@ -230,6 +240,43 @@ def _is_valid_session_id(sid):
     sessions.json. Rejects empty, oversized, separator, traversal, NUL,
     and control characters."""
     return isinstance(sid, str) and bool(_SESSION_ID_RE.match(sid))
+
+
+def _session_key(harness, session_id):
+    """Return Cue's collision-free internal key for a provider-native id."""
+    return "%s:%s" % (harness, session_id)
+
+
+def _is_valid_session_key(value):
+    """Accept normalized keys while retaining legacy raw Claude keys."""
+    if _is_valid_session_id(value):
+        return True
+    if not isinstance(value, str):
+        return False
+    harness, sep, native_id = value.partition(":")
+    return (
+        sep == ":"
+        and harness in _SUPPORTED_HARNESSES
+        and _is_valid_session_id(native_id)
+    )
+
+
+def _existing_session(sessions, harness, session_id, session_key):
+    """Read a normalized entry, falling back to a legacy Claude map key."""
+    entry = sessions.get(session_key)
+    if isinstance(entry, dict):
+        return entry
+    if harness == "claude":
+        legacy = sessions.get(session_id)
+        if isinstance(legacy, dict):
+            return legacy
+    return {}
+
+
+def _remove_legacy_session_key(sessions, harness, session_id):
+    """Finish the one-way, lossless migration from raw Claude map keys."""
+    if harness == "claude":
+        sessions.pop(session_id, None)
 
 
 def _validate_sessions(data):
@@ -260,7 +307,7 @@ def _validate_sessions(data):
     preserved = {
         sid: entry
         for sid, entry in sessions.items()
-        if _is_valid_session_id(sid) and isinstance(entry, dict)
+        if _is_valid_session_key(sid) and isinstance(entry, dict)
     }
     return {"sessions": preserved}
 
@@ -457,10 +504,20 @@ def _gc_sessions(sessions, now, keep_id=None):
         # front of the eviction order rather than being kept indefinitely.
         return (now - la) if isinstance(la, (int, float)) else float("inf")
 
+    def _is_keep(sid):
+        # During the Claude one-way migration the target may still be stored
+        # under its legacy native ID until this invocation commits. Never let
+        # retention reap that entry before its fields are carried forward.
+        if sid == keep_id:
+            return True
+        if isinstance(keep_id, str) and keep_id.startswith("claude:"):
+            return sid == keep_id.removeprefix("claude:")
+        return False
+
     # Pass 1: expire old `ended` tombstones.
     expired = [
         sid for sid, e in sessions.items()
-        if sid != keep_id
+        if not _is_keep(sid)
         and e.get("state") == "ended"
         and isinstance(e.get("lastActivity"), (int, float))
         and (now - e["lastActivity"]) > _GC_ENDED_MAX_AGE_SECS
@@ -472,7 +529,7 @@ def _gc_sessions(sessions, now, keep_id=None):
     # state — reaps crashed non-terminal entries the terminal rules can't.
     stale = [
         sid for sid, e in sessions.items()
-        if sid != keep_id
+        if not _is_keep(sid)
         and isinstance(e.get("lastActivity"), (int, float))
         and (now - e["lastActivity"]) > _GC_STALE_MAX_AGE_SECS
     ]
@@ -485,7 +542,7 @@ def _gc_sessions(sessions, now, keep_id=None):
         # Oldest (largest age) first.
         terminal = sorted(
             (sid for sid, e in sessions.items()
-             if sid != keep_id and e.get("state") in _GC_TERMINAL_STATES),
+             if not _is_keep(sid) and e.get("state") in _GC_TERMINAL_STATES),
             key=_age_of, reverse=True,
         )
         for sid in terminal[:overflow]:
@@ -495,7 +552,7 @@ def _gc_sessions(sessions, now, keep_id=None):
         overflow = len(sessions) - _GC_MAX_ENTRIES
         if overflow > 0:
             anything = sorted(
-                (sid for sid in sessions if sid != keep_id),
+                (sid for sid in sessions if not _is_keep(sid)),
                 key=_age_of, reverse=True,
             )
             for sid in anything[:overflow]:
@@ -548,8 +605,9 @@ def _read_status_or_recover():
         return {"sessions": {}}
 
 
-def _quick_state_write(session_id, workspace, resolved_source, subprocess_label,
-                       last_tokens, hook_start_time,
+def _quick_state_write(harness, session_id=None, session_key=None, workspace=None,
+                       resolved_source=None, subprocess_label=None, last_tokens=None,
+                       hook_start_time=None, transcript_path="", hook_model=None,
                        team_name=None, agent_name=None,
                        permission_mode=None):
     """Write 'waiting' state to sessions.json immediately so the dashboard
@@ -561,6 +619,24 @@ def _quick_state_write(session_id, workspace, resolved_source, subprocess_label,
     authoritative resolver — when the JSONL gains a matching tool_result the
     Rust side demotes `waiting` back to `idle`, so we don't pin cards forever.
     """
+    if harness not in _SUPPORTED_HARNESSES:
+        # Legacy helper form:
+        # _quick_state_write(session_id, workspace, source, subprocess,
+        #                    last_tokens, hook_start_time)
+        (legacy_id, legacy_workspace, legacy_source, legacy_subprocess,
+         legacy_tokens, legacy_start) = (
+            harness, session_id, session_key, workspace,
+            resolved_source, subprocess_label,
+        )
+        harness = "claude"
+        session_id = legacy_id
+        session_key = _session_key(harness, session_id)
+        workspace = legacy_workspace
+        resolved_source = legacy_source
+        subprocess_label = legacy_subprocess
+        last_tokens = legacy_tokens
+        hook_start_time = legacy_start
+
     if not _is_valid_session_id(session_id):
         return
     try:
@@ -575,7 +651,10 @@ def _quick_state_write(session_id, workspace, resolved_source, subprocess_label,
 
                 status = _validate_sessions(status)
 
-                existing = status["sessions"].get(session_id, {})
+                sessions = status["sessions"]
+                existing = _existing_session(
+                    sessions, harness, session_id, session_key
+                )
 
                 # Stale-write guard: if a newer hook already wrote, bail.
                 existing_activity = existing.get("lastActivity", 0)
@@ -603,6 +682,8 @@ def _quick_state_write(session_id, workspace, resolved_source, subprocess_label,
                 )
                 entry = {
                     "id": session_id,
+                    "harness": harness,
+                    "sessionKey": session_key,
                     "workspace": existing.get("workspace", workspace),
                     "state": "waiting",
                     "lastActivity": now,
@@ -614,8 +695,16 @@ def _quick_state_write(session_id, workspace, resolved_source, subprocess_label,
                     # hook stored one between the unlocked peek and this write.
                     "source": existing.get("source") or resolved_source,
                     "activeSubagents": _active_subagents(existing),
-                    "pid": os.getppid(),
                 }
+                # Claude invokes the hook as a direct child, so its parent PID
+                # is a useful liveness signal. Codex invokes command hooks via
+                # a short-lived shell; persisting that PID makes Cue retire a
+                # healthy session as soon as the shell exits. Codex liveness is
+                # derived from its thread-writer lock instead.
+                if harness == "claude":
+                    entry["pid"] = os.getppid()
+                if transcript_path:
+                    entry["transcriptPath"] = transcript_path
                 sub = existing.get("subprocess") or subprocess_label
                 if sub:
                     entry["subprocess"] = sub
@@ -632,11 +721,14 @@ def _quick_state_write(session_id, workspace, resolved_source, subprocess_label,
                     entry["inputTokens"] = existing["inputTokens"]
                     entry["outputTokens"] = existing.get("outputTokens", 0)
                     entry["model"] = existing.get("model", "")
+                elif hook_model:
+                    entry["model"] = hook_model
                 pm = permission_mode or existing.get("permissionMode")
                 if pm:
                     entry["permissionMode"] = pm
 
-                status["sessions"][session_id] = entry
+                _remove_legacy_session_key(sessions, harness, session_id)
+                sessions[session_key] = entry
 
                 fd, tmp = tempfile.mkstemp(dir=STATUS_DIR, suffix=".json.tmp")
                 try:
@@ -682,7 +774,7 @@ def _read_permission_token():
         return None
 
 
-def _forward_permission_request(hook_data, session_id):
+def _forward_permission_request(hook_data, session_key):
     """Forward a permission request to the Cue dashboard via localhost HTTP.
 
     The dashboard's permission server (port 3002) will block this connection
@@ -702,7 +794,6 @@ def _forward_permission_request(hook_data, session_id):
     import secrets
     import urllib.request
     import urllib.error
-    import hmac
 
     # Refuse to forward without the per-launch shared secret. If the token
     # file is missing, Cue isn't running (or has permissions disabled), and
@@ -728,7 +819,7 @@ def _forward_permission_request(hook_data, session_id):
     # would need a pre-auth round-trip (server proves itself before we send the
     # payload); accepted as low-risk given the same-uid threat model + 0600 token.
     payload = json.dumps({
-        "session_id": session_id,
+        "session_id": session_key,
         "tool_name": hook_data.get("tool_name", "unknown"),
         "tool_input": hook_data.get("tool_input", {}),
         "hook_event_name": hook_data.get("hook_event_name", "PermissionRequest"),
@@ -762,11 +853,6 @@ def _forward_permission_request(hook_data, session_id):
         key, b"resp:" + nonce.encode("ascii"), hashlib.sha256
     ).hexdigest()
     if not proof or not hmac.compare_digest(proof, expected_proof):
-        return None
-
-    try:
-        return json.loads(body)
-    except (json.JSONDecodeError, ValueError):
         return None
 
     try:
@@ -869,7 +955,7 @@ def _resolve_source(stored_source, detected_source):
     return "claude-desktop" if _is_claude_desktop() else "unknown"
 
 
-def _peek_stored_source(session_id):
+def _peek_stored_source(session_key, legacy_session_id=None):
     """Best-effort UNLOCKED read of a session's already-stored `source`.
 
     Sole purpose: let `_resolve_source` be evaluated — including its up-to-2s
@@ -895,7 +981,9 @@ def _peek_stored_source(session_id):
     sessions = data.get("sessions")
     if not isinstance(sessions, dict):
         return None
-    entry = sessions.get(session_id)
+    entry = sessions.get(session_key)
+    if not isinstance(entry, dict) and legacy_session_id:
+        entry = sessions.get(legacy_session_id)
     if isinstance(entry, dict):
         src = entry.get("source")
         if isinstance(src, str) and src:
@@ -903,7 +991,7 @@ def _peek_stored_source(session_id):
     return None
 
 
-def _resolve_source_unlocked(session_id, detected_source):
+def _resolve_source_unlocked(harness, session_id=None, session_key=None, detected_source=None):
     """Settle the launcher source OUTSIDE any lock.
 
     When the env already decided (`detected_source is not None`) that verdict
@@ -915,9 +1003,23 @@ def _resolve_source_unlocked(session_id, detected_source):
     None: the locked writer treats a stored source as authoritative on top of
     this via `existing.get("source") or resolved_source`.
     """
+    # Backward-compatible helper form retained for embedders and the legacy
+    # Claude test surface: _resolve_source_unlocked(session_id, detected_source).
+    if session_key is None:
+        legacy_session_id = harness
+        legacy_detected_source = session_id
+        if legacy_detected_source is not None:
+            return legacy_detected_source
+        stored = _peek_stored_source(legacy_session_id)
+        return _resolve_source(stored, None)
+
     if detected_source is not None:
         return detected_source
-    return _resolve_source(_peek_stored_source(session_id), None)
+    legacy_id = session_id if harness == "claude" else None
+    stored = _peek_stored_source(session_key, legacy_id)
+    if harness == "codex":
+        return stored or "unknown"
+    return _resolve_source(stored, None)
 
 
 def _detect_source():
@@ -958,7 +1060,7 @@ def _detect_source():
     return None
 
 
-def _should_ignore_session(hook_data, resolved_source=None):
+def _should_ignore_session(hook_data, resolved_source=None, harness="claude"):
     """Return True for sessions that should not appear in Cue.
 
     Two opt-outs:
@@ -988,6 +1090,8 @@ def _should_ignore_session(hook_data, resolved_source=None):
     _ = hook_data  # kept for signature stability / future payload fields
     if os.environ.get("CUE_SKIP") == "1":
         return True
+    if harness != "claude":
+        return False
     if os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
         return resolved_source != "claude-desktop"
     return False
@@ -1270,11 +1374,73 @@ def _read_last_tokens(transcript_path):
     }
 
 
-def main():
-    if len(sys.argv) < 2:
-        return
+def _validated_transcript_path(value, harness):
+    """Return a trusted provider transcript path, or an empty string.
 
-    action = sys.argv[1]
+    Hook stdin is untrusted. Both providers normally place transcripts below
+    their own config home, so resolve symlinks and require that containment
+    before either the hook or Rust parser reads the file.
+    """
+    if not isinstance(value, str) or not value:
+        return ""
+    try:
+        resolved = os.path.realpath(value)
+        provider_home = (
+            _codex_config_dir() if harness == "codex" else _claude_config_dir()
+        )
+        if not resolved.startswith(provider_home + os.sep):
+            return ""
+        return resolved
+    except Exception:
+        return ""
+
+
+def _parse_invocation(argv):
+    """Parse the explicit multi-harness CLI while preserving old commands."""
+    if len(argv) < 2:
+        return None, None
+    if argv[1] == "--harness":
+        if len(argv) < 4 or argv[2] not in _SUPPORTED_HARNESSES:
+            return None, None
+        return argv[2], argv[3]
+    return "claude", argv[1]
+
+
+def _permission_decision_for_harness(decision, harness):
+    """Normalize the forwarded response to the provider's native schema."""
+    if not isinstance(decision, dict):
+        return None
+    if harness == "claude":
+        return decision
+
+    # Cue's permission server already emits the nested Claude/Codex command
+    # hook shape. Rebuild it from allowlisted fields so no unrelated response
+    # keys cross the trust boundary into Codex.
+    output = decision.get("hookSpecificOutput")
+    raw = output.get("decision") if isinstance(output, dict) else None
+    if not isinstance(raw, dict):
+        raw = decision.get("decision")
+    if not isinstance(raw, dict):
+        return None
+    behavior = raw.get("behavior")
+    if behavior not in ("allow", "deny"):
+        return None
+    normalized = {"behavior": behavior}
+    message = raw.get("message")
+    if isinstance(message, str) and message:
+        normalized["message"] = message
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PermissionRequest",
+            "decision": normalized,
+        }
+    }
+
+
+def main():
+    harness, action = _parse_invocation(sys.argv)
+    if harness is None:
+        return
     valid_actions = {"idle", "working", "thinking", "waiting", "done", "remove", "error", "subagent", "subagent_stop", "compacting"}
     if action not in valid_actions:
         return  # Silently ignore unknown actions
@@ -1300,6 +1466,7 @@ def main():
     # read files outside the projects directory.
     if not _is_valid_session_id(session_id):
         return
+    session_key = _session_key(harness, session_id)
     # Sanitize the workspace to guaranteed-valid UTF-8 BEFORE it can be written
     # into sessions.json — a lone surrogate from a non-UTF-8 cwd would be
     # accepted by Python's json but rejected by serde_json, bricking the file
@@ -1319,25 +1486,31 @@ def main():
     if os.environ.get("CUE_SKIP") == "1":
         resolved_source, ignored_session = source, True
     else:
-        resolved_source = _resolve_source_unlocked(session_id, source)
-        ignored_session = _should_ignore_session(hook_data, resolved_source)
+        resolved_source = _resolve_source_unlocked(
+            harness, session_id, session_key, source
+        )
+        ignored_session = _should_ignore_session(
+            hook_data, resolved_source, harness
+        )
 
     # Read latest token usage directly from the JSONL transcript. Only trust
     # the path if it resolves under the expected Claude projects directory —
     # a malformed payload could otherwise point file reads at arbitrary paths
     # (e.g., /etc/passwd, large files to stall the hook).
-    transcript_path = hook_data.get("transcript_path", "")
-    if transcript_path:
-        try:
-            resolved = os.path.realpath(transcript_path)
-            claude_home = _claude_config_dir()
-            if not resolved.startswith(claude_home + os.sep):
-                transcript_path = ""
-        except Exception:
-            transcript_path = ""
+    transcript_path = _validated_transcript_path(
+        hook_data.get("transcript_path", ""), harness
+    )
 
-    team_name, agent_name = _detect_team(transcript_path)
-    last_tokens = _read_last_tokens(transcript_path)
+    if harness == "claude":
+        team_name, agent_name = _detect_team(transcript_path)
+        last_tokens = _read_last_tokens(transcript_path)
+    else:
+        # Codex transcript enrichment is handled by the bounded Rust parser.
+        # The hook stays latency-safe and only persists cheap event metadata.
+        team_name, agent_name, last_tokens = None, None, {}
+    hook_model = hook_data.get("model")
+    if not isinstance(hook_model, str) or not hook_model:
+        hook_model = None
     event_name = hook_data.get("hook_event_name", "")
 
     # Claude Code's Notification hook fires for six subtypes. Three are
@@ -1366,8 +1539,9 @@ def main():
         _ensure_status_dir()
         if notif_type in ("elicitation_dialog", "permission_prompt"):
             _quick_state_write(
-                session_id, workspace, resolved_source, subprocess_label,
-                last_tokens, hook_start_time,
+                harness, session_id, session_key, workspace, resolved_source,
+                subprocess_label, last_tokens, hook_start_time,
+                transcript_path=transcript_path, hook_model=hook_model,
                 team_name=team_name, agent_name=agent_name,
                 permission_mode=(hook_data.get("permission_mode")
                                  or hook_data.get("permissionMode")),
@@ -1389,14 +1563,16 @@ def main():
     if event_name == "PermissionRequest":
         _ensure_status_dir()
         _quick_state_write(
-            session_id, workspace, resolved_source, subprocess_label,
-            last_tokens, hook_start_time,
+            harness, session_id, session_key, workspace, resolved_source,
+            subprocess_label, last_tokens, hook_start_time,
+            transcript_path=transcript_path, hook_model=hook_model,
             team_name=team_name, agent_name=agent_name,
             permission_mode=(hook_data.get("permission_mode")
                              or hook_data.get("permissionMode")),
         )
         if "tool_name" in hook_data:
-            decision = _forward_permission_request(hook_data, session_id)
+            decision = _forward_permission_request(hook_data, session_key)
+            decision = _permission_decision_for_harness(decision, harness)
             if decision is not None:
                 json.dump(decision, sys.stdout)
                 sys.stdout.flush()
@@ -1445,8 +1621,9 @@ def main():
         if isinstance(tool_name, str) and tool_name in ("AskUserQuestion", "ExitPlanMode"):
             action = "waiting"
             _quick_state_write(
-                session_id, workspace, resolved_source, subprocess_label,
-                last_tokens, hook_start_time,
+                harness, session_id, session_key, workspace, resolved_source,
+                subprocess_label, last_tokens, hook_start_time,
+                transcript_path=transcript_path, hook_model=hook_model,
                 team_name=team_name, agent_name=agent_name,
                 permission_mode=permission_mode,
             )
@@ -1490,7 +1667,7 @@ def main():
             # Retention: prune week-old ended tombstones + enforce the entry
             # cap before the write, so the file stops growing unboundedly.
             gc_now = time.time()
-            _gc_sessions(status["sessions"], gc_now, keep_id=session_id)
+            _gc_sessions(status["sessions"], gc_now, keep_id=session_key)
             # Sweep orphaned temp files left by hooks SIGKILLed between
             # tempfile.mkstemp and os.replace — they'd otherwise accumulate in
             # STATUS_DIR forever. Runs under the same lock; the age threshold
@@ -1499,7 +1676,11 @@ def main():
 
             if ignored_session:
                 # Best-effort cleanup for already-recorded subprocess ghosts.
-                if status["sessions"].pop(session_id, None) is None:
+                removed = status["sessions"].pop(session_key, None)
+                if harness == "claude":
+                    legacy_removed = status["sessions"].pop(session_id, None)
+                    removed = removed if removed is not None else legacy_removed
+                if removed is None:
                     return
 
                 fd, tmp = tempfile.mkstemp(dir=STATUS_DIR, suffix=".json.tmp")
@@ -1526,13 +1707,25 @@ def main():
                 # card visible in Cue (frontend filters ended sessions into a
                 # "revived" section). For /clear and /compact, SessionStart
                 # fires immediately after SessionEnd and overwrites the entry.
-                existing = status["sessions"].get(session_id, {})
+                existing = _existing_session(
+                    status["sessions"], harness, session_id, session_key
+                )
                 if existing:
                     existing["state"] = "ended"
-                    status["sessions"][session_id] = existing
+                    existing["id"] = session_id
+                    existing["harness"] = harness
+                    existing["sessionKey"] = session_key
+                    if transcript_path:
+                        existing["transcriptPath"] = transcript_path
+                    _remove_legacy_session_key(
+                        status["sessions"], harness, session_id
+                    )
+                    status["sessions"][session_key] = existing
             else:
                 # Update or create session
-                existing = status["sessions"].get(session_id, {})
+                existing = _existing_session(
+                    status["sessions"], harness, session_id, session_key
+                )
 
                 # A single tool returning an error (PostToolUseFailure) is
                 # routine and recoverable — "read the file first", "file
@@ -1567,7 +1760,9 @@ def main():
                 # means /clear was run. Also detect via transcript content for
                 # sessions that weren't previously tracked by Cue.
                 is_clear = False
-                if action == "idle" and event_name == "SessionStart":
+                if harness == "codex" and action == "idle" and event_name == "SessionStart":
+                    is_clear = hook_data.get("source") == "clear"
+                elif action == "idle" and event_name == "SessionStart":
                     # Detect /clear or /compact: if the transcript already has
                     # content, this is a context reset, not a fresh session.
                     # Reset startedAt so the timer starts fresh.
@@ -1599,7 +1794,8 @@ def main():
                 # no subagent JSONL activity, the SubagentStop was missed —
                 # reset so this event can transition normally instead of
                 # being re-overridden back to "subagent" below.
-                _maybe_clear_stale_subagent_counter(existing, transcript_path, now)
+                if harness == "claude":
+                    _maybe_clear_stale_subagent_counter(existing, transcript_path, now)
 
                 # Subagent counter: increment on start, decrement on stop.
                 # Per CLAUDE.md the override applies to `working`/`done`/`idle`
@@ -1621,7 +1817,10 @@ def main():
                         # Main session went idle/done but subagents still running —
                         # override to subagent; counter resets as SubagentStops arrive
                         action = "subagent"
-                    elif _last_tool_was_ask_question(transcript_path):
+                    elif (
+                        harness == "claude"
+                        and _last_tool_was_ask_question(transcript_path)
+                    ):
                         # Turn ended by asking user a question — show waiting
                         action = "waiting"
                 elif action == "subagent":
@@ -1653,7 +1852,10 @@ def main():
                         # If the main turn already ended (Stop fired while
                         # subagents were still running and was overridden to
                         # "subagent"), go straight to idle.
-                        action = "idle" if _turn_has_finished(transcript_path) else "working"
+                        if harness == "codex":
+                            action = "idle" if existing.get("state") == "subagent" else "working"
+                        else:
+                            action = "idle" if _turn_has_finished(transcript_path) else "working"
 
                 # While subagents are active, override "working" to "subagent"
                 # so the card surfaces the parallel work. Per CLAUDE.md schema:
@@ -1685,6 +1887,8 @@ def main():
 
                 entry = {
                     "id": session_id,
+                    "harness": harness,
+                    "sessionKey": session_key,
                     "workspace": stable_workspace,
                     "state": action,
                     "lastActivity": now,
@@ -1695,8 +1899,11 @@ def main():
                     # stored one between the unlocked peek and this write.
                     "source": existing.get("source") or resolved_source,
                     "activeSubagents": active_subs,
-                    "pid": os.getppid(),
                 }
+                if harness == "claude":
+                    entry["pid"] = os.getppid()
+                if transcript_path:
+                    entry["transcriptPath"] = transcript_path
                 # Propagate subprocess label if detected (stable across events)
                 sub = existing.get("subprocess") or subprocess_label
                 if sub:
@@ -1718,6 +1925,8 @@ def main():
                     entry["inputTokens"] = existing["inputTokens"]
                     entry["outputTokens"] = existing.get("outputTokens", 0)
                     entry["model"] = existing.get("model", "")
+                elif hook_model:
+                    entry["model"] = hook_model
                 # Carry forward last known permission mode when the current
                 # hook event didn't include it (e.g. SessionStart, Stop).
                 pm = permission_mode or existing.get("permissionMode")
@@ -1736,7 +1945,10 @@ def main():
                 # existing entries is intentionally dropped here — the new
                 # entry doesn't carry it forward, so the next hook flush
                 # clears the field across the dashboard.
-                status["sessions"][session_id] = entry
+                _remove_legacy_session_key(
+                    status["sessions"], harness, session_id
+                )
+                status["sessions"][session_key] = entry
 
             # Atomic write with unique temp file to avoid collisions
             fd, tmp = tempfile.mkstemp(dir=STATUS_DIR, suffix=".json.tmp")

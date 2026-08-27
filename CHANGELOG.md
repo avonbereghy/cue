@@ -10,6 +10,46 @@ Being pre-1.0, minor (`0.x`) releases may include breaking changes.
 
 _Nothing yet._
 
+## [0.7.0] - 2026-08-26
+
+The multi-harness release. Cue now monitors Claude Code and Codex together,
+with provider-aware cards, metrics, permissions, resume actions, and lifecycle
+tracking in one dashboard.
+
+### Added
+
+- Native Codex hook integration alongside Claude Code, with independent install,
+  diagnostics, reinstall, and uninstall controls.
+- Provider-qualified session identity, Codex JSONL enrichment, provider-aware
+  resume actions, permissions, notifications, cards, and tray entries.
+- Hook-independent discovery of already-open Codex root sessions from rollout
+  files and thread-writer locks; structured subagent rollouts stay nested.
+- A documented real-Codex release smoke test for install, event transitions,
+  concurrent Claude/Codex sessions, resume, and clean uninstall.
+
+### Changed
+
+- Codex session visibility no longer depends on a hook firing first. Rollout
+  discovery provides the baseline; trusted hooks add precise transient states
+  such as waiting, compacting, and subagent activity.
+- Settings now reports the complete Codex integration separately from hook
+  registration and explains Codex's restart and `/hooks` trust requirements.
+
+### Fixed
+
+- Codex clients that were already open when Cue or its hooks were installed now
+  appear immediately instead of leaving the dashboard on “No Active Sessions.”
+- Cue no longer treats the short-lived shell that invokes a Codex hook as the
+  owning process and prematurely retires a healthy Codex session.
+- Structured Codex subagent and guardian rollouts stay nested instead of
+  appearing as duplicate top-level sessions.
+
+### Security
+
+- Codex transcript discovery is contained to `CODEX_HOME`; permission routing
+  validates provider-qualified keys and keeps the existing authenticated,
+  fail-closed localhost handshake.
+
 ## [0.6.0] - 2026-07-21
 
 The "tell me what needs me" release. Cue now pushes native notifications when a
@@ -183,7 +223,8 @@ First public open-source release.
 ### Fixed
 - Git status now counts both porcelain columns for combined statuses (e.g. `MM`).
 
-[Unreleased]: https://github.com/avonbereghy/cue/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/avonbereghy/cue/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/avonbereghy/cue/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/avonbereghy/cue/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/avonbereghy/cue/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/avonbereghy/cue/compare/v0.5.1...v0.5.2

@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui/nicegui-tauri/refs/heads/main/tauri-2/schema.json",
   "productName": "Cue",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "identifier": "com.cueapp.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -94,7 +94,7 @@
       "entitlements": "macos/Cue.entitlements"
     },
     "publisher": "Cue",
-    "shortDescription": "Cross-platform Claude Code session monitor",
+    "shortDescription": "Cross-platform Claude Code and Codex session monitor",
     "category": "DeveloperTool"
   },
   "plugins": {

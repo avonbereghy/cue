@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { EnrichedSession } from "@/lib/types";
+import { getSessionKey, type EnrichedSession } from "@/lib/types";
 import { announce } from "@/lib/a11y";
 
 /**
@@ -15,7 +15,7 @@ export function useSessionAnnouncements(sessions: EnrichedSession[]): void {
     const prev = prevStates.current;
     const next = new Map<string, string>();
     for (const s of sessions) {
-      const id = s.info.id;
+      const id = getSessionKey(s.info);
       const state = s.info.state;
       next.set(id, state);
       const before = prev.get(id);

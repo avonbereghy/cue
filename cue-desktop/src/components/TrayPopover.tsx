@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSessionMonitor } from "@/hooks/useSessionMonitor";
-import type { EnrichedSession, Settings } from "@/lib/types";
+import { getSessionKey, type EnrichedSession, type Settings } from "@/lib/types";
 import { cleanPromptText, errorReason } from "@/lib/format";
 import { normalizeView } from "@/lib/dashboardViews";
 import { UsageStatus } from "./UsageStatus";
@@ -215,8 +215,9 @@ function SessionRow({ session, view, isLight }: { session: EnrichedSession; view
       </div>
 
       {/* Optional badges row (subprocess, team, subagent count) */}
-      {(subprocBadge || teamBadge || subBadge) && (
+      {(subprocBadge || teamBadge || subBadge || session.info.harness) && (
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <Badge text={(session.info.harness ?? "claude").toUpperCase()} tint="blue" isLight={isLight} />
           {subprocBadge && <Badge text={subprocBadge} tint="violet" isLight={isLight} />}
           {teamBadge && <Badge text={teamBadge} tint="blue" isLight={isLight} />}
           {subBadge && <Badge text={subBadge} tint="cyan" isLight={isLight} />}
@@ -594,12 +595,12 @@ export function TrayPopoverPage() {
             color: "var(--tray-muted)",
           }}>
             No active sessions yet.<br/>
-            <span style={{ opacity: 0.7 }}>Open a Claude Code session to see it here.</span>
+            <span style={{ opacity: 0.7 }}>Open a Claude Code or Codex session to see it here.</span>
           </div>
         ) : (
           <>
             {sorted.slice(0, MAX_ROWS).map((s) => (
-              <SessionRow key={s.info.id} session={s} view={view} isLight={effLight} />
+              <SessionRow key={getSessionKey(s.info)} session={s} view={view} isLight={effLight} />
             ))}
             {sorted.length > MAX_ROWS && (
               <button

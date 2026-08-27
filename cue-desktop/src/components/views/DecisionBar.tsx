@@ -1,4 +1,4 @@
-import type { EnrichedSession, PermissionRequest } from "@/lib/types";
+import { getSessionKey, type EnrichedSession, type PermissionRequest } from "@/lib/types";
 import { openSession } from "@/lib/openSession";
 import { PermissionPrompt } from "../PermissionPrompt";
 
@@ -35,8 +35,8 @@ export function DecisionBar({ session, pending, onApprove, onDeny }: DecisionBar
           <PermissionPrompt
             key={req.requestId}
             request={req}
-            onApprove={() => onApprove(session.info.id, req.requestId)}
-            onDeny={() => onDeny(session.info.id, req.requestId)}
+            onApprove={() => onApprove(getSessionKey(session.info), req.requestId)}
+            onDeny={() => onDeny(getSessionKey(session.info), req.requestId)}
           />
         ))}
       </div>

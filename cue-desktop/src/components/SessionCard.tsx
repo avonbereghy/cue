@@ -33,8 +33,7 @@ function effortTextClass(level: string): string {
     default:       return "text-white/55";
   }
 }
-import type { EnrichedSession } from "@/lib/types";
-import { STATE_HEX, STATE_HEX_LIGHT, STATE_DOT_HEX, STATE_DOT_HEX_LIGHT, STATE_BADGE_HEX, STATE_BADGE_HEX_LIGHT } from "@/lib/types";
+import { getSessionKey, STATE_HEX, STATE_HEX_LIGHT, STATE_DOT_HEX, STATE_DOT_HEX_LIGHT, STATE_BADGE_HEX, STATE_BADGE_HEX_LIGHT, type EnrichedSession } from "@/lib/types";
 import { formatTokens, formatDuration, formatClockTime, formatElapsedCompact, cleanPromptText, errorReason, getProjectAccent, formatModelName } from "@/lib/format";
 import { usageSummary, usageDisplayStrings } from "@/lib/sessionCardModel";
 import { SignalString } from "./SignalString";
@@ -235,6 +234,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
   const effectiveCompact = expandOverride !== undefined ? expandOverride === 0 : compactMode;
   const effectiveSlim = expandOverride !== undefined ? expandOverride <= 1 : slimMode;
   const { info, metrics } = session;
+  const sessionKey = getSessionKey(info);
   const contextTokenThreshold = session.contextLimit >= 1_000_000 ? 200000 : 120000;
   const contextMeetsThreshold = contextThreshold !== "after200k" || metrics.lastInputTokens >= contextTokenThreshold;
   const [copied, setCopied] = useState(false);
@@ -497,14 +497,14 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     // Mark this card mid-transition so the SessionsTab FLIP shuffle defers
     // until the smooth-exit window finishes. Cleared in the smoothExit
     // settle timer below.
-    beginTransition(info.id);
+    beginTransition(sessionKey);
     handoffCommitTimerRef.current = window.setTimeout(() => {
       const target = latestStateRef.current;
       handoffCommitTimerRef.current = null;
       if (target === "thinking") {
         // Bail — main effect will re-stage. Release the registry latch since
         // we're not actually committing this transition.
-        endTransition(info.id);
+        endTransition(sessionKey);
         return;
       }
       if (smoothExitTimerRef.current !== null) window.clearTimeout(smoothExitTimerRef.current);
@@ -518,16 +518,16 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       smoothExitTimerRef.current = window.setTimeout(() => {
         setSmoothExit(false);
         smoothExitTimerRef.current = null;
-        endTransition(info.id);
+        endTransition(sessionKey);
       }, 2700);
     }, delayMs);
-  }, [info.id]);
+  }, [sessionKey]);
 
   // Safety: clear registry on unmount so a card that disappears mid-handoff
   // doesn't permanently block the shuffle.
   useEffect(() => {
-    return () => endTransition(info.id);
-  }, [info.id]);
+    return () => endTransition(sessionKey);
+  }, [sessionKey]);
 
   // SignalString fires this once per deploy cycle when all three bands have
   // fully landed. That's our cue to commit the working-state swap after a
@@ -875,7 +875,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
     };
     const out: { id: string; bandKind: "bass" | "mids" | "treble"; axisStart: { xFrac: number; yFrac: number }; axisEnd: { xFrac: number; yFrac: number }; color: { r: number; g: number; b: number }; phaseJitter: number }[] = [];
     for (let i = 0; i < activeSubs; i++) {
-      const id = `${info.id}-sub-${i}`;
+      const id = `${sessionKey}-sub-${i}`;
       const r1 = seedHash(id + "@y");
       const r4 = seedHash(id + "@phase");
       // Subagent strings now run straight across the card horizontally. Each
@@ -893,7 +893,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       });
     }
     return out;
-  }, [subagentBandsVisible, activeSubs, info.id, isDark]);
+  }, [subagentBandsVisible, activeSubs, sessionKey, isDark]);
 
   // During the smooth-exit window, text/background colors stretch longer and
   // use the same outExpo curve as the card to keep the whole retract in sync.
@@ -1176,14 +1176,14 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       {/* Dismiss ("X") — tucks the session into the recoverable Resting group.
           Only on the live card, never the revived/ended overlay. */}
       {onDismiss && !revived && (
-        <DismissButton sessionId={info.id} title={session.displayTitle} onDismiss={onDismiss} />
+        <DismissButton sessionId={sessionKey} title={session.displayTitle} onDismiss={onDismiss} />
       )}
 
       {/* Aurora wash — done-state ambient background. Slow FBM flow; mounts
           on done, fades out via AURORA_EXIT_MS when state leaves. */}
       {signalString && !lowPower && auroraEnabled && auroraMounted && (revived || info.state !== "ended") && (
         <AuroraEffect
-          seed={info.id}
+          seed={sessionKey}
           active={auroraActive}
           alpha={auroraAlpha}
           speed={auroraSpeed}
@@ -1195,7 +1195,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
           re-importing CompactTankEffect and reinstating the alpha ramp. */}
 
       {/* Signal String / Sand — renders behind all content */}
-      {signalString && (revived || info.state !== "ended") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} comets={cometsRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={signalEffect} stringsEnabled={stringsEnabled} sandEnabled={sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} stringDeployAngle={stringDeployAngle} sessionId={info.id} contentRef={contentRef} keyReleaseSpeed={keyReleaseSpeed} onStringsConnected={handleStringsConnected} extraBands={combinedExtraBands} suppressBaseBands={suppressBaseBands} baseBandsTarget={baseBandsTarget} baseBandsAmpMuls={baseBandsAmpMuls} />}
+      {signalString && (revived || info.state !== "ended") && <SignalString state={info.state} frequency={signalFrequency} revived={revived} pulses={pulsesRef} comets={cometsRef} signalMode={signalMode} signalAlpha={signalAlpha} signalAmplitude={signalAmplitude} signalEcho={signalEcho} signalBass={signalBass} signalMids={signalMids} signalTreble={signalTreble} signalColorDark={signalColorDark} signalColorLight={signalColorLight} signalOffset={signalOffset} signalEffect={signalEffect} stringsEnabled={stringsEnabled} sandEnabled={sandEnabled} sandIntensity={sandIntensity} sandDirection={sandDirection} sandDensity={sandDensity} sandSpeed={sandSpeed} sandGrainSize={sandGrainSize} sandTurbulence={sandTurbulence} sandAlpha={sandAlpha} cordRetractDelay={cordRetractDelay} cordDeployForce={cordDeployForce} cordRetractForce={cordRetractForce} stringSpread={stringSpread} stringDeployAngle={stringDeployAngle} sessionId={sessionKey} contentRef={contentRef} keyReleaseSpeed={keyReleaseSpeed} onStringsConnected={handleStringsConnected} extraBands={combinedExtraBands} suppressBaseBands={suppressBaseBands} baseBandsTarget={baseBandsTarget} baseBandsAmpMuls={baseBandsAmpMuls} />}
 
       {/* Flux streamline overlay on thinking cards, tinted by the state color.
           Mounted by a linger timer: stays while thinking is active, lingers
@@ -1206,7 +1206,7 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
       {signalString && fluxEnabled && fluxMounted && (revived || info.state !== "ended") && (
         <FluxEffect
           color={fluxTintHex}
-          seed={info.id}
+          seed={sessionKey}
           active={fluxActive}
           alpha={fluxAlpha}
           intensity={fluxIntensity}
@@ -1309,6 +1309,9 @@ function SessionCardBase({ session, titleAnimation = "none", animationSpeed = 1.
                 {session.displayTitle}
               </span>
             )}
+            <span className="text-[0.5625rem] font-mono uppercase tracking-wider text-white/35 shrink-0">
+              {info.harness ?? "claude"}
+            </span>
             {metrics.customTitle && session.displayTitle !== session.workspaceName && (
               <span className="text-xs text-white/40 truncate min-w-0 shrink">
                 {session.workspaceName}

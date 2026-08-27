@@ -3,13 +3,13 @@
 //! Polls sessions.json for current session states and parses JSONL conversation
 //! logs for token metrics. Maintains enriched sessions and usage metrics.
 
-use crate::jsonl_parser;
 use crate::models::{
     ConfigCounts, EnrichedSession, GitStatus, RateLimitInfo, SessionInfo, SessionMetrics,
     StatusData, SupplementalData, SystemMemory,
 };
 use crate::paths;
 use crate::security;
+use crate::{codex_jsonl_parser, codex_session_discovery, jsonl_parser};
 use crate::{config_counter, git_status, system_info};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -75,6 +75,9 @@ pub struct SessionMonitorState {
     /// `refresh_metrics` tail only newly-appended lines instead of re-reading
     /// and re-parsing the entire transcript every 5s.
     jsonl_entry_cache: Mutex<HashMap<String, jsonl_parser::JsonlEntryCache>>,
+    /// Provider-isolated incremental rollout caches. Codex entries never pass
+    /// through the Claude JSONL parser and cannot affect its heuristics.
+    codex_jsonl_entry_cache: Mutex<HashMap<String, codex_jsonl_parser::CodexJsonlCache>>,
     file_mod_dates: Mutex<HashMap<String, SystemTime>>,
     resolved_paths: Mutex<HashMap<String, String>>,
     /// Bundled supplemental info refreshed by the 5s timer. Bundling lets
@@ -156,6 +159,7 @@ impl Default for SessionMonitorState {
             enriched_sessions: Mutex::new(Vec::new()),
             metrics_cache: Mutex::new(HashMap::new()),
             jsonl_entry_cache: Mutex::new(HashMap::new()),
+            codex_jsonl_entry_cache: Mutex::new(HashMap::new()),
             file_mod_dates: Mutex::new(HashMap::new()),
             resolved_paths: Mutex::new(HashMap::new()),
             supplemental: Mutex::new(SupplementalCache::default()),
@@ -216,22 +220,22 @@ impl SessionMonitorState {
     /// CURRENT transition marker (its `state_changed_at`), so eviction compares
     /// two values from the same clock (the hook's) — a wall-clock jump can't wedge
     /// it the way an action-time anchor could.
-    pub fn dismiss_session(&self, session_id: &str) {
-        let anchor = self.transition_marker_for(session_id);
+    pub fn dismiss_session(&self, session_key: &str) {
+        let anchor = self.transition_marker_for(session_key);
         self.manual_visibility
             .lock_safe()
-            .insert(session_id.to_string(), (true, anchor));
+            .insert(session_key.to_string(), (true, anchor));
     }
 
     /// Manually bring a resting session back ("restore" in the Resting group).
     /// Records a force-shown override so the idle rule can't immediately re-hide
     /// it (the machine yields to the human); like dismiss, it self-evicts once
     /// the session's transition marker next changes.
-    pub fn restore_session(&self, session_id: &str) {
-        let anchor = self.transition_marker_for(session_id);
+    pub fn restore_session(&self, session_key: &str) {
+        let anchor = self.transition_marker_for(session_key);
         self.manual_visibility
             .lock_safe()
-            .insert(session_id.to_string(), (false, anchor));
+            .insert(session_key.to_string(), (false, anchor));
     }
 
     /// The session's current transition marker, read from the latest enriched
@@ -239,17 +243,21 @@ impl SessionMonitorState {
     /// caller takes `manual_visibility`, so the two locks are never nested.
     /// Falls back to `now` for a session not in the snapshot (it isn't visible,
     /// so dismissing it is a no-op in practice).
-    fn transition_marker_for(&self, session_id: &str) -> f64 {
+    fn transition_marker_for(&self, session_key: &str) -> f64 {
         self.enriched_sessions
             .lock_safe()
             .iter()
-            .find(|s| s.info.id == session_id)
+            .find(|s| s.info.session_key == session_key)
             .map(|s| transition_marker(&s.info))
             .unwrap_or_else(now_secs)
     }
 
     pub fn poll_status(&self) {
-        self.poll_status_with(paths::sessions_json_path(), self.effective_projects_path());
+        self.poll_status_with_sources(
+            paths::sessions_json_path(),
+            self.effective_projects_path(),
+            Some(paths::codex_config_dir()),
+        );
     }
 
     /// Path-injected core of `poll_status`. Extracted so tests can drive the
@@ -257,7 +265,20 @@ impl SessionMonitorState {
     /// waiting verdict → turn-ended) against fixture files instead of the real
     /// `~/.../sessions.json` and `~/.claude/projects` (F-tests-001/003). The
     /// public wrapper above passes the production paths.
+    #[cfg(test)]
     fn poll_status_with(&self, status_path: std::path::PathBuf, projects_path: std::path::PathBuf) {
+        self.poll_status_with_sources(status_path, projects_path, None);
+    }
+
+    /// Full source-injected reconcile core. Tests that exercise Claude-only
+    /// behavior use `poll_status_with`; Codex discovery tests pass an isolated
+    /// config root here so no test ever reads the developer's real CODEX_HOME.
+    fn poll_status_with_sources(
+        &self,
+        status_path: std::path::PathBuf,
+        projects_path: std::path::PathBuf,
+        codex_home: Option<std::path::PathBuf>,
+    ) {
         // sessions.json is the untrusted boundary (the Python hook writes it,
         // but any local process can race-write that path). Read through the
         // size-bounded reader so a runaway/hostile producer can't OOM the
@@ -271,7 +292,15 @@ impl SessionMonitorState {
         // action, so a single mid-rename read never flashes the UI.
         const REPAIR_THRESHOLD: u32 = 5;
 
-        let status = match security::read_to_string_bounded(&status_path, SESSIONS_JSON_MAX_BYTES) {
+        let discovery = codex_home
+            .as_deref()
+            .map(|home| codex_session_discovery::discover_codex_sessions(home, self.launched_at))
+            .unwrap_or_default();
+
+        let mut status = match security::read_to_string_bounded(
+            &status_path,
+            SESSIONS_JSON_MAX_BYTES,
+        ) {
             Ok(content) => match serde_json::from_str::<StatusData>(&content) {
                 Ok(s) => {
                     // Successful parse — reset the failure counter so the
@@ -366,6 +395,18 @@ impl SessionMonitorState {
                 );
                 return;
             }
+            Err(e)
+                if e.kind() == std::io::ErrorKind::NotFound && !discovery.sessions.is_empty() =>
+            {
+                // Cue may be launched before any hook has ever written its
+                // shared state file. A held Codex writer lock is independently
+                // authoritative, so do not make a missing sessions.json block
+                // rollout discovery.
+                *self.consecutive_parse_failures.lock_safe() = 0;
+                StatusData {
+                    sessions: HashMap::new(),
+                }
+            }
             Err(e) => {
                 // Transient read failure — the file is momentarily absent during
                 // the hook's atomic rename, or an EINTR/EIO blip. Preserve the
@@ -395,6 +436,23 @@ impl SessionMonitorState {
             }
         };
 
+        // Merge live root threads before admission. Hook entries win their
+        // exact event state; discovery supplies identity/path/liveness and
+        // synthesizes the session when hooks were installed after Codex began.
+        // Codex hook PIDs are intentionally discarded: Codex invokes a shell
+        // command for each hook, so the hook's parent is ephemeral rather than
+        // the long-lived thread owner. Writer-lock ownership is the authority.
+        {
+            let metrics = self.metrics_cache.lock_safe();
+            merge_codex_discovery(
+                &mut status,
+                &discovery,
+                &metrics,
+                self.launched_at,
+                now_secs(),
+            );
+        }
+
         // Admission filter:
         //   - Active states (working/thinking/subagent/compacting/clearing) and
         //     `waiting` bypass the launched_at gate. The hook is event-driven, so
@@ -410,6 +468,8 @@ impl SessionMonitorState {
         let launched_at = self.launched_at;
         let active = sort_sessions(status.sessions.into_values().filter(|s| {
             security::validate_session_id(&s.id).is_ok()
+                && security::validate_session_key(&s.session_key).is_ok()
+                && s.is_supported_harness()
                 && security::sanitize_workspace_path(&s.workspace).is_ok()
                 && admit_session(
                     &s.state,
@@ -430,9 +490,11 @@ impl SessionMonitorState {
                     .iter()
                     .filter(|s| {
                         s.team_name.is_some()
-                            || cache.get(&s.id).is_some_and(|m| m.team_name.is_some())
+                            || cache
+                                .get(&s.session_key)
+                                .is_some_and(|m| m.team_name.is_some())
                     })
-                    .map(|s| s.id.clone())
+                    .map(|s| s.session_key.clone())
                     .collect()
             };
             dedup_sessions(active, &team_ids)
@@ -450,13 +512,13 @@ impl SessionMonitorState {
                 .into_iter()
                 .map(|mut s| {
                     if s.state == "idle" {
-                        let metrics = cache.get(&s.id);
+                        let metrics = cache.get(&s.session_key);
                         // Only promote teammates (have teamName on entries), not the
                         // team lead which only has agentName via agent-name entry.
                         let is_teammate =
                             s.team_name.is_some() || metrics.is_some_and(|m| m.team_name.is_some());
                         if should_promote_teammate_done(is_teammate, s.last_activity, now_secs) {
-                            log::debug!(target: "cue::state", "id={} idle->done pass=team_done idle_secs={:.0}", s.id, now_secs - s.last_activity);
+                            log::debug!(target: "cue::state", "key={} idle->done pass=team_done idle_secs={:.0}", s.session_key, now_secs - s.last_activity);
                             s.state = "done".to_string();
                         }
                     }
@@ -483,7 +545,7 @@ impl SessionMonitorState {
         // for still-in-source ids keeps the demote deterministic across polls,
         // so the card settles instead of flickering.
         let admitted_ids: std::collections::HashSet<String> =
-            active.iter().map(|s| s.id.clone()).collect();
+            active.iter().map(|s| s.session_key.clone()).collect();
 
         // JSONL-presence check: demote liveness-sensitive sessions whose
         // ~/.claude/projects/<encoded-ws>/<id>.jsonl file no longer exists.
@@ -515,20 +577,26 @@ impl SessionMonitorState {
                     if !is_liveness_sensitive(&s.state) {
                         return s;
                     }
-                    if launcher_writes_transcript(s.source.as_deref())
-                        && !self.jsonl_exists_on_disk(&s.id, &s.workspace, &projects_path)
+                    if s.harness == "claude"
+                        && launcher_writes_transcript(s.source.as_deref())
+                        && !self.jsonl_exists_on_disk(
+                            &s.session_key,
+                            &s.id,
+                            &s.workspace,
+                            &projects_path,
+                        )
                     {
                         log::debug!(
                             target: "cue::state",
-                            "id={} {}->idle pass=jsonl_missing",
-                            s.id,
+                            "key={} {}->idle pass=jsonl_missing",
+                            s.session_key,
                             s.state
                         );
                         s.state = "idle".to_string();
                         s.active_subagents = 0;
                         s.permission_mode = None;
-                        active_since.remove(&s.id);
-                        identity.remove(&s.id);
+                        active_since.remove(&s.session_key);
+                        identity.remove(&s.session_key);
                     }
                     s
                 })
@@ -546,7 +614,7 @@ impl SessionMonitorState {
         // only chats that are still open.
         let active: Vec<_> = {
             let active_ids: std::collections::HashSet<String> =
-                active.iter().map(|s| s.id.clone()).collect();
+                active.iter().map(|s| s.session_key.clone()).collect();
             let pids_to_check: Vec<sysinfo::Pid> = active
                 .iter()
                 .filter(|s| liveness_checkable(&s.state))
@@ -588,15 +656,21 @@ impl SessionMonitorState {
                     // accept only processes that look like Claude Code so a
                     // recycled PID doesn't get anchored.
                     let live_name = process.and_then(|p| p.name().to_str()).map(str::to_owned);
-                    let cached = identity.get(&s.id).copied();
-                    match resolve_liveness(pid, live_start, cached, live_name.as_deref()) {
+                    let cached = identity.get(&s.session_key).copied();
+                    match resolve_liveness(
+                        pid,
+                        live_start,
+                        cached,
+                        live_name.as_deref(),
+                        &s.harness,
+                    ) {
                         LivenessOutcome::Alive { cache } => {
-                            identity.insert(s.id.clone(), cache);
+                            identity.insert(s.session_key.clone(), cache);
                         }
                         LivenessOutcome::Dead => {
-                            identity.remove(&s.id);
+                            identity.remove(&s.session_key);
                             let next = dead_state_for(&s.state);
-                            log::debug!(target: "cue::state", "id={} {}->{} pass=liveness_dead pid={}", s.id, s.state, next, pid);
+                            log::debug!(target: "cue::state", "key={} {}->{} pass=liveness_dead pid={}", s.session_key, s.state, next, pid);
                             s.state = next.to_string();
                             s.active_subagents = 0;
                         }
@@ -617,12 +691,12 @@ impl SessionMonitorState {
             active
                 .into_iter()
                 .map(|mut s| {
-                    let metrics = cache.get(&s.id);
+                    let metrics = cache.get(&s.session_key);
                     if should_demote_turn_ended(&s.state, s.state_changed_at, metrics) {
                         log::debug!(
                             target: "cue::state",
-                            "id={} {}->idle pass=turn_ended end_turn_ts={:?} state_changed_at={:?}",
-                            s.id, s.state,
+                            "key={} {}->idle pass=turn_ended end_turn_ts={:?} state_changed_at={:?}",
+                            s.session_key, s.state,
                             metrics.and_then(|m| m.last_end_turn_ts),
                             s.state_changed_at
                         );
@@ -643,7 +717,7 @@ impl SessionMonitorState {
             .into_iter()
             .map(|mut s| {
                 if should_demote_stuck_active(&s.state, s.state_changed_at, now_secs) {
-                    log::debug!(target: "cue::state", "id={} {}->idle pass=stuck_active_cap", s.id, s.state);
+                    log::debug!(target: "cue::state", "key={} {}->idle pass=stuck_active_cap", s.session_key, s.state);
                     s.state = "idle".to_string();
                 }
                 s
@@ -663,9 +737,9 @@ impl SessionMonitorState {
             active
                 .into_iter()
                 .map(|mut s| {
-                    let metrics = cache.get(&s.id);
+                    let metrics = cache.get(&s.session_key);
                     if should_demote_stalled_turn(&s.state, metrics, now_secs) {
-                        log::debug!(target: "cue::state", "id={} {}->idle pass=stalled_turn_cap", s.id, s.state);
+                        log::debug!(target: "cue::state", "key={} {}->idle pass=stalled_turn_cap", s.session_key, s.state);
                         s.state = "idle".to_string();
                     }
                     s
@@ -685,13 +759,13 @@ impl SessionMonitorState {
             active
                 .into_iter()
                 .map(|mut s| {
-                    let metrics = cache.get(&s.id);
+                    let metrics = cache.get(&s.session_key);
                     if should_demote_stale_subagent(&s.state, s.state_changed_at, metrics, now_secs)
                     {
                         log::debug!(
                             target: "cue::state",
-                            "id={} {}->idle pass=stale_subagent active_subagents={}",
-                            s.id,
+                            "key={} {}->idle pass=stale_subagent active_subagents={}",
+                            s.session_key,
                             s.state,
                             s.active_subagents,
                         );
@@ -735,11 +809,11 @@ impl SessionMonitorState {
             active
                 .into_iter()
                 .map(|mut s| {
-                    let metrics = cache.get(&s.id);
+                    let metrics = cache.get(&s.session_key);
                     let awaiting = metrics.map(|m| m.awaiting_user_prompt).unwrap_or(false);
                     let pending = metrics.map(|m| m.pending_tool_use).unwrap_or(false);
                     if awaiting && is_promotable_to_waiting(&s.state) {
-                        log::debug!(target: "cue::state", "id={} {}->waiting pass=waiting_promote src=awaiting_prompt", s.id, s.state);
+                        log::debug!(target: "cue::state", "key={} {}->waiting pass=waiting_promote src=awaiting_prompt", s.session_key, s.state);
                         s.state = "waiting".to_string();
                     } else if s.state == "waiting"
                         && should_resolve_waiting(awaiting, pending)
@@ -748,7 +822,7 @@ impl SessionMonitorState {
                             s.state_changed_at,
                         )
                     {
-                        log::debug!(target: "cue::state", "id={} waiting->idle pass=waiting_resolve awaiting={} pending={}", s.id, awaiting, pending);
+                        log::debug!(target: "cue::state", "key={} waiting->idle pass=waiting_resolve awaiting={} pending={}", s.session_key, awaiting, pending);
                         s.state = "idle".to_string();
                     }
                     s
@@ -785,7 +859,7 @@ impl SessionMonitorState {
             let mut rescued = self.subagent_rescued_for.lock_safe();
             let mut floor = self.compacting_floor.lock_safe();
             let current_ids: std::collections::HashSet<&str> =
-                active.iter().map(|s| s.id.as_str()).collect();
+                active.iter().map(|s| s.session_key.as_str()).collect();
             promoted.retain(|id, _| current_ids.contains(id.as_str()));
             rescued.retain(|id, _| current_ids.contains(id.as_str()));
             floor.retain(|id, _| current_ids.contains(id.as_str()));
@@ -793,7 +867,7 @@ impl SessionMonitorState {
             active
                 .into_iter()
                 .map(|mut s| {
-                    let metrics = cache.get(&s.id);
+                    let metrics = cache.get(&s.session_key);
 
                     // ── Compacting floor ───────────────────────────────
                     // When the hook writes `compacting`, set a 1500ms floor.
@@ -801,19 +875,20 @@ impl SessionMonitorState {
                     // valid floor, hold the card on `compacting` until the
                     // floor expires.
                     if s.state == "compacting" {
-                        floor.insert(s.id.clone(), now_secs + 1.5);
-                    } else if floor_extends(&s.state, floor.get(&s.id).copied(), now_secs) {
+                        floor.insert(s.session_key.clone(), now_secs + 1.5);
+                    } else if floor_extends(&s.state, floor.get(&s.session_key).copied(), now_secs)
+                    {
                         // Extend display: hook moved off compacting too
                         // quickly for the poll cadence to catch it.
                         s.state = "compacting".to_string();
                     } else {
-                        floor.remove(&s.id);
+                        floor.remove(&s.session_key);
                     }
 
                     // ── Thinking→working promotion latch ───────────────
                     let decision = promote_decision(
                         &s.state,
-                        promoted.get(&s.id).copied(),
+                        promoted.get(&s.session_key).copied(),
                         metrics.and_then(|m| m.last_user_prompt_ts),
                         metrics.and_then(|m| m.last_assistant_text_ts),
                         metrics.is_some_and(|m| m.last_assistant_has_text),
@@ -824,8 +899,12 @@ impl SessionMonitorState {
                         }
                         PromoteDecision::Promote { prompt_ts } => {
                             s.state = "working".to_string();
-                            promoted.insert(s.id.clone(), prompt_ts);
-                            log::debug!("promote-latch id={} prompt_ts={}", s.id, prompt_ts);
+                            promoted.insert(s.session_key.clone(), prompt_ts);
+                            log::debug!(
+                                "promote-latch key={} prompt_ts={}",
+                                s.session_key,
+                                prompt_ts
+                            );
                         }
                         PromoteDecision::Keep => {}
                     }
@@ -838,7 +917,7 @@ impl SessionMonitorState {
                         // session that errors out and immediately retries
                         // with a stale prompt_ts in metrics could skip the
                         // visual handoff entirely.
-                        promoted.remove(&s.id);
+                        promoted.remove(&s.session_key);
                     }
 
                     // ── Subagent rescue latch ──────────────────────────
@@ -876,7 +955,7 @@ impl SessionMonitorState {
                                     .fold(0.0_f64, f64::max)
                             })
                             .unwrap_or(0.0);
-                        let already = rescued.get(&s.id).copied().unwrap_or(0.0);
+                        let already = rescued.get(&s.session_key).copied().unwrap_or(0.0);
                         if (latest_started - already).abs() > 0.001 {
                             // Demoted from info→debug: session ids map 1:1 to
                             // JSONL files / conversation records, and the
@@ -884,12 +963,12 @@ impl SessionMonitorState {
                             // Surface with RUST_LOG=cue_desktop=debug when
                             // investigating rescue cycles.
                             log::debug!(
-                                "subagent-rescue-latched id={} state={}→subagent live={}",
-                                s.id,
+                                "subagent-rescue-latched key={} state={}→subagent live={}",
+                                s.session_key,
                                 s.state,
                                 live
                             );
-                            rescued.insert(s.id.clone(), latest_started);
+                            rescued.insert(s.session_key.clone(), latest_started);
                         }
                         s.state = "subagent".to_string();
                         s.active_subagents = live;
@@ -897,7 +976,7 @@ impl SessionMonitorState {
                     {
                         // Non-rescuable states clear the rescue latch so the
                         // NEXT qualifying window re-logs if needed.
-                        rescued.remove(&s.id);
+                        rescued.remove(&s.session_key);
                     }
 
                     s
@@ -917,7 +996,7 @@ impl SessionMonitorState {
                 )
             };
             let current_ids: std::collections::HashSet<&str> =
-                active.iter().map(|s| s.id.as_str()).collect();
+                active.iter().map(|s| s.session_key.as_str()).collect();
             // Prune the active-duration timer to what's actually displayed —
             // it's a per-card render timer, not demote evidence, so a
             // filtered-out session shouldn't keep one.
@@ -942,6 +1021,9 @@ impl SessionMonitorState {
             self.jsonl_entry_cache
                 .lock_safe()
                 .retain(|id, _| admitted_ids.contains(id.as_str()));
+            self.codex_jsonl_entry_cache
+                .lock_safe()
+                .retain(|id, _| admitted_ids.contains(id.as_str()));
             // `file_mod_dates` also stores subagent-dir entries keyed as
             // `<sid>-subagents`, so prefix-match the live ids.
             self.file_mod_dates.lock_safe().retain(|key, _| {
@@ -962,14 +1044,16 @@ impl SessionMonitorState {
                     // Fall back to first-seen-now for entries from older hooks.
                     match s.state_changed_at {
                         Some(ts) => {
-                            active_since.insert(s.id.clone(), ts);
+                            active_since.insert(s.session_key.clone(), ts);
                         }
                         None => {
-                            active_since.entry(s.id.clone()).or_insert(now_secs);
+                            active_since
+                                .entry(s.session_key.clone())
+                                .or_insert(now_secs);
                         }
                     }
                 } else {
-                    active_since.remove(&s.id);
+                    active_since.remove(&s.session_key);
                 }
             }
             active_since.clone()
@@ -989,7 +1073,7 @@ impl SessionMonitorState {
             let threshold = *self.auto_hide_idle_secs.lock_safe();
             let mut overrides = self.manual_visibility.lock_safe();
             let current_ids: std::collections::HashSet<&str> =
-                active.iter().map(|s| s.id.as_str()).collect();
+                active.iter().map(|s| s.session_key.as_str()).collect();
             // Drop overrides for sessions that no longer exist so the map can't
             // grow unbounded (same hygiene as active_since above).
             overrides.retain(|id, _| current_ids.contains(id.as_str()));
@@ -1001,18 +1085,18 @@ impl SessionMonitorState {
                     marker,
                     now_secs,
                     threshold,
-                    overrides.get(&s.id).copied(),
+                    overrides.get(&s.session_key).copied(),
                 );
                 match new_override {
                     Some(ov) => {
-                        overrides.insert(s.id.clone(), ov);
+                        overrides.insert(s.session_key.clone(), ov);
                     }
                     None => {
-                        overrides.remove(&s.id);
+                        overrides.remove(&s.session_key);
                     }
                 }
                 if let Some(r) = reason {
-                    out.insert(s.id.clone(), r);
+                    out.insert(s.session_key.clone(), r);
                 }
             }
             out
@@ -1028,11 +1112,13 @@ impl SessionMonitorState {
             active
                 .into_iter()
                 .map(|session| {
-                    let metrics = cache.get(&session.id).cloned().unwrap_or_default();
-                    let (prev_output, prev_ts) =
-                        speed_cache.get(&session.id).cloned().unwrap_or((0, 0.0));
-                    let active_since_ts = active_since_snapshot.get(&session.id).copied();
-                    let resting_reason = resting_snapshot.get(&session.id).copied();
+                    let metrics = cache.get(&session.session_key).cloned().unwrap_or_default();
+                    let (prev_output, prev_ts) = speed_cache
+                        .get(&session.session_key)
+                        .cloned()
+                        .unwrap_or((0, 0.0));
+                    let active_since_ts = active_since_snapshot.get(&session.session_key).copied();
+                    let resting_reason = resting_snapshot.get(&session.session_key).copied();
                     let supplemental = SupplementalData {
                         git_status: git_cache.get(&session.workspace).map(|(s, _)| s.clone()),
                         config_counts: config_cache.get(&session.workspace).map(|(c, _)| c.clone()),
@@ -1063,23 +1149,38 @@ impl SessionMonitorState {
         // state) instead of the full EnrichedSession vector — at every 5s tick
         // a 20-session list previously copied ~40 KB of nested supplemental
         // data through the allocator for no reason.
-        let session_keys: Vec<(String, String, String)> = {
+        type MetricsTarget = (String, String, String, String, String, Option<String>, i64);
+        let session_keys: Vec<MetricsTarget> = {
             let guard = self.enriched_sessions.lock_safe();
             guard
                 .iter()
                 .map(|s| {
                     (
+                        s.info.session_key.clone(),
                         s.info.id.clone(),
                         s.info.workspace.clone(),
                         s.info.state.clone(),
+                        s.info.harness.clone(),
+                        s.info.transcript_path.clone(),
+                        s.info.active_subagents,
                     )
                 })
                 .collect()
         };
         let projects_path = self.effective_projects_path();
 
-        for (id, workspace, state) in &session_keys {
-            let path = self.jsonl_path(id, workspace, &projects_path);
+        for (session_key, id, workspace, state, harness, transcript_path, active_subagents) in
+            &session_keys
+        {
+            let path = if harness == "claude" {
+                self.jsonl_path(session_key, id, workspace, &projects_path)
+            } else {
+                transcript_path
+                    .as_deref()
+                    .and_then(validated_codex_transcript_path)
+                    .map(|path| path.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            };
 
             if !Path::new(&path).exists() {
                 continue;
@@ -1098,7 +1199,7 @@ impl SessionMonitorState {
                 if let Ok(metadata) = std::fs::metadata(&path) {
                     if let Ok(mod_time) = metadata.modified() {
                         let mut mod_dates = self.file_mod_dates.lock_safe();
-                        if let Some(cached) = mod_dates.get(id) {
+                        if let Some(cached) = mod_dates.get(session_key) {
                             if *cached == mod_time {
                                 // Parent unchanged — also check subagents dir
                                 let session_stem = Path::new(&path)
@@ -1124,7 +1225,7 @@ impl SessionMonitorState {
                                     .as_deref()
                                     .and_then(subagents_latest_mtime)
                                     .map(|sub_mod| {
-                                        let sub_key = format!("{}-subagents", id);
+                                        let sub_key = format!("{}-subagents", session_key);
                                         let changed = mod_dates
                                             .get(&sub_key)
                                             .map(|c| *c != sub_mod)
@@ -1141,7 +1242,7 @@ impl SessionMonitorState {
                                 }
                             }
                         }
-                        mod_dates.insert(id.clone(), mod_time);
+                        mod_dates.insert(session_key.clone(), mod_time);
                     }
                 }
                 if should_skip {
@@ -1149,9 +1250,17 @@ impl SessionMonitorState {
                 }
             }
 
-            let metrics = {
+            let metrics = if harness == "codex" {
+                let mut cache_guard = self.codex_jsonl_entry_cache.lock_safe();
+                let entry_cache = cache_guard.entry(session_key.clone()).or_default();
+                codex_jsonl_parser::parse_codex_jsonl_to_session_metrics_cached(
+                    Path::new(&path),
+                    entry_cache,
+                    *active_subagents,
+                )
+            } else {
                 let mut cache_guard = self.jsonl_entry_cache.lock_safe();
-                let entry_cache = cache_guard.entry(id.clone()).or_default();
+                let entry_cache = cache_guard.entry(session_key.clone()).or_default();
                 jsonl_parser::parse_jsonl_to_session_metrics_cached(Path::new(&path), entry_cache)
             };
             if let Some(metrics) = metrics {
@@ -1163,10 +1272,12 @@ impl SessionMonitorState {
                 {
                     let mut speed_cache = self.output_speed_cache.lock_safe();
                     // Store current output_tokens as "previous" for next poll
-                    speed_cache.insert(id.clone(), (metrics.output_tokens, now_ts));
+                    speed_cache.insert(session_key.clone(), (metrics.output_tokens, now_ts));
                 }
 
-                self.metrics_cache.lock_safe().insert(id.clone(), metrics);
+                self.metrics_cache
+                    .lock_safe()
+                    .insert(session_key.clone(), metrics);
             }
         }
     }
@@ -1272,6 +1383,7 @@ impl SessionMonitorState {
     /// session id still exist as far as Claude Code is concerned?" checks.
     fn jsonl_exists_on_disk(
         &self,
+        session_key: &str,
         session_id: &str,
         workspace: &str,
         projects_path: &Path,
@@ -1279,7 +1391,7 @@ impl SessionMonitorState {
         // If we already resolved a path for this id, just stat it. A deleted
         // JSONL still leaves the cached string in place; `Path::exists()`
         // returning false is exactly the signal we want.
-        if let Some(cached) = self.resolved_paths.lock_safe().get(session_id).cloned() {
+        if let Some(cached) = self.resolved_paths.lock_safe().get(session_key).cloned() {
             return Path::new(&cached).exists();
         }
 
@@ -1296,7 +1408,7 @@ impl SessionMonitorState {
                 .join(&filename);
             if candidate.exists() {
                 self.resolved_paths.lock_safe().insert(
-                    session_id.to_string(),
+                    session_key.to_string(),
                     candidate.to_string_lossy().to_string(),
                 );
                 return true;
@@ -1312,7 +1424,7 @@ impl SessionMonitorState {
                 let candidate = entry.path().join(&filename);
                 if candidate.exists() {
                     self.resolved_paths.lock_safe().insert(
-                        session_id.to_string(),
+                        session_key.to_string(),
                         candidate.to_string_lossy().to_string(),
                     );
                     return true;
@@ -1323,11 +1435,17 @@ impl SessionMonitorState {
         false
     }
 
-    fn jsonl_path(&self, session_id: &str, workspace: &str, projects_path: &Path) -> String {
+    fn jsonl_path(
+        &self,
+        session_key: &str,
+        session_id: &str,
+        workspace: &str,
+        projects_path: &Path,
+    ) -> String {
         // Check cache
         {
             let cache = self.resolved_paths.lock_safe();
-            if let Some(cached) = cache.get(session_id) {
+            if let Some(cached) = cache.get(session_key) {
                 return cached.clone();
             }
         }
@@ -1348,7 +1466,7 @@ impl SessionMonitorState {
                 let result = candidate.to_string_lossy().to_string();
                 self.resolved_paths
                     .lock_safe()
-                    .insert(session_id.to_string(), result.clone());
+                    .insert(session_key.to_string(), result.clone());
                 return result;
             }
 
@@ -1367,7 +1485,7 @@ impl SessionMonitorState {
                     let result = candidate.to_string_lossy().to_string();
                     self.resolved_paths
                         .lock_safe()
-                        .insert(session_id.to_string(), result.clone());
+                        .insert(session_key.to_string(), result.clone());
                     return result;
                 }
             }
@@ -1457,6 +1575,183 @@ fn now_secs() -> f64 {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs_f64()
+}
+
+/// Merge hook state with Codex's independently-discovered open root threads.
+/// Hook state remains authoritative for transitions only hooks can observe
+/// (permissions, compaction, exact pre/post-tool timing); discovery guarantees
+/// the card exists and provides a stable rollout path even when no hook ran.
+fn merge_codex_discovery(
+    status: &mut StatusData,
+    discovery: &codex_session_discovery::CodexDiscoverySnapshot,
+    metrics: &HashMap<String, SessionMetrics>,
+    launched_at: f64,
+    now: f64,
+) {
+    const CLOSED_HOOK_GRACE_SECS: f64 = 15.0;
+    let open_keys: std::collections::HashSet<String> = discovery
+        .sessions
+        .iter()
+        .map(|session| format!("codex:{}", session.id))
+        .collect();
+
+    if discovery.authoritative {
+        status.sessions.retain(|_, session| {
+            if session.harness != "codex" {
+                return true;
+            }
+            open_keys.contains(&session.session_key)
+                || now - session.last_activity <= CLOSED_HOOK_GRACE_SECS
+        });
+    }
+
+    for discovered in &discovery.sessions {
+        let session_key = format!("codex:{}", discovered.id);
+        let existing_key = status.sessions.iter().find_map(|(key, session)| {
+            (session.session_key == session_key
+                || (session.harness == "codex" && session.id == discovered.id))
+                .then(|| key.clone())
+        });
+        let marker = discovered.last_activity.max(launched_at);
+        if let Some(existing_key) = existing_key {
+            if let Some(existing) = status.sessions.get_mut(&existing_key) {
+                existing.harness = "codex".to_string();
+                existing.session_key = session_key;
+                existing.transcript_path =
+                    Some(discovered.transcript_path.to_string_lossy().to_string());
+                if existing.workspace.is_empty() {
+                    existing.workspace = discovered.workspace.clone();
+                }
+                if existing.started_at <= 0.0 {
+                    existing.started_at = discovered.started_at;
+                }
+                existing.last_activity = existing.last_activity.max(marker);
+                if existing.source.is_none() {
+                    existing.source = discovered.source.clone();
+                }
+                existing.pid = None;
+                if existing.state.is_empty() {
+                    let inferred = infer_codex_state(
+                        metrics.get(&existing.session_key),
+                        discovered.last_activity,
+                        now,
+                    );
+                    existing.state = inferred.state.to_string();
+                    existing.state_changed_at = Some(inferred.changed_at.max(launched_at));
+                }
+            }
+            continue;
+        }
+
+        let inferred = infer_codex_state(metrics.get(&session_key), discovered.last_activity, now);
+        status.sessions.insert(
+            session_key.clone(),
+            SessionInfo {
+                id: discovered.id.clone(),
+                harness: "codex".to_string(),
+                session_key,
+                transcript_path: Some(discovered.transcript_path.to_string_lossy().to_string()),
+                workspace: discovered.workspace.clone(),
+                state: inferred.state.to_string(),
+                last_activity: marker,
+                started_at: discovered.started_at,
+                state_changed_at: Some(inferred.changed_at.max(launched_at)),
+                source: discovered.source.clone(),
+                hook_input_tokens: 0,
+                hook_output_tokens: 0,
+                hook_model: String::new(),
+                active_subagents: 0,
+                subprocess: None,
+                team_name: None,
+                agent_name: None,
+                pid: None,
+                permission_mode: None,
+                error_type: None,
+                pending_permission: None,
+            },
+        );
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct InferredCodexState {
+    state: &'static str,
+    changed_at: f64,
+}
+
+/// Infer the best baseline state available from a Codex rollout. Hooks can
+/// refine this to waiting/compacting/subagent, but a rollout alone can still
+/// distinguish a fresh prompt, in-progress tool work, and a completed turn.
+fn infer_codex_state(
+    metrics: Option<&SessionMetrics>,
+    transcript_mtime: f64,
+    now: f64,
+) -> InferredCodexState {
+    const RECENT_WRITE_SECS: f64 = 15.0;
+    let Some(metrics) = metrics else {
+        return InferredCodexState {
+            state: if now - transcript_mtime <= RECENT_WRITE_SECS {
+                "working"
+            } else {
+                "idle"
+            },
+            changed_at: transcript_mtime,
+        };
+    };
+
+    if metrics.awaiting_user_prompt {
+        return InferredCodexState {
+            state: "waiting",
+            changed_at: metrics
+                .last_user_prompt_ts
+                .or(metrics.last_entry_ts)
+                .unwrap_or(transcript_mtime),
+        };
+    }
+    if metrics.pending_tool_use {
+        return InferredCodexState {
+            state: "working",
+            changed_at: [
+                metrics.last_user_prompt_ts,
+                metrics.last_assistant_text_ts,
+                metrics.last_tool_result_ts,
+            ]
+            .into_iter()
+            .flatten()
+            .fold(transcript_mtime, f64::max),
+        };
+    }
+
+    let end = metrics.last_end_turn_ts.unwrap_or(f64::NEG_INFINITY);
+    if let Some(prompt) = metrics.last_user_prompt_ts.filter(|prompt| *prompt > end) {
+        let progress = metrics
+            .last_assistant_text_ts
+            .into_iter()
+            .chain(metrics.last_tool_result_ts)
+            .fold(f64::NEG_INFINITY, f64::max);
+        return InferredCodexState {
+            state: if progress >= prompt {
+                "working"
+            } else {
+                "thinking"
+            },
+            changed_at: if progress >= prompt { progress } else { prompt },
+        };
+    }
+    if end.is_finite() {
+        return InferredCodexState {
+            state: "idle",
+            changed_at: end,
+        };
+    }
+    InferredCodexState {
+        state: if now - transcript_mtime <= RECENT_WRITE_SECS {
+            "working"
+        } else {
+            "idle"
+        },
+        changed_at: transcript_mtime,
+    }
 }
 
 /// The timestamp we treat as "when this session last transitioned" — the hook's
@@ -1609,12 +1904,13 @@ pub(crate) fn dedup_sessions(
     for session in sessions {
         // Never deduplicate team agent sessions — they are real parallel
         // agents, not phantom startup duplicates.
-        if team_ids.contains(&session.id) {
+        if team_ids.contains(&session.session_key) {
             deduped.push(session);
             continue;
         }
         if let Some(existing) = deduped.iter_mut().find(|s| {
-            !team_ids.contains(&s.id)
+            !team_ids.contains(&s.session_key)
+                && s.harness == session.harness
                 && s.workspace == session.workspace
                 && (s.started_at - session.started_at).abs() < 3.0
         }) {
@@ -1622,8 +1918,10 @@ pub(crate) fn dedup_sessions(
             let p_old = dedup_state_priority(&existing.state);
             if p_new > p_old || (p_new == p_old && session.last_activity > existing.last_activity) {
                 let stable_id = existing.id.clone();
+                let stable_key = existing.session_key.clone();
                 *existing = session;
                 existing.id = stable_id;
+                existing.session_key = stable_key;
             }
         } else {
             deduped.push(session);
@@ -1929,6 +2227,13 @@ fn subagent_rescue_count(
     (live > 0).then_some(live)
 }
 
+/// Canonicalize an untrusted hook-reported Codex rollout path and require it
+/// to remain below CODEX_HOME. Codex date-shards rollouts, so reconstructing
+/// the path from a session id is not reliable.
+fn validated_codex_transcript_path(raw: &str) -> Option<PathBuf> {
+    security::validate_transcript_path(raw, &paths::codex_config_dir()).ok()
+}
+
 /// Newest mtime across a session's `subagents/*.jsonl` transcripts, folded
 /// together with the directory's own mtime. Returns `None` when the path isn't
 /// a directory (session has never spawned an agent).
@@ -2046,6 +2351,7 @@ fn resolve_liveness(
     live_start: Option<u64>,
     cached: Option<(u32, u64)>,
     live_name: Option<&str>,
+    harness: &str,
 ) -> LivenessOutcome {
     match (live_start, cached) {
         // First sight — capture identity, but require the process name to
@@ -2055,8 +2361,12 @@ fn resolve_liveness(
         // process (any random PID) and survive every later liveness check
         // for the duration of that unrelated process. F-reliability-005.
         (Some(start), None) => {
+            let expected = match harness {
+                "codex" => "codex",
+                _ => "claude",
+            };
             let name_ok = live_name
-                .map(|n| n.to_ascii_lowercase().contains("claude"))
+                .map(|n| n.to_ascii_lowercase().contains(expected))
                 .unwrap_or(false);
             if name_ok {
                 LivenessOutcome::Alive {
@@ -2152,7 +2462,7 @@ mod tests {
 
     #[test]
     fn test_liveness_first_sight_captures_identity_when_name_is_claude() {
-        match resolve_liveness(1234, Some(5000), None, Some("claude")) {
+        match resolve_liveness(1234, Some(5000), None, Some("claude"), "claude") {
             LivenessOutcome::Alive { cache } => assert_eq!(cache, (1234, 5000)),
             LivenessOutcome::Dead => panic!("expected Alive on first sight of claude"),
         }
@@ -2162,7 +2472,7 @@ mod tests {
     fn test_liveness_first_sight_accepts_mixed_case_claude() {
         // Real binaries are sometimes "claude", "claude-code", "Claude.app/Contents/MacOS/Claude"
         // — the check is case-insensitive substring match on "claude".
-        match resolve_liveness(1234, Some(5000), None, Some("Claude-Code")) {
+        match resolve_liveness(1234, Some(5000), None, Some("Claude-Code"), "claude") {
             LivenessOutcome::Alive { cache } => assert_eq!(cache, (1234, 5000)),
             LivenessOutcome::Dead => panic!("expected Alive on Claude-Code"),
         }
@@ -2172,7 +2482,7 @@ mod tests {
     fn test_liveness_first_sight_rejects_unrelated_process() {
         // F-reliability-005 — recycled PID anchored onto an unrelated process.
         assert!(matches!(
-            resolve_liveness(1234, Some(5000), None, Some("nginx")),
+            resolve_liveness(1234, Some(5000), None, Some("nginx"), "claude"),
             LivenessOutcome::Dead
         ));
     }
@@ -2182,7 +2492,7 @@ mod tests {
         // sysinfo couldn't read the process name; conservatively treat as dead
         // on first sight. The hook will re-fire and we'll get another chance.
         assert!(matches!(
-            resolve_liveness(1234, Some(5000), None, None),
+            resolve_liveness(1234, Some(5000), None, None, "claude"),
             LivenessOutcome::Dead
         ));
     }
@@ -2191,7 +2501,13 @@ mod tests {
     fn test_liveness_matching_cache_stays_alive_regardless_of_name() {
         // Once we've cached identity, name no longer matters — the cached
         // (pid, start_time) tuple is the authoritative check.
-        match resolve_liveness(1234, Some(5000), Some((1234, 5000)), Some("anything")) {
+        match resolve_liveness(
+            1234,
+            Some(5000),
+            Some((1234, 5000)),
+            Some("anything"),
+            "claude",
+        ) {
             LivenessOutcome::Alive { cache } => assert_eq!(cache, (1234, 5000)),
             LivenessOutcome::Dead => panic!("expected Alive when cache matches"),
         }
@@ -2200,7 +2516,7 @@ mod tests {
     #[test]
     fn test_liveness_process_gone_is_dead() {
         assert!(matches!(
-            resolve_liveness(1234, None, Some((1234, 5000)), Some("claude")),
+            resolve_liveness(1234, None, Some((1234, 5000)), Some("claude"), "claude"),
             LivenessOutcome::Dead
         ));
     }
@@ -2210,7 +2526,7 @@ mod tests {
         // Hook wrote a PID but there's no process at that pid and we never
         // cached one. Means it died before we ever polled — still dead.
         assert!(matches!(
-            resolve_liveness(1234, None, None, None),
+            resolve_liveness(1234, None, None, None, "claude"),
             LivenessOutcome::Dead
         ));
     }
@@ -2343,7 +2659,25 @@ mod tests {
     fn test_liveness_pid_reuse_different_start_time_is_dead() {
         // Same pid, but a different process now holds it (different start time).
         assert!(matches!(
-            resolve_liveness(1234, Some(9999), Some((1234, 5000)), Some("claude")),
+            resolve_liveness(
+                1234,
+                Some(9999),
+                Some((1234, 5000)),
+                Some("claude"),
+                "claude"
+            ),
+            LivenessOutcome::Dead
+        ));
+    }
+
+    #[test]
+    fn test_liveness_first_sight_accepts_codex_for_codex_session_only() {
+        assert!(matches!(
+            resolve_liveness(42, Some(100), None, Some("codex"), "codex"),
+            LivenessOutcome::Alive { .. }
+        ));
+        assert!(matches!(
+            resolve_liveness(42, Some(100), None, Some("codex"), "claude"),
             LivenessOutcome::Dead
         ));
     }
@@ -2599,7 +2933,7 @@ mod tests {
         std::fs::write(project_dir.join("session-1.jsonl"), "{}").unwrap();
 
         let state = SessionMonitorState::new();
-        let path = state.jsonl_path("session-1", "/Users/dev/App", &dir);
+        let path = state.jsonl_path("claude:session-1", "session-1", "/Users/dev/App", &dir);
         assert!(path.contains("session-1.jsonl"));
         assert!(path.contains("-Users-dev-App"));
 
@@ -2617,7 +2951,12 @@ mod tests {
         std::fs::write(project_dir.join("session-2.jsonl"), "{}").unwrap();
 
         let state = SessionMonitorState::new();
-        let path = state.jsonl_path("session-2", "/Users/dev/Projects/SubDir", &dir);
+        let path = state.jsonl_path(
+            "claude:session-2",
+            "session-2",
+            "/Users/dev/Projects/SubDir",
+            &dir,
+        );
         assert!(path.contains("session-2.jsonl"));
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -2626,6 +2965,9 @@ mod tests {
     fn make_session(id: &str, state: &str, last_activity: f64, started_at: f64) -> SessionInfo {
         SessionInfo {
             id: id.to_string(),
+            harness: "claude".to_string(),
+            session_key: format!("claude:{id}"),
+            transcript_path: None,
             workspace: "/Users/dev/App".to_string(),
             state: state.to_string(),
             last_activity,
@@ -3543,9 +3885,26 @@ mod tests {
         // Mark s2 as a team agent.
         sessions[1].team_name = Some("auditors".to_string());
         let mut team_ids = std::collections::HashSet::new();
-        team_ids.insert("s2".to_string());
+        team_ids.insert("claude:s2".to_string());
         let out = dedup_sessions(sessions, &team_ids);
         assert_eq!(out.len(), 2, "team agents must not be deduplicated");
+    }
+
+    #[test]
+    fn test_dedup_keeps_same_native_id_across_harnesses() {
+        let now = 1000.0;
+        let claude = make_session("same", "working", now, now - 1.0);
+        let mut codex = make_session("same", "working", now, now - 1.0);
+        codex.harness = "codex".to_string();
+        codex.session_key = "codex:same".to_string();
+        let out = dedup_sessions(vec![claude, codex], &std::collections::HashSet::new());
+        assert_eq!(out.len(), 2);
+        assert!(out
+            .iter()
+            .any(|session| session.session_key == "claude:same"));
+        assert!(out
+            .iter()
+            .any(|session| session.session_key == "codex:same"));
     }
 
     #[test]
@@ -3660,7 +4019,7 @@ mod tests {
         std::fs::write(project_dir.join("sess-a.jsonl"), "{}").unwrap();
 
         let state = SessionMonitorState::new();
-        assert!(state.jsonl_exists_on_disk("sess-a", "/Users/dev/App", &dir));
+        assert!(state.jsonl_exists_on_disk("claude:sess-a", "sess-a", "/Users/dev/App", &dir));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3672,7 +4031,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let state = SessionMonitorState::new();
-        assert!(!state.jsonl_exists_on_disk("sess-gone", "/Users/dev/App", &dir));
+        assert!(!state.jsonl_exists_on_disk(
+            "claude:sess-gone",
+            "sess-gone",
+            "/Users/dev/App",
+            &dir
+        ));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3692,10 +4056,20 @@ mod tests {
 
         let state = SessionMonitorState::new();
         // First call resolves and caches.
-        assert!(state.jsonl_exists_on_disk("sess-rotated", "/Users/dev/App", &dir));
+        assert!(state.jsonl_exists_on_disk(
+            "claude:sess-rotated",
+            "sess-rotated",
+            "/Users/dev/App",
+            &dir
+        ));
         // Now Claude Code rotates the id and removes the file.
         std::fs::remove_file(&jsonl).unwrap();
-        assert!(!state.jsonl_exists_on_disk("sess-rotated", "/Users/dev/App", &dir));
+        assert!(!state.jsonl_exists_on_disk(
+            "claude:sess-rotated",
+            "sess-rotated",
+            "/Users/dev/App",
+            &dir
+        ));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3711,7 +4085,12 @@ mod tests {
         std::fs::write(project_dir.join("session-3.jsonl"), "{}").unwrap();
 
         let state = SessionMonitorState::new();
-        let path = state.jsonl_path("session-3", "/Users/dev/Unrelated", &dir);
+        let path = state.jsonl_path(
+            "claude:session-3",
+            "session-3",
+            "/Users/dev/Unrelated",
+            &dir,
+        );
         assert!(path.contains("session-3.jsonl"));
         assert!(path.contains("some-other-project"));
 
@@ -3864,7 +4243,7 @@ mod tests {
         // Stale metrics: parsed BEFORE the question opened, so they don't yet see
         // the unmatched AskUserQuestion (awaiting/pending both false).
         m.metrics_cache.lock_safe().insert(
-            "sess-q".to_string(),
+            "claude:sess-q".to_string(),
             crate::models::SessionMetrics {
                 awaiting_user_prompt: false,
                 pending_tool_use: false,
@@ -3885,7 +4264,7 @@ mod tests {
         // Metrics catch up and show genuine resolution (question answered):
         // last_entry_ts now past stateChangedAt, awaiting/pending false → demote.
         m.metrics_cache.lock_safe().insert(
-            "sess-q".to_string(),
+            "claude:sess-q".to_string(),
             crate::models::SessionMetrics {
                 awaiting_user_prompt: false,
                 pending_tool_use: false,
@@ -3903,6 +4282,150 @@ mod tests {
             );
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_poll_discovers_live_codex_without_sessions_json_or_hook_event() {
+        use std::os::fd::AsRawFd;
+
+        let dir = std::env::temp_dir().join(format!(
+            "cue_test_poll_codex_discovery_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let codex_home = dir.join("codex");
+        let rollout_dir = codex_home.join("sessions/2026/08/26");
+        let lock_dir = codex_home.join("thread-writer-locks");
+        std::fs::create_dir_all(&rollout_dir).unwrap();
+        std::fs::create_dir_all(&lock_dir).unwrap();
+        let id = "51a03fc0-0b91-74a3-bfa4-ca850b36ad77";
+        let rollout = rollout_dir.join(format!("rollout-2026-08-26T12-00-00-{id}.jsonl"));
+        std::fs::write(
+            &rollout,
+            format!(
+                "{}\n{}\n",
+                serde_json::json!({
+                    "timestamp": "2026-08-26T19:00:00.000Z",
+                    "type": "session_meta",
+                    "payload": {
+                        "id": id,
+                        "session_id": id,
+                        "timestamp": "2026-08-26T19:00:00.000Z",
+                        "cwd": dir,
+                        "source": "cli"
+                    }
+                }),
+                serde_json::json!({
+                    "timestamp": "2026-08-26T19:00:01.000Z",
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete"}
+                })
+            ),
+        )
+        .unwrap();
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_dir.join(format!("{id}.lock")))
+            .unwrap();
+        assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
+
+        let monitor = SessionMonitorState::new();
+        let missing_status = dir.join("never-written-sessions.json");
+        monitor.poll_status_with_sources(
+            missing_status.clone(),
+            dir.join("claude-projects"),
+            Some(codex_home.clone()),
+        );
+        {
+            let sessions = monitor.enriched_sessions.lock_safe();
+            let session = sessions
+                .iter()
+                .find(|session| session.info.session_key == format!("codex:{id}"))
+                .expect("held Codex root thread should be visible without a hook write");
+            assert_eq!(session.info.harness, "codex");
+            assert_eq!(
+                session.info.transcript_path.as_deref(),
+                rollout.canonicalize().unwrap().to_str()
+            );
+            assert_eq!(
+                session.info.pid, None,
+                "ephemeral hook shell is not liveness"
+            );
+        }
+
+        let mut rollout_cache = crate::codex_jsonl_parser::CodexJsonlCache::default();
+        let parsed = crate::codex_jsonl_parser::parse_codex_jsonl_to_session_metrics_cached(
+            &rollout,
+            &mut rollout_cache,
+            0,
+        )
+        .expect("fixture rollout should parse");
+        monitor
+            .metrics_cache
+            .lock_safe()
+            .insert(format!("codex:{id}"), parsed);
+        monitor.poll_status_with_sources(
+            missing_status,
+            dir.join("claude-projects"),
+            Some(codex_home),
+        );
+        {
+            let sessions = monitor.enriched_sessions.lock_safe();
+            let session = sessions
+                .iter()
+                .find(|session| session.info.id == id)
+                .expect("discovered thread remains visible after metrics refresh");
+            assert_eq!(session.info.state, "idle");
+        }
+        drop(lock);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_infer_codex_state_tracks_turn_progress() {
+        let prompt_only = crate::models::SessionMetrics {
+            last_user_prompt_ts: Some(200.0),
+            last_end_turn_ts: Some(100.0),
+            ..Default::default()
+        };
+        assert_eq!(
+            infer_codex_state(Some(&prompt_only), 200.0, 201.0).state,
+            "thinking"
+        );
+
+        let progress = crate::models::SessionMetrics {
+            last_user_prompt_ts: Some(200.0),
+            last_assistant_text_ts: Some(201.0),
+            last_end_turn_ts: Some(100.0),
+            ..Default::default()
+        };
+        assert_eq!(
+            infer_codex_state(Some(&progress), 201.0, 202.0).state,
+            "working"
+        );
+
+        let pending = crate::models::SessionMetrics {
+            pending_tool_use: true,
+            last_user_prompt_ts: Some(200.0),
+            ..Default::default()
+        };
+        assert_eq!(
+            infer_codex_state(Some(&pending), 201.0, 202.0).state,
+            "working"
+        );
+
+        let complete = crate::models::SessionMetrics {
+            last_user_prompt_ts: Some(200.0),
+            last_end_turn_ts: Some(210.0),
+            ..Default::default()
+        };
+        assert_eq!(
+            infer_codex_state(Some(&complete), 210.0, 211.0).state,
+            "idle"
+        );
     }
 
     #[test]
@@ -3941,7 +4464,7 @@ mod tests {
         // last_entry_ts predates the seed (no real entry since the dialog
         // opened), but file mtime has raced PAST the seed on metadata writes.
         m.metrics_cache.lock_safe().insert(
-            "sess-oq".to_string(),
+            "claude:sess-oq".to_string(),
             crate::models::SessionMetrics {
                 awaiting_user_prompt: false,
                 pending_tool_use: false,
@@ -4017,12 +4540,12 @@ mod tests {
         };
         m.process_identity
             .lock_safe()
-            .insert("sess-esc".to_string(), (my_pid, my_start));
+            .insert("claude:sess-esc".to_string(), (my_pid, my_start));
 
         // Metrics as refresh_metrics would produce them after ESC: a
         // "[Request interrupted by user]" marker newer than stateChangedAt.
         m.metrics_cache.lock_safe().insert(
-            "sess-esc".to_string(),
+            "claude:sess-esc".to_string(),
             crate::models::SessionMetrics {
                 last_interrupt_ts: Some(started + 100.0),
                 ..Default::default()
@@ -4041,7 +4564,7 @@ mod tests {
         // ...and its metrics MUST survive the prune (the fix). Before the fix
         // this key was evicted because the session left the display set.
         assert!(
-            m.metrics_cache.lock_safe().contains_key("sess-esc"),
+            m.metrics_cache.lock_safe().contains_key("claude:sess-esc"),
             "metrics for a still-in-source session must survive the prune"
         );
 
@@ -4157,7 +4680,7 @@ mod tests {
         // Seed the metrics cache as refresh_metrics would for a permission
         // prompt: an unresolved tool_use at the tail, no prompting tool_use.
         m.metrics_cache.lock_safe().insert(
-            "sess-perm".to_string(),
+            "claude:sess-perm".to_string(),
             crate::models::SessionMetrics {
                 pending_tool_use: true,
                 awaiting_user_prompt: false,
@@ -4179,7 +4702,7 @@ mod tests {
 
         // Tool approved → tool_result lands → pending clears.
         m.metrics_cache.lock_safe().insert(
-            "sess-perm".to_string(),
+            "claude:sess-perm".to_string(),
             crate::models::SessionMetrics {
                 pending_tool_use: false,
                 awaiting_user_prompt: false,

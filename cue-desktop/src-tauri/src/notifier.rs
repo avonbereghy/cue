@@ -215,7 +215,7 @@ fn build_event(s: &EnrichedSession, kind: NotificationKind, now: f64) -> Notific
         }
     };
     NotificationEvent {
-        session_id: s.info.id.clone(),
+        session_id: s.info.session_key.clone(),
         title,
         body,
         kind,
@@ -412,7 +412,7 @@ impl Notifier {
         let mut seen: HashSet<&str> = HashSet::with_capacity(sessions.len());
 
         for s in sessions {
-            let id = s.info.id.as_str();
+            let id = s.info.session_key.as_str();
             seen.insert(id);
             let new_state = s.info.state.as_str();
 
@@ -629,6 +629,9 @@ mod tests {
     fn test_session(id: &str, workspace: &str, state: &str) -> SessionInfo {
         SessionInfo {
             id: id.to_string(),
+            harness: "claude".to_string(),
+            session_key: format!("claude:{id}"),
+            transcript_path: None,
             workspace: workspace.to_string(),
             state: state.to_string(),
             last_activity: 1000.0,
@@ -663,7 +666,7 @@ mod tests {
         let ev = build_event(&enrich(info, metrics), NotificationKind::Waiting, 0.0);
         assert_eq!(ev.title, "my-proj needs you");
         assert!(ev.body.contains("migration approach"), "body: {}", ev.body);
-        assert_eq!(ev.session_id, "s1");
+        assert_eq!(ev.session_id, "claude:s1");
     }
 
     #[test]
@@ -919,7 +922,7 @@ mod tests {
         let n = Notifier::new();
         n.diff_and_collect(&[enriched("s1", "working", 10.0)], 0.0); // seed
                                                                      // Permission server fired its own specific "Permission needed" ping:
-        n.suppress_next_waiting("s1");
+        n.suppress_next_waiting("claude:s1");
         // The imminent → waiting transition must NOT double-fire.
         let events = n.diff_and_collect(&[enriched("s1", "waiting", 10.0)], 0.0);
         assert!(events.is_empty(), "suppressed waiting should stay silent");
@@ -927,6 +930,22 @@ mod tests {
         n.diff_and_collect(&[enriched("s1", "working", 10.0)], 0.0);
         let events = n.diff_and_collect(&[enriched("s1", "waiting", 10.0)], 0.0);
         assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, NotificationKind::Waiting);
+    }
+
+    #[test]
+    fn same_native_id_across_harnesses_has_independent_notification_state() {
+        let n = Notifier::new();
+        let claude = enriched("same", "working", 10.0);
+        let mut codex = enriched("same", "working", 10.0);
+        codex.info.harness = "codex".to_string();
+        codex.info.session_key = "codex:same".to_string();
+        n.diff_and_collect(&[claude, codex.clone()], 0.0);
+
+        let claude_waiting = enriched("same", "waiting", 10.0);
+        let events = n.diff_and_collect(&[claude_waiting, codex], 1.0);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].session_id, "claude:same");
         assert_eq!(events[0].kind, NotificationKind::Waiting);
     }
 

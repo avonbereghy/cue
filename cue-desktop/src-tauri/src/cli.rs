@@ -1,4 +1,4 @@
-//! CLI for monitoring Claude Code sessions from the terminal.
+//! CLI for monitoring Claude Code and Codex sessions from the terminal.
 //!
 //! When the binary is invoked with `--status`, session data is printed to stdout
 //! instead of launching the GUI. Supports:
@@ -8,11 +8,11 @@
 //!
 //! ANSI colors are auto-detected: enabled when stdout is a TTY, disabled when piped.
 
-use crate::jsonl_parser;
 use crate::models::{EnrichedSession, SessionMetrics, StatusData, SupplementalData};
 use crate::paths;
 use crate::security;
 use crate::session_monitor::{encode_workspace_path, sort_sessions};
+use crate::{codex_jsonl_parser, jsonl_parser};
 use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -119,6 +119,8 @@ fn load_sessions() -> Vec<EnrichedSession> {
         // allowlist before any path join — otherwise a hostile
         // sessions.json id (e.g. `../../foo`) escapes the projects dir.
         security::validate_session_id(&s.id).is_ok()
+            && security::validate_session_key(&s.session_key).is_ok()
+            && s.is_supported_harness()
             && security::sanitize_workspace_path(&s.workspace).is_ok()
     }));
 
@@ -127,7 +129,25 @@ fn load_sessions() -> Vec<EnrichedSession> {
     let mut enriched: Vec<_> = active
         .into_iter()
         .map(|info| {
-            let metrics = resolve_jsonl_metrics(&info.id, &info.workspace, &projects_path);
+            let metrics = if info.harness == "codex" {
+                info.transcript_path
+                    .as_deref()
+                    .and_then(|raw| {
+                        security::validate_transcript_path(raw, &paths::codex_config_dir()).ok()
+                    })
+                    .map(|path| {
+                        let mut cache = codex_jsonl_parser::CodexJsonlCache::default();
+                        codex_jsonl_parser::parse_codex_jsonl_to_session_metrics_cached(
+                            &path,
+                            &mut cache,
+                            info.active_subagents,
+                        )
+                        .unwrap_or_default()
+                    })
+                    .unwrap_or_default()
+            } else {
+                resolve_jsonl_metrics(&info.id, &info.workspace, &projects_path)
+            };
             EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default())
         })
         .collect();
@@ -303,6 +323,8 @@ fn print_json(sessions: &[EnrichedSession], show_paths: bool) {
     #[serde(rename_all = "camelCase")]
     struct JsonSession {
         id: String,
+        harness: String,
+        session_key: String,
         workspace: String,
         display_title: String,
         state: String,
@@ -355,6 +377,8 @@ fn print_json(sessions: &[EnrichedSession], show_paths: bool) {
             .iter()
             .map(|s| JsonSession {
                 id: s.info.id.clone(),
+                harness: s.info.harness.clone(),
+                session_key: s.info.session_key.clone(),
                 workspace: workspace_display(s, show_paths),
                 display_title: s.display_title.clone(),
                 state: s.info.state.clone(),
@@ -429,9 +453,10 @@ fn print_pretty_rich(sessions: &[EnrichedSession], show_paths: bool, use_color: 
             .unwrap_or_default();
 
         println!(
-            "{}  {}  {}  {}{}",
+            "{}  {}  {}  {}  {}{}",
             color(state_icon(&s.info.state), sc, use_color),
             bold(&title, use_color),
+            dim(&s.info.harness, use_color),
             color(badge, sc, use_color),
             dim(&duration, use_color),
             branch_str,
@@ -634,6 +659,9 @@ mod tests {
     fn make_test_info(id: &str, workspace: &str, state: &str) -> crate::models::SessionInfo {
         crate::models::SessionInfo {
             id: id.to_string(),
+            harness: "claude".to_string(),
+            session_key: format!("claude:{id}"),
+            transcript_path: None,
             workspace: workspace.to_string(),
             state: state.to_string(),
             last_activity: 0.0,

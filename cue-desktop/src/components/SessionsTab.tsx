@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, Fra
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import type { EnrichedSession, Settings, SignalPreset } from "@/lib/types";
+import { getSessionKey, type EnrichedSession, type Settings, type SignalPreset } from "@/lib/types";
 import { loadPreset as loadPresetEngine, isLoaded as isPresetLoaded, setGate as setGateEngine } from "@/lib/presetEngine";
 import { DEFAULT_PRESET } from "@/lib/defaultPreset";
 import { SessionCard } from "./SessionCard";
@@ -216,12 +216,12 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // or closed the chat cleanly) and shouldn't need reviving — they just
   // disappear silently via the main-list filter.
   useEffect(() => {
-    const currentIds = new Set(sessions.map((s) => s.info.id));
+    const currentIds = new Set(sessions.map((s) => getSessionKey(s.info)));
     const prevIds = prevSessionIdsRef.current;
 
     setRevivedSessions((prev) => {
       let next = prev;
-      const alreadyRevived = new Set(prev.map((r) => r.session.info.id));
+      const alreadyRevived = new Set(prev.map((r) => getSessionKey(r.session.info)));
 
       if (prevIds.size > 0) {
         const ended: RevivedSession[] = [];
@@ -232,7 +232,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         // doesn't warrant a revive prompt.
         for (const id of prevIds) {
           if (!currentIds.has(id) && !alreadyRevived.has(id)) {
-            const snapshot = prevSessionsRef.current.find((s) => s.info.id === id);
+            const snapshot = prevSessionsRef.current.find((s) => getSessionKey(s.info) === id);
             if (snapshot && snapshot.info.state !== "ended") {
               ended.push({ session: snapshot, revivedAt: Date.now() });
             }
@@ -246,7 +246,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
       // Remove revived sessions that reappeared with a non-ended state (revive succeeded)
       const filtered = next.filter((r) => {
-        const active = sessions.find((s) => s.info.id === r.session.info.id);
+        const active = sessions.find((s) => getSessionKey(s.info) === getSessionKey(r.session.info));
         return !active || active.info.state === "ended";
       });
 
@@ -272,13 +272,14 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const REVIVE_CLICKS_REQUIRED = 3;
 
   const handleReviveClick = useCallback((session: EnrichedSession) => {
-    const id = session.info.id;
+    const id = getSessionKey(session.info);
     setReviveClicks((prev) => {
       const next = (prev[id] ?? 0) + 1;
       if (next >= REVIVE_CLICKS_REQUIRED) {
         invoke("revive_session", {
           sessionId: session.info.id,
           workspace: session.info.workspace,
+          harness: session.info.harness ?? "claude",
         }).catch((err) => console.error("Failed to revive session:", err));
         const copy = { ...prev };
         delete copy[id];
@@ -291,7 +292,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const handleDismissRevived = useCallback((sessionId: string) => {
     dismissedIdsRef.current.add(sessionId);
     setRevivedSessions((prev) => {
-      const next = prev.filter((r) => r.session.info.id !== sessionId);
+      const next = prev.filter((r) => getSessionKey(r.session.info) !== sessionId);
       saveRevivedSessions(next);
       return next;
     });
@@ -299,7 +300,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
 
   const handleClearAllRevived = useCallback(() => {
     for (const r of revivedSessions) {
-      dismissedIdsRef.current.add(r.session.info.id);
+      dismissedIdsRef.current.add(getSessionKey(r.session.info));
     }
     setRevivedSessions([]);
     saveRevivedSessions([]);
@@ -1355,7 +1356,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const effectiveState = useCallback((s: EnrichedSession) => {
     const st = s.info.state;
     if (!isOrderingNeutral(st)) return st;
-    return orderingStateRef.current.get(s.info.id) ?? st;
+    return orderingStateRef.current.get(getSessionKey(s.info)) ?? st;
   }, []);
 
   // The "desired" fully-sorted order (used by the deferred full rearrange)
@@ -1426,7 +1427,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const allSettled = useCallback((list: EnrichedSession[], now: number) => {
     return list.every((s) => {
       if (!isQuiescent(effectiveState(s))) return false;
-      const since = settledSinceRef.current.get(s.info.id);
+      const since = settledSinceRef.current.get(getSessionKey(s.info));
       return since !== undefined && (now - since) >= SETTLE_MS;
     });
   }, [effectiveState]);
@@ -1461,36 +1462,37 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const now = Date.now();
   let turnEndDetected = false;
   for (const s of activeSessions) {
+    const sessionKey = getSessionKey(s.info);
     // Record the most recent non-neutral state so effectiveState resolves
     // correctly for compacting/clearing entries.
     if (!isOrderingNeutral(s.info.state)) {
-      orderingStateRef.current.set(s.info.id, s.info.state);
+      orderingStateRef.current.set(sessionKey, s.info.state);
     }
     const curr = effectiveState(s);
-    const prev = prevStatesRef.current.get(s.info.id);
+    const prev = prevStatesRef.current.get(sessionKey);
     if (prev !== undefined && !isQuiescent(prev) && isQuiescent(curr)) {
       turnEndDetected = true;
     }
-    prevStatesRef.current.set(s.info.id, curr);
+    prevStatesRef.current.set(sessionKey, curr);
 
     if (isQuiescent(curr)) {
       // Record when it first became idle/done (if not already tracked)
-      if (!settledSinceRef.current.has(s.info.id)) {
-        settledSinceRef.current.set(s.info.id, now);
+      if (!settledSinceRef.current.has(sessionKey)) {
+        settledSinceRef.current.set(sessionKey, now);
       }
       // No longer active — clear active-since
-      activeSinceRef.current.delete(s.info.id);
+      activeSinceRef.current.delete(sessionKey);
     } else {
       // Active — clear any settled timestamp
-      settledSinceRef.current.delete(s.info.id);
+      settledSinceRef.current.delete(sessionKey);
       // Record when it first became active (if not already tracked)
-      if (!activeSinceRef.current.has(s.info.id)) {
-        activeSinceRef.current.set(s.info.id, now);
+      if (!activeSinceRef.current.has(sessionKey)) {
+        activeSinceRef.current.set(sessionKey, now);
       }
     }
   }
   // Prune sessions that no longer exist
-  const activeIdSet = new Set(activeSessions.map((s) => s.info.id));
+  const activeIdSet = new Set(activeSessions.map((s) => getSessionKey(s.info)));
   for (const id of settledSinceRef.current.keys()) {
     if (!activeIdSet.has(id)) settledSinceRef.current.delete(id);
   }
@@ -1509,8 +1511,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   // longest-active-first, and the idle/done set sorted most-recently-idle-first
   // so the session that just settled rises to the top of the idle stack.
   const idleTiebreak = (a: EnrichedSession, b: EnrichedSession) => {
-    const sa = settledSinceRef.current.get(a.info.id) ?? 0;
-    const sb = settledSinceRef.current.get(b.info.id) ?? 0;
+    const sa = settledSinceRef.current.get(getSessionKey(a.info)) ?? 0;
+    const sb = settledSinceRef.current.get(getSessionKey(b.info)) ?? 0;
     if (sa !== sb) return sb - sa; // newest-settled first
     return b.info.startedAt - a.info.startedAt; // newer session first
   };
@@ -1524,8 +1526,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         // Idle/done block: most recently settled goes to the top.
         if (pa === 3) return idleTiebreak(a, b);
         // Working block: longest-active first.
-        const aa = activeSinceRef.current.get(a.info.id) ?? Infinity;
-        const ba = activeSinceRef.current.get(b.info.id) ?? Infinity;
+        const aa = activeSinceRef.current.get(getSessionKey(a.info)) ?? Infinity;
+        const ba = activeSinceRef.current.get(getSessionKey(b.info)) ?? Infinity;
         if (aa !== ba) return aa - ba;
         return a.info.startedAt - b.info.startedAt;
       });
@@ -1536,8 +1538,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         const bActive = !isQuiescent(effectiveState(b));
         if (aActive !== bActive) return aActive ? -1 : 1;
         if (aActive) {
-          const aa = activeSinceRef.current.get(a.info.id) ?? Infinity;
-          const ba = activeSinceRef.current.get(b.info.id) ?? Infinity;
+          const aa = activeSinceRef.current.get(getSessionKey(a.info)) ?? Infinity;
+          const ba = activeSinceRef.current.get(getSessionKey(b.info)) ?? Infinity;
           if (aa !== ba) return aa - ba;
           return a.info.startedAt - b.info.startedAt;
         }
@@ -1545,7 +1547,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         return idleTiebreak(a, b);
       });
     }
-    return all.map((s) => s.info.id);
+    return all.map((s) => getSessionKey(s.info));
   })();
 
   // Display order is sticky: existing sessions keep their committed slot,
@@ -1558,19 +1560,19 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         const bActive = !isQuiescent(effectiveState(b));
         if (aActive !== bActive) return aActive ? -1 : 1;
         if (aActive) {
-          const aa = activeSinceRef.current.get(a.info.id) ?? Infinity;
-          const ba = activeSinceRef.current.get(b.info.id) ?? Infinity;
+          const aa = activeSinceRef.current.get(getSessionKey(a.info)) ?? Infinity;
+          const ba = activeSinceRef.current.get(getSessionKey(b.info)) ?? Infinity;
           if (aa !== ba) return aa - ba;
           return a.info.startedAt - b.info.startedAt;
         }
         return idleTiebreak(a, b);
       });
-      committedOrderRef.current = sorted.map((s) => s.info.id);
+      committedOrderRef.current = sorted.map((s) => getSessionKey(s.info));
       return sorted;
     }
 
     const committed = committedOrderRef.current;
-    const sessionMap = new Map(activeSessions.map((s) => [s.info.id, s]));
+    const sessionMap = new Map(activeSessions.map((s) => [getSessionKey(s.info), s]));
 
     // Bootstrap if no committed order yet
     if (committed.length === 0 || !committed.some((id) => activeIdSet.has(id))) {
@@ -1643,7 +1645,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     // Don't overwrite committed order during an in-flight animation —
     // the animation owns the position snapshot and will update on completion.
     if (!isAnimatingRef.current) {
-      committedOrderRef.current = ordered.map((s) => s.info.id);
+      committedOrderRef.current = ordered.map((s) => getSessionKey(s.info));
     }
     return ordered;
   })();
@@ -1657,11 +1659,12 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     const parentByWs = new Map<string, { id: string; count: number }>();
     for (const p of sortedSessions) {
       if ((p.info.activeSubagents ?? 0) > 0 || p.hasSubagents) {
-        const entry = parentByWs.get(p.info.workspace);
+        const workspaceKey = `${p.info.harness ?? "claude"}:${p.info.workspace}`;
+        const entry = parentByWs.get(workspaceKey);
         if (entry) {
           entry.count++; // multiple parents — ambiguous
         } else {
-          parentByWs.set(p.info.workspace, { id: p.info.id, count: 1 });
+          parentByWs.set(workspaceKey, { id: getSessionKey(p.info), count: 1 });
         }
       }
     }
@@ -1671,7 +1674,10 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     for (const child of teamChildren) {
       const cw = child.info.workspace;
       let assigned = false;
-      for (const [pw, entry] of parentByWs) {
+      for (const [providerWorkspace, entry] of parentByWs) {
+        const prefix = `${child.info.harness ?? "claude"}:`;
+        if (!providerWorkspace.startsWith(prefix)) continue;
+        const pw = providerWorkspace.slice(prefix.length);
         if (entry.count === 1 && (cw === pw || cw.startsWith(pw + "/"))) {
           const list = childrenByParent.get(entry.id) ?? [];
           list.push(child);
@@ -1686,7 +1692,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
     const result: EnrichedSession[] = [];
     for (const s of sortedSessions) {
       result.push(s);
-      const kids = childrenByParent.get(s.info.id);
+      const kids = childrenByParent.get(getSessionKey(s.info));
       if (kids) result.push(...kids);
     }
     result.push(...orphans);
@@ -1777,7 +1783,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
       return;
     }
 
-    const currentOrderKey = sortedSessions.map((s) => s.info.id).join(",");
+    const currentOrderKey = sortedSessions.map((s) => getSessionKey(s.info)).join(",");
     const desiredOrderKey = desiredOrder.join(",");
     const orderAlreadyCorrect = currentOrderKey === desiredOrderKey;
 
@@ -1815,7 +1821,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
   const [reorderTick, setReorderTick] = useState(0);
 
   // Keys for FLIP animation tracking
-  const sortKey = sortedSessions.map((s) => s.info.id).join(",");
+  const sortKey = sortedSessions.map((s) => getSessionKey(s.info)).join(",");
 
   // FLIP animation — smooth mechanical reorder
   useLayoutEffect(() => {
@@ -2465,7 +2471,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             sessionsRef.current.forEach((s) => {
               const st = s.info.state;
               if (st !== "working" && st !== "subagent" && st !== "waiting") {
-                next[s.info.id] = "working";
+                next[getSessionKey(s.info)] = "working";
               }
             });
             return next;
@@ -3005,7 +3011,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
         <div className="flex-1 flex flex-col items-center justify-center text-white/60 gap-2">
           <span className="text-4xl">○</span>
           <span className="text-lg font-medium">No Active Sessions</span>
-          <span className="text-sm text-white/40">Sessions will appear here when Claude Code is running</span>
+          <span className="text-sm text-white/40">Sessions will appear here when Claude Code or Codex is running</span>
         </div>
       ) : (
         // Responsive grid: cards flow into 1/2/3 columns by width. The 400px min
@@ -3030,7 +3036,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             <div className="col-span-full flex flex-col items-center justify-center text-white/60 gap-2 py-12">
               <span className="text-4xl">○</span>
               <span className="text-lg font-medium">No Active Sessions</span>
-              <span className="text-sm text-white/40">Sessions will appear here when Claude Code is running</span>
+              <span className="text-sm text-white/40">Sessions will appear here when Claude Code or Codex is running</span>
             </div>
           )}
           {/* Active sessions — branch view or vertical stack */}
@@ -3075,7 +3081,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             // the ref'd Map doesn't accumulate one closure per session id ever
             // observed during a long Cue lifetime.
             if (expandCyclersRef.current.size > sortedWithChildren.length) {
-              const liveIds = new Set(sortedWithChildren.map((s) => s.info.id));
+              const liveIds = new Set(sortedWithChildren.map((s) => getSessionKey(s.info)));
               const stale: string[] = [];
               for (const id of expandCyclersRef.current.keys()) {
                 if (!liveIds.has(id)) stale.push(id);
@@ -3083,11 +3089,12 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
               for (const id of stale) expandCyclersRef.current.delete(id);
             }
             return displaySessions.map((session, idx) => {
-            const pending = pendingBySession[session.info.id] ?? [];
-            const history = permissionHistory[session.info.id] ?? [];
+            const sessionKey = getSessionKey(session.info);
+            const pending = pendingBySession[sessionKey] ?? [];
+            const history = permissionHistory[sessionKey] ?? [];
 
             // Apply keyboard state override if active
-            const overrideState = stateOverrides[session.info.id];
+            const overrideState = stateOverrides[sessionKey];
             const effectiveSession = overrideState
               ? { ...session, info: { ...session.info, state: overrideState } }
               : session;
@@ -3095,7 +3102,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
             const firstOfGroup =
               grouped && (idx === 0 || displaySessions[idx - 1].info.workspace !== session.info.workspace);
             return (
-              <Fragment key={session.info.id}>
+              <Fragment key={sessionKey}>
                 {firstOfGroup && (
                   <div className="col-span-full flex items-center gap-2 pt-2">
                     {projectAccentsEnabled && (
@@ -3115,7 +3122,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                     <div className="flex-1 border-t border-white/10" />
                   </div>
                 )}
-                <div data-session-id={session.info.id} data-session-state={effectiveSession.info.state} className="relative space-y-2" style={{ zIndex: idx + 1 }}>
+                <div data-session-id={sessionKey} data-session-state={effectiveSession.info.state} className="relative space-y-2" style={{ zIndex: idx + 1 }}>
                 {/* The action this session is blocked on, pinned ABOVE the card so
                     long context/todos/subagents can't push it out of reach.
                     Approve/Deny for a pending permission; "answer in your editor"
@@ -3130,8 +3137,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                   {...cardSettings}
                   session={effectiveSession}
                   isDuplicate={duplicateTitles.has(session.displayTitle)}
-                  expandOverride={compactMode ? expandOverrides[session.info.id] : undefined}
-                  onExpandCycle={compactMode ? getExpandCycle(session.info.id) : undefined}
+                  expandOverride={compactMode ? expandOverrides[sessionKey] : undefined}
+                  onExpandCycle={compactMode ? getExpandCycle(sessionKey) : undefined}
                   onDismiss={handleDismiss}
                 />
 
@@ -3143,7 +3150,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                     className="text-xs ml-3 border-l-2 border-yellow-400/10 pl-3"
                     onToggle={(e) => {
                       if ((e.target as HTMLDetailsElement).open) {
-                        refreshHistory(session.info.id);
+                        refreshHistory(sessionKey);
                       }
                     }}
                   >
@@ -3190,7 +3197,8 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
               </summary>
               <div className="space-y-2.5 pt-2">
                 {revivedSessions.map((revived) => {
-                  const clicks = reviveClicks[revived.session.info.id] ?? 0;
+                  const sessionKey = getSessionKey(revived.session.info);
+                  const clicks = reviveClicks[sessionKey] ?? 0;
                   const pulseClass = clicks > 0 ? `revived-pulse-${Math.min(clicks, 2)}` : "";
                   const remaining = REVIVE_CLICKS_REQUIRED - clicks;
                   const buttonLabel = clicks === 0
@@ -3200,7 +3208,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                       : `Revive (${clicks}/${REVIVE_CLICKS_REQUIRED})`;
 
                   return (
-                    <div key={revived.session.info.id} className={`revived-card-wrapper relative ${pulseClass}`}>
+                    <div key={sessionKey} className={`revived-card-wrapper relative ${pulseClass}`}>
                       <div key={clicks} className="revived-overlay" />
                       <SessionCard {...cardSettings} session={revived.session} titleAnimation="none" revived />
                       {/* Full blur overlay */}
@@ -3228,7 +3236,7 @@ export function SessionsTab({ sessions }: SessionsTabProps) {
                           {buttonLabel}
                         </button>
                         <button
-                          onClick={() => handleDismissRevived(revived.session.info.id)}
+                          onClick={() => handleDismissRevived(sessionKey)}
                           className="px-5 py-2.5 rounded-lg bg-white/10 hover:bg-white/20 text-white/60 hover:text-white/80 text-base font-medium transition-colors"
                           title="Dismiss"
                         >
