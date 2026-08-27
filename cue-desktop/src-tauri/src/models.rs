@@ -338,6 +338,11 @@ pub struct SessionMetrics {
     pub cache_read_tokens: i64,
     pub model: String,
     pub last_input_tokens: i64,
+    /// Usable context window reported by the harness for this session.
+    /// Codex writes this into task_started and token_count rollout events;
+    /// Claude currently leaves it at zero and uses model_context detection.
+    #[serde(default)]
+    pub model_context_window: i64,
     pub custom_title: Option<String>,
     pub git_branch: Option<String>,
     pub tool_counts: HashMap<String, i64>,
@@ -704,8 +709,12 @@ impl EnrichedSession {
             metrics.model.clone()
         };
 
-        let context_limit =
-            crate::model_context::context_limit_for(&effective_model, effective_input_tokens);
+        let context_limit = crate::model_context::context_limit_for_harness(
+            &info.harness,
+            &effective_model,
+            metrics.model_context_window,
+            effective_input_tokens,
+        );
 
         let context_usage_percent = if effective_input_tokens > 0 {
             (effective_input_tokens as f64 / context_limit as f64).min(1.0)
@@ -1845,6 +1854,25 @@ mod tests {
         let es2 =
             EnrichedSession::from_info_and_metrics(info, metrics_old, &SupplementalData::default());
         assert_eq!(es2.context_limit, 200_000);
+    }
+
+    #[test]
+    fn test_codex_context_limit_prefers_rollout_metadata() {
+        let mut info = make_test_info("codex", "/test", "working");
+        info.harness = "codex".to_string();
+        info.session_key = "codex:codex".to_string();
+        let metrics = SessionMetrics {
+            model: "gpt-5.6-sol".to_string(),
+            last_input_tokens: 129_200,
+            model_context_window: 258_400,
+            ..Default::default()
+        };
+
+        let session =
+            EnrichedSession::from_info_and_metrics(info, metrics, &SupplementalData::default());
+
+        assert_eq!(session.context_limit, 258_400);
+        assert!((session.context_usage_percent - 0.5).abs() < 0.001);
     }
 
     #[test]

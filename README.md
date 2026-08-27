@@ -46,7 +46,7 @@ Multiple sessions show as a grid of dots — see all your sessions at once. Clic
 - **Subagent awareness** — tracks active subagent count per session, displays "Subagents(N)" badge with live count; parent sessions stay in subagent state while children are running (won't falsely drop to idle/error/waiting from subagent events)
 - **Session dashboard** — detailed view with workspace, duration, model, git branch, tool usage, context usage bar
 - **Token metrics** — incremental JSONL parsing for input/output/cache token counts per session, aggregated across parent and all subagents
-- **Context usage bar** — color-coded progress bar (green → amber → red) showing token usage relative to model context limit (auto-detected: 1M for current models like Opus 4.8 / Sonnet 4.6, 200K for older models)
+- **Context usage bar** — color-coded progress bar (green → amber → red) showing token usage relative to the active harness's usable context limit (auto-detected from Claude Code; read directly from each Codex rollout)
 - **Running tool display** — fixed-width pill showing the currently executing tool and its target (file path, command, pattern) in real-time
 - **Output speed** — tokens/sec badge calculated from output token deltas between poll intervals
 - **Todo/task progress** — tracks TodoWrite and TaskCreate/TaskUpdate tools, shows completed/total counter with checkbox icon

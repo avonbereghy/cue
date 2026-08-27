@@ -10,6 +10,17 @@ Being pre-1.0, minor (`0.x`) releases may include breaking changes.
 
 _Nothing yet._
 
+## [0.7.1] - 2026-08-26
+
+The Codex context-accuracy patch. Cue now tracks the usable window of each
+Codex session instead of applying Claude's default context tier.
+
+### Fixed
+
+- Codex cards now use the exact usable context window reported in each rollout
+  instead of falling through to Claude's 200K default. Current Codex model
+  metadata is used only as a fallback before a rollout reports its own limit.
+
 ## [0.7.0] - 2026-08-26
 
 The multi-harness release. Cue now monitors Claude Code and Codex together,
@@ -223,7 +234,8 @@ First public open-source release.
 ### Fixed
 - Git status now counts both porcelain columns for combined statuses (e.g. `MM`).
 
-[Unreleased]: https://github.com/avonbereghy/cue/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/avonbereghy/cue/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/avonbereghy/cue/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/avonbereghy/cue/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/avonbereghy/cue/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/avonbereghy/cue/compare/v0.5.2...v0.5.3

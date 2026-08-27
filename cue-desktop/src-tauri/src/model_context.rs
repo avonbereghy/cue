@@ -1,4 +1,10 @@
-//! Model → context-window lookup.
+//! Harness/model → context-window lookup.
+//!
+//! Codex rollouts report the session's usable `model_context_window` directly,
+//! so that value always wins. Current Codex model metadata exposes a 272K raw
+//! window at 95% usable (258,400) for GPT-5.4/5.5/5.6 and a 128K raw window at
+//! 95% usable (121,600) for GPT-5.3-Codex-Spark. Those values are only
+//! fallbacks for a new/empty rollout that has not reported its own limit yet.
 //!
 //! Claude Code embeds its own model-to-context logic inside the `claude` binary
 //! (a Bun-compiled JS bundle). We parse that binary at first lookup, find the
@@ -37,6 +43,8 @@ use std::sync::OnceLock;
 
 pub const DEFAULT_CONTEXT_WINDOW: i64 = 200_000;
 pub const LARGE_CONTEXT_WINDOW: i64 = 1_000_000;
+pub const CODEX_DEFAULT_CONTEXT_WINDOW: i64 = 258_400;
+pub const CODEX_SPARK_CONTEXT_WINDOW: i64 = 121_600;
 
 /// Baked-in floor of known 1M models. Always part of the resolved set; the
 /// binary scan only adds to it (see `merge_with_fallback`). Substring matches
@@ -57,6 +65,38 @@ const FALLBACK_1M_SUBSTRINGS: &[&str] = &[
 const KNOWN_FAMILIES: &[&str] = &["opus", "sonnet", "haiku", "fable", "mythos"];
 
 static ONE_M_SUBSTRINGS: OnceLock<Vec<String>> = OnceLock::new();
+
+/// Resolve a context window without applying one provider's model rules to
+/// another. Codex supplies the exact usable window in its rollout; Claude uses
+/// the existing binary/model detection below.
+pub fn context_limit_for_harness(
+    harness: &str,
+    model: &str,
+    reported_context_window: i64,
+    observed_tokens: i64,
+) -> i64 {
+    if harness.eq_ignore_ascii_case("codex") {
+        return codex_context_limit_for(model, reported_context_window);
+    }
+    context_limit_for(model, observed_tokens)
+}
+
+fn codex_context_limit_for(model: &str, reported_context_window: i64) -> i64 {
+    if reported_context_window > 0 {
+        return reported_context_window;
+    }
+
+    let lower = model.to_ascii_lowercase();
+    if lower.contains("codex-spark") {
+        CODEX_SPARK_CONTEXT_WINDOW
+    } else {
+        // The current Codex registry uses this usable window for GPT-5.4,
+        // GPT-5.4 Mini, GPT-5.5, every GPT-5.6 tier, and auto-review. Unknown
+        // future models use the same safe fallback until their rollout reports
+        // the authoritative value.
+        CODEX_DEFAULT_CONTEXT_WINDOW
+    }
+}
 
 /// Resolve the context window for a given model id.
 ///
@@ -739,6 +779,41 @@ mod tests {
             LARGE_CONTEXT_WINDOW
         );
         assert_eq!(context_limit_for("<synthetic>", 0), LARGE_CONTEXT_WINDOW);
+    }
+
+    #[test]
+    fn codex_context_uses_reported_window_then_current_fallbacks() {
+        assert_eq!(
+            context_limit_for_harness("codex", "gpt-5.6-sol", 999_999, 0),
+            999_999
+        );
+        for model in [
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.5",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "codex-auto-review",
+        ] {
+            assert_eq!(
+                context_limit_for_harness("codex", model, 0, 0),
+                CODEX_DEFAULT_CONTEXT_WINDOW,
+                "wrong Codex fallback for {model}"
+            );
+        }
+        assert_eq!(
+            context_limit_for_harness("codex", "gpt-5.3-codex-spark", 0, 0),
+            CODEX_SPARK_CONTEXT_WINDOW
+        );
+    }
+
+    #[test]
+    fn claude_context_resolution_ignores_codex_reported_window() {
+        assert_eq!(
+            context_limit_for_harness("claude", "claude-sonnet-3-5", 258_400, 0),
+            DEFAULT_CONTEXT_WINDOW
+        );
     }
 
     #[test]

@@ -1666,7 +1666,7 @@ export function SettingsView() {
             <span className="text-white/50 font-medium">Row 3</span> &mdash; Top 6 tools with counts, cache hit rate
           </div>
           <div>
-            <span className="text-white/50 font-medium">Row 4</span> &mdash; Context window usage bar (1M for Opus/Sonnet 4.6, 200K for older)
+            <span className="text-white/50 font-medium">Row 4</span> &mdash; Context window usage bar (detected from Claude Code or reported by Codex)
           </div>
         </div>
       </details>
